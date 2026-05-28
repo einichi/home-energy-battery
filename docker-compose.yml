@@ -5,8 +5,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: home-energy-battery-node:latest
-    container_name: home-energy-battery-node
+    image: ghcr.io/einichi/home-energy-battery:latest
+    container_name: home-energy-battery
     ports:
       - "8787:8787/tcp"
       - "3610:3610/udp"
