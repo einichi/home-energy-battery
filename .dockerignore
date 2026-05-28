@@ -1,0 +1,16 @@
+# Node dependencies
+node_modules
+
+# Build artifacts and local files
+__pycache__
+.DS_Store
+npm-debug.log*
+
+# Persistent runtime data
+data
+
+# Secrets and local configuration
+.env
+
+# Docker Compose local overrides
+docker-compose.override.yml

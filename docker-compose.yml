@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+  home-energy-battery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: home-energy-battery-node:latest
+    container_name: home-energy-battery-node
+    ports:
+      - "8787:8787/tcp"
+      - "3610:3610/udp"
+    environment:
+      - NODE_ENV=production
+      - PORT=8787
+      - DATA_DIR=/data
+      - TZ=UTC
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

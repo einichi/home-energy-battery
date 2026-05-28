@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HOME ENERGY & BATTERY</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="bolt">↯</span>
+        <span data-i18n="brand">HOME ENERGY <strong>& BATTERY</strong></span>
+      </div>
+      <nav aria-label="Main">
+        <button
+          class="nav-button active"
+          data-page="dashboard"
+          data-i18n="navDashboard"
+        >
+          Dashboard
+        </button>
+        <button class="nav-button" data-page="settings" data-i18n="navSettings">
+          Settings
+        </button>
+      </nav>
+      <div class="service-state">
+        <span class="dot"></span>
+        <span id="serviceState">Service online</span>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <span class="label" data-i18n="liveDashboard">Live dashboard</span>
+          <strong data-i18n="homeEnergyFlow">Home energy flow</strong>
+        </div>
+        <div class="top-actions">
+          <form id="historyForm" class="history-form" data-dashboard-only>
+            <label>
+              <span data-i18n="from">From</span>
+              <input id="historyStart" type="datetime-local" />
+            </label>
+            <label>
+              <span data-i18n="to">To</span>
+              <input id="historyEnd" type="datetime-local" />
+            </label>
+            <button class="ghost" data-i18n="showRange">Show Range</button>
+            <button id="liveBtn" class="ghost" type="button" data-i18n="live">
+              Live
+            </button>
+          </form>
+          <details class="debug-menu">
+            <summary data-i18n="debug">Debug</summary>
+            <pre id="rawJson">{}</pre>
+          </details>
+          <button id="refreshBtn" class="ghost" data-i18n="refresh">
+            Refresh
+          </button>
+        </div>
+      </header>
+
+      <section
+        id="dashboardPage"
+        class="page active-page"
+        aria-label="Dashboard"
+      >
+        <!-- Graph widgets are separated from status widgets so live flow values
+             can be scanned first, while slower-changing settings sit below. -->
+        <section class="widget-section" aria-labelledby="trendWidgetsTitle">
+          <h1 id="trendWidgetsTitle" data-i18n="trendWidgets">Power Trends</h1>
+          <div class="widget-grid">
+          <article class="widget" data-feature="solar">
+            <span data-i18n="solarGeneration">Solar Generation</span>
+            <strong id="solarPower">-- W</strong>
+            <canvas
+              class="trend"
+              id="solarPowerTrend"
+              width="260"
+              height="78"
+            ></canvas>
+          </article>
+          <article class="widget" data-feature="fuel-cell">
+            <span data-i18n="fuelCellGeneration">Ene-Farm Generation</span>
+            <strong id="fuelCellPower">-- W</strong>
+            <canvas
+              class="trend"
+              id="fuelCellPowerTrend"
+              width="260"
+              height="78"
+            ></canvas>
+          </article>
+          <article class="widget">
+            <span data-i18n="houseDemand">House Demand</span>
+            <strong id="houseDemandPower">-- W</strong>
+            <canvas
+              class="trend"
+              id="houseDemandPowerTrend"
+              width="260"
+              height="78"
+            ></canvas>
+          </article>
+          <article class="widget">
+            <span data-i18n="batteryPower">Battery Power</span>
+            <strong id="batteryPower">-- W</strong>
+            <canvas
+              class="trend"
+              id="batteryPowerTrend"
+              width="260"
+              height="78"
+            ></canvas>
+          </article>
+          <article class="widget">
+            <span data-i18n="stateOfCharge">State of Charge</span>
+            <div class="soc-combo">
+              <div class="donut" id="batterySocGauge" style="--value: 0">
+                <strong id="batterySoc">--%</strong>
+              </div>
+              <canvas
+                class="trend"
+                id="batterySocTrend"
+                width="260"
+                height="78"
+              ></canvas>
+            </div>
+          </article>
+          <article class="widget">
+            <span data-i18n="gridImport">Grid Import</span>
+            <strong id="gridImportPower">-- W</strong>
+            <canvas
+              class="trend"
+              id="gridImportPowerTrend"
+              width="260"
+              height="78"
+            ></canvas>
+          </article>
+          <article class="widget">
+            <span data-i18n="gridExport">Grid Export</span>
+            <strong id="gridExportPower">-- W</strong>
+            <canvas
+              class="trend"
+              id="gridExportPowerTrend"
+              width="260"
+              height="78"
+            ></canvas>
+          </article>
+          </div>
+        </section>
+
+        <section class="widget-section" aria-labelledby="statusWidgetsTitle">
+          <h1 id="statusWidgetsTitle" data-i18n="statusWidgets">Status & Savings</h1>
+          <div class="widget-grid compact">
+          <article class="widget">
+            <span data-i18n="batteryWorkingStatus">Battery Working Status</span>
+            <strong class="status-text" id="batteryWorking">--</strong>
+          </article>
+          <article class="widget">
+            <span data-i18n="operationMode">Operation Mode</span>
+            <strong class="status-text" id="operationMode">--</strong>
+          </article>
+          <article class="widget">
+            <span data-i18n="chargingProfile">Charging Profile</span>
+            <strong class="status-text" id="vendorProfile">--</strong>
+          </article>
+          <article class="widget">
+            <span data-i18n="dischargeLimit">Discharge Limit</span>
+            <strong id="dischargeLimitWidget">--%</strong>
+            <div class="level-track">
+              <i id="dischargeLimitBar"></i>
+            </div>
+          </article>
+          <article class="widget wide" data-feature="fuel-cell">
+            <span data-i18n="fuelCellStatus">Ene-Farm Status</span>
+            <strong class="status-text" id="fuelCellStatus">--</strong>
+          </article>
+          <article class="widget" data-feature="solar">
+            <span data-i18n="solarSavings">Solar Savings</span>
+            <strong id="solarSavings">--</strong>
+            <small id="solarSavingsPeriod" class="widget-note">--</small>
+          </article>
+          <article class="widget" data-feature="off-peak-savings">
+            <span data-i18n="offPeakSavings">Off-Peak Charge Savings</span>
+            <strong id="offPeakSavings">--</strong>
+            <small id="offPeakSavingsPeriod" class="widget-note">--</small>
+          </article>
+          </div>
+        </section>
+      </section>
+
+      <section id="settingsPage" class="page" aria-label="Settings">
+        <section class="workspace">
+          <!-- Battery settings write real ECHONET properties. The frontend keeps
+               these controls still while editing; live polling stays dashboard-only. -->
+          <div class="panel settings-panel">
+            <div class="panel-title">
+              <h1 data-i18n="batterySettings">Battery Settings</h1>
+            </div>
+
+            <form id="modeForm" class="setting-row">
+              <div>
+                <h2 data-i18n="chargingProfile">Charging Profile</h2>
+                <p data-i18n="chargingProfileHelp">
+                  Choose the battery behavior profile used by the controller.
+                </p>
+              </div>
+              <div class="segmented">
+                <label
+                  ><input type="radio" name="mode" value="osaifu" />
+                  <span data-mode-label="osaifu">osaifu</span></label
+                >
+                <label
+                  ><input type="radio" name="mode" value="eco" />
+                  <span data-mode-label="eco">eco</span></label
+                >
+                <label
+                  ><input type="radio" name="mode" value="backup" />
+                  <span data-mode-label="backup">backup</span></label
+                >
+              </div>
+              <button data-i18n="set">Set</button>
+            </form>
+
+            <form id="limitForm" class="setting-row">
+              <div>
+                <h2 data-i18n="dischargeLimit">Discharge Limit</h2>
+                <p data-i18n="dischargeLimitHelp">
+                  Minimum charge to keep available for later use.
+                </p>
+              </div>
+              <input id="limitValue" type="range" min="0" max="100" step="10" />
+              <output id="limitOutput">--%</output>
+              <button data-i18n="set">Set</button>
+            </form>
+
+            <form id="chargeWindowForm" class="setting-row">
+              <div>
+                <h2 data-i18n="chargeWindow">osaifu Charge Window</h2>
+                <p data-i18n="chargeWindowHelp">
+                  Hours when the battery is allowed to charge in osaifu mode.
+                </p>
+              </div>
+              <select id="chargeStart"></select>
+              <select id="chargeEnd"></select>
+              <button data-i18n="set">Set</button>
+            </form>
+
+            <form id="dischargeWindowForm" class="setting-row">
+              <div>
+                <h2 data-i18n="dischargeWindow">osaifu Discharge Window</h2>
+                <p data-i18n="dischargeWindowHelp">
+                  Hours when the battery is allowed to discharge in osaifu mode.
+                </p>
+              </div>
+              <select id="dischargeStart"></select>
+              <select id="dischargeEnd"></select>
+              <button data-i18n="set">Set</button>
+            </form>
+
+            <form id="directActionForm" class="setting-row">
+              <div>
+                <h2 data-i18n="directAction">Direct Action</h2>
+                <p data-i18n="directActionHelp">
+                  Send an immediate battery command. Energy target is optional
+                  for charge and discharge.
+                </p>
+              </div>
+              <select id="directAction">
+                <option value="charge">Charge with optional target Wh</option>
+                <option value="discharge">
+                  Discharge with optional target Wh
+                </option>
+                <option value="set-mode:auto">Set operation auto</option>
+                <option value="set-mode:standby">Set operation standby</option>
+                <option value="set-mode:rapid">
+                  Set operation rapid charge
+                </option>
+                <option value="set-mode:charge">Set operation charging</option>
+                <option value="set-mode:discharge">
+                  Set operation discharging
+                </option>
+              </select>
+              <input
+                id="targetWh"
+                type="number"
+                min="0"
+                data-i18n-placeholder="targetWh"
+                placeholder="target Wh"
+              />
+              <button data-i18n="run">Run</button>
+            </form>
+          </div>
+
+          <div class="panel device-panel">
+            <!-- Device addresses are user-specific and are stored in /data, not
+                 in the image, so public builds do not contain private LAN details. -->
+            <div class="panel-title">
+              <h1 data-i18n="deviceAddresses">Device Addresses</h1>
+            </div>
+
+            <label class="language-row">
+              <span data-i18n="language">Language</span>
+              <select id="languageSelect">
+                <option value="en">English</option>
+                <option value="ja">日本語</option>
+              </select>
+            </label>
+
+            <form id="rateConfigForm" class="config-form rate-form">
+              <fieldset class="feature-options">
+                <legend data-i18n="electricityRates">Electricity Rates</legend>
+                <label>
+                  <span data-i18n="standardRate">Standard rate</span>
+                  <input
+                    id="standardRate"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    inputmode="decimal"
+                  />
+                </label>
+                <label>
+                  <span data-i18n="offPeakRate">Off-peak rate</span>
+                  <input
+                    id="offPeakRate"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    inputmode="decimal"
+                  />
+                </label>
+                <label class="check-row">
+                  <input id="offPeakSavingsEnabled" type="checkbox" />
+                  <span data-i18n="offPeakSavingsEnabled"
+                    >Calculate off-peak battery charging savings</span
+                  >
+                </label>
+                <button data-i18n="saveRates">Save Rates</button>
+              </fieldset>
+            </form>
+
+            <form id="deviceConfigForm" class="config-form">
+              <fieldset class="feature-options">
+                <legend data-i18n="installedEquipment">
+                  Installed Equipment
+                </legend>
+                <label class="check-row">
+                  <input id="configSolarEnabled" type="checkbox" />
+                  <span data-i18n="solarEnabled">Show solar generation</span>
+                </label>
+                <label class="check-row">
+                  <input id="configFuelCellEnabled" type="checkbox" />
+                  <span data-i18n="fuelCellEnabled"
+                    >Show Ene-Farm generation and status</span
+                  >
+                </label>
+              </fieldset>
+              <label>
+                <span data-i18n="battery">Battery</span>
+                <input
+                  id="configBatteryHost"
+                  inputmode="decimal"
+                  placeholder="192.0.2.10"
+                />
+              </label>
+              <label>
+                <span data-i18n="homePowerMeter">Home power meter</span>
+                <input
+                  id="configMeterHost"
+                  inputmode="decimal"
+                  placeholder="192.0.2.20"
+                />
+              </label>
+              <label>
+                <span data-i18n="solar">Solar</span>
+                <input
+                  id="configSolarHost"
+                  inputmode="decimal"
+                  placeholder="192.0.2.10"
+                />
+              </label>
+              <label>
+                <span data-i18n="fuelCell">Ene-Farm</span>
+                <input
+                  id="configFuelCellHosts"
+                  inputmode="decimal"
+                  placeholder="192.0.2.30"
+                />
+              </label>
+              <label>
+                <span data-i18n="utilityMeter">Utility meter</span>
+                <input
+                  id="configSmartMeterHost"
+                  inputmode="decimal"
+                  data-i18n-placeholder="optional"
+                  placeholder="optional"
+                />
+              </label>
+              <button data-i18n="saveAddresses">Save Addresses</button>
+            </form>
+
+            <div class="discovery-box">
+              <div>
+                <h2 data-i18n="autoDiscovery">Auto-Discovery</h2>
+              </div>
+              <button
+                id="broadcastDiscoverBtn"
+                class="ghost"
+                type="button"
+                data-i18n="broadcastDiscovery"
+              >
+                Broadcast Discovery
+              </button>
+              <button
+                id="activeScanBtn"
+                class="ghost"
+                type="button"
+                data-i18n="activeSubnetScan"
+              >
+                Active Subnet Scan
+              </button>
+            </div>
+            <div
+              id="discoveryProgress"
+              class="discovery-progress hidden"
+              aria-live="polite"
+            >
+              <div class="progress-copy">
+                <strong
+                  id="discoveryProgressTitle"
+                  data-i18n="discoveryStarting"
+                  >Starting discovery</strong
+                >
+                <span id="discoveryProgressDetail"></span>
+              </div>
+              <div
+                class="progress-bar"
+                role="progressbar"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow="0"
+              >
+                <i id="discoveryProgressFill"></i>
+              </div>
+            </div>
+            <div id="discoveryResults" class="discovery-results"></div>
+          </div>
+
+          <div class="panel schedule-panel">
+            <div class="panel-title">
+              <h1 data-i18n="schedules">Schedules</h1>
+            </div>
+
+            <form id="scheduleForm" class="schedule-form">
+              <label>
+                <span data-i18n="action">Action</span>
+                <select id="scheduleAction">
+                  <option value="vendor-profile">Set charging profile</option>
+                  <option value="discharge-limit">Set discharge limit</option>
+                  <option value="osaifu-charge-window">
+                    Set charge window
+                  </option>
+                  <option value="osaifu-discharge-window">
+                    Set discharge window
+                  </option>
+                  <option value="charge">Charge with optional target Wh</option>
+                  <option value="discharge">
+                    Discharge with optional target Wh
+                  </option>
+                  <option value="set-mode">Set operation mode</option>
+                </select>
+              </label>
+              <div id="schedulePayload" class="payload-grid"></div>
+              <label>
+                <span data-i18n="repeat">Repeat</span>
+                <select id="scheduleRepeat">
+                  <option value="once" data-i18n="once">Once</option>
+                  <option value="daily" data-i18n="daily">Daily</option>
+                </select>
+              </label>
+              <fieldset id="scheduleDays" class="day-picker">
+                <legend data-i18n="days">Days</legend>
+                <label
+                  ><input type="checkbox" value="0" checked />
+                  <span data-i18n="daySun">Sun</span></label
+                >
+                <label
+                  ><input type="checkbox" value="1" checked />
+                  <span data-i18n="dayMon">Mon</span></label
+                >
+                <label
+                  ><input type="checkbox" value="2" checked />
+                  <span data-i18n="dayTue">Tue</span></label
+                >
+                <label
+                  ><input type="checkbox" value="3" checked />
+                  <span data-i18n="dayWed">Wed</span></label
+                >
+                <label
+                  ><input type="checkbox" value="4" checked />
+                  <span data-i18n="dayThu">Thu</span></label
+                >
+                <label
+                  ><input type="checkbox" value="5" checked />
+                  <span data-i18n="dayFri">Fri</span></label
+                >
+                <label
+                  ><input type="checkbox" value="6" checked />
+                  <span data-i18n="daySat">Sat</span></label
+                >
+              </fieldset>
+              <label>
+                <span data-i18n="time">Time</span>
+                <input id="scheduleTime" type="datetime-local" />
+              </label>
+              <button data-i18n="createSchedule">Create Schedule</button>
+            </form>
+
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th data-i18n="when">When</th>
+                    <th data-i18n="action">Action</th>
+                    <th data-i18n="details">Details</th>
+                    <th data-i18n="status">Status</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="scheduleRows"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <div id="toast" role="status"></div>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
