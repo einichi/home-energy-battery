@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process";
 import dgram from "node:dgram";
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +12,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 8787);
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, "data");
 const SCHEDULES_FILE = path.join(DATA_DIR, "schedules.json");
+const AUTOMATION_RULES_FILE = path.join(DATA_DIR, "automation-rules.json");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
 const HISTORY_FILE = path.join(HISTORY_DIR, "samples.jsonl");
@@ -29,14 +30,29 @@ const DEFAULT_CONFIG = {
   solarEnabled: true,
   fuelCellHosts: ["192.0.2.30"],
   fuelCellEnabled: true,
+  rateMode: "simple",
   standardRateYenPerKwh: 35,
   offPeakRateYenPerKwh: 25,
   offPeakSavingsEnabled: false,
+  discoverySubnets: [],
+  historyRetentionDays: 1095,
+  updateIntervalSeconds: 15,
+  rateBands: [
+    { start: "00:00", end: "00:00", yenPerKwh: 35, label: "Simple" },
+  ],
+  automation: {
+    breakerVoltage: 100,
+    breakerAmps: 40,
+    reserveAmps: 5,
+    enabledDefaults: false,
+  },
+  settingCache: {},
   language: "en",
 };
 
 let cliQueue = Promise.resolve();
 let scheduleTimer = null;
+let automationTimer = null;
 let lastRecordedSample = null;
 const discoveryJobs = new Map();
 const DISCOVERY_JOB_TTL_MS = 10 * 60 * 1000;
@@ -94,6 +110,38 @@ function strongestFuelCellWatts(fuelCells = []) {
   return values.length ? Math.max(...values) : null;
 }
 
+function rateForTimestamp(rateBands = DEFAULT_CONFIG.rateBands, timestamp = new Date(), fallbackRate = null) {
+  const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
+  const minute = date.getHours() * 60 + date.getMinutes();
+  const bands = normalizeRateBands({ rateBands });
+  const match = bands.find((band) => {
+    const start = minutesOfDay(band.start);
+    const end = minutesOfDay(band.end);
+    if (start === null || end === null) return false;
+    if (start === end) return true;
+    if (start < end) return minute >= start && minute < end;
+    return minute >= start || minute < end;
+  });
+  if (match) return match;
+  if (fallbackRate !== null && fallbackRate !== undefined) {
+    return {
+      start: "00:00",
+      end: "00:00",
+      yenPerKwh: configNumber(fallbackRate, DEFAULT_CONFIG.standardRateYenPerKwh, 0, 1000),
+      label: "Standard",
+    };
+  }
+  return bands[0];
+}
+
+function maxDailyRate(rateBands = DEFAULT_CONFIG.rateBands, fallbackRate = null) {
+  const rates = normalizeRateBands({ rateBands }).map((band) => band.yenPerKwh);
+  if (fallbackRate !== null && fallbackRate !== undefined) {
+    rates.push(configNumber(fallbackRate, DEFAULT_CONFIG.standardRateYenPerKwh, 0, 1000));
+  }
+  return Math.max(...rates);
+}
+
 function sampleFromStatus(status, config, previousSample) {
   // Convert the large live status payload into one compact time-series sample.
   // We store only normalized values that graphs and savings calculations need.
@@ -105,14 +153,16 @@ function sampleFromStatus(status, config, previousSample) {
   const gridImportW = numericMetric(status.meter?.grid_import_power);
   const gridExportW = numericMetric(status.meter?.grid_export_power);
   const stateOfChargePercent = numericMetric(status.energy?.battery?.remaining_percent);
-  const standardRate = config.standardRateYenPerKwh;
-  const offPeakRate = config.offPeakRateYenPerKwh;
+  const rateBand = rateForTimestamp(config.rateBands, timestamp, config.standardRateYenPerKwh);
+  const activeRate = rateBand.yenPerKwh;
+  const highestRate = maxDailyRate(config.rateBands, config.standardRateYenPerKwh);
   const deltaHours = previousSample
     ? Math.max(0, Math.min(1, (new Date(timestamp).getTime() - new Date(previousSample.timestamp).getTime()) / 3_600_000))
     : 0;
-  const offPeakSavingW = config.offPeakSavingsEnabled && batteryPowerW > 0 && !(solarPowerW > 0) ? batteryPowerW : 0;
-  const offPeakSavingYen = deltaHours * (offPeakSavingW / 1000) * Math.max(0, standardRate - offPeakRate);
-  const solarSavingYen = deltaHours * (Math.max(0, solarPowerW ?? 0) / 1000) * standardRate;
+  const offPeakSavingsEnabled = config.rateMode !== "simple" || config.offPeakSavingsEnabled === true;
+  const offPeakSavingW = offPeakSavingsEnabled && batteryPowerW > 0 && !(solarPowerW > 0) ? batteryPowerW : 0;
+  const offPeakSavingYen = deltaHours * (offPeakSavingW / 1000) * Math.max(0, highestRate - activeRate);
+  const solarSavingYen = deltaHours * (Math.max(0, solarPowerW ?? 0) / 1000) * activeRate;
   return {
     timestamp,
     batteryPowerW,
@@ -124,6 +174,8 @@ function sampleFromStatus(status, config, previousSample) {
     gridImportW,
     offPeakSavingYen,
     solarSavingYen,
+    rateYenPerKwh: activeRate,
+    rateLabel: rateBand.label || null,
   };
 }
 
@@ -179,6 +231,39 @@ async function readHistoryRange(start, end) {
   return { samples, summary: summarizeSamples(samples) };
 }
 
+async function readAllHistorySamples() {
+  await ensureDataDir();
+  let text = "";
+  try {
+    text = await readFile(HISTORY_FILE, "utf8");
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+  return text
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+async function trimHistory(retentionDays) {
+  await ensureDataDir();
+  const days = configNumber(retentionDays, DEFAULT_CONFIG.historyRetentionDays, 1, 3650);
+  const cutoff = Date.now() - days * 24 * 60 * 60_000;
+  const samples = await readAllHistorySamples();
+  const kept = samples.filter((sample) => new Date(sample.timestamp).getTime() >= cutoff);
+  const tmp = `${HISTORY_FILE}.tmp`;
+  await writeFile(tmp, kept.map((sample) => JSON.stringify(sample)).join("\n") + (kept.length ? "\n" : ""));
+  await rename(tmp, HISTORY_FILE);
+  return { retentionDays: days, before: samples.length, after: kept.length, deleted: samples.length - kept.length };
+}
+
 async function readSchedules() {
   await ensureDataDir();
   try {
@@ -216,9 +301,90 @@ function configNumber(value, fallback, min = 0, max = 1000) {
   return Math.max(min, Math.min(max, n));
 }
 
+function isValidTime(value) {
+  if (!/^\d{2}:\d{2}$/.test(String(value ?? ""))) return false;
+  const [hh, mm] = String(value).split(":").map(Number);
+  return hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59;
+}
+
+function minutesOfDay(value) {
+  if (!isValidTime(value)) return null;
+  const [hh, mm] = String(value).split(":").map(Number);
+  return hh * 60 + mm;
+}
+
+function normalizeSubnets(value) {
+  const items = Array.isArray(value) ? value : String(value ?? "").split(",");
+  return [...new Set(items.map((item) => String(item).trim()).filter(Boolean))]
+    .filter((item) => /^(\d{1,3}\.){3}0\/24$/.test(item))
+    .filter((item) => item.split(".").slice(0, 3).every((part) => Number(part) >= 0 && Number(part) <= 255));
+}
+
+function normalizeRateMode(input = {}) {
+  if (["simple", "offPeak", "multi"].includes(input.rateMode)) return input.rateMode;
+  if (input.offPeakSavingsEnabled === true) {
+    return Array.isArray(input.rateBands) && input.rateBands.length > 2 ? "multi" : "offPeak";
+  }
+  return DEFAULT_CONFIG.rateMode;
+}
+
+function normalizeRateBands(input = {}) {
+  const hasRateMode = ["simple", "offPeak", "multi"].includes(input.rateMode);
+  const rateMode = hasRateMode ? input.rateMode : normalizeRateMode(input);
+  const standardRate = configNumber(input.standardRateYenPerKwh, DEFAULT_CONFIG.standardRateYenPerKwh, 0, 1000);
+  const offPeakRate = configNumber(input.offPeakRateYenPerKwh, DEFAULT_CONFIG.offPeakRateYenPerKwh, 0, 1000);
+  const source = !hasRateMode && Array.isArray(input.rateBands) && input.rateBands.length
+    ? input.rateBands
+    : rateMode === "simple"
+    ? [{ start: "00:00", end: "00:00", yenPerKwh: standardRate, label: "Simple" }]
+    : rateMode === "offPeak"
+      ? [
+        { start: "00:00", end: "07:00", yenPerKwh: offPeakRate, label: "Off-peak" },
+        { start: "07:00", end: "00:00", yenPerKwh: standardRate, label: "Standard" },
+      ]
+      : Array.isArray(input.rateBands) && input.rateBands.length
+        ? input.rateBands
+        : [{ start: "00:00", end: "07:00", yenPerKwh: offPeakRate, label: "Off-peak" }];
+  const bands = source
+    .map((band) => ({
+      start: isValidTime(band.start) ? band.start : "00:00",
+      end: isValidTime(band.end) ? band.end : "00:00",
+      yenPerKwh: configNumber(band.yenPerKwh, DEFAULT_CONFIG.standardRateYenPerKwh, 0, 1000),
+      label: String(band.label ?? "").trim(),
+    }));
+  return bands.length ? bands : DEFAULT_CONFIG.rateBands;
+}
+
+function normalizeAutomationConfig(value = {}) {
+  return {
+    breakerVoltage: configNumber(value.breakerVoltage, DEFAULT_CONFIG.automation.breakerVoltage, 1, 1000),
+    breakerAmps: configNumber(value.breakerAmps, DEFAULT_CONFIG.automation.breakerAmps, 1, 400),
+    reserveAmps: configNumber(value.reserveAmps, DEFAULT_CONFIG.automation.reserveAmps, 0, 200),
+    enabledDefaults: configBool(value.enabledDefaults, DEFAULT_CONFIG.automation.enabledDefaults),
+  };
+}
+
+function normalizeSettingCache(value = {}) {
+  const out = {};
+  for (const key of ["discharge_limit", "osaifu_charge_window", "osaifu_discharge_window"]) {
+    const cached = value?.[key];
+    if (cached?.lastKnown) {
+      out[key] = {
+        lastKnown: cached.lastKnown,
+        lastReadAt: cached.lastReadAt ?? null,
+      };
+    }
+  }
+  return out;
+}
+
 function cleanConfig(input = {}) {
   // Config can arrive from old files, forms, or hand-edited JSON. Normalize it
   // here so the rest of the server can assume stable types.
+  const rateMode = normalizeRateMode(input);
+  const rateBands = normalizeRateBands({ ...input, rateMode });
+  const standardRate = configNumber(input.standardRateYenPerKwh, Math.max(...rateBands.map((band) => band.yenPerKwh)));
+  const offPeakRate = configNumber(input.offPeakRateYenPerKwh, Math.min(...rateBands.map((band) => band.yenPerKwh)));
   return {
     batteryHost: String(input.batteryHost ?? DEFAULT_CONFIG.batteryHost).trim(),
     smartMeterHost: String(input.smartMeterHost ?? DEFAULT_CONFIG.smartMeterHost).trim(),
@@ -228,9 +394,16 @@ function cleanConfig(input = {}) {
     solarEnabled: configBool(input.solarEnabled, DEFAULT_CONFIG.solarEnabled),
     fuelCellHosts: normalizeHostList(input.fuelCellHosts ?? DEFAULT_CONFIG.fuelCellHosts),
     fuelCellEnabled: configBool(input.fuelCellEnabled, DEFAULT_CONFIG.fuelCellEnabled),
-    standardRateYenPerKwh: configNumber(input.standardRateYenPerKwh, DEFAULT_CONFIG.standardRateYenPerKwh),
-    offPeakRateYenPerKwh: configNumber(input.offPeakRateYenPerKwh, DEFAULT_CONFIG.offPeakRateYenPerKwh),
-    offPeakSavingsEnabled: configBool(input.offPeakSavingsEnabled, DEFAULT_CONFIG.offPeakSavingsEnabled),
+    rateMode,
+    standardRateYenPerKwh: standardRate,
+    offPeakRateYenPerKwh: offPeakRate,
+    offPeakSavingsEnabled: rateMode !== "simple",
+    discoverySubnets: normalizeSubnets(input.discoverySubnets),
+    historyRetentionDays: configNumber(input.historyRetentionDays, DEFAULT_CONFIG.historyRetentionDays, 1, 3650),
+    updateIntervalSeconds: configNumber(input.updateIntervalSeconds, DEFAULT_CONFIG.updateIntervalSeconds, 5, 3600),
+    rateBands,
+    automation: normalizeAutomationConfig(input.automation ?? {}),
+    settingCache: normalizeSettingCache(input.settingCache ?? {}),
     language: ["en", "ja"].includes(input.language) ? input.language : DEFAULT_CONFIG.language,
   };
 }
@@ -239,7 +412,7 @@ async function readConfig() {
   await ensureDataDir();
   try {
     const text = await readFile(CONFIG_FILE, "utf8");
-    return cleanConfig({ ...DEFAULT_CONFIG, ...JSON.parse(text) });
+    return cleanConfig(JSON.parse(text));
   } catch (err) {
     if (err.code === "ENOENT") return cleanConfig(DEFAULT_CONFIG);
     throw err;
@@ -247,9 +420,33 @@ async function readConfig() {
 }
 
 async function writeConfig(config) {
-  const cleaned = cleanConfig({ ...DEFAULT_CONFIG, ...config });
+  const previous = await readConfig().catch(() => cleanConfig(DEFAULT_CONFIG));
+  const cleaned = cleanConfig({ ...previous, ...config });
   await ensureDataDir();
   await writeFile(CONFIG_FILE, `${JSON.stringify(cleaned, null, 2)}\n`);
+  const hostKeys = ["batteryHost", "smartMeterHost", "meterHost", "meterEoj", "solarHost"];
+  const hostChanged = hostKeys.some((key) => previous[key] !== cleaned[key])
+    || JSON.stringify(previous.fuelCellHosts) !== JSON.stringify(cleaned.fuelCellHosts);
+  if (hostChanged) lastRecordedSample = null;
+  return cleaned;
+}
+
+async function readAutomationRules() {
+  await ensureDataDir();
+  try {
+    const text = await readFile(AUTOMATION_RULES_FILE, "utf8");
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed.map(cleanAutomationRule) : [];
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  }
+}
+
+async function writeAutomationRules(rules) {
+  await ensureDataDir();
+  const cleaned = rules.map(cleanAutomationRule);
+  await writeFile(AUTOMATION_RULES_FILE, `${JSON.stringify(cleaned, null, 2)}\n`);
   return cleaned;
 }
 
@@ -298,8 +495,12 @@ function parseRawHex(raw) {
   return Buffer.from(raw.slice(2), "hex");
 }
 
+function isDocumentationHost(host) {
+  return /^(192\.0\.2|198\.51\.100|203\.0\.113)\.\d{1,3}$/.test(String(host ?? ""));
+}
+
 async function readSmartMeterStatus(config) {
-  if (!config.smartMeterHost) {
+  if (!config.smartMeterHost || isDocumentationHost(config.smartMeterHost)) {
     return { configured: false, host: null };
   }
   try {
@@ -329,7 +530,7 @@ async function readSmartMeterStatus(config) {
 }
 
 async function readMeterStatus(config) {
-  if (!config.meterHost) {
+  if (!config.meterHost || isDocumentationHost(config.meterHost)) {
     return { configured: false, host: null };
   }
   try {
@@ -347,6 +548,37 @@ async function readMeterStatus(config) {
   }
 }
 
+async function safeCli(command, args = {}, positional = []) {
+  try {
+    return await runCliQueued(command, args, positional);
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
+async function settingWithCache(config, key, reader) {
+  const cached = config.settingCache?.[key] ?? null;
+  const data = await reader();
+  if (data && !data.error && (data.raw || data.decoded)) {
+    config.settingCache = {
+      ...(config.settingCache ?? {}),
+      [key]: {
+        lastKnown: data,
+        lastReadAt: new Date().toISOString(),
+      },
+    };
+    await writeConfig(config);
+    return { ...data, available: true };
+  }
+  return {
+    ...(data ?? {}),
+    available: false,
+    lastKnown: cached?.lastKnown ?? null,
+    lastReadAt: cached?.lastReadAt ?? null,
+    error: data?.error ?? "setting unavailable in current device mode",
+  };
+}
+
 async function readAllStatus() {
   // One dashboard refresh fans out into several short CLI calls. The queue keeps
   // node-echonet-lite from fighting itself over UDP port 3610.
@@ -356,15 +588,17 @@ async function readAllStatus() {
     ...(config.solarEnabled ? { "solar-host": config.solarHost } : { "no-solar": true }),
     ...(config.fuelCellEnabled ? fuelCellArgs(config.fuelCellHosts) : { "no-fuel-cell": true }),
   };
+  const batteryConfigured = config.batteryHost && !isDocumentationHost(config.batteryHost);
+  const skippedSetting = { available: false, error: "battery host is not configured", lastKnown: null, lastReadAt: null };
   const [energy, smartMeter, meter, mode, dischargeLimit, chargeWindow, dischargeWindow, vendor] = await Promise.all([
-    runCliQueued("energy-status", energyArgs),
+    batteryConfigured ? safeCli("energy-status", energyArgs) : Promise.resolve({ battery: { configured: false } }),
     readSmartMeterStatus(config),
     readMeterStatus(config),
-    runCliQueued("vendor-profile", { host: config.batteryHost }),
-    runCliQueued("discharge-limit", { host: config.batteryHost }),
-    runCliQueued("osaifu-charge-window", { host: config.batteryHost }),
-    runCliQueued("osaifu-discharge-window", { host: config.batteryHost }),
-    runCliQueued("dump-vendor", { host: config.batteryHost }),
+    batteryConfigured ? safeCli("vendor-profile", { host: config.batteryHost }) : Promise.resolve({ error: "battery host is not configured" }),
+    batteryConfigured ? settingWithCache(config, "discharge_limit", () => safeCli("discharge-limit", { host: config.batteryHost })) : Promise.resolve(skippedSetting),
+    batteryConfigured ? settingWithCache(config, "osaifu_charge_window", () => safeCli("osaifu-charge-window", { host: config.batteryHost })) : Promise.resolve(skippedSetting),
+    batteryConfigured ? settingWithCache(config, "osaifu_discharge_window", () => safeCli("osaifu-discharge-window", { host: config.batteryHost })) : Promise.resolve(skippedSetting),
+    batteryConfigured ? safeCli("dump-vendor", { host: config.batteryHost }) : Promise.resolve({ error: "battery host is not configured" }),
   ]);
 
   async function hydrateWindowRaw(windowData, epcHex) {
@@ -373,7 +607,7 @@ async function readAllStatus() {
     // best chance to populate selectors without inventing fallback values.
     if (windowData?.raw) return windowData;
     try {
-      const rawRead = await runCliQueued("raw-get", { host: config.batteryHost, eoj: "0x027D01" }, [epcHex]);
+      const rawRead = await safeCli("raw-get", { host: config.batteryHost, eoj: "0x027D01" }, [epcHex]);
       if (rawRead?.raw) {
         return {
           ...windowData,
@@ -399,6 +633,7 @@ async function readAllStatus() {
     features: {
       solarEnabled: config.solarEnabled,
       fuelCellEnabled: config.fuelCellEnabled,
+      rateMode: config.rateMode,
       offPeakSavingsEnabled: config.offPeakSavingsEnabled,
     },
     energy,
@@ -414,9 +649,11 @@ async function readAllStatus() {
     read_at: new Date().toISOString(),
   };
   status.rates = {
+    rateMode: config.rateMode,
     standardRateYenPerKwh: config.standardRateYenPerKwh,
     offPeakRateYenPerKwh: config.offPeakRateYenPerKwh,
     offPeakSavingsEnabled: config.offPeakSavingsEnabled,
+    rateBands: config.rateBands,
   };
   status.sample = await recordStatusSample(status, config);
   const today = new Date();
@@ -522,6 +759,130 @@ async function runDueSchedules() {
   if (changed) await writeSchedules(schedules);
 }
 
+function cleanAutomationRule(input = {}) {
+  const conditions = input.conditions ?? {};
+  return {
+    id: String(input.id || randomUUID()),
+    name: String(input.name || "Charging demand guard"),
+    type: String(input.type || "backup-demand-guard"),
+    enabled: input.enabled === true,
+    conditions: {
+      source: ["houseDemandW", "gridImportW"].includes(conditions.source) ? conditions.source : "houseDemandW",
+      breakerAmps: configNumber(conditions.breakerAmps, DEFAULT_CONFIG.automation.breakerAmps, 1, 400),
+      breakerVoltage: configNumber(conditions.breakerVoltage, DEFAULT_CONFIG.automation.breakerVoltage, 1, 1000),
+      reserveAmps: configNumber(conditions.reserveAmps, DEFAULT_CONFIG.automation.reserveAmps, 0, 200),
+      batteryChargingEstimateW: configNumber(conditions.batteryChargingEstimateW, 1000, 0, 20000),
+      restoreBelowAmps: configNumber(conditions.restoreBelowAmps, Math.max(1, DEFAULT_CONFIG.automation.breakerAmps - 10), 1, 400),
+      restoreDelaySeconds: configNumber(conditions.restoreDelaySeconds, 300, 0, 86400),
+    },
+    action: "set-mode",
+    payload: { mode: "standby" },
+    restoreAction: "set-mode",
+    restorePayload: { mode: "auto" },
+    cooldownSeconds: configNumber(input.cooldownSeconds, 300, 0, 86400),
+    createdAt: input.createdAt || new Date().toISOString(),
+    updatedAt: input.updatedAt || new Date().toISOString(),
+    lastResult: input.lastResult ?? null,
+    state: input.state && typeof input.state === "object" ? input.state : {},
+  };
+}
+
+function automationDemandWatts(status, source) {
+  if (source === "gridImportW") return Number(status.meter?.grid_import_power?.value);
+  return Number(status.meter?.house_demand_power?.value);
+}
+
+function batteryOperationMode(status) {
+  return status.energy?.battery?.operation_mode?.value
+    ?? status.energy?.battery?.operation_mode?.human
+    ?? null;
+}
+
+function batteryChargingWatts(status) {
+  const watts = Number(status.energy?.battery?.instant_power?.value);
+  if (!Number.isFinite(watts)) return null;
+  return Math.max(0, watts);
+}
+
+function canRunAutomation(rule, now) {
+  if (rule.lastResult?.skipped) return true;
+  const lastAt = rule.lastResult?.at ? new Date(rule.lastResult.at).getTime() : 0;
+  return !lastAt || (now.getTime() - lastAt) / 1000 >= rule.cooldownSeconds;
+}
+
+async function evaluateAutomationRule(rule, status, now = new Date()) {
+  if (!rule.enabled) return { changed: false, result: { skipped: "disabled" } };
+  if (rule.type !== "backup-demand-guard") return { changed: false, result: { skipped: "unknown rule type" } };
+
+  const operationMode = batteryOperationMode(status);
+  const demandW = automationDemandWatts(status, rule.conditions.source);
+  if (!Number.isFinite(demandW)) return { changed: false, result: { skipped: "demand unavailable" } };
+
+  const breakerLimitW = Math.max(0, (rule.conditions.breakerAmps - rule.conditions.reserveAmps) * rule.conditions.breakerVoltage);
+  const batteryChargingW = batteryChargingWatts(status);
+  const actualDemandWithChargingW = Number.isFinite(batteryChargingW) ? demandW + batteryChargingW : null;
+  const estimatedRestoredDemandW = demandW + rule.conditions.batteryChargingEstimateW;
+  const restoreLimitW = rule.conditions.restoreBelowAmps * rule.conditions.breakerVoltage;
+
+  if (operationMode === "auto" && actualDemandWithChargingW !== null && batteryChargingW > 0 && actualDemandWithChargingW >= breakerLimitW) {
+    if (!canRunAutomation(rule, now)) return { changed: false, result: { skipped: "cooldown" } };
+    const result = await executeAction(rule.action, rule.payload);
+    rule.state = {
+      ...rule.state,
+      awaitingRestore: true,
+      restoreSince: null,
+      previousMode: operationMode,
+    };
+    rule.lastResult = { ok: true, at: now.toISOString(), kind: "guard", operationMode, demandW, batteryChargingW, actualDemandWithChargingW, breakerLimitW, result };
+    return { changed: true, result: rule.lastResult };
+  }
+
+  if (rule.state?.awaitingRestore && demandW <= restoreLimitW) {
+    if (estimatedRestoredDemandW > breakerLimitW) {
+      rule.state = { ...rule.state, restoreSince: null };
+      return { changed: true, result: { skipped: "restore would exceed breaker reserve", demandW, estimatedRestoredDemandW, breakerLimitW } };
+    }
+    const restoreSince = rule.state.restoreSince ? new Date(rule.state.restoreSince).getTime() : now.getTime();
+    rule.state.restoreSince = new Date(restoreSince).toISOString();
+    if ((now.getTime() - restoreSince) / 1000 >= rule.conditions.restoreDelaySeconds && canRunAutomation(rule, now)) {
+      const result = await executeAction(rule.restoreAction, rule.restorePayload);
+      rule.state = { ...rule.state, awaitingRestore: false, restoreSince: null };
+      rule.lastResult = { ok: true, at: now.toISOString(), kind: "restore", demandW, estimatedRestoredDemandW, breakerLimitW, restoreLimitW, result };
+      return { changed: true, result: rule.lastResult };
+    }
+    return { changed: true, result: { skipped: "waiting for restore delay", demandW, estimatedRestoredDemandW, breakerLimitW, restoreLimitW } };
+  }
+
+  if (rule.state?.awaitingRestore && demandW > restoreLimitW) {
+    rule.state = { ...rule.state, restoreSince: null };
+    return { changed: true, result: { skipped: "restore demand still high", demandW, restoreLimitW } };
+  }
+
+  return { changed: false, result: { skipped: "conditions not met", operationMode, demandW, batteryChargingW, actualDemandWithChargingW, estimatedRestoredDemandW, breakerLimitW } };
+}
+
+async function runAutomationRules() {
+  const rules = await readAutomationRules();
+  if (!rules.some((rule) => rule.enabled)) return;
+  const status = await readAllStatus();
+  const now = new Date();
+  let changed = false;
+  for (const rule of rules) {
+    try {
+      const result = await evaluateAutomationRule(rule, status, now);
+      changed = changed || result.changed;
+      if (!result.result?.skipped) continue;
+      rule.lastResult = { ok: true, at: now.toISOString(), ...result.result };
+      changed = true;
+    } catch (err) {
+      rule.lastResult = { ok: false, at: now.toISOString(), error: err.message };
+      changed = true;
+    }
+    rule.updatedAt = now.toISOString();
+  }
+  if (changed) await writeAutomationRules(rules);
+}
+
 function inferDevice(instances) {
   const set = new Set(instances.map((item) => String(item).toLowerCase().slice(0, 4)));
   const roles = [];
@@ -557,7 +918,11 @@ function localNetworkHints(config) {
       }
     }
   }
-  return { configuredSubnets, containerSubnets: [...new Set(containerSubnets)] };
+  return {
+    configuredSubnets,
+    containerSubnets: [...new Set(containerSubnets)],
+    userSubnets: normalizeSubnets(config.discoverySubnets),
+  };
 }
 
 function ipRangeFromCidr(cidr) {
@@ -689,12 +1054,18 @@ function discoveryResult(devices, network, config) {
   };
 }
 
-async function discoverDevices(timeout = 5, mode = "broadcast", progress = () => {}) {
+async function discoverDevices(timeout = 5, mode = "broadcast", progress = () => {}, requestedSubnets = []) {
   const config = await readConfig();
   const network = localNetworkHints(config);
   const scanTimeout = Number(timeout) || 5;
   if (mode === "active") {
-    const subnets = network.containerSubnets.length ? network.containerSubnets : network.configuredSubnets;
+    const subnets = normalizeSubnets(requestedSubnets).length
+      ? normalizeSubnets(requestedSubnets)
+      : network.userSubnets.length
+        ? network.userSubnets
+        : network.configuredSubnets.length
+          ? network.configuredSubnets
+          : network.containerSubnets;
     const devices = await activeScanSubnets(
       subnets,
       Math.max(1000, scanTimeout * 1000),
@@ -736,7 +1107,7 @@ function updateDiscoveryJob(job, patch) {
   Object.assign(job, patch, { updatedAt: new Date().toISOString() });
 }
 
-function startDiscoveryJob(timeout, mode = "broadcast") {
+function startDiscoveryJob(timeout, mode = "broadcast", subnets = []) {
   cleanupDiscoveryJobs();
   const job = {
     id: randomUUID(),
@@ -752,7 +1123,7 @@ function startDiscoveryJob(timeout, mode = "broadcast") {
     updatedAt: new Date().toISOString(),
   };
   discoveryJobs.set(job.id, job);
-  discoverDevices(timeout, mode, (patch) => updateDiscoveryJob(job, patch))
+  discoverDevices(timeout, mode, (patch) => updateDiscoveryJob(job, patch), subnets)
     .then((result) => {
       updateDiscoveryJob(job, {
         status: "complete",
@@ -775,7 +1146,11 @@ function startScheduler() {
   scheduleTimer = setInterval(() => {
     runDueSchedules().catch((err) => console.error("scheduler:", err.message));
   }, 15000);
+  automationTimer = setInterval(() => {
+    runAutomationRules().catch((err) => console.error("automation:", err.message));
+  }, 30000);
   runDueSchedules().catch((err) => console.error("scheduler:", err.message));
+  runAutomationRules().catch((err) => console.error("automation:", err.message));
 }
 
 async function api(req, res, url) {
@@ -785,13 +1160,18 @@ async function api(req, res, url) {
   if (req.method === "PUT" && url.pathname === "/api/config") {
     return json(res, 200, { ...(await writeConfig(await readBody(req))), port: PORT });
   }
+  if (req.method === "POST" && url.pathname === "/api/history/trim") {
+    const config = await readConfig();
+    const body = await readBody(req);
+    return json(res, 200, await trimHistory(body.retentionDays ?? config.historyRetentionDays));
+  }
   if (req.method === "POST" && url.pathname === "/api/discovery") {
     const body = await readBody(req);
-    return json(res, 200, await discoverDevices(body.timeout, body.mode));
+    return json(res, 200, await discoverDevices(body.timeout, body.mode, () => {}, body.subnets));
   }
   if (req.method === "POST" && url.pathname === "/api/discovery/jobs") {
     const body = await readBody(req);
-    return json(res, 202, startDiscoveryJob(body.timeout, body.mode));
+    return json(res, 202, startDiscoveryJob(body.timeout, body.mode, body.subnets));
   }
   if (req.method === "GET" && url.pathname.startsWith("/api/discovery/jobs/")) {
     cleanupDiscoveryJobs();
@@ -818,6 +1198,34 @@ async function api(req, res, url) {
   }
   if (req.method === "GET" && url.pathname === "/api/schedules") {
     return json(res, 200, await readSchedules());
+  }
+  if (req.method === "GET" && url.pathname === "/api/automation-rules") {
+    return json(res, 200, await readAutomationRules());
+  }
+  if (req.method === "POST" && url.pathname === "/api/automation-rules") {
+    const body = await readBody(req);
+    const rules = await readAutomationRules();
+    const rule = cleanAutomationRule({ ...body, id: randomUUID(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    rules.push(rule);
+    await writeAutomationRules(rules);
+    return json(res, 201, rule);
+  }
+  if (req.method === "PATCH" && url.pathname.startsWith("/api/automation-rules/")) {
+    const id = url.pathname.split("/").pop();
+    const body = await readBody(req);
+    const rules = await readAutomationRules();
+    const index = rules.findIndex((item) => item.id === id);
+    if (index < 0) return json(res, 404, { error: "automation rule not found" });
+    rules[index] = cleanAutomationRule({ ...rules[index], ...body, id, updatedAt: new Date().toISOString() });
+    await writeAutomationRules(rules);
+    return json(res, 200, rules[index]);
+  }
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/automation-rules/")) {
+    const id = url.pathname.split("/").pop();
+    const rules = await readAutomationRules();
+    const next = rules.filter((item) => item.id !== id);
+    await writeAutomationRules(next);
+    return json(res, 200, { ok: next.length !== rules.length });
   }
   if (req.method === "POST" && url.pathname === "/api/schedules") {
     const body = await readBody(req);
@@ -880,7 +1288,7 @@ async function serveStatic(res, pathname) {
   }
 }
 
-const server = http.createServer(async (req, res) => {
+export const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   try {
     if (url.pathname.startsWith("/api/")) {
@@ -893,13 +1301,31 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-await ensureDataDir();
-startScheduler();
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`HOME ENERGY & BATTERY listening on http://0.0.0.0:${PORT}`);
-});
+export {
+  cleanAutomationRule,
+  cleanConfig,
+  evaluateAutomationRule,
+  normalizeRateBands,
+  normalizeSubnets,
+  rateForTimestamp,
+  sampleFromStatus,
+  summarizeSamples,
+};
+
+async function main() {
+  await ensureDataDir();
+  startScheduler();
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`HOME ENERGY & BATTERY listening on http://0.0.0.0:${PORT}`);
+  });
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  await main();
+}
 
 process.on("SIGTERM", () => {
   if (scheduleTimer) clearInterval(scheduleTimer);
+  if (automationTimer) clearInterval(automationTimer);
   server.close(() => process.exit(0));
 });

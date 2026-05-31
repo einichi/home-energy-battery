@@ -190,9 +190,10 @@
 
       <section id="settingsPage" class="page" aria-label="Settings">
         <section class="workspace">
-          <!-- Battery settings write real ECHONET properties. The frontend keeps
-               these controls still while editing; live polling stays dashboard-only. -->
-          <div class="panel settings-panel">
+          <div class="settings-column primary-column">
+            <!-- Battery settings write real ECHONET properties. The frontend keeps
+                 these controls still while editing; live polling stays dashboard-only. -->
+            <div class="panel settings-panel">
             <div class="panel-title">
               <h1 data-i18n="batterySettings">Battery Settings</h1>
             </div>
@@ -289,6 +290,153 @@
               />
               <button data-i18n="run">Run</button>
             </form>
+            </div>
+
+            <div class="panel schedule-panel">
+              <div class="panel-title">
+                <h1 data-i18n="schedules">Schedules</h1>
+              </div>
+
+              <form id="scheduleForm" class="schedule-form">
+                <label>
+                  <span data-i18n="action">Action</span>
+                  <select id="scheduleAction">
+                    <option value="vendor-profile">Set charging profile</option>
+                    <option value="discharge-limit">Set discharge limit</option>
+                    <option value="osaifu-charge-window">
+                      Set charge window
+                    </option>
+                    <option value="osaifu-discharge-window">
+                      Set discharge window
+                    </option>
+                    <option value="charge">Charge with optional target Wh</option>
+                    <option value="discharge">
+                      Discharge with optional target Wh
+                    </option>
+                    <option value="set-mode">Set operation mode</option>
+                  </select>
+                </label>
+                <div id="schedulePayload" class="payload-grid"></div>
+                <label>
+                  <span data-i18n="repeat">Repeat</span>
+                  <select id="scheduleRepeat">
+                    <option value="once" data-i18n="once">Once</option>
+                    <option value="daily" data-i18n="daily">Daily</option>
+                  </select>
+                </label>
+                <fieldset id="scheduleDays" class="day-picker">
+                  <legend data-i18n="days">Days</legend>
+                  <label
+                    ><input type="checkbox" value="0" checked />
+                    <span data-i18n="daySun">Sun</span></label
+                  >
+                  <label
+                    ><input type="checkbox" value="1" checked />
+                    <span data-i18n="dayMon">Mon</span></label
+                  >
+                  <label
+                    ><input type="checkbox" value="2" checked />
+                    <span data-i18n="dayTue">Tue</span></label
+                  >
+                  <label
+                    ><input type="checkbox" value="3" checked />
+                    <span data-i18n="dayWed">Wed</span></label
+                  >
+                  <label
+                    ><input type="checkbox" value="4" checked />
+                    <span data-i18n="dayThu">Thu</span></label
+                  >
+                  <label
+                    ><input type="checkbox" value="5" checked />
+                    <span data-i18n="dayFri">Fri</span></label
+                  >
+                  <label
+                    ><input type="checkbox" value="6" checked />
+                    <span data-i18n="daySat">Sat</span></label
+                  >
+                </fieldset>
+                <label>
+                  <span data-i18n="time">Time</span>
+                  <input id="scheduleTime" type="datetime-local" />
+                </label>
+                <button data-i18n="createSchedule">Create Schedule</button>
+              </form>
+
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th data-i18n="when">When</th>
+                      <th data-i18n="action">Action</th>
+                      <th data-i18n="details">Details</th>
+                      <th data-i18n="status">Status</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="scheduleRows"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="panel automation-panel">
+              <div class="panel-title">
+                <h1 data-i18n="automationRules">Automation Rules</h1>
+              </div>
+
+              <form id="automationRuleForm" class="config-form">
+                <fieldset class="feature-options">
+                  <legend data-i18n="backupDemandGuard">Charging Demand Guard</legend>
+                  <label class="check-row">
+                    <input id="automationEnabled" type="checkbox" />
+                    <span data-i18n="backupGuardEnabled">Enable charging demand guard</span>
+                  </label>
+                  <label>
+                    <span data-i18n="breakerAmps">Breaker amps</span>
+                    <input id="automationBreakerAmps" type="number" min="1" step="1" inputmode="numeric" />
+                  </label>
+                  <label>
+                    <span data-i18n="reserveAmps">Reserve amps</span>
+                    <input id="automationReserveAmps" type="number" min="0" step="1" inputmode="numeric" />
+                  </label>
+                  <label>
+                    <span data-i18n="batteryChargeEstimate">Maximum battery charge watts</span>
+                    <input id="automationBatteryEstimate" type="number" min="0" step="100" inputmode="numeric" />
+                  </label>
+                  <label>
+                    <span data-i18n="restoreBelowAmps">Restore below amps</span>
+                    <input id="automationRestoreBelow" type="number" min="1" step="1" inputmode="numeric" />
+                  </label>
+                  <label>
+                    <span data-i18n="restoreDelay">Restore delay seconds</span>
+                    <input id="automationRestoreDelay" type="number" min="0" step="30" inputmode="numeric" />
+                  </label>
+                  <button data-i18n="saveAutomation">Save Automation</button>
+                  <div id="automationStatus" class="automation-status"></div>
+                </fieldset>
+              </form>
+            </div>
+          </div>
+
+          <div class="settings-column utility-column">
+          <div class="panel preferences-panel">
+            <div class="panel-title">
+              <h1 data-i18n="preferences">Preferences</h1>
+            </div>
+
+            <form id="preferencesForm" class="config-form">
+              <label>
+                <span data-i18n="language">Language</span>
+                <select id="languageSelect">
+                  <option value="en">English</option>
+                  <option value="ja">日本語</option>
+                </select>
+              </label>
+              <label>
+                <span data-i18n="updateInterval">Update interval (seconds)</span>
+                <input id="updateIntervalSeconds" type="number" min="5" max="3600" step="1" inputmode="numeric" />
+              </label>
+              <button data-i18n="savePreferences">Save Preferences</button>
+            </form>
           </div>
 
           <div class="panel device-panel">
@@ -297,47 +445,6 @@
             <div class="panel-title">
               <h1 data-i18n="deviceAddresses">Device Addresses</h1>
             </div>
-
-            <label class="language-row">
-              <span data-i18n="language">Language</span>
-              <select id="languageSelect">
-                <option value="en">English</option>
-                <option value="ja">日本語</option>
-              </select>
-            </label>
-
-            <form id="rateConfigForm" class="config-form rate-form">
-              <fieldset class="feature-options">
-                <legend data-i18n="electricityRates">Electricity Rates</legend>
-                <label>
-                  <span data-i18n="standardRate">Standard rate</span>
-                  <input
-                    id="standardRate"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    inputmode="decimal"
-                  />
-                </label>
-                <label>
-                  <span data-i18n="offPeakRate">Off-peak rate</span>
-                  <input
-                    id="offPeakRate"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    inputmode="decimal"
-                  />
-                </label>
-                <label class="check-row">
-                  <input id="offPeakSavingsEnabled" type="checkbox" />
-                  <span data-i18n="offPeakSavingsEnabled"
-                    >Calculate off-peak battery charging savings</span
-                  >
-                </label>
-                <button data-i18n="saveRates">Save Rates</button>
-              </fieldset>
-            </form>
 
             <form id="deviceConfigForm" class="config-form">
               <fieldset class="feature-options">
@@ -396,10 +503,18 @@
                   placeholder="optional"
                 />
               </label>
+              <label>
+                <span data-i18n="discoverySubnets">Discovery subnets</span>
+                <input
+                  id="configDiscoverySubnets"
+                  inputmode="decimal"
+                  placeholder="192.168.1.0/24"
+                />
+              </label>
               <button data-i18n="saveAddresses">Save Addresses</button>
             </form>
 
-            <div class="discovery-box">
+            <div class="discovery-box section-box">
               <div>
                 <h2 data-i18n="autoDiscovery">Auto-Discovery</h2>
               </div>
@@ -446,90 +561,102 @@
             <div id="discoveryResults" class="discovery-results"></div>
           </div>
 
-          <div class="panel schedule-panel">
+          <div class="panel rates-panel">
             <div class="panel-title">
-              <h1 data-i18n="schedules">Schedules</h1>
+              <h1 data-i18n="electricityRates">Electricity Rates</h1>
             </div>
-
-            <form id="scheduleForm" class="schedule-form">
-              <label>
-                <span data-i18n="action">Action</span>
-                <select id="scheduleAction">
-                  <option value="vendor-profile">Set charging profile</option>
-                  <option value="discharge-limit">Set discharge limit</option>
-                  <option value="osaifu-charge-window">
-                    Set charge window
-                  </option>
-                  <option value="osaifu-discharge-window">
-                    Set discharge window
-                  </option>
-                  <option value="charge">Charge with optional target Wh</option>
-                  <option value="discharge">
-                    Discharge with optional target Wh
-                  </option>
-                  <option value="set-mode">Set operation mode</option>
-                </select>
-              </label>
-              <div id="schedulePayload" class="payload-grid"></div>
-              <label>
-                <span data-i18n="repeat">Repeat</span>
-                <select id="scheduleRepeat">
-                  <option value="once" data-i18n="once">Once</option>
-                  <option value="daily" data-i18n="daily">Daily</option>
-                </select>
-              </label>
-              <fieldset id="scheduleDays" class="day-picker">
-                <legend data-i18n="days">Days</legend>
-                <label
-                  ><input type="checkbox" value="0" checked />
-                  <span data-i18n="daySun">Sun</span></label
-                >
-                <label
-                  ><input type="checkbox" value="1" checked />
-                  <span data-i18n="dayMon">Mon</span></label
-                >
-                <label
-                  ><input type="checkbox" value="2" checked />
-                  <span data-i18n="dayTue">Tue</span></label
-                >
-                <label
-                  ><input type="checkbox" value="3" checked />
-                  <span data-i18n="dayWed">Wed</span></label
-                >
-                <label
-                  ><input type="checkbox" value="4" checked />
-                  <span data-i18n="dayThu">Thu</span></label
-                >
-                <label
-                  ><input type="checkbox" value="5" checked />
-                  <span data-i18n="dayFri">Fri</span></label
-                >
-                <label
-                  ><input type="checkbox" value="6" checked />
-                  <span data-i18n="daySat">Sat</span></label
-                >
+            <form id="rateConfigForm" class="config-form rate-form">
+              <fieldset class="feature-options">
+                <legend data-i18n="rateMode">Rate Mode</legend>
+                <div class="rate-mode-options">
+                  <label>
+                    <input type="radio" name="rateMode" value="simple" />
+                    <span data-i18n="rateModeSimple">Simple</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="rateMode" value="offPeak" />
+                    <span data-i18n="rateModeOffPeak">Off-Peak</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="rateMode" value="multi" />
+                    <span data-i18n="rateModeMulti">Multi-Rate</span>
+                  </label>
+                </div>
+                <div class="rate-mode-panel" data-rate-mode-panel="simple">
+                  <label>
+                    <span data-i18n="simpleRate">Rate</span>
+                    <input
+                      id="simpleRate"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputmode="decimal"
+                    />
+                  </label>
+                </div>
+                <div class="rate-mode-panel" data-rate-mode-panel="offPeak">
+                  <label>
+                    <span data-i18n="standardRate">Standard rate</span>
+                    <input
+                      id="standardRate"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputmode="decimal"
+                    />
+                  </label>
+                  <label>
+                    <span data-i18n="offPeakRate">Off-peak rate</span>
+                    <input
+                      id="offPeakRate"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputmode="decimal"
+                    />
+                  </label>
+                </div>
+                <div class="rate-mode-panel" data-rate-mode-panel="multi">
+                  <label>
+                    <span data-i18n="standardRate">Standard rate</span>
+                    <input
+                      id="multiStandardRate"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputmode="decimal"
+                    />
+                  </label>
+                  <div id="rateBands" class="rate-bands"></div>
+                  <button id="addRateBandBtn" class="ghost" type="button" data-i18n="addRateBand">
+                    Add rate band
+                  </button>
+                </div>
+                <button data-i18n="saveRates">Save Rates</button>
               </fieldset>
-              <label>
-                <span data-i18n="time">Time</span>
-                <input id="scheduleTime" type="datetime-local" />
-              </label>
-              <button data-i18n="createSchedule">Create Schedule</button>
             </form>
+          </div>
 
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th data-i18n="when">When</th>
-                    <th data-i18n="action">Action</th>
-                    <th data-i18n="details">Details</th>
-                    <th data-i18n="status">Status</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody id="scheduleRows"></tbody>
-              </table>
+          <div class="panel data-panel">
+            <div class="panel-title">
+              <h1 data-i18n="dataRetention">Data Retention</h1>
             </div>
+
+            <form id="historyConfigForm" class="config-form">
+              <fieldset class="feature-options">
+                <legend data-i18n="historyRetention">History Retention</legend>
+                <label>
+                  <span data-i18n="retentionDays">Keep samples for days</span>
+                  <input id="historyRetentionDays" type="number" min="1" step="1" inputmode="numeric" />
+                </label>
+                <button data-i18n="saveRetention">Save Retention</button>
+                <button id="trimHistoryBtn" class="ghost" type="button" data-i18n="trimHistoryNow">
+                  Trim history now
+                </button>
+              </fieldset>
+            </form>
+          </div>
+
           </div>
         </section>
       </section>

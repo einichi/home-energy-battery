@@ -7,7 +7,8 @@
   "scripts": {
     "node:help": "node home-energy-battery-node.js --help",
     "start": "node server.js",
-    "check": "node --check home-energy-battery-node.js && node --check server.js"
+    "check": "node --check home-energy-battery-node.js && node --check server.js && node --check public/app.js",
+    "test": "node tests/helpers.test.js"
   },
   "dependencies": {
     "node-echonet-lite": "^0.6.0"

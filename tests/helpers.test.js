@@ -1,0 +1,116 @@
+import assert from "node:assert/strict";
+import {
+  cleanAutomationRule,
+  cleanConfig,
+  evaluateAutomationRule,
+  normalizeRateBands,
+  normalizeSubnets,
+  rateForTimestamp,
+  sampleFromStatus,
+  summarizeSamples,
+} from "../server.js";
+
+const migrated = cleanConfig({
+  standardRateYenPerKwh: 36,
+  offPeakRateYenPerKwh: 18,
+  offPeakSavingsEnabled: true,
+  settingCache: {
+    discharge_limit: {
+      lastKnown: { decoded: { percent: 30 } },
+      lastReadAt: "2026-05-31T00:00:00.000Z",
+    },
+  },
+});
+assert.equal(migrated.rateMode, "offPeak");
+assert.equal(migrated.rateBands.length, 2);
+assert.equal(migrated.offPeakSavingsEnabled, true);
+assert.equal(Math.max(...migrated.rateBands.map((band) => band.yenPerKwh)), 36);
+assert.equal(migrated.settingCache.discharge_limit.lastKnown.decoded.percent, 30);
+
+const simple = cleanConfig({ standardRateYenPerKwh: 42 });
+assert.equal(simple.rateMode, "simple");
+assert.equal(simple.offPeakSavingsEnabled, false);
+assert.equal(simple.rateBands.length, 1);
+assert.equal(simple.historyRetentionDays, 1095);
+assert.equal(simple.updateIntervalSeconds, 15);
+assert.equal(rateForTimestamp(simple.rateBands, "2026-05-31T23:30:00+09:00").yenPerKwh, 42);
+
+assert.equal(cleanConfig({ updateIntervalSeconds: 2 }).updateIntervalSeconds, 5);
+assert.equal(cleanConfig({ updateIntervalSeconds: 30 }).updateIntervalSeconds, 30);
+
+assert.deepEqual(normalizeSubnets(["192.168.1.0/24", "bad", "192.168.1.0/24"]), ["192.168.1.0/24"]);
+
+const bands = normalizeRateBands({
+  rateBands: [
+    { start: "23:00", end: "07:00", yenPerKwh: 20, label: "Night" },
+    { start: "07:00", end: "23:00", yenPerKwh: 40, label: "Day" },
+  ],
+});
+assert.equal(rateForTimestamp(bands, "2026-05-31T23:30:00+09:00").yenPerKwh, 20);
+assert.equal(rateForTimestamp(bands, "2026-05-31T12:00:00+09:00").yenPerKwh, 40);
+
+const partialBands = normalizeRateBands({
+  rateMode: "multi",
+  rateBands: [{ start: "23:00", end: "07:00", yenPerKwh: 20, label: "Night" }],
+});
+assert.equal(rateForTimestamp(partialBands, "2026-05-31T12:00:00+09:00", 40).yenPerKwh, 40);
+
+const sample = sampleFromStatus({
+  read_at: "2026-05-31T12:15:00+09:00",
+  energy: {
+    battery: { instant_power: { value: 500 }, remaining_percent: { value: 60 } },
+    solar: { instant_power: { value: 1200 } },
+    fuel_cells: [{ instant_power: { value: 300 } }],
+  },
+  meter: {
+    house_demand_power: { value: 1800 },
+    grid_import_power: { value: 200 },
+    grid_export_power: { value: 100 },
+  },
+}, { ...migrated, rateBands: bands }, { timestamp: "2026-05-31T11:45:00+09:00" });
+assert.equal(sample.rateYenPerKwh, 40);
+assert.equal(sample.solarSavingYen, 24);
+
+const summary = summarizeSamples([{ solarSavingYen: 1, offPeakSavingYen: 2 }, { solarSavingYen: 3, offPeakSavingYen: 4 }]);
+assert.equal(summary.solarSavingYen, 4);
+assert.equal(summary.offPeakSavingYen, 6);
+
+const rule = cleanAutomationRule({ enabled: true, conditions: { breakerAmps: 40, reserveAmps: 5 } });
+assert.equal(rule.action, "set-mode");
+assert.equal(rule.payload.mode, "standby");
+assert.equal(rule.restoreAction, "set-mode");
+assert.equal(rule.restorePayload.mode, "auto");
+const skipped = await evaluateAutomationRule(rule, {
+  settings: { mode: { decoded: { mode: "eco" } } },
+  energy: { battery: { operation_mode: { value: "auto" }, instant_power: { value: 0 } } },
+  meter: { house_demand_power: { value: 1000 } },
+}, new Date("2026-05-31T00:00:00.000Z"));
+assert.equal(skipped.result.skipped, "conditions not met");
+
+const actualChargingSafe = await evaluateAutomationRule(cleanAutomationRule({
+  enabled: true,
+  conditions: { breakerAmps: 40, reserveAmps: 5, batteryChargingEstimateW: 1000 },
+}), {
+  energy: { battery: { operation_mode: { value: "auto" }, instant_power: { value: 600 } } },
+  meter: { house_demand_power: { value: 2800 } },
+}, new Date("2026-05-31T00:00:00.000Z"));
+assert.equal(actualChargingSafe.result.skipped, "conditions not met");
+assert.equal(actualChargingSafe.result.actualDemandWithChargingW, 3400);
+
+const restoreWouldTrip = await evaluateAutomationRule(cleanAutomationRule({
+  enabled: true,
+  state: { awaitingRestore: true },
+  conditions: {
+    breakerAmps: 40,
+    reserveAmps: 5,
+    batteryChargingEstimateW: 1000,
+    restoreBelowAmps: 30,
+  },
+}), {
+  energy: { battery: { operation_mode: { value: "standby" }, instant_power: { value: 0 } } },
+  meter: { house_demand_power: { value: 2600 } },
+}, new Date("2026-05-31T00:00:00.000Z"));
+assert.equal(restoreWouldTrip.result.skipped, "restore would exceed breaker reserve");
+assert.equal(restoreWouldTrip.result.estimatedRestoredDemandW, 3600);
+
+console.log("helper tests passed");

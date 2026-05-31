@@ -353,27 +353,27 @@ label {
 }
 
 .workspace {
-  /* Settings are split into action-heavy battery controls, device configuration,
-     and schedules to reduce the chance of accidental command clicks. */
+  /* Settings are split by intent so address config, data retention, rates, and
+     state-changing controls do not blur together. */
   display: grid;
   grid-template-columns: minmax(520px, 1.45fr) minmax(360px, 1fr);
-  grid-template-areas:
-    "settings device"
-    "schedule device";
   gap: 16px;
   align-items: start;
 }
 
-.settings-panel {
-  grid-area: settings;
+.settings-column {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  min-width: 0;
 }
 
-.device-panel {
-  grid-area: device;
+.primary-column {
+  grid-column: 1;
 }
 
-.schedule-panel {
-  grid-area: schedule;
+.utility-column {
+  grid-column: 2;
 }
 
 .panel {
@@ -400,7 +400,7 @@ h2 {
 
 .setting-row {
   display: grid;
-  grid-template-columns: minmax(200px, 1fr) 190px 92px 78px;
+  grid-template-columns: minmax(180px, 1fr) minmax(140px, 190px) minmax(64px, 80px) 64px;
   gap: 12px;
   align-items: center;
   min-height: 78px;
@@ -415,7 +415,7 @@ h2 {
 .segmented {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  width: 280px;
+  width: 100%;
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
@@ -436,6 +436,8 @@ h2 {
 .segmented input {
   position: absolute;
   opacity: 0;
+  width: 0;
+  min-height: 0;
 }
 
 .segmented label:has(input:checked) {
@@ -468,8 +470,21 @@ output {
 
 .config-form {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
+}
+
+.setting-row input:not([type="checkbox"]):not([type="radio"]),
+.setting-row select,
+.setting-row button,
+.schedule-form input:not([type="checkbox"]):not([type="radio"]),
+.schedule-form select,
+.schedule-form button,
+.config-form input:not([type="checkbox"]):not([type="radio"]),
+.config-form select,
+.config-form button {
+  width: 100%;
+  min-width: 0;
 }
 
 .feature-options {
@@ -503,26 +518,86 @@ output {
 
 .language-row {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) 180px;
+  grid-template-columns: 1fr;
   gap: 12px;
   align-items: center;
-  margin-bottom: 16px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--border);
   font-size: 13px;
   font-weight: 800;
 }
 
 .config-form button {
-  grid-column: span 2;
+  grid-column: 1 / -1;
 }
 
 .rate-form {
-  margin-bottom: 16px;
+  margin-bottom: 0;
 }
 
 .rate-form .feature-options {
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.rate-form .feature-options,
+#historyConfigForm .feature-options,
+#automationRuleForm .feature-options {
+  padding: 0;
+  border: 0;
+}
+
+.rate-mode-options {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.rate-mode-options label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+}
+
+.rate-mode-options input {
+  width: 16px;
+  min-height: 16px;
+  padding: 0;
+}
+
+.rate-mode-panel {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.rate-bands {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 8px;
+}
+
+.rate-band-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  align-items: end;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.rates-panel .rate-band-row {
+  grid-template-columns: 1fr;
+}
+
+.rate-band-row .remove-rate-band {
+  grid-column: 1 / -1;
 }
 
 .rate-form .check-row,
@@ -535,7 +610,11 @@ output {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-top: 18px;
+  flex-wrap: wrap;
+}
+
+.section-box {
+  margin-top: 16px;
   padding-top: 16px;
   border-top: 1px solid var(--border);
 }
@@ -609,6 +688,26 @@ output {
   margin-top: 0;
 }
 
+.automation-status {
+  grid-column: 1 / -1;
+  min-height: 22px;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.trend-tooltip {
+  position: fixed;
+  z-index: 50;
+  max-width: 250px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  color: #f8fafc;
+  background: rgba(15, 23, 42, 0.92);
+  font-size: 0.78rem;
+  pointer-events: none;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.22);
+}
+
 .day-picker {
   grid-column: span 2;
   display: flex;
@@ -649,7 +748,7 @@ output {
 
 .payload-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -747,16 +846,50 @@ td code {
 
   .workspace {
     grid-template-columns: 1fr;
-    grid-template-areas:
-      "settings"
-      "schedule"
-      "device";
   }
 
-  .settings-panel,
-  .device-panel,
+  .settings-column {
+    grid-column: 1;
+  }
+}
+
+@media (max-width: 720px) {
+  .workspace {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .settings-column {
+    display: contents;
+  }
+
+  .preferences-panel {
+    order: 4;
+  }
+
+  .settings-panel {
+    order: 1;
+  }
+
   .schedule-panel {
-    grid-area: auto;
+    order: 2;
+  }
+
+  .automation-panel {
+    order: 3;
+  }
+
+  .device-panel {
+    order: 5;
+  }
+
+  .rates-panel {
+    order: 6;
+  }
+
+  .data-panel {
+    order: 7;
   }
 }
 
@@ -815,13 +948,16 @@ td code {
   .schedule-form,
   .payload-grid,
   .config-form,
-  .rate-form .feature-options {
+  .rate-form .feature-options,
+  .rate-mode-options,
+  .rate-mode-panel {
     grid-template-columns: 1fr;
   }
 
   .config-form button,
   .day-picker,
-  .language-row {
+  .language-row,
+  .rate-band-row {
     grid-column: auto;
     grid-template-columns: 1fr;
   }

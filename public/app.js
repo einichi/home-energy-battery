@@ -19,8 +19,10 @@ const state = {
   lastDiscovery: null,
   discoveryPollTimer: null,
   trendHistory: {},
+  trendHover: {},
   historyMode: false,
   historyHorizonMs: null,
+  automationRules: [],
 };
 
 const TREND_CONFIG = {
@@ -112,24 +114,51 @@ const I18N = {
     fuelCellGeneration: "Ene-Farm Generation",
     fuelCellStatus: "Ene-Farm Status",
     batterySettings: "Battery Settings",
-    chargingProfileHelp: "Choose the battery behavior profile used by the controller.",
+    chargingProfileHelp:
+      "Choose the battery behavior profile used by the controller.",
     dischargeLimitHelp: "Minimum charge to keep available for later use.",
     chargeWindow: "osaifu Charge Window",
-    chargeWindowHelp: "Hours when the battery is allowed to charge in osaifu mode.",
+    chargeWindowHelp:
+      "Hours when the battery is allowed to charge in osaifu mode.",
     dischargeWindow: "osaifu Discharge Window",
-    dischargeWindowHelp: "Hours when the battery is allowed to discharge in osaifu mode.",
+    dischargeWindowHelp:
+      "Hours when the battery is allowed to discharge in osaifu mode.",
     directAction: "Direct Action",
-    directActionHelp: "Send an immediate battery command. Energy target is optional for charge and discharge.",
+    directActionHelp:
+      "Send an immediate battery command. Energy target is optional for charge and discharge.",
     set: "Set",
     run: "Run",
     targetWh: "target Wh",
     deviceAddresses: "Device Addresses",
+    preferences: "Preferences",
+    preferencesRates: "Preferences & Rates",
+    dataDiscovery: "Data & Discovery",
+    dataRetention: "Data Retention",
     language: "Language",
+    updateInterval: "Update interval (seconds)",
+    savePreferences: "Save Preferences",
+    preferencesSaved: "Preferences saved",
     electricityRates: "Electricity Rates",
+    rateMode: "Rate Mode",
+    rateModeSimple: "Simple",
+    rateModeOffPeak: "Off-Peak",
+    rateModeMulti: "Multi-Rate",
+    simpleRate: "Rate (yen/kWh)",
     standardRate: "Standard rate (yen/kWh)",
     offPeakRate: "Off-peak rate (yen/kWh)",
     offPeakSavingsEnabled: "Calculate off-peak battery charging savings",
+    addRateBand: "Add rate band",
+    removeRateBand: "Remove",
+    rateBandLabel: "Label",
+    rateBandStart: "Start",
+    rateBandEnd: "End",
+    rateBandPrice: "Yen/kWh",
     saveRates: "Save Rates",
+    historyRetention: "History Retention",
+    retentionDays: "Keep samples for days",
+    saveRetention: "Save Retention",
+    trimHistoryNow: "Trim history now",
+    historyTrimmed: "History trimmed",
     installedEquipment: "Installed Equipment",
     solarEnabled: "Show solar generation",
     fuelCellEnabled: "Show Ene-Farm generation and status",
@@ -138,6 +167,7 @@ const I18N = {
     solar: "Solar",
     fuelCell: "Ene-Farm",
     utilityMeter: "Utility meter",
+    discoverySubnets: "Discovery subnets",
     optional: "optional",
     saveAddresses: "Save Addresses",
     autoDiscovery: "Auto-Discovery",
@@ -237,6 +267,17 @@ const I18N = {
     setChargeWindowAction: "Set charge window",
     setDischargeWindowAction: "Set discharge window",
     setOperationModeAction: "Set operation mode",
+    automationRules: "Automation Rules",
+    backupDemandGuard: "Charging Demand Guard",
+    backupGuardEnabled: "Enable charging demand guard",
+    breakerAmps: "Breaker amps",
+    reserveAmps: "Reserve amps",
+    batteryChargeEstimate: "Maximum battery charge watts",
+    restoreBelowAmps: "Restore below amps",
+    restoreDelay: "Restore delay seconds",
+    saveAutomation: "Save Automation",
+    automationSaved: "Automation saved",
+    automationNoRules: "No automation rules saved.",
   },
   ja: {
     brand: "ホームエネルギー <strong>& バッテリー</strong>",
@@ -267,24 +308,49 @@ const I18N = {
     fuelCellGeneration: "エネファーム発電",
     fuelCellStatus: "エネファーム状態",
     batterySettings: "蓄電池設定",
-    chargingProfileHelp: "コントローラーが使う蓄電池の動作プロファイルを選びます。",
+    chargingProfileHelp:
+      "コントローラーが使う蓄電池の動作プロファイルを選びます。",
     dischargeLimitHelp: "あとで使うために残しておく最低残量です。",
-    chargeWindow: "おさいふ充電時間帯",
-    chargeWindowHelp: "おさいふモードで充電を許可する時間帯です。",
-    dischargeWindow: "おさいふ放電時間帯",
-    dischargeWindowHelp: "おさいふモードで放電を許可する時間帯です。",
+    chargeWindow: "おサイフ充電時間帯",
+    chargeWindowHelp: "おサイフモードで充電を許可する時間帯です。",
+    dischargeWindow: "おサイフ放電時間帯",
+    dischargeWindowHelp: "おサイフモードで放電を許可する時間帯です。",
     directAction: "即時操作",
-    directActionHelp: "蓄電池にすぐ実行する指示を送ります。充電・放電では目標電力量を任意で指定できます。",
+    directActionHelp:
+      "蓄電池にすぐ実行する指示を送ります。充電・放電では目標電力量を任意で指定できます。",
     set: "設定",
     run: "実行",
     targetWh: "目標Wh",
     deviceAddresses: "機器アドレス",
+    preferences: "表示設定",
+    preferencesRates: "表示・料金設定",
+    dataDiscovery: "データと自動検出",
+    dataRetention: "保存期間",
     language: "言語",
+    updateInterval: "更新間隔（秒）",
+    savePreferences: "表示設定を保存",
+    preferencesSaved: "表示設定を保存しました",
     electricityRates: "電気料金",
+    rateMode: "料金モード",
+    rateModeSimple: "シンプル",
+    rateModeOffPeak: "夜間料金",
+    rateModeMulti: "複数料金",
+    simpleRate: "料金 (円/kWh)",
     standardRate: "通常料金 (円/kWh)",
     offPeakRate: "夜間料金 (円/kWh)",
     offPeakSavingsEnabled: "夜間充電の節約額を計算する",
+    addRateBand: "料金帯を追加",
+    removeRateBand: "削除",
+    rateBandLabel: "ラベル",
+    rateBandStart: "開始",
+    rateBandEnd: "終了",
+    rateBandPrice: "円/kWh",
     saveRates: "料金を保存",
+    historyRetention: "電力使用データの保存期間",
+    retentionDays: "保存日数",
+    saveRetention: "保存期間設定を保存",
+    trimHistoryNow: "データを今すぐトリム",
+    historyTrimmed: "履歴をトリムしました",
     installedEquipment: "設置済み設備",
     solarEnabled: "太陽光発電を表示",
     fuelCellEnabled: "エネファーム発電・状態を表示",
@@ -292,7 +358,8 @@ const I18N = {
     homePowerMeter: "家庭内電力メーター",
     solar: "太陽光",
     fuelCell: "エネファーム",
-    utilityMeter: "電力会社メーター",
+    utilityMeter: "スマートメーター",
+    discoverySubnets: "検出サブネット",
     optional: "任意",
     saveAddresses: "アドレスを保存",
     autoDiscovery: "自動検出",
@@ -392,9 +459,28 @@ const I18N = {
     setChargeWindowAction: "充電時間帯を設定",
     setDischargeWindowAction: "放電時間帯を設定",
     setOperationModeAction: "運転モードを設定",
+    automationRules: "自動化ルール",
+    backupDemandGuard: "ブレーカー落ちガード",
+    backupGuardEnabled: "ブレーカー落ちガードを有効化",
+    breakerAmps: "ブレーカー容量(A)",
+    reserveAmps: "余裕(A)",
+    batteryChargeEstimate: "蓄電池の最大充電電力(W)",
+    restoreBelowAmps: "復帰しきい値(A)",
+    restoreDelay: "復帰待機秒数",
+    saveAutomation: "自動化を保存",
+    automationSaved: "自動化を保存しました",
+    automationNoRules: "自動化ルールはありません。",
   },
 };
-const DAY_KEYS = ["daySun", "dayMon", "dayTue", "dayWed", "dayThu", "dayFri", "daySat"];
+const DAY_KEYS = [
+  "daySun",
+  "dayMon",
+  "dayTue",
+  "dayWed",
+  "dayThu",
+  "dayFri",
+  "daySat",
+];
 
 function t(key) {
   return I18N[state.language]?.[key] ?? I18N.en[key] ?? key;
@@ -409,7 +495,10 @@ function setLanguage(language) {
   // the active language, but device values are left untouched.
   state.language = ["en", "ja"].includes(language) ? language : "en";
   document.documentElement.lang = state.language;
-  document.title = state.language === "ja" ? "ホームエネルギー & バッテリー" : "HOME ENERGY & BATTERY";
+  document.title =
+    state.language === "ja"
+      ? "ホームエネルギー & バッテリー"
+      : "HOME ENERGY & BATTERY";
   document.querySelectorAll("[data-i18n]").forEach((el) => {
     const value = t(el.dataset.i18n);
     if (value.includes("<")) el.innerHTML = value;
@@ -420,7 +509,9 @@ function setLanguage(language) {
   });
   document.querySelectorAll("[data-mode-label]").forEach((el) => {
     const value = el.dataset.modeLabel;
-    const key = value ? `profile${value.replace(/^./, (c) => c.toUpperCase())}` : "";
+    const key = value
+      ? `profile${value.replace(/^./, (c) => c.toUpperCase())}`
+      : "";
     el.textContent = key ? t(key) : "";
   });
   $("#languageSelect").value = state.language;
@@ -445,15 +536,17 @@ function setServiceState(key) {
 }
 
 function actionLabel(action) {
-  return {
-    "vendor-profile": t("setProfileAction"),
-    "discharge-limit": t("setLimitAction"),
-    "osaifu-charge-window": t("setChargeWindowAction"),
-    "osaifu-discharge-window": t("setDischargeWindowAction"),
-    charge: t("chargeAction"),
-    discharge: t("dischargeAction"),
-    "set-mode": t("setOperationModeAction"),
-  }[action] ?? action;
+  return (
+    {
+      "vendor-profile": t("setProfileAction"),
+      "discharge-limit": t("setLimitAction"),
+      "osaifu-charge-window": t("setChargeWindowAction"),
+      "osaifu-discharge-window": t("setDischargeWindowAction"),
+      charge: t("chargeAction"),
+      discharge: t("dischargeAction"),
+      "set-mode": t("setOperationModeAction"),
+    }[action] ?? action
+  );
 }
 
 function toast(message) {
@@ -482,7 +575,8 @@ function setText(selector, value) {
 function metricValue(item, fallback = "--") {
   if (!item) return fallback;
   if (item.human) return item.human;
-  if (item.value !== undefined && item.unit) return `${item.value} ${item.unit}`;
+  if (item.value !== undefined && item.unit)
+    return `${item.value} ${item.unit}`;
   if (item.value !== undefined) return String(item.value);
   return item.raw ?? fallback;
 }
@@ -522,8 +616,18 @@ function parseOsaifuWindow(setting) {
   // Prefer decoded fields from the server, but fall back to raw 0xSS00EE00 so
   // selectors still populate when only a raw vendor value is available.
   const decoded = setting?.decoded ?? {};
-  const start = Number(decoded.start_hour ?? decoded.startHour ?? decoded.charge_start_hour ?? decoded.discharge_start_hour);
-  const end = Number(decoded.end_hour ?? decoded.endHour ?? decoded.charge_end_hour ?? decoded.discharge_end_hour);
+  const start = Number(
+    decoded.start_hour ??
+      decoded.startHour ??
+      decoded.charge_start_hour ??
+      decoded.discharge_start_hour,
+  );
+  const end = Number(
+    decoded.end_hour ??
+      decoded.endHour ??
+      decoded.charge_end_hour ??
+      decoded.discharge_end_hour,
+  );
   if (Number.isInteger(start) && Number.isInteger(end)) {
     return { start, end };
   }
@@ -561,7 +665,9 @@ function populateActionOptions() {
     const select = $(selector);
     if (!select) return;
     const selected = select.value || options[0][0];
-    select.innerHTML = options.map(([value, key]) => `<option value="${value}">${t(key)}</option>`).join("");
+    select.innerHTML = options
+      .map(([value, key]) => `<option value="${value}">${t(key)}</option>`)
+      .join("");
     if (options.some(([value]) => value === selected)) select.value = selected;
   };
   fill("#scheduleAction", actionOptions);
@@ -575,7 +681,10 @@ function pushTrend(name, value, time = Date.now()) {
   if (!config || !Number.isFinite(value)) return;
   const history = state.trendHistory[name] ?? [];
   history.push({ time, value });
-  const horizonMs = state.historyMode && state.historyHorizonMs ? state.historyHorizonMs : config.horizonMs;
+  const horizonMs =
+    state.historyMode && state.historyHorizonMs
+      ? state.historyHorizonMs
+      : config.horizonMs;
   const cutoff = time - horizonMs;
   state.trendHistory[name] = history.filter((point) => point.time >= cutoff);
   drawTrend(name);
@@ -595,7 +704,10 @@ function drawTrend(name) {
   const width = Math.max(1, Math.round(rect.width));
   const height = Math.max(1, Math.round(rect.height));
   const dpr = window.devicePixelRatio || 1;
-  if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+  if (
+    canvas.width !== Math.round(width * dpr) ||
+    canvas.height !== Math.round(height * dpr)
+  ) {
     canvas.width = Math.round(width * dpr);
     canvas.height = Math.round(height * dpr);
   }
@@ -621,7 +733,9 @@ function drawTrend(name) {
 
   const values = points.map((point) => point.value);
   let min = config.min ?? (points.length ? Math.min(...values) : 0);
-  let max = config.max ?? (points.length ? Math.max(...values) : config.signed ? 1000 : 100);
+  let max =
+    config.max ??
+    (points.length ? Math.max(...values) : config.signed ? 1000 : 100);
   if (config.includeZero) {
     min = Math.min(min, 0);
     max = Math.max(max, 0);
@@ -642,7 +756,11 @@ function drawTrend(name) {
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   ctx.fillText(`${Math.round(max)}${unit}`, pad.left - 5, pad.top);
-  ctx.fillText(`${Math.round(min)}${unit}`, pad.left - 5, pad.top + chartHeight);
+  ctx.fillText(
+    `${Math.round(min)}${unit}`,
+    pad.left - 5,
+    pad.top + chartHeight,
+  );
 
   ctx.save();
   ctx.translate(9, pad.top + chartHeight / 2);
@@ -654,10 +772,29 @@ function drawTrend(name) {
 
   ctx.textBaseline = "alphabetic";
   ctx.textAlign = "left";
-  const horizonMs = state.historyMode && state.historyHorizonMs ? state.historyHorizonMs : config.horizonMs;
-  ctx.fillText(state.historyMode ? t("selectedRange") : config.horizonMs === SOC_TREND_MS ? t("hourAgo") : t("minAgo"), pad.left, height - 14);
+  const horizonMs =
+    state.historyMode && state.historyHorizonMs
+      ? state.historyHorizonMs
+      : config.horizonMs;
+  const firstLabel = points[0]?.time
+    ? new Date(points[0].time).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : state.historyMode
+      ? t("selectedRange")
+      : config.horizonMs === SOC_TREND_MS
+        ? t("hourAgo")
+        : t("minAgo");
+  const lastLabel = points[points.length - 1]?.time
+    ? new Date(points[points.length - 1].time).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : t("now");
+  ctx.fillText(firstLabel, pad.left, height - 14);
   ctx.textAlign = "right";
-  ctx.fillText(t("now"), width - pad.right, height - 14);
+  ctx.fillText(lastLabel, width - pad.right, height - 14);
   ctx.textAlign = "center";
   ctx.fillText(t("timeAxis"), pad.left + chartWidth / 2, height - 3);
 
@@ -667,7 +804,8 @@ function drawTrend(name) {
   const start = now - horizonMs;
   const range = max - min;
   const xFor = (time) => pad.left + ((time - start) / horizonMs) * chartWidth;
-  const yFor = (value) => pad.top + chartHeight - ((value - min) / range) * chartHeight;
+  const yFor = (value) =>
+    pad.top + chartHeight - ((value - min) / range) * chartHeight;
 
   if (min < 0 && max > 0) {
     const zeroY = yFor(0);
@@ -678,7 +816,10 @@ function drawTrend(name) {
     ctx.stroke();
   }
 
-  const plotted = points.map((point) => ({ x: xFor(point.time), y: yFor(point.value) }));
+  const plotted = points.map((point) => ({
+    x: xFor(point.time),
+    y: yFor(point.value),
+  }));
   if (plotted.length === 1) {
     plotted.unshift({ x: pad.left, y: plotted[0].y });
   }
@@ -705,6 +846,75 @@ function drawTrend(name) {
   ctx.beginPath();
   ctx.arc(last.x, last.y, 3, 0, Math.PI * 2);
   ctx.fill();
+
+  const hover = state.trendHover[name];
+  if (hover && Number.isFinite(hover.time) && Number.isFinite(hover.value)) {
+    const hoverX = xFor(hover.time);
+    const hoverY = yFor(hover.value);
+    ctx.strokeStyle = "rgba(15, 23, 42, 0.42)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(hoverX, pad.top);
+    ctx.lineTo(hoverX, height - pad.bottom);
+    ctx.stroke();
+    ctx.fillStyle = "#0f172a";
+    ctx.beginPath();
+    ctx.arc(hoverX, hoverY, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function ensureTrendTooltip() {
+  let tooltip = $("#trendTooltip");
+  if (!tooltip) {
+    tooltip = document.createElement("div");
+    tooltip.id = "trendTooltip";
+    tooltip.className = "trend-tooltip hidden";
+    document.body.append(tooltip);
+  }
+  return tooltip;
+}
+
+function handleTrendPointer(name, event) {
+  const config = TREND_CONFIG[name];
+  const canvas = $(config.canvas);
+  const points = state.trendHistory[name] ?? [];
+  if (!canvas || !points.length) return;
+  const rect = canvas.getBoundingClientRect();
+  const pad = { top: 10, right: 8, bottom: 28, left: 48 };
+  const chartWidth = Math.max(1, rect.width - pad.left - pad.right);
+  const horizonMs =
+    state.historyMode && state.historyHorizonMs
+      ? state.historyHorizonMs
+      : config.horizonMs;
+  const now = points[points.length - 1].time;
+  const start = now - horizonMs;
+  const x = Math.max(
+    pad.left,
+    Math.min(rect.width - pad.right, event.clientX - rect.left),
+  );
+  const targetTime = start + ((x - pad.left) / chartWidth) * horizonMs;
+  const nearest = points.reduce(
+    (best, point) =>
+      Math.abs(point.time - targetTime) < Math.abs(best.time - targetTime)
+        ? point
+        : best,
+    points[0],
+  );
+  state.trendHover[name] = nearest;
+  drawTrend(name);
+  const tooltip = ensureTrendTooltip();
+  const unit = name === "batterySoc" ? "%" : "W";
+  tooltip.textContent = `${new Date(nearest.time).toLocaleString()} · ${Math.round(nearest.value)} ${unit}`;
+  tooltip.style.left = `${Math.min(window.innerWidth - 260, event.clientX + 12)}px`;
+  tooltip.style.top = `${Math.max(8, event.clientY + 12)}px`;
+  tooltip.classList.remove("hidden");
+}
+
+function clearTrendPointer(name) {
+  delete state.trendHover[name];
+  drawTrend(name);
+  $("#trendTooltip")?.classList.add("hidden");
 }
 
 function setBar(selector, percent) {
@@ -737,7 +947,10 @@ function selectHourOptions(select) {
 }
 
 function hourOptions() {
-  return Array.from({ length: 24 }, (_, i) => `<option value="${i}">${String(i).padStart(2, "0")}:00</option>`).join("");
+  return Array.from(
+    { length: 24 },
+    (_, i) => `<option value="${i}">${String(i).padStart(2, "0")}:00</option>`,
+  ).join("");
 }
 
 function operationModeOptions() {
@@ -750,20 +963,212 @@ function operationModeOptions() {
   `;
 }
 
+function rateBandRow(band = {}, index = 0) {
+  return `
+    <div class="rate-band-row" data-rate-band="${index}">
+      <label><span>${t("rateBandLabel")}</span><input data-rate-field="label" value="${band.label ?? ""}" /></label>
+      <label><span>${t("rateBandStart")}</span><input data-rate-field="start" type="time" value="${band.start ?? "00:00"}" /></label>
+      <label><span>${t("rateBandEnd")}</span><input data-rate-field="end" type="time" value="${band.end ?? "00:00"}" /></label>
+      <label><span>${t("rateBandPrice")}</span><input data-rate-field="yenPerKwh" type="number" min="0" step="0.01" value="${band.yenPerKwh ?? ""}" /></label>
+      <button class="ghost remove-rate-band" type="button">${t("removeRateBand")}</button>
+    </div>
+  `;
+}
+
+function renderRateBands(bands = []) {
+  const el = $("#rateBands");
+  if (!el) return;
+  const source = bands.length
+    ? bands
+    : [
+        {
+          start: "00:00",
+          end: "07:00",
+          yenPerKwh: $("#offPeakRate")?.value || 25,
+          label: "Off-peak",
+        },
+      ];
+  el.innerHTML = source.map(rateBandRow).join("");
+}
+
+function collectRateBands() {
+  return $$("#rateBands .rate-band-row")
+    .map((row) => {
+      const field = (name) =>
+        row.querySelector(`[data-rate-field="${name}"]`)?.value ?? "";
+      return {
+        label: field("label"),
+        start: field("start") || "00:00",
+        end: field("end") || "00:00",
+        yenPerKwh: Number(field("yenPerKwh")),
+      };
+    })
+    .filter((band) => Number.isFinite(band.yenPerKwh));
+}
+
+function defaultOffPeakBands(standardRate, offPeakRate) {
+  return [
+    {
+      start: "00:00",
+      end: "07:00",
+      yenPerKwh: Number(offPeakRate || 0),
+      label: "Off-peak",
+    },
+    {
+      start: "07:00",
+      end: "00:00",
+      yenPerKwh: Number(standardRate || 0),
+      label: "Standard",
+    },
+  ];
+}
+
+function defaultMultiBands(offPeakRate) {
+  return [
+    {
+      start: "00:00",
+      end: "07:00",
+      yenPerKwh: Number(offPeakRate || 0),
+      label: "Off-peak",
+    },
+  ];
+}
+
+function rateModeFromConfig(config = {}) {
+  if (["simple", "offPeak", "multi"].includes(config.rateMode))
+    return config.rateMode;
+  if (config.offPeakSavingsEnabled === true)
+    return (config.rateBands ?? []).length > 2 ? "multi" : "offPeak";
+  return "simple";
+}
+
+function currentRateMode() {
+  return (
+    document.querySelector('input[name="rateMode"]:checked')?.value ?? "simple"
+  );
+}
+
+function updateRateModeVisibility(mode = currentRateMode()) {
+  $$("[data-rate-mode-panel]").forEach((panel) => {
+    panel.classList.toggle("hidden", panel.dataset.rateModePanel !== mode);
+  });
+}
+
+function buildRateConfigBody() {
+  const mode = currentRateMode();
+  if (mode === "simple") {
+    const rate = Number($("#simpleRate").value || 0);
+    return {
+      rateMode: "simple",
+      standardRateYenPerKwh: rate,
+      offPeakRateYenPerKwh: rate,
+      offPeakSavingsEnabled: false,
+      rateBands: [
+        { start: "00:00", end: "00:00", yenPerKwh: rate, label: "Simple" },
+      ],
+    };
+  }
+  if (mode === "offPeak") {
+    const standardRate = Number($("#standardRate").value || 0);
+    const offPeakRate = Number($("#offPeakRate").value || 0);
+    return {
+      rateMode: "offPeak",
+      standardRateYenPerKwh: standardRate,
+      offPeakRateYenPerKwh: offPeakRate,
+      offPeakSavingsEnabled: true,
+      rateBands: defaultOffPeakBands(standardRate, offPeakRate),
+    };
+  }
+  const bands = collectRateBands();
+  const rates = bands.map((band) => band.yenPerKwh).filter(Number.isFinite);
+  const standardRate = Number(
+    $("#multiStandardRate").value || Math.max(...rates, 0),
+  );
+  const offPeakRate = Math.min(...rates, standardRate);
+  return {
+    rateMode: "multi",
+    standardRateYenPerKwh: standardRate,
+    offPeakRateYenPerKwh: offPeakRate,
+    offPeakSavingsEnabled: true,
+    rateBands: bands.length ? bands : defaultMultiBands(offPeakRate),
+  };
+}
+
+function defaultAutomationRule(config = {}) {
+  return {
+    name: "Charging demand guard",
+    type: "backup-demand-guard",
+    enabled: false,
+    conditions: {
+      source: "houseDemandW",
+      breakerAmps: config.automation?.breakerAmps ?? 40,
+      breakerVoltage: config.automation?.breakerVoltage ?? 100,
+      reserveAmps: config.automation?.reserveAmps ?? 5,
+      batteryChargingEstimateW: 1000,
+      restoreBelowAmps: Math.max(
+        1,
+        (config.automation?.breakerAmps ?? 40) - 10,
+      ),
+      restoreDelaySeconds: 300,
+    },
+    action: "set-mode",
+    payload: { mode: "standby" },
+    restoreAction: "set-mode",
+    restorePayload: { mode: "auto" },
+    cooldownSeconds: 300,
+  };
+}
+
+function updateAutomationControls(rules = state.automationRules) {
+  const rule =
+    rules.find((item) => item.type === "backup-demand-guard") ??
+    defaultAutomationRule(state.config ?? {});
+  $("#automationEnabled").checked = rule.enabled === true;
+  $("#automationBreakerAmps").value = rule.conditions?.breakerAmps ?? "";
+  $("#automationReserveAmps").value = rule.conditions?.reserveAmps ?? "";
+  $("#automationBatteryEstimate").value =
+    rule.conditions?.batteryChargingEstimateW ?? "";
+  $("#automationRestoreBelow").value = rule.conditions?.restoreBelowAmps ?? "";
+  $("#automationRestoreDelay").value =
+    rule.conditions?.restoreDelaySeconds ?? "";
+  const status = rule.lastResult
+    ? `${new Date(rule.lastResult.at).toLocaleString()} · ${rule.lastResult.error || rule.lastResult.skipped || rule.lastResult.kind || "ok"}`
+    : rule.id
+      ? rule.enabled
+        ? t("waiting")
+        : t("disabled")
+      : t("automationNoRules");
+  $("#automationStatus").textContent = status;
+}
+
+async function refreshAutomationRules() {
+  state.automationRules = await api("/api/automation-rules");
+  updateAutomationControls(state.automationRules);
+  return state.automationRules;
+}
+
 function updateControls(data) {
   // Settings are hydrated only when entering the Settings page so sliders/selects
   // do not jump around while the user is editing them.
   const mode = data.settings?.mode?.decoded?.mode;
-  const selected = document.querySelector(`input[name="mode"][value="${mode}"]`);
+  const selected = document.querySelector(
+    `input[name="mode"][value="${mode}"]`,
+  );
   if (selected) selected.checked = true;
 
-  const limit = data.settings?.discharge_limit?.decoded?.percent;
+  const dischargeLimitData = data.settings?.discharge_limit?.decoded
+    ? data.settings.discharge_limit
+    : data.settings?.discharge_limit?.lastKnown;
+  const limit = dischargeLimitData?.decoded?.percent;
   if (Number.isInteger(limit)) {
     $("#limitValue").value = String(limit);
     $("#limitOutput").textContent = `${limit}%`;
   }
 
-  const charge = parseOsaifuWindow(data.settings?.osaifu_charge_window);
+  const chargeData = data.settings?.osaifu_charge_window?.decoded
+    ? data.settings.osaifu_charge_window
+    : data.settings?.osaifu_charge_window?.lastKnown;
+  const charge = parseOsaifuWindow(chargeData);
   if (charge) {
     $("#chargeStart").value = String(charge.start);
     $("#chargeEnd").value = String(charge.end);
@@ -772,7 +1177,10 @@ function updateControls(data) {
     $("#chargeEnd").value = "";
   }
 
-  const discharge = parseOsaifuWindow(data.settings?.osaifu_discharge_window);
+  const dischargeData = data.settings?.osaifu_discharge_window?.decoded
+    ? data.settings.osaifu_discharge_window
+    : data.settings?.osaifu_discharge_window?.lastKnown;
+  const discharge = parseOsaifuWindow(dischargeData);
   if (discharge) {
     $("#dischargeStart").value = String(discharge.start);
     $("#dischargeEnd").value = String(discharge.end);
@@ -786,16 +1194,34 @@ function updateConfigControls(config) {
   state.config = config;
   setLanguage(config.language ?? "en");
   applyFeatureVisibility(config);
+  $("#updateIntervalSeconds").value = config.updateIntervalSeconds ?? 15;
   $("#configBatteryHost").value = config.batteryHost ?? "";
   $("#configMeterHost").value = config.meterHost ?? "";
   $("#configSolarHost").value = config.solarHost ?? "";
   $("#configFuelCellHosts").value = (config.fuelCellHosts ?? []).join(",");
   $("#configSmartMeterHost").value = config.smartMeterHost ?? "";
+  $("#configDiscoverySubnets").value = (config.discoverySubnets ?? []).join(
+    ",",
+  );
   $("#configSolarEnabled").checked = config.solarEnabled !== false;
   $("#configFuelCellEnabled").checked = config.fuelCellEnabled !== false;
+  const rateMode = rateModeFromConfig(config);
+  const modeInput = document.querySelector(
+    `input[name="rateMode"][value="${rateMode}"]`,
+  );
+  if (modeInput) modeInput.checked = true;
+  $("#simpleRate").value = config.standardRateYenPerKwh ?? "";
   $("#standardRate").value = config.standardRateYenPerKwh ?? "";
   $("#offPeakRate").value = config.offPeakRateYenPerKwh ?? "";
-  $("#offPeakSavingsEnabled").checked = config.offPeakSavingsEnabled === true;
+  $("#multiStandardRate").value = config.standardRateYenPerKwh ?? "";
+  $("#historyRetentionDays").value = config.historyRetentionDays ?? "";
+  renderRateBands(
+    rateMode === "multi"
+      ? (config.rateBands ?? [])
+      : defaultMultiBands(config.offPeakRateYenPerKwh ?? 25),
+  );
+  updateRateModeVisibility(rateMode);
+  updateAutomationControls();
   $("#configSolarHost").disabled = config.solarEnabled === false;
   $("#configFuelCellHosts").disabled = config.fuelCellEnabled === false;
 }
@@ -805,14 +1231,27 @@ function applyFeatureVisibility(features = {}) {
   // off-peak savings calculations enabled.
   const solarEnabled = features.solarEnabled !== false;
   const fuelCellEnabled = features.fuelCellEnabled !== false;
-  const offPeakSavingsEnabled = features.offPeakSavingsEnabled === true || state.config?.offPeakSavingsEnabled === true;
-  $$('[data-feature="solar"]').forEach((el) => el.classList.toggle("hidden", !solarEnabled));
-  $$('[data-feature="fuel-cell"]').forEach((el) => el.classList.toggle("hidden", !fuelCellEnabled));
-  $$('[data-feature="off-peak-savings"]').forEach((el) => el.classList.toggle("hidden", !offPeakSavingsEnabled));
+  const featureRateMode = features.rateMode ?? state.config?.rateMode;
+  const offPeakSavingsEnabled =
+    featureRateMode !== "simple" && featureRateMode !== undefined
+      ? true
+      : features.offPeakSavingsEnabled === true ||
+        state.config?.offPeakSavingsEnabled === true;
+  $$('[data-feature="solar"]').forEach((el) =>
+    el.classList.toggle("hidden", !solarEnabled),
+  );
+  $$('[data-feature="fuel-cell"]').forEach((el) =>
+    el.classList.toggle("hidden", !fuelCellEnabled),
+  );
+  $$('[data-feature="off-peak-savings"]').forEach((el) =>
+    el.classList.toggle("hidden", !offPeakSavingsEnabled),
+  );
 }
 
 function strongestFuelCellWatts(fuelCells) {
-  const values = fuelCells.map((cell) => Number(cell.instant_power?.value)).filter(Number.isFinite);
+  const values = fuelCells
+    .map((cell) => Number(cell.instant_power?.value))
+    .filter(Number.isFinite);
   return values.length ? Math.max(...values) : null;
 }
 
@@ -824,38 +1263,107 @@ function renderDashboard(data, options = {}) {
   applyFeatureVisibility(data.features ?? state.config ?? {});
   const now = Date.now();
   setText("#batteryPower", watts(data.energy?.battery?.instant_power?.value));
-  setText("#batterySoc", Number.isFinite(data.energy?.battery?.remaining_percent?.value) ? `${data.energy.battery.remaining_percent.value}%` : "--%");
-  setText("#batteryWorking", displayValue(data.energy?.battery?.working_status?.human));
-  setText("#operationMode", displayValue(data.energy?.battery?.operation_mode?.human));
+  setText(
+    "#batterySoc",
+    Number.isFinite(data.energy?.battery?.remaining_percent?.value)
+      ? `${data.energy.battery.remaining_percent.value}%`
+      : "--%",
+  );
+  setText(
+    "#batteryWorking",
+    displayValue(data.energy?.battery?.working_status?.human),
+  );
+  setText(
+    "#operationMode",
+    displayValue(data.energy?.battery?.operation_mode?.human),
+  );
   const profile = data.settings?.mode?.decoded?.mode;
-  setText("#vendorProfile", profile ? displayValue(`profile${profile.replace(/^./, (c) => c.toUpperCase())}`) : "--");
-  setText("#dischargeLimitWidget", data.settings?.discharge_limit?.decoded?.human);
+  setText(
+    "#vendorProfile",
+    profile
+      ? displayValue(`profile${profile.replace(/^./, (c) => c.toUpperCase())}`)
+      : "--",
+  );
+  const dischargeLimitData = data.settings?.discharge_limit?.decoded
+    ? data.settings.discharge_limit
+    : data.settings?.discharge_limit?.lastKnown;
+  setText(
+    "#dischargeLimitWidget",
+    dischargeLimitData?.decoded?.human ??
+      (data.settings?.discharge_limit?.available === false
+        ? t("unavailable")
+        : "--"),
+  );
   const solarEnabled = data.features?.solarEnabled !== false;
   const fuelCellEnabled = data.features?.fuelCellEnabled !== false;
-  setText("#solarPower", solarEnabled ? metricValue(data.energy?.solar?.instant_power) : "-- W");
+  setText(
+    "#solarPower",
+    solarEnabled ? metricValue(data.energy?.solar?.instant_power) : "-- W",
+  );
 
   const batteryWatts = numericValue(data.energy?.battery?.instant_power);
   const soc = numericValue(data.energy?.battery?.remaining_percent);
-  const dischargeLimit = Number(data.settings?.discharge_limit?.decoded?.percent ?? 0);
-  const solarWatts = solarEnabled ? numericValue(data.energy?.solar?.instant_power) : Number.NaN;
+  const dischargeLimit = Number(dischargeLimitData?.decoded?.percent ?? 0);
+  const solarWatts = solarEnabled
+    ? numericValue(data.energy?.solar?.instant_power)
+    : Number.NaN;
   const houseDemandWatts = data.meter?.house_demand_power?.value;
   const gridImportWatts = data.meter?.grid_import_power?.value;
   const gridExportWatts = data.meter?.grid_export_power?.value;
-  $("#batterySocGauge").style.setProperty("--value", Math.max(0, Math.min(100, soc)));
+  $("#batterySocGauge").style.setProperty(
+    "--value",
+    Math.max(0, Math.min(100, soc)),
+  );
   setBar("#dischargeLimitBar", dischargeLimit);
-  setText("#houseDemandPower", Number.isFinite(houseDemandWatts) ? `${houseDemandWatts} W` : data.meter?.configured ? t("unavailable") : t("notSet"));
-  setText("#gridImportPower", Number.isFinite(gridImportWatts) ? `${gridImportWatts} W` : data.meter?.configured ? t("unavailable") : t("notSet"));
-  setText("#gridExportPower", Number.isFinite(gridExportWatts) ? `${gridExportWatts} W` : data.meter?.configured ? t("unavailable") : t("notSet"));
+  setText(
+    "#houseDemandPower",
+    Number.isFinite(houseDemandWatts)
+      ? `${houseDemandWatts} W`
+      : data.meter?.configured
+        ? t("unavailable")
+        : t("notSet"),
+  );
+  setText(
+    "#gridImportPower",
+    Number.isFinite(gridImportWatts)
+      ? `${gridImportWatts} W`
+      : data.meter?.configured
+        ? t("unavailable")
+        : t("notSet"),
+  );
+  setText(
+    "#gridExportPower",
+    Number.isFinite(gridExportWatts)
+      ? `${gridExportWatts} W`
+      : data.meter?.configured
+        ? t("unavailable")
+        : t("notSet"),
+  );
 
-  const fuelCells = fuelCellEnabled ? data.energy?.fuel_cells ?? [] : [];
-  const fuelCellWatts = fuelCellEnabled ? strongestFuelCellWatts(fuelCells) : Number.NaN;
-  const fuelStatuses = [...new Set(fuelCells.map((cell) => cell.generation_status?.human).filter(Boolean))];
-  setText("#fuelCellPower", Number.isFinite(fuelCellWatts) ? `${fuelCellWatts} W` : "-- W");
+  const fuelCells = fuelCellEnabled ? (data.energy?.fuel_cells ?? []) : [];
+  const fuelCellWatts = fuelCellEnabled
+    ? strongestFuelCellWatts(fuelCells)
+    : Number.NaN;
+  const fuelStatuses = [
+    ...new Set(
+      fuelCells.map((cell) => cell.generation_status?.human).filter(Boolean),
+    ),
+  ];
+  setText(
+    "#fuelCellPower",
+    Number.isFinite(fuelCellWatts) ? `${fuelCellWatts} W` : "-- W",
+  );
   setText("#fuelCellStatus", fuelStatuses.map(displayValue).join(", ") || "--");
   setText("#solarSavings", yen(Number(data.savings?.solarSavingYen)));
   setText("#offPeakSavings", yen(Number(data.savings?.offPeakSavingYen)));
-  setText("#solarSavingsPeriod", state.historyMode ? rangeLabel(data.savings, "selectedRange") : t("today"));
-  setText("#offPeakSavingsPeriod", state.historyMode ? rangeLabel(data.savings, "selectedRange") : t("today"));
+  setText(
+    "#solarSavingsPeriod",
+    state.historyMode ? rangeLabel(data.savings, "selectedRange") : t("today"),
+  );
+  setText(
+    "#offPeakSavingsPeriod",
+    state.historyMode ? rangeLabel(data.savings, "selectedRange") : t("today"),
+  );
 
   if (recordTrend) {
     pushTrend("batteryPower", batteryWatts, now);
@@ -884,7 +1392,11 @@ function renderHistory(history) {
   resetTrendHistory();
   const samples = history.samples ?? [];
   if (samples.length > 1) {
-    state.historyHorizonMs = Math.max(60_000, new Date(samples[samples.length - 1].timestamp).getTime() - new Date(samples[0].timestamp).getTime());
+    state.historyHorizonMs = Math.max(
+      60_000,
+      new Date(samples[samples.length - 1].timestamp).getTime() -
+        new Date(samples[0].timestamp).getTime(),
+    );
   } else {
     state.historyHorizonMs = POWER_TREND_MS;
   }
@@ -911,7 +1423,9 @@ function renderHistory(history) {
         remaining_percent: { value: latest.stateOfChargePercent, unit: "%" },
       },
       solar: { instant_power: { value: latest.solarPowerW, unit: "W" } },
-      fuel_cells: [{ instant_power: { value: latest.fuelCellPowerW, unit: "W" } }],
+      fuel_cells: [
+        { instant_power: { value: latest.fuelCellPowerW, unit: "W" } },
+      ],
     },
     meter: {
       ...(state.status?.meter ?? {}),
@@ -981,9 +1495,15 @@ function scheduleWhen(schedule) {
 }
 
 function scheduleDays(schedule) {
-  const days = Array.isArray(schedule.days) && schedule.days.length ? schedule.days : [0, 1, 2, 3, 4, 5, 6];
+  const days =
+    Array.isArray(schedule.days) && schedule.days.length
+      ? schedule.days
+      : [0, 1, 2, 3, 4, 5, 6];
   if (days.length === 7) return t("everyDay");
-  return days.sort((a, b) => a - b).map((day) => t(DAY_KEYS[day])).join(", ");
+  return days
+    .sort((a, b) => a - b)
+    .map((day) => t(DAY_KEYS[day]))
+    .join(", ");
 }
 
 function renderSchedules(schedules) {
@@ -997,8 +1517,12 @@ function renderSchedules(schedules) {
   for (const schedule of schedules) {
     const tr = document.createElement("tr");
     const status = schedule.lastResult
-      ? schedule.lastResult.ok ? `${t("lastRan")} ${new Date(schedule.lastResult.at).toLocaleString()}` : schedule.lastResult.error
-      : schedule.enabled ? t("waiting") : t("disabled");
+      ? schedule.lastResult.ok
+        ? `${t("lastRan")} ${new Date(schedule.lastResult.at).toLocaleString()}`
+        : schedule.lastResult.error
+      : schedule.enabled
+        ? t("waiting")
+        : t("disabled");
     tr.innerHTML = `
       <td>${scheduleWhen(schedule)}</td>
       <td>${actionLabel(schedule.action)}</td>
@@ -1013,15 +1537,24 @@ function renderSchedules(schedules) {
 function setPage(page) {
   $$(".page").forEach((el) => el.classList.remove("active-page"));
   $(`#${page}Page`).classList.add("active-page");
-  $$(".nav-button").forEach((button) => button.classList.toggle("active", button.dataset.page === page));
-  $$("[data-dashboard-only]").forEach((el) => el.classList.toggle("hidden", page !== "dashboard"));
+  $$(".nav-button").forEach((button) =>
+    button.classList.toggle("active", button.dataset.page === page),
+  );
+  $$("[data-dashboard-only]").forEach((el) =>
+    el.classList.toggle("hidden", page !== "dashboard"),
+  );
   if (page === "settings") {
     hydrateSettingsView();
   }
 }
 
 function refreshInterval() {
-  return document.visibilityState === "visible" ? ACTIVE_REFRESH_MS : INACTIVE_REFRESH_MS;
+  const configuredMs =
+    Math.max(5, Number(state.config?.updateIntervalSeconds ?? ACTIVE_REFRESH_MS / 1000)) *
+    1000;
+  return document.visibilityState === "visible"
+    ? configuredMs
+    : Math.max(configuredMs, INACTIVE_REFRESH_MS);
 }
 
 function scheduleNextRefresh() {
@@ -1034,7 +1567,11 @@ async function refreshStatus() {
   setServiceState("readingDevices");
   try {
     renderDashboard(await api("/api/status"));
-    setServiceState(document.visibilityState === "visible" ? "serviceOnline" : "backgroundRefresh");
+    setServiceState(
+      document.visibilityState === "visible"
+        ? "serviceOnline"
+        : "backgroundRefresh",
+    );
   } catch (err) {
     setServiceState("readFailed");
     toast(err.message);
@@ -1053,7 +1590,12 @@ async function refreshAll() {
 
 async function initialLoad() {
   setServiceState("readingDevices");
-  const [statusResult, configResult] = await Promise.allSettled([api("/api/status"), api("/api/config"), refreshSchedules()]);
+  const [statusResult, configResult] = await Promise.allSettled([
+    api("/api/status"),
+    api("/api/config"),
+    refreshSchedules(),
+    refreshAutomationRules(),
+  ]);
   if (statusResult.status === "fulfilled") {
     renderInitialStatus(statusResult.value);
     setServiceState("serviceOnline");
@@ -1061,7 +1603,8 @@ async function initialLoad() {
     setServiceState("readFailed");
     toast(statusResult.reason.message);
   }
-  if (configResult.status === "fulfilled") updateConfigControls(configResult.value);
+  if (configResult.status === "fulfilled")
+    updateConfigControls(configResult.value);
   scheduleNextRefresh();
 }
 
@@ -1078,6 +1621,11 @@ async function hydrateSettingsView() {
   } catch (err) {
     toast(err.message);
   }
+  try {
+    await refreshAutomationRules();
+  } catch (err) {
+    toast(err.message);
+  }
 }
 
 async function mutate(path, body, success) {
@@ -1091,7 +1639,9 @@ async function mutate(path, body, success) {
 }
 
 function initForms() {
-  ["#chargeStart", "#chargeEnd", "#dischargeStart", "#dischargeEnd"].forEach((selector) => selectHourOptions($(selector)));
+  ["#chargeStart", "#chargeEnd", "#dischargeStart", "#dischargeEnd"].forEach(
+    (selector) => selectHourOptions($(selector)),
+  );
   populateActionOptions();
   $("#limitValue").addEventListener("input", () => {
     $("#limitOutput").textContent = `${$("#limitValue").value}%`;
@@ -1099,7 +1649,9 @@ function initForms() {
   $("#refreshBtn").addEventListener("click", refreshAll);
   const now = new Date();
   $("#historyEnd").value = localDateTimeValue(now);
-  $("#historyStart").value = localDateTimeValue(new Date(now.getTime() - 30 * 60_000));
+  $("#historyStart").value = localDateTimeValue(
+    new Date(now.getTime() - 30 * 60_000),
+  );
   $("#historyForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const params = new URLSearchParams({
@@ -1119,7 +1671,16 @@ function initForms() {
     await refreshStatus();
     scheduleNextRefresh();
   });
-  $$(".nav-button").forEach((button) => button.addEventListener("click", () => setPage(button.dataset.page)));
+  for (const name of Object.keys(TREND_CONFIG)) {
+    const canvas = $(TREND_CONFIG[name].canvas);
+    canvas?.addEventListener("pointermove", (event) =>
+      handleTrendPointer(name, event),
+    );
+    canvas?.addEventListener("pointerleave", () => clearTrendPointer(name));
+  }
+  $$(".nav-button").forEach((button) =>
+    button.addEventListener("click", () => setPage(button.dataset.page)),
+  );
   ["#configSolarEnabled", "#configFuelCellEnabled"].forEach((selector) => {
     $(selector).addEventListener("change", () => {
       const features = {
@@ -1142,10 +1703,15 @@ function initForms() {
       fuelCellHosts: $("#configFuelCellHosts").value,
       fuelCellEnabled: $("#configFuelCellEnabled").checked,
       smartMeterHost: $("#configSmartMeterHost").value,
+      discoverySubnets: $("#configDiscoverySubnets").value,
       meterEoj: state.config?.meterEoj,
+      rateMode: state.config?.rateMode,
       standardRateYenPerKwh: state.config?.standardRateYenPerKwh,
       offPeakRateYenPerKwh: state.config?.offPeakRateYenPerKwh,
       offPeakSavingsEnabled: state.config?.offPeakSavingsEnabled,
+      rateBands: state.config?.rateBands,
+      historyRetentionDays: state.config?.historyRetentionDays,
+      automation: state.config?.automation,
       language: state.language,
     };
     try {
@@ -1165,14 +1731,83 @@ function initForms() {
         method: "PUT",
         body: {
           ...(state.config ?? {}),
-          standardRateYenPerKwh: $("#standardRate").value,
-          offPeakRateYenPerKwh: $("#offPeakRate").value,
-          offPeakSavingsEnabled: $("#offPeakSavingsEnabled").checked,
+          ...buildRateConfigBody(),
         },
       });
       updateConfigControls(config);
       toast(t("saveRates"));
       if (!state.historyMode) await refreshStatus();
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  $("#rateBands").addEventListener("click", (event) => {
+    if (!event.target.classList.contains("remove-rate-band")) return;
+    event.target.closest(".rate-band-row")?.remove();
+  });
+
+  $("#addRateBandBtn").addEventListener("click", () => {
+    const bands = collectRateBands();
+    bands.push({
+      start: "23:00",
+      end: "07:00",
+      yenPerKwh: Number($("#multiStandardRate").value || 0),
+      label: "Custom",
+    });
+    renderRateBands(bands);
+  });
+
+  $$('input[name="rateMode"]').forEach((input) => {
+    input.addEventListener("change", () =>
+      updateRateModeVisibility(input.value),
+    );
+  });
+
+  $("#historyConfigForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const config = await api("/api/config", {
+        method: "PUT",
+        body: {
+          ...(state.config ?? {}),
+          historyRetentionDays: $("#historyRetentionDays").value,
+        },
+      });
+      updateConfigControls(config);
+      toast(t("saveRetention"));
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  $("#trimHistoryBtn").addEventListener("click", async () => {
+    try {
+      const result = await api("/api/history/trim", {
+        method: "POST",
+        body: { retentionDays: $("#historyRetentionDays").value },
+      });
+      toast(`${t("historyTrimmed")}: ${result.deleted}`);
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  $("#preferencesForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const nextLanguage = $("#languageSelect").value;
+    try {
+      const config = await api("/api/config", {
+        method: "PUT",
+        body: {
+          ...(state.config ?? {}),
+          language: nextLanguage,
+          updateIntervalSeconds: $("#updateIntervalSeconds").value,
+        },
+      });
+      updateConfigControls(config);
+      if (!state.historyMode) scheduleNextRefresh();
+      toast(t("preferencesSaved"));
     } catch (err) {
       toast(err.message);
     }
@@ -1208,10 +1843,17 @@ function initForms() {
       createdAt: new Date().toISOString(),
     });
     try {
-      const job = await api("/api/discovery/jobs", { method: "POST", body: { timeout: 6, mode } });
+      const job = await api("/api/discovery/jobs", {
+        method: "POST",
+        body: { timeout: 6, mode, subnets: $("#configDiscoverySubnets").value },
+      });
       await pollDiscoveryJob(job.id);
     } catch (err) {
-      renderDiscoveryProgress({ status: "failed", phase: "failed", error: err.message });
+      renderDiscoveryProgress({
+        status: "failed",
+        phase: "failed",
+        error: err.message,
+      });
       $("#discoveryResults").innerHTML = "";
       toast(err.message);
     } finally {
@@ -1223,35 +1865,91 @@ function initForms() {
     }
   }
 
-  $("#broadcastDiscoverBtn").addEventListener("click", () => startDiscovery("broadcast", $("#broadcastDiscoverBtn")));
-  $("#activeScanBtn").addEventListener("click", () => startDiscovery("active", $("#activeScanBtn")));
+  $("#broadcastDiscoverBtn").addEventListener("click", () =>
+    startDiscovery("broadcast", $("#broadcastDiscoverBtn")),
+  );
+  $("#activeScanBtn").addEventListener("click", () =>
+    startDiscovery("active", $("#activeScanBtn")),
+  );
+
+  $("#automationRuleForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const existing = state.automationRules.find(
+      (rule) => rule.type === "backup-demand-guard",
+    );
+    const body = {
+      ...(existing ?? defaultAutomationRule(state.config ?? {})),
+      enabled: $("#automationEnabled").checked,
+      conditions: {
+        source: "houseDemandW",
+        breakerAmps: $("#automationBreakerAmps").value,
+        breakerVoltage: state.config?.automation?.breakerVoltage ?? 100,
+        reserveAmps: $("#automationReserveAmps").value,
+        batteryChargingEstimateW: $("#automationBatteryEstimate").value,
+        restoreBelowAmps: $("#automationRestoreBelow").value,
+        restoreDelaySeconds: $("#automationRestoreDelay").value,
+      },
+      action: "set-mode",
+      payload: { mode: "standby" },
+      restoreAction: "set-mode",
+      restorePayload: { mode: "auto" },
+    };
+    try {
+      if (existing)
+        await api(`/api/automation-rules/${existing.id}`, {
+          method: "PATCH",
+          body,
+        });
+      else await api("/api/automation-rules", { method: "POST", body });
+      await refreshAutomationRules();
+      toast(t("automationSaved"));
+    } catch (err) {
+      toast(err.message);
+    }
+  });
 
   $("#modeForm").addEventListener("submit", (event) => {
     event.preventDefault();
     const mode = new FormData(event.currentTarget).get("mode");
     if (!mode) return toast(t("chooseProfile"));
-    mutate("/api/settings/vendor-profile", { mode }, `${t("setProfileAction")}: ${displayValue(`profile${mode.replace(/^./, (c) => c.toUpperCase())}`)}`);
+    mutate(
+      "/api/settings/vendor-profile",
+      { mode },
+      `${t("setProfileAction")}: ${displayValue(`profile${mode.replace(/^./, (c) => c.toUpperCase())}`)}`,
+    );
   });
 
   $("#limitForm").addEventListener("submit", (event) => {
     event.preventDefault();
-    mutate("/api/settings/discharge-limit", { percent: $("#limitValue").value }, t("setLimitAction"));
+    mutate(
+      "/api/settings/discharge-limit",
+      { percent: $("#limitValue").value },
+      t("setLimitAction"),
+    );
   });
 
   $("#chargeWindowForm").addEventListener("submit", (event) => {
     event.preventDefault();
-    mutate("/api/settings/osaifu-charge-window", {
-      startHour: $("#chargeStart").value,
-      endHour: $("#chargeEnd").value,
-    }, t("setChargeWindowAction"));
+    mutate(
+      "/api/settings/osaifu-charge-window",
+      {
+        startHour: $("#chargeStart").value,
+        endHour: $("#chargeEnd").value,
+      },
+      t("setChargeWindowAction"),
+    );
   });
 
   $("#dischargeWindowForm").addEventListener("submit", (event) => {
     event.preventDefault();
-    mutate("/api/settings/osaifu-discharge-window", {
-      startHour: $("#dischargeStart").value,
-      endHour: $("#dischargeEnd").value,
-    }, t("setDischargeWindowAction"));
+    mutate(
+      "/api/settings/osaifu-discharge-window",
+      {
+        startHour: $("#dischargeStart").value,
+        endHour: $("#dischargeEnd").value,
+      },
+      t("setDischargeWindowAction"),
+    );
   });
 
   $("#directActionForm").addEventListener("submit", (event) => {
@@ -1259,16 +1957,30 @@ function initForms() {
     const value = $("#directAction").value;
     if (value.startsWith("set-mode:")) {
       const mode = value.split(":")[1];
-      mutate("/api/actions/set-mode", { mode }, `${t("setOperationModeAction")}: ${displayValue(mode)}`);
+      mutate(
+        "/api/actions/set-mode",
+        { mode },
+        `${t("setOperationModeAction")}: ${displayValue(mode)}`,
+      );
       return;
     }
-    mutate(`/api/actions/${value}`, { targetWh: $("#targetWh").value }, actionLabel(value));
+    mutate(
+      `/api/actions/${value}`,
+      { targetWh: $("#targetWh").value },
+      actionLabel(value),
+    );
   });
 
-  $("#scheduleAction").addEventListener("change", () => schedulePayloadFields($("#scheduleAction").value));
+  $("#scheduleAction").addEventListener("change", () =>
+    schedulePayloadFields($("#scheduleAction").value),
+  );
   $("#scheduleRepeat").addEventListener("change", () => {
-    $("#scheduleTime").type = $("#scheduleRepeat").value === "daily" ? "time" : "datetime-local";
-    $("#scheduleDays").classList.toggle("disabled", $("#scheduleRepeat").value !== "daily");
+    $("#scheduleTime").type =
+      $("#scheduleRepeat").value === "daily" ? "time" : "datetime-local";
+    $("#scheduleDays").classList.toggle(
+      "disabled",
+      $("#scheduleRepeat").value !== "daily",
+    );
   });
   $("#scheduleDays").classList.add("disabled");
   schedulePayloadFields($("#scheduleAction").value);
@@ -1312,18 +2024,22 @@ function initForms() {
 }
 
 function collectScheduleDays() {
-  return Array.from(document.querySelectorAll("#scheduleDays input:checked")).map((input) => Number(input.value));
+  return Array.from(
+    document.querySelectorAll("#scheduleDays input:checked"),
+  ).map((input) => Number(input.value));
 }
 
 function discoveryPhaseKey(phase) {
-  return {
-    starting: "discoveryStarting",
-    broadcast: "discoveryBroadcast",
-    "active-scan": "discoveryActiveScan",
-    waiting: "discoveryWaiting",
-    complete: "discoveryComplete",
-    failed: "discoveryFailed",
-  }[phase] ?? "discoveryStarting";
+  return (
+    {
+      starting: "discoveryStarting",
+      broadcast: "discoveryBroadcast",
+      "active-scan": "discoveryActiveScan",
+      waiting: "discoveryWaiting",
+      complete: "discoveryComplete",
+      failed: "discoveryFailed",
+    }[phase] ?? "discoveryStarting"
+  );
 }
 
 function renderDiscoveryProgress(job) {
@@ -1335,10 +2051,20 @@ function renderDiscoveryProgress(job) {
   const total = Number(job.total ?? 0);
   const scanned = Number(job.scanned ?? 0);
   const found = Number(job.found ?? job.result?.discovered?.length ?? 0);
-  const percent = total > 0 ? Math.max(0, Math.min(100, Math.round((scanned / total) * 100))) : 0;
-  const elapsed = job.createdAt ? Math.max(0, Math.round((Date.now() - new Date(job.createdAt).getTime()) / 1000)) : 0;
+  const percent =
+    total > 0
+      ? Math.max(0, Math.min(100, Math.round((scanned / total) * 100)))
+      : 0;
+  const elapsed = job.createdAt
+    ? Math.max(
+        0,
+        Math.round((Date.now() - new Date(job.createdAt).getTime()) / 1000),
+      )
+    : 0;
   const details = [
-    total > 0 ? template("discoveryProgressCount", { scanned, total }) : t("scanningNearby"),
+    total > 0
+      ? template("discoveryProgressCount", { scanned, total })
+      : t("scanningNearby"),
     template("discoveryFoundCount", { count: found }),
     template("discoveryElapsed", { seconds: elapsed }),
   ];
@@ -1346,7 +2072,10 @@ function renderDiscoveryProgress(job) {
   progress.classList.remove("hidden");
   $("#discoveryProgressTitle").textContent = t(discoveryPhaseKey(job.phase));
   $("#discoveryProgressDetail").textContent = details.join(" · ");
-  bar.classList.toggle("indeterminate", total === 0 && job.status === "running");
+  bar.classList.toggle(
+    "indeterminate",
+    total === 0 && job.status === "running",
+  );
   bar.setAttribute("aria-valuenow", String(percent));
   fill.style.width = total > 0 ? `${percent}%` : "";
 }
@@ -1361,7 +2090,8 @@ async function pollDiscoveryJob(id) {
     });
     return pollDiscoveryJob(id);
   }
-  if (job.status === "failed") throw new Error(job.error || t("discoveryFailed"));
+  if (job.status === "failed")
+    throw new Error(job.error || t("discoveryFailed"));
   renderDiscovery(job.result);
   return job.result;
 }
@@ -1373,13 +2103,17 @@ function renderDiscovery(result) {
     el.innerHTML = `<p>${t("noDevicesFound")}</p>`;
     return;
   }
-  const rows = result.discovered.map((device) => `
+  const rows = result.discovered
+    .map(
+      (device) => `
     <tr>
       <td>${device.host}</td>
       <td>${device.roles.map(localizeRole).join(", ")}</td>
       <td>${device.instances.length}</td>
     </tr>
-  `).join("");
+  `,
+    )
+    .join("");
   el.innerHTML = `
     <div class="table-wrap discovery-table">
       <table>
@@ -1398,16 +2132,21 @@ function renderDiscovery(result) {
 }
 
 function localizeRole(role) {
-  return {
-    "Battery": t("battery"),
-    "Solar generation": t("solarGeneration"),
-    "Home power meter": t("homePowerMeter"),
-    "Utility meter": t("utilityMeter"),
-    "Ene-Farm": t("fuelCell"),
-    "Water heater": state.language === "ja" ? "給湯器" : "Water heater",
-    "Controller": state.language === "ja" ? "コントローラー" : "Controller",
-    "Unknown energy device": state.language === "ja" ? "不明なエネルギー機器" : "Unknown energy device",
-  }[role] ?? role;
+  return (
+    {
+      Battery: t("battery"),
+      "Solar generation": t("solarGeneration"),
+      "Home power meter": t("homePowerMeter"),
+      "Utility meter": t("utilityMeter"),
+      "Ene-Farm": t("fuelCell"),
+      "Water heater": state.language === "ja" ? "給湯器" : "Water heater",
+      Controller: state.language === "ja" ? "コントローラー" : "Controller",
+      "Unknown energy device":
+        state.language === "ja"
+          ? "不明なエネルギー機器"
+          : "Unknown energy device",
+    }[role] ?? role
+  );
 }
 
 initForms();
