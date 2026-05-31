@@ -4,6 +4,9 @@ node_modules/
 # Environment variables
 .env
 
+# Runtime config, schedules, automation rules, and history
+data/
+
 # Local editor / OS files
 .DS_Store
 npm-debug.log*
