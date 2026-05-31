@@ -4,7 +4,7 @@ const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 const ACTIVE_REFRESH_MS = 15_000;
 const INACTIVE_REFRESH_MS = 5 * 60_000;
 const POWER_TREND_MS = 30 * 60_000;
-const SOC_TREND_MS = 3 * 60 * 60_000;
+const SOC_TREND_MS = POWER_TREND_MS;
 
 // Frontend state is intentionally kept in one small object. The app has no build
 // step, so avoiding framework state makes it easier to inspect in a browser.
@@ -91,12 +91,14 @@ const I18N = {
     navSettings: "Settings",
     liveDashboard: "Live dashboard",
     homeEnergyFlow: "Home energy flow",
-    debug: "Debug",
-    refresh: "Refresh",
     from: "From",
     to: "To",
     showRange: "Show Range",
     live: "Live",
+    last1Hour: "Last 1 hour",
+    last8Hours: "Last 8 hours",
+    last24Hours: "Last 24 Hours",
+    last3Days: "Last 3 Days",
     trendWidgets: "Power Trends",
     statusWidgets: "Status & Savings",
     batteryPower: "Battery Power",
@@ -229,7 +231,6 @@ const I18N = {
     notSet: "Not set",
     now: "now",
     minAgo: "30m ago",
-    hourAgo: "3h ago",
     timeAxis: "Time",
     wattsAxis: "Power (W)",
     percentAxis: "Charge (%)",
@@ -285,12 +286,14 @@ const I18N = {
     navSettings: "設定",
     liveDashboard: "ライブ表示",
     homeEnergyFlow: "家庭内の電力フロー",
-    debug: "デバッグ",
-    refresh: "更新",
     from: "開始",
     to: "終了",
     showRange: "範囲を表示",
     live: "ライブ",
+    last1Hour: "直近1時間",
+    last8Hours: "直近8時間",
+    last24Hours: "直近24時間",
+    last3Days: "直近3日",
     trendWidgets: "電力トレンド",
     statusWidgets: "状態と節約額",
     batteryPower: "蓄電池の電力",
@@ -421,7 +424,6 @@ const I18N = {
     notSet: "未設定",
     now: "現在",
     minAgo: "30分前",
-    hourAgo: "3時間前",
     timeAxis: "時間",
     wattsAxis: "電力 (W)",
     percentAxis: "充電率 (%)",
@@ -575,9 +577,9 @@ function setText(selector, value) {
 function metricValue(item, fallback = "--") {
   if (!item) return fallback;
   if (item.human) return item.human;
-  if (item.value !== undefined && item.unit)
+  if (item.value !== undefined && item.value !== null && item.unit)
     return `${item.value} ${item.unit}`;
-  if (item.value !== undefined) return String(item.value);
+  if (item.value !== undefined && item.value !== null) return String(item.value);
   return item.raw ?? fallback;
 }
 
@@ -610,6 +612,48 @@ function rangeLabel(summary, fallbackKey) {
 
 function resetTrendHistory() {
   state.trendHistory = {};
+}
+
+function setLiveModeButton() {
+  $("#liveBtn")?.classList.toggle("is-live", !state.historyMode);
+}
+
+function historyParams(start, end) {
+  return new URLSearchParams({
+    start: start.toISOString(),
+    end: end.toISOString(),
+  });
+}
+
+function pushSampleToTrends(sample) {
+  const time = new Date(sample.timestamp).getTime();
+  pushTrend("batteryPower", Number(sample.batteryPowerW), time);
+  pushTrend("batterySoc", Number(sample.stateOfChargePercent), time);
+  pushTrend("solarPower", Number(sample.solarPowerW), time);
+  pushTrend("houseDemandPower", Number(sample.houseDemandW), time);
+  pushTrend("gridExportPower", Number(sample.gridExportW), time);
+  pushTrend("gridImportPower", Number(sample.gridImportW), time);
+  pushTrend("fuelCellPower", Number(sample.fuelCellPowerW), time);
+}
+
+function setHistoryRange(durationMs, end = new Date()) {
+  $("#historyEnd").value = localDateTimeValue(end);
+  $("#historyStart").value = localDateTimeValue(new Date(end.getTime() - durationMs));
+}
+
+async function loadLiveTrendHistory() {
+  const end = new Date();
+  const start = new Date(end.getTime() - POWER_TREND_MS);
+  const previousMode = state.historyMode;
+  state.historyMode = false;
+  state.historyHorizonMs = null;
+  resetTrendHistory();
+  const history = await api(`/api/history?${historyParams(start, end)}`);
+  for (const sample of history.samples ?? []) pushSampleToTrends(sample);
+  drawAllTrends();
+  state.historyMode = previousMode;
+  setLiveModeButton();
+  return history;
 }
 
 function parseOsaifuWindow(setting) {
@@ -783,9 +827,7 @@ function drawTrend(name) {
       })
     : state.historyMode
       ? t("selectedRange")
-      : config.horizonMs === SOC_TREND_MS
-        ? t("hourAgo")
-        : t("minAgo");
+      : t("minAgo");
   const lastLabel = points[points.length - 1]?.time
     ? new Date(points[points.length - 1].time).toLocaleTimeString([], {
         hour: "2-digit",
@@ -1257,7 +1299,7 @@ function strongestFuelCellWatts(fuelCells) {
 
 function renderDashboard(data, options = {}) {
   // The server returns raw and decoded data together. The dashboard uses decoded
-  // values, while the Debug menu exposes the full payload for reverse engineering.
+  // values and appends live samples onto the preloaded trend buffers.
   const recordTrend = options.recordTrend ?? true;
   state.status = data;
   applyFeatureVisibility(data.features ?? state.config ?? {});
@@ -1377,7 +1419,6 @@ function renderDashboard(data, options = {}) {
     drawAllTrends();
   }
 
-  $("#rawJson").textContent = JSON.stringify(data, null, 2);
 }
 
 function renderInitialStatus(data) {
@@ -1388,6 +1429,7 @@ function renderHistory(history) {
   // Historical mode uses persisted samples instead of live polling. It pauses the
   // refresh timer until the user presses Live again.
   state.historyMode = true;
+  setLiveModeButton();
   clearTimeout(state.refreshTimer);
   resetTrendHistory();
   const samples = history.samples ?? [];
@@ -1400,16 +1442,7 @@ function renderHistory(history) {
   } else {
     state.historyHorizonMs = POWER_TREND_MS;
   }
-  for (const sample of samples) {
-    const time = new Date(sample.timestamp).getTime();
-    pushTrend("batteryPower", Number(sample.batteryPowerW), time);
-    pushTrend("batterySoc", Number(sample.stateOfChargePercent), time);
-    pushTrend("solarPower", Number(sample.solarPowerW), time);
-    pushTrend("houseDemandPower", Number(sample.houseDemandW), time);
-    pushTrend("gridExportPower", Number(sample.gridExportW), time);
-    pushTrend("gridImportPower", Number(sample.gridImportW), time);
-    pushTrend("fuelCellPower", Number(sample.fuelCellPowerW), time);
-  }
+  for (const sample of samples) pushSampleToTrends(sample);
   const latest = samples[samples.length - 1] ?? {};
   const syntheticStatus = {
     ...(state.status ?? {}),
@@ -1436,7 +1469,6 @@ function renderHistory(history) {
     },
   };
   renderDashboard(syntheticStatus, { recordTrend: false });
-  $("#rawJson").textContent = JSON.stringify(history, null, 2);
   setServiceState("historicalData");
 }
 
@@ -1590,6 +1622,7 @@ async function refreshAll() {
 
 async function initialLoad() {
   setServiceState("readingDevices");
+  await loadLiveTrendHistory().catch(() => {});
   const [statusResult, configResult] = await Promise.allSettled([
     api("/api/status"),
     api("/api/config"),
@@ -1597,6 +1630,9 @@ async function initialLoad() {
     refreshAutomationRules(),
   ]);
   if (statusResult.status === "fulfilled") {
+    state.historyMode = false;
+    state.historyHorizonMs = null;
+    setLiveModeButton();
     renderInitialStatus(statusResult.value);
     setServiceState("serviceOnline");
   } else {
@@ -1646,20 +1682,20 @@ function initForms() {
   $("#limitValue").addEventListener("input", () => {
     $("#limitOutput").textContent = `${$("#limitValue").value}%`;
   });
-  $("#refreshBtn").addEventListener("click", refreshAll);
-  const now = new Date();
-  $("#historyEnd").value = localDateTimeValue(now);
-  $("#historyStart").value = localDateTimeValue(
-    new Date(now.getTime() - 30 * 60_000),
-  );
+  setHistoryRange(30 * 60_000);
+  setLiveModeButton();
+  $$("[data-range-ms]").forEach((button) => {
+    button.addEventListener("click", () => {
+      setHistoryRange(Number(button.dataset.rangeMs));
+      $("#historyForm").requestSubmit();
+    });
+  });
   $("#historyForm").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const params = new URLSearchParams({
-      start: new Date($("#historyStart").value).toISOString(),
-      end: new Date($("#historyEnd").value).toISOString(),
-    });
+    const start = new Date($("#historyStart").value);
+    const end = new Date($("#historyEnd").value);
     try {
-      renderHistory(await api(`/api/history?${params}`));
+      renderHistory(await api(`/api/history?${historyParams(start, end)}`));
     } catch (err) {
       toast(err.message);
     }
@@ -1667,7 +1703,8 @@ function initForms() {
   $("#liveBtn").addEventListener("click", async () => {
     state.historyMode = false;
     state.historyHorizonMs = null;
-    resetTrendHistory();
+    setLiveModeButton();
+    await loadLiveTrendHistory().catch(() => {});
     await refreshStatus();
     scheduleNextRefresh();
   });

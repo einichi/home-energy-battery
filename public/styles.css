@@ -148,13 +148,28 @@ main {
 }
 
 .history-form {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto auto auto auto auto;
   align-items: end;
   gap: 8px;
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #fff;
+}
+
+.quick-ranges {
+  display: flex;
+  align-items: end;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+.quick-ranges button {
+  min-height: 32px;
+  padding: 0 8px;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .history-form label {
@@ -166,6 +181,18 @@ main {
 
 .history-form input {
   width: 178px;
+}
+
+.live-button {
+  min-width: 78px;
+  border: 2px solid #0f766e;
+  background: #127c78;
+  color: #fff;
+  box-shadow: 0 8px 20px rgba(18, 124, 120, 0.22);
+}
+
+.live-button.is-live {
+  background: #0f5f5c;
 }
 
 .label,
@@ -782,44 +809,6 @@ td code {
   min-height: 30px;
 }
 
-.debug-menu {
-  position: relative;
-}
-
-.debug-menu summary {
-  min-height: 38px;
-  display: flex;
-  align-items: center;
-  padding: 0 14px;
-  border-radius: 8px;
-  background: #edf2f7;
-  color: #334155;
-  font-weight: 800;
-  cursor: pointer;
-  list-style: none;
-}
-
-.debug-menu summary::-webkit-details-marker {
-  display: none;
-}
-
-.debug-menu pre {
-  position: absolute;
-  top: 46px;
-  right: 0;
-  z-index: 10;
-  width: min(760px, calc(100vw - 280px));
-  max-height: 520px;
-  overflow: auto;
-  margin: 0;
-  padding: 14px;
-  background: #0f1720;
-  color: #dbeafe;
-  border-radius: 8px;
-  box-shadow: var(--shadow);
-  font-size: 12px;
-}
-
 #toast {
   position: fixed;
   right: 20px;
@@ -921,9 +910,6 @@ td code {
     padding: 16px;
   }
 
-  .debug-menu pre {
-    width: calc(100vw - 32px);
-  }
 }
 
 @media (max-width: 720px) {
@@ -940,7 +926,22 @@ td code {
 
   .history-form {
     width: 100%;
-    flex-wrap: wrap;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .quick-ranges {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .history-form label {
+    min-width: 0;
+  }
+
+  .history-form input,
+  .history-form button {
+    width: 100%;
   }
 
   .widget-grid,

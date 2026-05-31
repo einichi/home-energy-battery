@@ -38,6 +38,20 @@
         </div>
         <div class="top-actions">
           <form id="historyForm" class="history-form" data-dashboard-only>
+            <div class="quick-ranges" aria-label="Quick history ranges">
+              <button type="button" class="ghost" data-range-ms="3600000" data-i18n="last1Hour">
+                Last 1 hour
+              </button>
+              <button type="button" class="ghost" data-range-ms="28800000" data-i18n="last8Hours">
+                Last 8 hours
+              </button>
+              <button type="button" class="ghost" data-range-ms="86400000" data-i18n="last24Hours">
+                Last 24 Hours
+              </button>
+              <button type="button" class="ghost" data-range-ms="259200000" data-i18n="last3Days">
+                Last 3 Days
+              </button>
+            </div>
             <label>
               <span data-i18n="from">From</span>
               <input id="historyStart" type="datetime-local" />
@@ -47,17 +61,10 @@
               <input id="historyEnd" type="datetime-local" />
             </label>
             <button class="ghost" data-i18n="showRange">Show Range</button>
-            <button id="liveBtn" class="ghost" type="button" data-i18n="live">
+            <button id="liveBtn" class="live-button" type="button" data-i18n="live">
               Live
             </button>
           </form>
-          <details class="debug-menu">
-            <summary data-i18n="debug">Debug</summary>
-            <pre id="rawJson">{}</pre>
-          </details>
-          <button id="refreshBtn" class="ghost" data-i18n="refresh">
-            Refresh
-          </button>
         </div>
       </header>
 
