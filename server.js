@@ -37,6 +37,7 @@ const DEFAULT_CONFIG = {
   discoverySubnets: [],
   historyRetentionDays: 1095,
   updateIntervalSeconds: 15,
+  co2TonnesPerKwh: 0.000423,
   rateBands: [
     { start: "00:00", end: "00:00", yenPerKwh: 35, label: "Simple" },
   ],
@@ -81,9 +82,9 @@ function runCli(command, args = {}, positional = []) {
         return;
       }
       try {
-        resolve(JSON.parse(stdout));
-      } catch {
-        reject(new Error(`CLI returned non-JSON output: ${stdout.trim()}`));
+        resolve(parseJsonWithContext(stdout, `CLI ${command} stdout`));
+      } catch (err) {
+        reject(err);
       }
     });
   });
@@ -108,6 +109,61 @@ function numericMetric(item) {
 function strongestFuelCellWatts(fuelCells = []) {
   const values = fuelCells.map((cell) => numericMetric(cell.instant_power)).filter((value) => value !== null);
   return values.length ? Math.max(...values) : null;
+}
+
+function jsonSnippet(text, maxLength = 4000) {
+  if (text === "") return "(empty)";
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}\n...<truncated ${text.length - maxLength} chars>`;
+}
+
+function parseJsonWithContext(text, source) {
+  try {
+    return JSON.parse(text);
+  } catch (cause) {
+    const err = new Error(`Failed to parse JSON from ${source}: ${cause.message}`);
+    err.cause = cause;
+    err.jsonSource = source;
+    err.jsonText = text;
+    throw err;
+  }
+}
+
+function logDetailedError(label, err) {
+  console.error(`${label}:`, err.stack || err.message);
+  if (err.jsonSource !== undefined) {
+    console.error(`${label} JSON source: ${err.jsonSource}`);
+    console.error(`${label} JSON payload:\n${jsonSnippet(err.jsonText ?? "")}`);
+  }
+}
+
+function parseHistorySamples(text) {
+  return text
+    .split("\n")
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => line.trim())
+    .map(({ line, index }) => {
+      try {
+        return parseJsonWithContext(line, `${HISTORY_FILE}:line ${index + 1}`);
+      } catch (err) {
+        logDetailedError("history", err);
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+async function writeJsonFileAtomic(file, data) {
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`);
+  await rename(tmp, file);
+}
+
+async function writeJsonLinesAtomic(file, rows) {
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  const body = rows.map((row) => JSON.stringify(row)).join("\n");
+  await writeFile(tmp, body + (rows.length ? "\n" : ""));
+  await rename(tmp, file);
 }
 
 function rateForTimestamp(rateBands = DEFAULT_CONFIG.rateBands, timestamp = new Date(), fallbackRate = null) {
@@ -161,8 +217,9 @@ function sampleFromStatus(status, config, previousSample) {
     : 0;
   const offPeakSavingsEnabled = config.rateMode !== "simple" || config.offPeakSavingsEnabled === true;
   const offPeakSavingW = offPeakSavingsEnabled && batteryPowerW > 0 && !(solarPowerW > 0) ? batteryPowerW : 0;
+  const solarGenerationKwh = deltaHours * (Math.max(0, solarPowerW ?? 0) / 1000);
   const offPeakSavingYen = deltaHours * (offPeakSavingW / 1000) * Math.max(0, highestRate - activeRate);
-  const solarSavingYen = deltaHours * (Math.max(0, solarPowerW ?? 0) / 1000) * activeRate;
+  const solarSavingYen = solarGenerationKwh * activeRate;
   return {
     timestamp,
     batteryPowerW,
@@ -172,6 +229,7 @@ function sampleFromStatus(status, config, previousSample) {
     fuelCellPowerW,
     gridExportW,
     gridImportW,
+    solarGenerationKwh,
     offPeakSavingYen,
     solarSavingYen,
     rateYenPerKwh: activeRate,
@@ -188,17 +246,32 @@ async function recordStatusSample(status, config) {
   return sample;
 }
 
-function summarizeSamples(samples) {
+function sampleSolarGenerationKwh(sample) {
+  const direct = Number(sample.solarGenerationKwh);
+  if (Number.isFinite(direct)) return direct;
+  const solarSavingYen = Number(sample.solarSavingYen);
+  const rateYenPerKwh = Number(sample.rateYenPerKwh);
+  if (Number.isFinite(solarSavingYen) && Number.isFinite(rateYenPerKwh) && rateYenPerKwh > 0) {
+    return solarSavingYen / rateYenPerKwh;
+  }
+  return 0;
+}
+
+function summarizeSamples(samples, config = DEFAULT_CONFIG) {
+  const solarGenerationKwh = samples.reduce((sum, sample) => sum + sampleSolarGenerationKwh(sample), 0);
+  const co2TonnesPerKwh = configNumber(config.co2TonnesPerKwh, DEFAULT_CONFIG.co2TonnesPerKwh, 0, 1);
   return {
     sampleCount: samples.length,
     start: samples[0]?.timestamp ?? null,
     end: samples[samples.length - 1]?.timestamp ?? null,
     offPeakSavingYen: samples.reduce((sum, sample) => sum + Number(sample.offPeakSavingYen ?? 0), 0),
     solarSavingYen: samples.reduce((sum, sample) => sum + Number(sample.solarSavingYen ?? 0), 0),
+    solarGenerationKwh,
+    co2SavingKg: solarGenerationKwh * co2TonnesPerKwh * 1000,
   };
 }
 
-async function readHistoryRange(start, end) {
+async function readHistoryRange(start, end, config = DEFAULT_CONFIG) {
   // History is read by scanning the JSONL file. This is intentionally boring and
   // inspectable; a database can replace it later if retention grows large.
   await ensureDataDir();
@@ -213,22 +286,12 @@ async function readHistoryRange(start, end) {
   } catch (err) {
     if (err.code !== "ENOENT") throw err;
   }
-  const samples = text
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      try {
-        return JSON.parse(line);
-      } catch {
-        return null;
-      }
-    })
-    .filter(Boolean)
+  const samples = parseHistorySamples(text)
     .filter((sample) => {
       const time = new Date(sample.timestamp).getTime();
       return time >= startMs && time <= endMs;
     });
-  return { samples, summary: summarizeSamples(samples) };
+  return { samples, summary: summarizeSamples(samples, config) };
 }
 
 async function readAllHistorySamples() {
@@ -239,17 +302,7 @@ async function readAllHistorySamples() {
   } catch (err) {
     if (err.code !== "ENOENT") throw err;
   }
-  return text
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      try {
-        return JSON.parse(line);
-      } catch {
-        return null;
-      }
-    })
-    .filter(Boolean);
+  return parseHistorySamples(text);
 }
 
 async function trimHistory(retentionDays) {
@@ -258,9 +311,7 @@ async function trimHistory(retentionDays) {
   const cutoff = Date.now() - days * 24 * 60 * 60_000;
   const samples = await readAllHistorySamples();
   const kept = samples.filter((sample) => new Date(sample.timestamp).getTime() >= cutoff);
-  const tmp = `${HISTORY_FILE}.tmp`;
-  await writeFile(tmp, kept.map((sample) => JSON.stringify(sample)).join("\n") + (kept.length ? "\n" : ""));
-  await rename(tmp, HISTORY_FILE);
+  await writeJsonLinesAtomic(HISTORY_FILE, kept);
   return { retentionDays: days, before: samples.length, after: kept.length, deleted: samples.length - kept.length };
 }
 
@@ -268,7 +319,7 @@ async function readSchedules() {
   await ensureDataDir();
   try {
     const text = await readFile(SCHEDULES_FILE, "utf8");
-    const parsed = JSON.parse(text);
+    const parsed = parseJsonWithContext(text, SCHEDULES_FILE);
     return Array.isArray(parsed) ? parsed : [];
   } catch (err) {
     if (err.code === "ENOENT") return [];
@@ -278,7 +329,7 @@ async function readSchedules() {
 
 async function writeSchedules(schedules) {
   await ensureDataDir();
-  await writeFile(SCHEDULES_FILE, `${JSON.stringify(schedules, null, 2)}\n`);
+  await writeJsonFileAtomic(SCHEDULES_FILE, schedules);
 }
 
 function normalizeHostList(value) {
@@ -398,6 +449,7 @@ function cleanConfig(input = {}) {
     standardRateYenPerKwh: standardRate,
     offPeakRateYenPerKwh: offPeakRate,
     offPeakSavingsEnabled: rateMode !== "simple",
+    co2TonnesPerKwh: configNumber(input.co2TonnesPerKwh, DEFAULT_CONFIG.co2TonnesPerKwh, 0, 1),
     discoverySubnets: normalizeSubnets(input.discoverySubnets),
     historyRetentionDays: configNumber(input.historyRetentionDays, DEFAULT_CONFIG.historyRetentionDays, 1, 3650),
     updateIntervalSeconds: configNumber(input.updateIntervalSeconds, DEFAULT_CONFIG.updateIntervalSeconds, 5, 3600),
@@ -412,7 +464,7 @@ async function readConfig() {
   await ensureDataDir();
   try {
     const text = await readFile(CONFIG_FILE, "utf8");
-    return cleanConfig(JSON.parse(text));
+    return cleanConfig(parseJsonWithContext(text, CONFIG_FILE));
   } catch (err) {
     if (err.code === "ENOENT") return cleanConfig(DEFAULT_CONFIG);
     throw err;
@@ -423,7 +475,7 @@ async function writeConfig(config) {
   const previous = await readConfig().catch(() => cleanConfig(DEFAULT_CONFIG));
   const cleaned = cleanConfig({ ...previous, ...config });
   await ensureDataDir();
-  await writeFile(CONFIG_FILE, `${JSON.stringify(cleaned, null, 2)}\n`);
+  await writeJsonFileAtomic(CONFIG_FILE, cleaned);
   const hostKeys = ["batteryHost", "smartMeterHost", "meterHost", "meterEoj", "solarHost"];
   const hostChanged = hostKeys.some((key) => previous[key] !== cleaned[key])
     || JSON.stringify(previous.fuelCellHosts) !== JSON.stringify(cleaned.fuelCellHosts);
@@ -435,7 +487,7 @@ async function readAutomationRules() {
   await ensureDataDir();
   try {
     const text = await readFile(AUTOMATION_RULES_FILE, "utf8");
-    const parsed = JSON.parse(text);
+    const parsed = parseJsonWithContext(text, AUTOMATION_RULES_FILE);
     return Array.isArray(parsed) ? parsed.map(cleanAutomationRule) : [];
   } catch (err) {
     if (err.code === "ENOENT") return [];
@@ -446,7 +498,7 @@ async function readAutomationRules() {
 async function writeAutomationRules(rules) {
   await ensureDataDir();
   const cleaned = rules.map(cleanAutomationRule);
-  await writeFile(AUTOMATION_RULES_FILE, `${JSON.stringify(cleaned, null, 2)}\n`);
+  await writeJsonFileAtomic(AUTOMATION_RULES_FILE, cleaned);
   return cleaned;
 }
 
@@ -469,7 +521,7 @@ async function readBody(req) {
   for await (const chunk of req) chunks.push(chunk);
   const textBody = Buffer.concat(chunks).toString("utf8");
   if (!textBody) return {};
-  return JSON.parse(textBody);
+  return parseJsonWithContext(textBody, `${req.method} ${req.url} request body`);
 }
 
 function numberInRange(value, label, min, max, step = 1) {
@@ -658,7 +710,7 @@ async function readAllStatus() {
   status.sample = await recordStatusSample(status, config);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  status.savings = (await readHistoryRange(today.toISOString(), status.read_at)).summary;
+  status.savings = (await readHistoryRange(today.toISOString(), status.read_at, config)).summary;
   return status;
 }
 
@@ -1144,13 +1196,13 @@ function startDiscoveryJob(timeout, mode = "broadcast", subnets = []) {
 
 function startScheduler() {
   scheduleTimer = setInterval(() => {
-    runDueSchedules().catch((err) => console.error("scheduler:", err.message));
+    runDueSchedules().catch((err) => logDetailedError("scheduler", err));
   }, 15000);
   automationTimer = setInterval(() => {
-    runAutomationRules().catch((err) => console.error("automation:", err.message));
+    runAutomationRules().catch((err) => logDetailedError("automation", err));
   }, 30000);
-  runDueSchedules().catch((err) => console.error("scheduler:", err.message));
-  runAutomationRules().catch((err) => console.error("automation:", err.message));
+  runDueSchedules().catch((err) => logDetailedError("scheduler", err));
+  runAutomationRules().catch((err) => logDetailedError("automation", err));
 }
 
 async function api(req, res, url) {
@@ -1184,7 +1236,8 @@ async function api(req, res, url) {
     return json(res, 200, await readAllStatus());
   }
   if (req.method === "GET" && url.pathname === "/api/history") {
-    return json(res, 200, await readHistoryRange(url.searchParams.get("start"), url.searchParams.get("end")));
+    const config = await readConfig();
+    return json(res, 200, await readHistoryRange(url.searchParams.get("start"), url.searchParams.get("end"), config));
   }
   if (req.method === "POST" && url.pathname.startsWith("/api/settings/")) {
     const body = await readBody(req);
@@ -1297,6 +1350,7 @@ export const server = http.createServer(async (req, res) => {
     }
     await serveStatic(res, url.pathname);
   } catch (err) {
+    logDetailedError("api", err);
     json(res, 500, { error: err.message });
   }
 });

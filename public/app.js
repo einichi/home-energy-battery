@@ -109,6 +109,7 @@ const I18N = {
     dischargeLimit: "Discharge Limit",
     solarGeneration: "Solar Generation",
     solarSavings: "Solar Savings",
+    co2Savings: "CO2 Savings",
     offPeakSavings: "Off-Peak Charge Savings",
     houseDemand: "House Demand",
     gridImport: "Grid Import",
@@ -156,6 +157,10 @@ const I18N = {
     rateBandEnd: "End",
     rateBandPrice: "Yen/kWh",
     saveRates: "Save Rates",
+    co2Release: "CO2 Release",
+    co2ReleaseFactor: "Average CO2 emitted (t-CO2/kWh)",
+    saveCo2Release: "Save CO2 Release",
+    co2ReleaseSaved: "CO2 release saved",
     historyRetention: "History Retention",
     retentionDays: "Keep samples for days",
     saveRetention: "Save Retention",
@@ -304,6 +309,7 @@ const I18N = {
     dischargeLimit: "放電下限",
     solarGeneration: "太陽光発電",
     solarSavings: "太陽光の節約額",
+    co2Savings: "CO2削減量",
     offPeakSavings: "夜間充電の節約額",
     houseDemand: "家庭内消費",
     gridImport: "買電",
@@ -349,6 +355,10 @@ const I18N = {
     rateBandEnd: "終了",
     rateBandPrice: "円/kWh",
     saveRates: "料金を保存",
+    co2Release: "CO2排出係数",
+    co2ReleaseFactor: "平均CO2排出量 (t-CO2/kWh)",
+    saveCo2Release: "CO2排出係数を保存",
+    co2ReleaseSaved: "CO2排出係数を保存しました",
     historyRetention: "電力使用データの保存期間",
     retentionDays: "保存日数",
     saveRetention: "保存期間設定を保存",
@@ -598,6 +608,18 @@ function yen(value) {
     currency: "JPY",
     maximumFractionDigits: value >= 100 ? 0 : 2,
   }).format(value);
+}
+
+function co2Saved(valueKg) {
+  if (!Number.isFinite(valueKg)) return "--";
+  if (valueKg >= 1000) {
+    return `${new Intl.NumberFormat(state.language === "ja" ? "ja-JP" : "en-US", {
+      maximumFractionDigits: valueKg >= 10_000 ? 0 : 1,
+    }).format(valueKg / 1000)} t`;
+  }
+  return `${new Intl.NumberFormat(state.language === "ja" ? "ja-JP" : "en-US", {
+    maximumFractionDigits: valueKg >= 100 ? 0 : 2,
+  }).format(valueKg)} kg`;
 }
 
 function localDateTimeValue(date) {
@@ -1256,6 +1278,7 @@ function updateConfigControls(config) {
   $("#standardRate").value = config.standardRateYenPerKwh ?? "";
   $("#offPeakRate").value = config.offPeakRateYenPerKwh ?? "";
   $("#multiStandardRate").value = config.standardRateYenPerKwh ?? "";
+  $("#co2TonnesPerKwh").value = config.co2TonnesPerKwh ?? "";
   $("#historyRetentionDays").value = config.historyRetentionDays ?? "";
   renderRateBands(
     rateMode === "multi"
@@ -1397,9 +1420,14 @@ function renderDashboard(data, options = {}) {
   );
   setText("#fuelCellStatus", fuelStatuses.map(displayValue).join(", ") || "--");
   setText("#solarSavings", yen(Number(data.savings?.solarSavingYen)));
+  setText("#co2Savings", co2Saved(Number(data.savings?.co2SavingKg)));
   setText("#offPeakSavings", yen(Number(data.savings?.offPeakSavingYen)));
   setText(
     "#solarSavingsPeriod",
+    state.historyMode ? rangeLabel(data.savings, "selectedRange") : t("today"),
+  );
+  setText(
+    "#co2SavingsPeriod",
     state.historyMode ? rangeLabel(data.savings, "selectedRange") : t("today"),
   );
   setText(
@@ -1773,6 +1801,24 @@ function initForms() {
       });
       updateConfigControls(config);
       toast(t("saveRates"));
+      if (!state.historyMode) await refreshStatus();
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  $("#co2ConfigForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const config = await api("/api/config", {
+        method: "PUT",
+        body: {
+          ...(state.config ?? {}),
+          co2TonnesPerKwh: $("#co2TonnesPerKwh").value,
+        },
+      });
+      updateConfigControls(config);
+      toast(t("co2ReleaseSaved"));
       if (!state.historyMode) await refreshStatus();
     } catch (err) {
       toast(err.message);

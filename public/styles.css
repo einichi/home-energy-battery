@@ -632,6 +632,11 @@ output {
   grid-column: 1 / -1;
 }
 
+.co2-form h2 {
+  color: var(--text);
+  font-size: 15px;
+}
+
 .discovery-box {
   display: flex;
   align-items: center;
@@ -913,10 +918,69 @@ td code {
 }
 
 @media (max-width: 720px) {
-  .topbar,
-  .sidebar {
+  .topbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .brand {
+    gap: 7px;
+    font-size: 12px;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .brand span:not(.bolt) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .bolt {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    font-size: 13px;
+  }
+
+  nav {
+    flex: 1;
+    justify-content: flex-end;
+    gap: 4px;
+  }
+
+  .nav-button {
+    min-height: 30px;
+    padding: 0 9px;
+    border-radius: 7px;
+    font-size: 13px;
+  }
+
+  .service-state {
+    margin-left: 0;
+    gap: 0;
+  }
+
+  .service-state span:last-child {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 
   .top-actions {

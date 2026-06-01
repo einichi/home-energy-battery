@@ -177,7 +177,7 @@
               <i id="dischargeLimitBar"></i>
             </div>
           </article>
-          <article class="widget wide" data-feature="fuel-cell">
+          <article class="widget" data-feature="fuel-cell">
             <span data-i18n="fuelCellStatus">Ene-Farm Status</span>
             <strong class="status-text" id="fuelCellStatus">--</strong>
           </article>
@@ -185,6 +185,11 @@
             <span data-i18n="solarSavings">Solar Savings</span>
             <strong id="solarSavings">--</strong>
             <small id="solarSavingsPeriod" class="widget-note">--</small>
+          </article>
+          <article class="widget" data-feature="solar">
+            <span data-i18n="co2Savings">CO2 Savings</span>
+            <strong id="co2Savings">--</strong>
+            <small id="co2SavingsPeriod" class="widget-note">--</small>
           </article>
           <article class="widget" data-feature="off-peak-savings">
             <span data-i18n="offPeakSavings">Off-Peak Charge Savings</span>
@@ -641,6 +646,20 @@
                 </div>
                 <button data-i18n="saveRates">Save Rates</button>
               </fieldset>
+            </form>
+            <form id="co2ConfigForm" class="config-form co2-form section-box">
+              <h2 data-i18n="co2Release">CO2 Release</h2>
+              <label>
+                <span data-i18n="co2ReleaseFactor">Average CO2 emitted (t-CO2/kWh)</span>
+                <input
+                  id="co2TonnesPerKwh"
+                  type="number"
+                  min="0"
+                  step="0.000001"
+                  inputmode="decimal"
+                />
+              </label>
+              <button data-i18n="saveCo2Release">Save CO2 Release</button>
             </form>
           </div>
 

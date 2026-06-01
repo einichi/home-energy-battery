@@ -33,10 +33,12 @@ assert.equal(simple.offPeakSavingsEnabled, false);
 assert.equal(simple.rateBands.length, 1);
 assert.equal(simple.historyRetentionDays, 1095);
 assert.equal(simple.updateIntervalSeconds, 15);
+assert.equal(simple.co2TonnesPerKwh, 0.000423);
 assert.equal(rateForTimestamp(simple.rateBands, "2026-05-31T23:30:00+09:00").yenPerKwh, 42);
 
 assert.equal(cleanConfig({ updateIntervalSeconds: 2 }).updateIntervalSeconds, 5);
 assert.equal(cleanConfig({ updateIntervalSeconds: 30 }).updateIntervalSeconds, 30);
+assert.equal(cleanConfig({ co2TonnesPerKwh: 0.0005 }).co2TonnesPerKwh, 0.0005);
 
 assert.deepEqual(normalizeSubnets(["192.168.1.0/24", "bad", "192.168.1.0/24"]), ["192.168.1.0/24"]);
 
@@ -70,10 +72,16 @@ const sample = sampleFromStatus({
 }, { ...migrated, rateBands: bands }, { timestamp: "2026-05-31T11:45:00+09:00" });
 assert.equal(sample.rateYenPerKwh, 40);
 assert.equal(sample.solarSavingYen, 24);
+assert.equal(sample.solarGenerationKwh, 0.6);
 
-const summary = summarizeSamples([{ solarSavingYen: 1, offPeakSavingYen: 2 }, { solarSavingYen: 3, offPeakSavingYen: 4 }]);
+const summary = summarizeSamples([
+  { solarSavingYen: 1, offPeakSavingYen: 2, solarGenerationKwh: 0.25 },
+  { solarSavingYen: 3, offPeakSavingYen: 4, solarGenerationKwh: 0.75 },
+], { co2TonnesPerKwh: 0.000423 });
 assert.equal(summary.solarSavingYen, 4);
 assert.equal(summary.offPeakSavingYen, 6);
+assert.equal(summary.solarGenerationKwh, 1);
+assert.equal(summary.co2SavingKg, 0.423);
 
 const rule = cleanAutomationRule({ enabled: true, conditions: { breakerAmps: 40, reserveAmps: 5 } });
 assert.equal(rule.action, "set-mode");
