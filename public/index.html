@@ -20,6 +20,18 @@
         >
           Dashboard
         </button>
+        <details class="nav-section" open>
+          <summary data-i18n="navGraphs">Graphs</summary>
+          <div class="nav-submenu">
+            <button class="nav-subbutton" data-feature="solar" data-graph-page="solarPower" data-i18n="solarGeneration">Solar Generation</button>
+            <button class="nav-subbutton" data-feature="fuel-cell" data-graph-page="fuelCellPower" data-i18n="fuelCellGeneration">Ene-Farm Generation</button>
+            <button class="nav-subbutton" data-graph-page="houseDemandPower" data-i18n="houseDemand">House Demand</button>
+            <button class="nav-subbutton" data-graph-page="batteryPower" data-i18n="batteryPower">Battery Power</button>
+            <button class="nav-subbutton" data-graph-page="batterySoc" data-i18n="stateOfCharge">State of Charge</button>
+            <button class="nav-subbutton" data-graph-page="gridImportPower" data-i18n="gridImport">Grid Import</button>
+            <button class="nav-subbutton" data-graph-page="gridExportPower" data-i18n="gridExport">Grid Export</button>
+          </div>
+        </details>
         <button class="nav-button" data-page="settings" data-i18n="navSettings">
           Settings
         </button>
@@ -33,8 +45,8 @@
     <main>
       <header class="topbar">
         <div>
-          <span class="label" data-i18n="liveDashboard">Live dashboard</span>
-          <strong data-i18n="homeEnergyFlow">Home energy flow</strong>
+          <span id="pageEyebrow" class="label" data-i18n="liveDashboard">Live dashboard</span>
+          <strong id="pageTitle" data-i18n="homeEnergyFlow">Home energy flow</strong>
         </div>
         <div class="top-actions">
           <form id="historyForm" class="history-form" data-dashboard-only>
@@ -64,6 +76,15 @@
             <button id="liveBtn" class="live-button" type="button" data-i18n="live">
               Live
             </button>
+            <div id="historyLoadProgress" class="load-progress hidden" aria-live="polite">
+              <div class="progress-copy">
+                <strong id="historyLoadTitle" data-i18n="loadingGraphData">Loading graph data</strong>
+                <span id="historyLoadDetail"></span>
+              </div>
+              <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <i id="historyLoadFill"></i>
+              </div>
+            </div>
           </form>
         </div>
       </header>
@@ -196,6 +217,73 @@
             <strong id="offPeakSavings">--</strong>
             <small id="offPeakSavingsPeriod" class="widget-note">--</small>
           </article>
+          </div>
+        </section>
+      </section>
+
+      <section id="graphPage" class="page" aria-label="Graph Analysis">
+        <section class="graph-workspace">
+          <div class="panel graph-panel">
+            <div class="panel-title">
+              <span class="label" data-i18n="graphAnalysis">Graph Analysis</span>
+              <h1 id="graphTitle">--</h1>
+            </div>
+            <form id="graphHistoryForm" class="history-form graph-history-form">
+              <div class="quick-ranges" aria-label="Graph history ranges">
+                <button type="button" class="ghost" data-graph-range-ms="3600000" data-i18n="last1Hour">
+                  Last 1 hour
+                </button>
+                <button type="button" class="ghost" data-graph-range-ms="28800000" data-i18n="last8Hours">
+                  Last 8 hours
+                </button>
+                <button type="button" class="ghost" data-graph-range-ms="86400000" data-i18n="last24Hours">
+                  Last 24 Hours
+                </button>
+                <button type="button" class="ghost" data-graph-range-ms="259200000" data-i18n="last3Days">
+                  Last 3 Days
+                </button>
+                <button type="button" class="ghost" data-graph-range-ms="604800000" data-i18n="last7Days">
+                  Last 7 days
+                </button>
+                <button type="button" class="ghost" data-graph-range-ms="2592000000" data-i18n="last30Days">
+                  Last 30 days
+                </button>
+                <button type="button" class="ghost" data-graph-range-ms="7776000000" data-i18n="last3Months">
+                  Last 3 months
+                </button>
+                <button type="button" class="ghost" data-graph-range-ms="15552000000" data-i18n="last6Months">
+                  Last 6 months
+                </button>
+                <button type="button" class="ghost" data-graph-range-ms="31536000000" data-i18n="lastYear">
+                  Last year
+                </button>
+              </div>
+              <label>
+                <span data-i18n="from">From</span>
+                <input id="graphHistoryStart" type="datetime-local" />
+              </label>
+              <label>
+                <span data-i18n="to">To</span>
+                <input id="graphHistoryEnd" type="datetime-local" />
+              </label>
+              <button class="ghost" data-i18n="loadGraphRange">Load Graph</button>
+              <div id="graphLoadProgress" class="load-progress hidden" aria-live="polite">
+                <div class="progress-copy">
+                  <strong id="graphLoadTitle" data-i18n="loadingGraphData">Loading graph data</strong>
+                  <span id="graphLoadDetail"></span>
+                </div>
+                <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                  <i id="graphLoadFill"></i>
+                </div>
+              </div>
+            </form>
+            <canvas
+              class="trend analysis-trend"
+              id="graphAnalysisTrend"
+              width="980"
+              height="360"
+            ></canvas>
+            <div id="graphMeta" class="graph-meta"></div>
           </div>
         </section>
       </section>
@@ -423,6 +511,7 @@
                     <input id="automationRestoreDelay" type="number" min="0" step="30" inputmode="numeric" />
                   </label>
                   <button data-i18n="saveAutomation">Save Automation</button>
+                  <div id="automationLog" class="automation-log" aria-live="polite"></div>
                   <div id="automationStatus" class="automation-status"></div>
                 </fieldset>
               </form>
@@ -659,6 +748,15 @@
                   inputmode="decimal"
                 />
               </label>
+              <a
+                class="data-source-link"
+                href="https://policies.env.go.jp/earth/ghg-santeikohyo/calc.html"
+                target="_blank"
+                rel="noreferrer"
+                data-i18n="dataSource"
+              >
+                Data Source
+              </a>
               <button data-i18n="saveCo2Release">Save CO2 Release</button>
             </form>
           </div>

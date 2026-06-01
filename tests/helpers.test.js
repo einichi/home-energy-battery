@@ -83,11 +83,12 @@ assert.equal(summary.offPeakSavingYen, 6);
 assert.equal(summary.solarGenerationKwh, 1);
 assert.equal(summary.co2SavingKg, 0.423);
 
-const rule = cleanAutomationRule({ enabled: true, conditions: { breakerAmps: 40, reserveAmps: 5 } });
+const rule = cleanAutomationRule({ enabled: true, conditions: { breakerAmps: 40, reserveAmps: 5, source: "houseDemandW" } });
 assert.equal(rule.action, "set-mode");
 assert.equal(rule.payload.mode, "standby");
 assert.equal(rule.restoreAction, "set-mode");
 assert.equal(rule.restorePayload.mode, "auto");
+assert.equal(cleanAutomationRule({}).conditions.source, "gridImportW");
 const skipped = await evaluateAutomationRule(rule, {
   settings: { mode: { decoded: { mode: "eco" } } },
   energy: { battery: { operation_mode: { value: "auto" }, instant_power: { value: 0 } } },
@@ -97,7 +98,7 @@ assert.equal(skipped.result.skipped, "conditions not met");
 
 const actualChargingSafe = await evaluateAutomationRule(cleanAutomationRule({
   enabled: true,
-  conditions: { breakerAmps: 40, reserveAmps: 5, batteryChargingEstimateW: 1000 },
+  conditions: { source: "houseDemandW", breakerAmps: 40, reserveAmps: 5, batteryChargingEstimateW: 1000 },
 }), {
   energy: { battery: { operation_mode: { value: "auto" }, instant_power: { value: 600 } } },
   meter: { house_demand_power: { value: 2800 } },
@@ -105,11 +106,23 @@ const actualChargingSafe = await evaluateAutomationRule(cleanAutomationRule({
 assert.equal(actualChargingSafe.result.skipped, "conditions not met");
 assert.equal(actualChargingSafe.result.actualDemandWithChargingW, 3400);
 
+const gridImportDoesNotDoubleCountCharging = await evaluateAutomationRule(cleanAutomationRule({
+  enabled: true,
+  conditions: { source: "gridImportW", breakerAmps: 40, reserveAmps: 5, batteryChargingEstimateW: 1000 },
+}), {
+  energy: { battery: { operation_mode: { value: "auto" }, instant_power: { value: 600 } } },
+  meter: { grid_import_power: { value: 3400 } },
+}, new Date("2026-05-31T00:00:00.000Z"));
+assert.equal(gridImportDoesNotDoubleCountCharging.result.skipped, "conditions not met");
+assert.equal(gridImportDoesNotDoubleCountCharging.result.guardDemandW, 3400);
+
+
 const restoreWouldTrip = await evaluateAutomationRule(cleanAutomationRule({
   enabled: true,
   state: { awaitingRestore: true },
   conditions: {
     breakerAmps: 40,
+    source: "houseDemandW",
     reserveAmps: 5,
     batteryChargingEstimateW: 1000,
     restoreBelowAmps: 30,

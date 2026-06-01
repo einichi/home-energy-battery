@@ -813,13 +813,14 @@ async function runDueSchedules() {
 
 function cleanAutomationRule(input = {}) {
   const conditions = input.conditions ?? {};
+  const log = Array.isArray(input.log) ? input.log.slice(-100) : [];
   return {
     id: String(input.id || randomUUID()),
     name: String(input.name || "Charging demand guard"),
     type: String(input.type || "backup-demand-guard"),
     enabled: input.enabled === true,
     conditions: {
-      source: ["houseDemandW", "gridImportW"].includes(conditions.source) ? conditions.source : "houseDemandW",
+      source: ["houseDemandW", "gridImportW"].includes(conditions.source) ? conditions.source : "gridImportW",
       breakerAmps: configNumber(conditions.breakerAmps, DEFAULT_CONFIG.automation.breakerAmps, 1, 400),
       breakerVoltage: configNumber(conditions.breakerVoltage, DEFAULT_CONFIG.automation.breakerVoltage, 1, 1000),
       reserveAmps: configNumber(conditions.reserveAmps, DEFAULT_CONFIG.automation.reserveAmps, 0, 200),
@@ -836,6 +837,7 @@ function cleanAutomationRule(input = {}) {
     updatedAt: input.updatedAt || new Date().toISOString(),
     lastResult: input.lastResult ?? null,
     state: input.state && typeof input.state === "object" ? input.state : {},
+    log,
   };
 }
 
@@ -862,6 +864,21 @@ function canRunAutomation(rule, now) {
   return !lastAt || (now.getTime() - lastAt) / 1000 >= rule.cooldownSeconds;
 }
 
+function formatWatts(value) {
+  return `${Math.round(Number(value) || 0)} W`;
+}
+
+function appendAutomationLog(rule, message, at = new Date()) {
+  rule.log = [
+    ...(Array.isArray(rule.log) ? rule.log : []),
+    { at: at.toISOString(), message },
+  ].slice(-100);
+}
+
+function automationDemandLabel(source) {
+  return source === "gridImportW" ? "Grid Import" : "House demand";
+}
+
 async function evaluateAutomationRule(rule, status, now = new Date()) {
   if (!rule.enabled) return { changed: false, result: { skipped: "disabled" } };
   if (rule.type !== "backup-demand-guard") return { changed: false, result: { skipped: "unknown rule type" } };
@@ -873,19 +890,26 @@ async function evaluateAutomationRule(rule, status, now = new Date()) {
   const breakerLimitW = Math.max(0, (rule.conditions.breakerAmps - rule.conditions.reserveAmps) * rule.conditions.breakerVoltage);
   const batteryChargingW = batteryChargingWatts(status);
   const actualDemandWithChargingW = Number.isFinite(batteryChargingW) ? demandW + batteryChargingW : null;
+  const guardDemandW = rule.conditions.source === "gridImportW" ? demandW : actualDemandWithChargingW;
   const estimatedRestoredDemandW = demandW + rule.conditions.batteryChargingEstimateW;
   const restoreLimitW = rule.conditions.restoreBelowAmps * rule.conditions.breakerVoltage;
+  const demandLabel = automationDemandLabel(rule.conditions.source);
 
-  if (operationMode === "auto" && actualDemandWithChargingW !== null && batteryChargingW > 0 && actualDemandWithChargingW >= breakerLimitW) {
+  if (operationMode === "auto" && guardDemandW !== null && batteryChargingW > 0 && guardDemandW >= breakerLimitW) {
     if (!canRunAutomation(rule, now)) return { changed: false, result: { skipped: "cooldown" } };
     const result = await executeAction(rule.action, rule.payload);
+    appendAutomationLog(
+      rule,
+      `${demandLabel} (${formatWatts(guardDemandW)}) exceeds Charge Demand Guard limit (${formatWatts(breakerLimitW)}), setting battery working state from (${operationMode}) to Standby`,
+      now,
+    );
     rule.state = {
       ...rule.state,
       awaitingRestore: true,
       restoreSince: null,
       previousMode: operationMode,
     };
-    rule.lastResult = { ok: true, at: now.toISOString(), kind: "guard", operationMode, demandW, batteryChargingW, actualDemandWithChargingW, breakerLimitW, result };
+    rule.lastResult = { ok: true, at: now.toISOString(), kind: "guard", operationMode, demandW, batteryChargingW, actualDemandWithChargingW, guardDemandW, breakerLimitW, result };
     return { changed: true, result: rule.lastResult };
   }
 
@@ -896,8 +920,13 @@ async function evaluateAutomationRule(rule, status, now = new Date()) {
     }
     const restoreSince = rule.state.restoreSince ? new Date(rule.state.restoreSince).getTime() : now.getTime();
     rule.state.restoreSince = new Date(restoreSince).toISOString();
-    if ((now.getTime() - restoreSince) / 1000 >= rule.conditions.restoreDelaySeconds && canRunAutomation(rule, now)) {
+    if ((now.getTime() - restoreSince) / 1000 >= rule.conditions.restoreDelaySeconds) {
       const result = await executeAction(rule.restoreAction, rule.restorePayload);
+      appendAutomationLog(
+        rule,
+        `${demandLabel} (${formatWatts(demandW)}) now below Guard restore limit (${formatWatts(restoreLimitW)}), setting battery working state to Auto`,
+        now,
+      );
       rule.state = { ...rule.state, awaitingRestore: false, restoreSince: null };
       rule.lastResult = { ok: true, at: now.toISOString(), kind: "restore", demandW, estimatedRestoredDemandW, breakerLimitW, restoreLimitW, result };
       return { changed: true, result: rule.lastResult };
@@ -906,11 +935,18 @@ async function evaluateAutomationRule(rule, status, now = new Date()) {
   }
 
   if (rule.state?.awaitingRestore && demandW > restoreLimitW) {
+    if (rule.lastResult?.skipped !== "restore demand still high") {
+      appendAutomationLog(
+        rule,
+        `${demandLabel} (${formatWatts(demandW)}) still exceeds Guard restore limit (${formatWatts(restoreLimitW)}), maintaining Standby state`,
+        now,
+      );
+    }
     rule.state = { ...rule.state, restoreSince: null };
     return { changed: true, result: { skipped: "restore demand still high", demandW, restoreLimitW } };
   }
 
-  return { changed: false, result: { skipped: "conditions not met", operationMode, demandW, batteryChargingW, actualDemandWithChargingW, estimatedRestoredDemandW, breakerLimitW } };
+  return { changed: false, result: { skipped: "conditions not met", operationMode, demandW, batteryChargingW, actualDemandWithChargingW, guardDemandW, estimatedRestoredDemandW, breakerLimitW } };
 }
 
 async function runAutomationRules() {

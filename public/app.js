@@ -15,6 +15,7 @@ const state = {
   controlsInitialized: false,
   config: null,
   language: "en",
+  currentPage: "dashboard",
   settingsLoadedForView: false,
   lastDiscovery: null,
   discoveryPollTimer: null,
@@ -22,7 +23,23 @@ const state = {
   trendHover: {},
   historyMode: false,
   historyHorizonMs: null,
+  activeGraph: "solarPower",
+  graphPoints: [],
+  graphHover: null,
+  graphHistoryHorizonMs: POWER_TREND_MS,
+  graphLoadToken: 0,
+  historyLoadToken: 0,
   automationRules: [],
+};
+
+const TREND_LABEL_KEYS = {
+  batteryPower: "batteryPower",
+  batterySoc: "stateOfCharge",
+  solarPower: "solarGeneration",
+  houseDemandPower: "houseDemand",
+  fuelCellPower: "fuelCellGeneration",
+  gridExportPower: "gridExport",
+  gridImportPower: "gridImport",
 };
 
 const TREND_CONFIG = {
@@ -88,6 +105,7 @@ const I18N = {
   en: {
     brand: "HOME ENERGY <strong>& BATTERY</strong>",
     navDashboard: "Dashboard",
+    navGraphs: "Graphs",
     navSettings: "Settings",
     liveDashboard: "Live dashboard",
     homeEnergyFlow: "Home energy flow",
@@ -95,10 +113,21 @@ const I18N = {
     to: "To",
     showRange: "Show Range",
     live: "Live",
+    graphAnalysis: "Graph Analysis",
+    loadGraphRange: "Load Graph",
+    loadingGraphData: "Loading graph data",
+    fetchingGraphRecords: "Fetching records...",
+    parsedGraphRecords: "Parsed {parsed} / {total} records",
+    graphRecordCount: "{count} records",
     last1Hour: "Last 1 hour",
     last8Hours: "Last 8 hours",
     last24Hours: "Last 24 Hours",
     last3Days: "Last 3 Days",
+    last7Days: "Last 7 days",
+    last30Days: "Last 30 days",
+    last3Months: "Last 3 months",
+    last6Months: "Last 6 months",
+    lastYear: "Last year",
     trendWidgets: "Power Trends",
     statusWidgets: "Status & Savings",
     batteryPower: "Battery Power",
@@ -159,6 +188,7 @@ const I18N = {
     saveRates: "Save Rates",
     co2Release: "CO2 Release",
     co2ReleaseFactor: "Average CO2 emitted (t-CO2/kWh)",
+    dataSource: "Data Source",
     saveCo2Release: "Save CO2 Release",
     co2ReleaseSaved: "CO2 release saved",
     historyRetention: "History Retention",
@@ -284,10 +314,12 @@ const I18N = {
     saveAutomation: "Save Automation",
     automationSaved: "Automation saved",
     automationNoRules: "No automation rules saved.",
+    automationNoLog: "No guard events logged yet.",
   },
   ja: {
     brand: "ホームエネルギー <strong>& バッテリー</strong>",
     navDashboard: "ダッシュボード",
+    navGraphs: "グラフ",
     navSettings: "設定",
     liveDashboard: "ライブ表示",
     homeEnergyFlow: "家庭内の電力フロー",
@@ -295,10 +327,21 @@ const I18N = {
     to: "終了",
     showRange: "範囲を表示",
     live: "ライブ",
+    graphAnalysis: "グラフ分析",
+    loadGraphRange: "グラフを読み込む",
+    loadingGraphData: "グラフデータを読み込み中",
+    fetchingGraphRecords: "レコードを取得中...",
+    parsedGraphRecords: "{parsed} / {total} レコード解析済み",
+    graphRecordCount: "{count} レコード",
     last1Hour: "直近1時間",
     last8Hours: "直近8時間",
     last24Hours: "直近24時間",
     last3Days: "直近3日",
+    last7Days: "直近7日",
+    last30Days: "直近30日",
+    last3Months: "直近3か月",
+    last6Months: "直近6か月",
+    lastYear: "直近1年",
     trendWidgets: "電力トレンド",
     statusWidgets: "状態と節約額",
     batteryPower: "蓄電池の電力",
@@ -357,6 +400,7 @@ const I18N = {
     saveRates: "料金を保存",
     co2Release: "CO2排出係数",
     co2ReleaseFactor: "平均CO2排出量 (t-CO2/kWh)",
+    dataSource: "データソース",
     saveCo2Release: "CO2排出係数を保存",
     co2ReleaseSaved: "CO2排出係数を保存しました",
     historyRetention: "電力使用データの保存期間",
@@ -482,6 +526,7 @@ const I18N = {
     saveAutomation: "自動化を保存",
     automationSaved: "自動化を保存しました",
     automationNoRules: "自動化ルールはありません。",
+    automationNoLog: "ガードイベントはまだ記録されていません。",
   },
 };
 const DAY_KEYS = [
@@ -534,6 +579,8 @@ function setLanguage(language) {
   if (serviceKey) setServiceState(serviceKey);
   if (state.status) renderDashboard(state.status, { recordTrend: false });
   drawAllTrends();
+  drawGraphAnalysis();
+  setPage(state.currentPage);
 }
 
 function displayValue(value) {
@@ -636,6 +683,10 @@ function resetTrendHistory() {
   state.trendHistory = {};
 }
 
+function trendLabel(name) {
+  return t(TREND_LABEL_KEYS[name] ?? name);
+}
+
 function setLiveModeButton() {
   $("#liveBtn")?.classList.toggle("is-live", !state.historyMode);
 }
@@ -647,20 +698,114 @@ function historyParams(start, end) {
   });
 }
 
-function pushSampleToTrends(sample) {
+function sampleValueForTrend(name, sample) {
+  return Number(
+    {
+      batteryPower: sample.batteryPowerW,
+      batterySoc: sample.stateOfChargePercent,
+      solarPower: sample.solarPowerW,
+      houseDemandPower: sample.houseDemandW,
+      gridExportPower: sample.gridExportW,
+      gridImportPower: sample.gridImportW,
+      fuelCellPower: sample.fuelCellPowerW,
+    }[name],
+  );
+}
+
+function pushSampleToTrends(sample, options = {}) {
   const time = new Date(sample.timestamp).getTime();
-  pushTrend("batteryPower", Number(sample.batteryPowerW), time);
-  pushTrend("batterySoc", Number(sample.stateOfChargePercent), time);
-  pushTrend("solarPower", Number(sample.solarPowerW), time);
-  pushTrend("houseDemandPower", Number(sample.houseDemandW), time);
-  pushTrend("gridExportPower", Number(sample.gridExportW), time);
-  pushTrend("gridImportPower", Number(sample.gridImportW), time);
-  pushTrend("fuelCellPower", Number(sample.fuelCellPowerW), time);
+  for (const name of Object.keys(TREND_CONFIG)) {
+    pushTrend(name, sampleValueForTrend(name, sample), time, options);
+  }
 }
 
 function setHistoryRange(durationMs, end = new Date()) {
   $("#historyEnd").value = localDateTimeValue(end);
   $("#historyStart").value = localDateTimeValue(new Date(end.getTime() - durationMs));
+}
+
+function setGraphHistoryRange(durationMs, end = new Date()) {
+  $("#graphHistoryEnd").value = localDateTimeValue(end);
+  $("#graphHistoryStart").value = localDateTimeValue(new Date(end.getTime() - durationMs));
+}
+
+function setLoadProgress(prefix, parsed = 0, total = 0, visible = true) {
+  const container = $(`#${prefix}LoadProgress`);
+  const detail = $(`#${prefix}LoadDetail`);
+  const fill = $(`#${prefix}LoadFill`);
+  const bar = fill?.parentElement;
+  if (!container || !detail || !fill || !bar) return;
+  container.classList.toggle("hidden", !visible);
+  const percent = total ? Math.round((parsed / total) * 100) : 0;
+  detail.textContent = total
+    ? template("parsedGraphRecords", {
+        parsed: parsed.toLocaleString(),
+        total: total.toLocaleString(),
+      })
+    : t("fetchingGraphRecords");
+  fill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+  bar.setAttribute("aria-valuenow", String(percent));
+}
+
+function finishLoadProgress(prefix, parsed, total) {
+  setLoadProgress(prefix, parsed, total, true);
+  window.setTimeout(() => setLoadProgress(prefix, parsed, total, false), 700);
+}
+
+function nextFrame() {
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
+function historyHorizonForSamples(samples) {
+  if (samples.length > 1) {
+    return Math.max(
+      60_000,
+      new Date(samples[samples.length - 1].timestamp).getTime() -
+        new Date(samples[0].timestamp).getTime(),
+    );
+  }
+  return POWER_TREND_MS;
+}
+
+async function loadHistorySamplesAsync(history, { target = "dashboard", graphName = state.activeGraph } = {}) {
+  const samples = history.samples ?? [];
+  const total = samples.length;
+  const prefix = target === "graph" ? "graph" : "history";
+  const tokenKey = target === "graph" ? "graphLoadToken" : "historyLoadToken";
+  const token = (state[tokenKey] += 1);
+  setLoadProgress(prefix, 0, total, true);
+  if (target === "dashboard") {
+    resetTrendHistory();
+    state.historyHorizonMs = historyHorizonForSamples(samples);
+  } else {
+    state.graphPoints = [];
+    state.graphHover = null;
+    state.graphHistoryHorizonMs = historyHorizonForSamples(samples);
+  }
+  const batchSize = 400;
+  for (let index = 0; index < samples.length; index += batchSize) {
+    if (token !== state[tokenKey]) return false;
+    const batch = samples.slice(index, index + batchSize);
+    for (const sample of batch) {
+      const time = new Date(sample.timestamp).getTime();
+      if (!Number.isFinite(time)) continue;
+      if (target === "dashboard") {
+        pushSampleToTrends(sample, { draw: false });
+      } else {
+        const value = sampleValueForTrend(graphName, sample);
+        if (Number.isFinite(value)) state.graphPoints.push({ time, value });
+      }
+    }
+    const parsed = Math.min(index + batch.length, total);
+    setLoadProgress(prefix, parsed, total, true);
+    if (target === "dashboard") drawAllTrends();
+    else drawGraphAnalysis();
+    await nextFrame();
+  }
+  if (target === "dashboard") drawAllTrends();
+  else drawGraphAnalysis();
+  finishLoadProgress(prefix, total, total);
+  return true;
 }
 
 async function loadLiveTrendHistory() {
@@ -669,10 +814,9 @@ async function loadLiveTrendHistory() {
   const previousMode = state.historyMode;
   state.historyMode = false;
   state.historyHorizonMs = null;
-  resetTrendHistory();
+  setLoadProgress("history", 0, 0, true);
   const history = await api(`/api/history?${historyParams(start, end)}`);
-  for (const sample of history.samples ?? []) pushSampleToTrends(sample);
-  drawAllTrends();
+  await loadHistorySamplesAsync(history, { target: "dashboard" });
   state.historyMode = previousMode;
   setLiveModeButton();
   return history;
@@ -740,7 +884,7 @@ function populateActionOptions() {
   fill("#directAction", directOptions);
 }
 
-function pushTrend(name, value, time = Date.now()) {
+function pushTrend(name, value, time = Date.now(), options = {}) {
   // Trends are kept client-side for live mode. Historical mode repopulates this
   // same structure from samples loaded from disk.
   const config = TREND_CONFIG[name];
@@ -753,7 +897,7 @@ function pushTrend(name, value, time = Date.now()) {
       : config.horizonMs;
   const cutoff = time - horizonMs;
   state.trendHistory[name] = history.filter((point) => point.time >= cutoff);
-  drawTrend(name);
+  if (options.draw !== false) drawTrend(name);
 }
 
 function drawAllTrends() {
@@ -761,11 +905,26 @@ function drawAllTrends() {
 }
 
 function drawTrend(name) {
+  const config = TREND_CONFIG[name];
+  const horizonMs =
+    state.historyMode && state.historyHorizonMs
+      ? state.historyHorizonMs
+      : config?.horizonMs;
+  drawTrendCanvas(
+    name,
+    config ? $(config.canvas) : null,
+    state.trendHistory[name] ?? [],
+    state.trendHover[name],
+    horizonMs,
+  );
+}
+
+function drawTrendCanvas(name, canvas, points, hover, horizonMs) {
   // Canvas keeps the UI dependency-free. The chart is deliberately simple:
   // gridlines, min/max labels, a time axis, filled area, and current point.
   const config = TREND_CONFIG[name];
-  const canvas = $(config.canvas);
-  if (!canvas) return;
+  if (!config || !canvas) return;
+  horizonMs = horizonMs || config.horizonMs;
   const rect = canvas.getBoundingClientRect();
   const width = Math.max(1, Math.round(rect.width));
   const height = Math.max(1, Math.round(rect.height));
@@ -781,7 +940,6 @@ function drawTrend(name) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
 
-  const points = state.trendHistory[name] ?? [];
   const pad = { top: 10, right: 8, bottom: 28, left: 48 };
   const chartWidth = Math.max(1, width - pad.left - pad.right);
   const chartHeight = Math.max(1, height - pad.top - pad.bottom);
@@ -838,10 +996,6 @@ function drawTrend(name) {
 
   ctx.textBaseline = "alphabetic";
   ctx.textAlign = "left";
-  const horizonMs =
-    state.historyMode && state.historyHorizonMs
-      ? state.historyHorizonMs
-      : config.horizonMs;
   const firstLabel = points[0]?.time
     ? new Date(points[0].time).toLocaleTimeString([], {
         hour: "2-digit",
@@ -911,7 +1065,6 @@ function drawTrend(name) {
   ctx.arc(last.x, last.y, 3, 0, Math.PI * 2);
   ctx.fill();
 
-  const hover = state.trendHover[name];
   if (hover && Number.isFinite(hover.time) && Number.isFinite(hover.value)) {
     const hoverX = xFor(hover.time);
     const hoverY = yFor(hover.value);
@@ -978,6 +1131,59 @@ function handleTrendPointer(name, event) {
 function clearTrendPointer(name) {
   delete state.trendHover[name];
   drawTrend(name);
+  $("#trendTooltip")?.classList.add("hidden");
+}
+
+function drawGraphAnalysis() {
+  const graphName = state.activeGraph;
+  $("#graphTitle").textContent = trendLabel(graphName);
+  $("#graphMeta").textContent = template("graphRecordCount", {
+    count: state.graphPoints.length.toLocaleString(),
+  });
+  drawTrendCanvas(
+    graphName,
+    $("#graphAnalysisTrend"),
+    state.graphPoints,
+    state.graphHover,
+    state.graphHistoryHorizonMs,
+  );
+}
+
+function handleGraphPointer(event) {
+  const graphName = state.activeGraph;
+  const canvas = $("#graphAnalysisTrend");
+  const points = state.graphPoints;
+  if (!canvas || !points.length) return;
+  const rect = canvas.getBoundingClientRect();
+  const pad = { top: 10, right: 8, bottom: 28, left: 48 };
+  const chartWidth = Math.max(1, rect.width - pad.left - pad.right);
+  const now = points[points.length - 1].time;
+  const start = now - state.graphHistoryHorizonMs;
+  const x = Math.max(
+    pad.left,
+    Math.min(rect.width - pad.right, event.clientX - rect.left),
+  );
+  const targetTime = start + ((x - pad.left) / chartWidth) * state.graphHistoryHorizonMs;
+  const nearest = points.reduce(
+    (best, point) =>
+      Math.abs(point.time - targetTime) < Math.abs(best.time - targetTime)
+        ? point
+        : best,
+    points[0],
+  );
+  state.graphHover = nearest;
+  drawGraphAnalysis();
+  const tooltip = ensureTrendTooltip();
+  const unit = graphName === "batterySoc" ? "%" : "W";
+  tooltip.textContent = `${new Date(nearest.time).toLocaleString()} · ${Math.round(nearest.value)} ${unit}`;
+  tooltip.style.left = `${Math.min(window.innerWidth - 260, event.clientX + 12)}px`;
+  tooltip.style.top = `${Math.max(8, event.clientY + 12)}px`;
+  tooltip.classList.remove("hidden");
+}
+
+function clearGraphPointer() {
+  state.graphHover = null;
+  drawGraphAnalysis();
   $("#trendTooltip")?.classList.add("hidden");
 }
 
@@ -1164,7 +1370,7 @@ function defaultAutomationRule(config = {}) {
     type: "backup-demand-guard",
     enabled: false,
     conditions: {
-      source: "houseDemandW",
+      source: "gridImportW",
       breakerAmps: config.automation?.breakerAmps ?? 40,
       breakerVoltage: config.automation?.breakerVoltage ?? 100,
       reserveAmps: config.automation?.reserveAmps ?? 5,
@@ -1203,6 +1409,23 @@ function updateAutomationControls(rules = state.automationRules) {
         : t("disabled")
       : t("automationNoRules");
   $("#automationStatus").textContent = status;
+  const log = Array.isArray(rule.log) ? rule.log : [];
+  const logEl = $("#automationLog");
+  logEl.innerHTML = "";
+  const emptyLogMessage = rule.id ? t("automationNoLog") : t("automationNoRules");
+  const entries = log.length ? log.slice().reverse() : [{ message: emptyLogMessage }];
+  for (const entry of entries) {
+    const row = document.createElement("div");
+    if (entry.at) {
+      const time = document.createElement("time");
+      time.textContent = new Date(entry.at).toLocaleString();
+      row.append(time);
+    }
+    const message = document.createElement("span");
+    message.textContent = entry.message ?? "";
+    row.append(message);
+    logEl.append(row);
+  }
 }
 
 async function refreshAutomationRules() {
@@ -1453,24 +1676,14 @@ function renderInitialStatus(data) {
   renderDashboard(data);
 }
 
-function renderHistory(history) {
+async function renderHistory(history) {
   // Historical mode uses persisted samples instead of live polling. It pauses the
   // refresh timer until the user presses Live again.
   state.historyMode = true;
   setLiveModeButton();
   clearTimeout(state.refreshTimer);
-  resetTrendHistory();
   const samples = history.samples ?? [];
-  if (samples.length > 1) {
-    state.historyHorizonMs = Math.max(
-      60_000,
-      new Date(samples[samples.length - 1].timestamp).getTime() -
-        new Date(samples[0].timestamp).getTime(),
-    );
-  } else {
-    state.historyHorizonMs = POWER_TREND_MS;
-  }
-  for (const sample of samples) pushSampleToTrends(sample);
+  await loadHistorySamplesAsync(history, { target: "dashboard" });
   const latest = samples[samples.length - 1] ?? {};
   const syntheticStatus = {
     ...(state.status ?? {}),
@@ -1498,6 +1711,28 @@ function renderHistory(history) {
   };
   renderDashboard(syntheticStatus, { recordTrend: false });
   setServiceState("historicalData");
+}
+
+async function loadGraphHistory() {
+  const start = new Date($("#graphHistoryStart").value);
+  const end = new Date($("#graphHistoryEnd").value);
+  setLoadProgress("graph", 0, 0, true);
+  const history = await api(`/api/history?${historyParams(start, end)}`);
+  await loadHistorySamplesAsync(history, {
+    target: "graph",
+    graphName: state.activeGraph,
+  });
+  setServiceState("historicalData");
+}
+
+async function openGraphPage(name) {
+  if (!TREND_CONFIG[name]) return;
+  state.activeGraph = name;
+  setPage("graph");
+  if (!$("#graphHistoryStart").value || !$("#graphHistoryEnd").value) {
+    setGraphHistoryRange(24 * 60 * 60_000);
+  }
+  await loadGraphHistory().catch((err) => toast(err.message));
 }
 
 function schedulePayloadFields(action) {
@@ -1595,14 +1830,32 @@ function renderSchedules(schedules) {
 }
 
 function setPage(page) {
+  state.currentPage = page;
   $$(".page").forEach((el) => el.classList.remove("active-page"));
   $(`#${page}Page`).classList.add("active-page");
   $$(".nav-button").forEach((button) =>
     button.classList.toggle("active", button.dataset.page === page),
   );
+  $$(".nav-subbutton").forEach((button) =>
+    button.classList.toggle(
+      "active",
+      page === "graph" && button.dataset.graphPage === state.activeGraph,
+    ),
+  );
   $$("[data-dashboard-only]").forEach((el) =>
     el.classList.toggle("hidden", page !== "dashboard"),
   );
+  if (page === "dashboard") {
+    $("#pageEyebrow").textContent = t("liveDashboard");
+    $("#pageTitle").textContent = t("homeEnergyFlow");
+  } else if (page === "graph") {
+    $("#pageEyebrow").textContent = t("graphAnalysis");
+    $("#pageTitle").textContent = trendLabel(state.activeGraph);
+    drawGraphAnalysis();
+  } else if (page === "settings") {
+    $("#pageEyebrow").textContent = t("navSettings");
+    $("#pageTitle").textContent = t("navSettings");
+  }
   if (page === "settings") {
     hydrateSettingsView();
   }
@@ -1711,6 +1964,7 @@ function initForms() {
     $("#limitOutput").textContent = `${$("#limitValue").value}%`;
   });
   setHistoryRange(30 * 60_000);
+  setGraphHistoryRange(24 * 60 * 60_000);
   setLiveModeButton();
   $$("[data-range-ms]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1718,12 +1972,27 @@ function initForms() {
       $("#historyForm").requestSubmit();
     });
   });
+  $$("[data-graph-range-ms]").forEach((button) => {
+    button.addEventListener("click", () => {
+      setGraphHistoryRange(Number(button.dataset.graphRangeMs));
+      $("#graphHistoryForm").requestSubmit();
+    });
+  });
   $("#historyForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const start = new Date($("#historyStart").value);
     const end = new Date($("#historyEnd").value);
     try {
-      renderHistory(await api(`/api/history?${historyParams(start, end)}`));
+      setLoadProgress("history", 0, 0, true);
+      await renderHistory(await api(`/api/history?${historyParams(start, end)}`));
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+  $("#graphHistoryForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await loadGraphHistory();
     } catch (err) {
       toast(err.message);
     }
@@ -1743,9 +2012,22 @@ function initForms() {
     );
     canvas?.addEventListener("pointerleave", () => clearTrendPointer(name));
   }
+  $("#graphAnalysisTrend")?.addEventListener("pointermove", handleGraphPointer);
+  $("#graphAnalysisTrend")?.addEventListener("pointerleave", clearGraphPointer);
   $$(".nav-button").forEach((button) =>
     button.addEventListener("click", () => setPage(button.dataset.page)),
   );
+  $$(".nav-subbutton").forEach((button) =>
+    button.addEventListener("click", async () => {
+      if (window.matchMedia("(max-width: 720px)").matches) {
+        button.closest(".nav-section")?.removeAttribute("open");
+      }
+      await openGraphPage(button.dataset.graphPage);
+    }),
+  );
+  if (window.matchMedia("(max-width: 720px)").matches) {
+    $(".nav-section")?.removeAttribute("open");
+  }
   ["#configSolarEnabled", "#configFuelCellEnabled"].forEach((selector) => {
     $(selector).addEventListener("change", () => {
       const features = {
@@ -1964,7 +2246,7 @@ function initForms() {
       ...(existing ?? defaultAutomationRule(state.config ?? {})),
       enabled: $("#automationEnabled").checked,
       conditions: {
-        source: "houseDemandW",
+        source: "gridImportW",
         breakerAmps: $("#automationBreakerAmps").value,
         breakerVoltage: state.config?.automation?.breakerVoltage ?? 100,
         reserveAmps: $("#automationReserveAmps").value,
