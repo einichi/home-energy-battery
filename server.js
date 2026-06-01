@@ -900,7 +900,7 @@ async function evaluateAutomationRule(rule, status, now = new Date()) {
     const result = await executeAction(rule.action, rule.payload);
     appendAutomationLog(
       rule,
-      `${demandLabel} (${formatWatts(guardDemandW)}) exceeds Charge Demand Guard limit (${formatWatts(breakerLimitW)}), setting battery working state from (${operationMode}) to Standby`,
+      `${demandLabel} (${formatWatts(guardDemandW)}) exceeds Charge Demand Guard limit (${formatWatts(breakerLimitW)}), setting operation mode from ${operationMode} to Standby`,
       now,
     );
     rule.state = {
@@ -924,7 +924,7 @@ async function evaluateAutomationRule(rule, status, now = new Date()) {
       const result = await executeAction(rule.restoreAction, rule.restorePayload);
       appendAutomationLog(
         rule,
-        `${demandLabel} (${formatWatts(demandW)}) now below Guard restore limit (${formatWatts(restoreLimitW)}), setting battery working state to Auto`,
+        `${demandLabel} (${formatWatts(demandW)}) now below Guard restore limit (${formatWatts(restoreLimitW)}), setting operation mode to Auto`,
         now,
       );
       rule.state = { ...rule.state, awaitingRestore: false, restoreSince: null };
@@ -938,7 +938,7 @@ async function evaluateAutomationRule(rule, status, now = new Date()) {
     if (rule.lastResult?.skipped !== "restore demand still high") {
       appendAutomationLog(
         rule,
-        `${demandLabel} (${formatWatts(demandW)}) still exceeds Guard restore limit (${formatWatts(restoreLimitW)}), maintaining Standby state`,
+        `${demandLabel} (${formatWatts(demandW)}) still exceeds Guard restore limit (${formatWatts(restoreLimitW)}), maintaining Standby operation mode`,
         now,
       );
     }

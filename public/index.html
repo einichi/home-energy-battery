@@ -490,29 +490,31 @@
                     <input id="automationEnabled" type="checkbox" />
                     <span data-i18n="backupGuardEnabled">Enable charging demand guard</span>
                   </label>
-                  <label>
-                    <span data-i18n="breakerAmps">Breaker amps</span>
-                    <input id="automationBreakerAmps" type="number" min="1" step="1" inputmode="numeric" />
-                  </label>
-                  <label>
-                    <span data-i18n="reserveAmps">Reserve amps</span>
-                    <input id="automationReserveAmps" type="number" min="0" step="1" inputmode="numeric" />
-                  </label>
-                  <label>
-                    <span data-i18n="batteryChargeEstimate">Maximum battery charge watts</span>
-                    <input id="automationBatteryEstimate" type="number" min="0" step="100" inputmode="numeric" />
-                  </label>
-                  <label>
-                    <span data-i18n="restoreBelowAmps">Restore below amps</span>
-                    <input id="automationRestoreBelow" type="number" min="1" step="1" inputmode="numeric" />
-                  </label>
-                  <label>
-                    <span data-i18n="restoreDelay">Restore delay seconds</span>
-                    <input id="automationRestoreDelay" type="number" min="0" step="30" inputmode="numeric" />
-                  </label>
+                  <div class="compact-field-grid">
+                    <label>
+                      <span data-i18n="breakerAmps">Breaker amps</span>
+                      <input id="automationBreakerAmps" type="number" min="1" step="1" inputmode="numeric" />
+                    </label>
+                    <label>
+                      <span data-i18n="reserveAmps">Reserve amps</span>
+                      <input id="automationReserveAmps" type="number" min="0" step="1" inputmode="numeric" />
+                    </label>
+                    <label>
+                      <span data-i18n="batteryChargeEstimate">Maximum battery charge watts</span>
+                      <input id="automationBatteryEstimate" type="number" min="0" step="100" inputmode="numeric" />
+                    </label>
+                    <label>
+                      <span data-i18n="restoreBelowAmps">Restore below amps</span>
+                      <input id="automationRestoreBelow" type="number" min="1" step="1" inputmode="numeric" />
+                    </label>
+                    <label>
+                      <span data-i18n="restoreDelay">Restore delay seconds</span>
+                      <input id="automationRestoreDelay" type="number" min="0" step="30" inputmode="numeric" />
+                    </label>
+                  </div>
                   <button data-i18n="saveAutomation">Save Automation</button>
+                  <h2 class="guard-log-title" data-i18n="guardLog">Guard log</h2>
                   <div id="automationLog" class="automation-log" aria-live="polite"></div>
-                  <div id="automationStatus" class="automation-status"></div>
                 </fieldset>
               </form>
             </div>
@@ -563,55 +565,57 @@
                   >
                 </label>
               </fieldset>
-              <label>
-                <span data-i18n="battery">Battery</span>
-                <input
-                  id="configBatteryHost"
-                  inputmode="decimal"
-                  placeholder="192.0.2.10"
-                />
-              </label>
-              <label>
-                <span data-i18n="homePowerMeter">Home power meter</span>
-                <input
-                  id="configMeterHost"
-                  inputmode="decimal"
-                  placeholder="192.0.2.20"
-                />
-              </label>
-              <label>
-                <span data-i18n="solar">Solar</span>
-                <input
-                  id="configSolarHost"
-                  inputmode="decimal"
-                  placeholder="192.0.2.10"
-                />
-              </label>
-              <label>
-                <span data-i18n="fuelCell">Ene-Farm</span>
-                <input
-                  id="configFuelCellHosts"
-                  inputmode="decimal"
-                  placeholder="192.0.2.30"
-                />
-              </label>
-              <label>
-                <span data-i18n="utilityMeter">Utility meter</span>
-                <input
-                  id="configSmartMeterHost"
-                  inputmode="decimal"
-                  data-i18n-placeholder="optional"
-                  placeholder="optional"
-                />
-              </label>
-              <label>
-                <span data-i18n="discoverySubnets">Discovery subnets</span>
-                <input
-                  id="configDiscoverySubnets"
-                  inputmode="decimal"
-                  placeholder="192.168.1.0/24"
-                />
-              </label>
+              <div class="compact-field-grid">
+                <label>
+                  <span data-i18n="battery">Battery</span>
+                  <input
+                    id="configBatteryHost"
+                    inputmode="decimal"
+                    placeholder="192.0.2.10"
+                  />
+                </label>
+                <label>
+                  <span data-i18n="homePowerMeter">Home power meter</span>
+                  <input
+                    id="configMeterHost"
+                    inputmode="decimal"
+                    placeholder="192.0.2.20"
+                  />
+                </label>
+                <label>
+                  <span data-i18n="solar">Solar</span>
+                  <input
+                    id="configSolarHost"
+                    inputmode="decimal"
+                    placeholder="192.0.2.10"
+                  />
+                </label>
+                <label>
+                  <span data-i18n="fuelCell">Ene-Farm</span>
+                  <input
+                    id="configFuelCellHosts"
+                    inputmode="decimal"
+                    placeholder="192.0.2.30"
+                  />
+                </label>
+                <label>
+                  <span data-i18n="utilityMeter">Utility meter</span>
+                  <input
+                    id="configSmartMeterHost"
+                    inputmode="decimal"
+                    data-i18n-placeholder="optional"
+                    placeholder="optional"
+                  />
+                </label>
+                <label>
+                  <span data-i18n="discoverySubnets">Discovery subnets</span>
+                  <input
+                    id="configDiscoverySubnets"
+                    inputmode="decimal"
+                    placeholder="192.168.1.0/24"
+                  />
+                </label>
+              </div>
               <button data-i18n="saveAddresses">Save Addresses</button>
             </form>
 
@@ -696,26 +700,28 @@
                   </label>
                 </div>
                 <div class="rate-mode-panel" data-rate-mode-panel="offPeak">
-                  <label>
-                    <span data-i18n="standardRate">Standard rate</span>
-                    <input
-                      id="standardRate"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      inputmode="decimal"
-                    />
-                  </label>
-                  <label>
-                    <span data-i18n="offPeakRate">Off-peak rate</span>
-                    <input
-                      id="offPeakRate"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      inputmode="decimal"
-                    />
-                  </label>
+                  <div class="compact-field-grid">
+                    <label>
+                      <span data-i18n="standardRate">Standard rate</span>
+                      <input
+                        id="standardRate"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        inputmode="decimal"
+                      />
+                    </label>
+                    <label>
+                      <span data-i18n="offPeakRate">Off-peak rate</span>
+                      <input
+                        id="offPeakRate"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        inputmode="decimal"
+                      />
+                    </label>
+                  </div>
                 </div>
                 <div class="rate-mode-panel" data-rate-mode-panel="multi">
                   <label>

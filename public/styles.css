@@ -618,9 +618,17 @@ output {
 }
 
 .check-row input {
-  width: 18px;
-  min-height: 18px;
+  width: 16px;
+  min-height: 16px;
+  accent-color: var(--accent);
   padding: 0;
+}
+
+.compact-field-grid {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .language-row {
@@ -699,10 +707,6 @@ output {
   background: transparent;
 }
 
-.rates-panel .rate-band-row {
-  grid-template-columns: 1fr;
-}
-
 .rate-band-row .remove-rate-band {
   grid-column: 1 / -1;
 }
@@ -723,6 +727,15 @@ output {
   color: #0f766e;
   font-size: 13px;
   font-weight: 800;
+}
+
+.guard-log-title {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 900;
+  text-transform: uppercase;
 }
 
 .discovery-box {
@@ -806,13 +819,6 @@ output {
 
 .discovery-table {
   margin-top: 0;
-}
-
-.automation-status {
-  grid-column: 1 / -1;
-  min-height: 22px;
-  color: var(--muted);
-  font-size: 0.88rem;
 }
 
 .automation-log {
@@ -1174,6 +1180,7 @@ td code {
   .schedule-form,
   .payload-grid,
   .config-form,
+  .compact-field-grid,
   .rate-form .feature-options,
   .rate-mode-options,
   .rate-mode-panel {

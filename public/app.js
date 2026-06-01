@@ -315,6 +315,7 @@ const I18N = {
     automationSaved: "Automation saved",
     automationNoRules: "No automation rules saved.",
     automationNoLog: "No guard events logged yet.",
+    guardLog: "Guard log",
   },
   ja: {
     brand: "ホームエネルギー <strong>& バッテリー</strong>",
@@ -527,6 +528,7 @@ const I18N = {
     automationSaved: "自動化を保存しました",
     automationNoRules: "自動化ルールはありません。",
     automationNoLog: "ガードイベントはまだ記録されていません。",
+    guardLog: "ガードログ",
   },
 };
 const DAY_KEYS = [
@@ -1237,9 +1239,9 @@ function rateBandRow(band = {}, index = 0) {
   return `
     <div class="rate-band-row" data-rate-band="${index}">
       <label><span>${t("rateBandLabel")}</span><input data-rate-field="label" value="${band.label ?? ""}" /></label>
+      <label><span>${t("rateBandPrice")}</span><input data-rate-field="yenPerKwh" type="number" min="0" step="0.01" value="${band.yenPerKwh ?? ""}" /></label>
       <label><span>${t("rateBandStart")}</span><input data-rate-field="start" type="time" value="${band.start ?? "00:00"}" /></label>
       <label><span>${t("rateBandEnd")}</span><input data-rate-field="end" type="time" value="${band.end ?? "00:00"}" /></label>
-      <label><span>${t("rateBandPrice")}</span><input data-rate-field="yenPerKwh" type="number" min="0" step="0.01" value="${band.yenPerKwh ?? ""}" /></label>
       <button class="ghost remove-rate-band" type="button">${t("removeRateBand")}</button>
     </div>
   `;
@@ -1401,14 +1403,6 @@ function updateAutomationControls(rules = state.automationRules) {
   $("#automationRestoreBelow").value = rule.conditions?.restoreBelowAmps ?? "";
   $("#automationRestoreDelay").value =
     rule.conditions?.restoreDelaySeconds ?? "";
-  const status = rule.lastResult
-    ? `${new Date(rule.lastResult.at).toLocaleString()} · ${rule.lastResult.error || rule.lastResult.skipped || rule.lastResult.kind || "ok"}`
-    : rule.id
-      ? rule.enabled
-        ? t("waiting")
-        : t("disabled")
-      : t("automationNoRules");
-  $("#automationStatus").textContent = status;
   const log = Array.isArray(rule.log) ? rule.log : [];
   const logEl = $("#automationLog");
   logEl.innerHTML = "";
@@ -1422,10 +1416,17 @@ function updateAutomationControls(rules = state.automationRules) {
       row.append(time);
     }
     const message = document.createElement("span");
-    message.textContent = entry.message ?? "";
+    message.textContent = normalizeAutomationLogMessage(entry.message ?? "");
     row.append(message);
     logEl.append(row);
   }
+}
+
+function normalizeAutomationLogMessage(message) {
+  return String(message)
+    .replace(/^House demand/, "Grid Import")
+    .replace(/\((auto|standby|rapid|charge|discharge)\)/gi, "$1")
+    .replace(/battery working state/g, "operation mode");
 }
 
 async function refreshAutomationRules() {
