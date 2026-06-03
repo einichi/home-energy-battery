@@ -935,13 +935,11 @@ async function evaluateAutomationRule(rule, status, now = new Date()) {
   }
 
   if (rule.state?.awaitingRestore && demandW > restoreLimitW) {
-    if (rule.lastResult?.skipped !== "restore demand still high") {
-      appendAutomationLog(
-        rule,
-        `${demandLabel} (${formatWatts(demandW)}) still exceeds Guard restore limit (${formatWatts(restoreLimitW)}), maintaining Standby operation mode`,
-        now,
-      );
-    }
+    appendAutomationLog(
+      rule,
+      `${demandLabel} (${formatWatts(demandW)}) still exceeds Guard restore limit (${formatWatts(restoreLimitW)}), maintaining Standby operation mode`,
+      now,
+    );
     rule.state = { ...rule.state, restoreSince: null };
     return { changed: true, result: { skipped: "restore demand still high", demandW, restoreLimitW } };
   }

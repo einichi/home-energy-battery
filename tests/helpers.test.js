@@ -134,4 +134,28 @@ const restoreWouldTrip = await evaluateAutomationRule(cleanAutomationRule({
 assert.equal(restoreWouldTrip.result.skipped, "restore would exceed breaker reserve");
 assert.equal(restoreWouldTrip.result.estimatedRestoredDemandW, 3600);
 
+const repeatedRestoreLogRule = cleanAutomationRule({
+  enabled: true,
+  state: { awaitingRestore: true },
+  lastResult: { ok: true, at: "2026-05-31T00:00:00.000Z", skipped: "restore demand still high" },
+  conditions: {
+    source: "gridImportW",
+    breakerAmps: 40,
+    reserveAmps: 5,
+    batteryChargingEstimateW: 1000,
+    restoreBelowAmps: 30,
+  },
+});
+await evaluateAutomationRule(repeatedRestoreLogRule, {
+  energy: { battery: { operation_mode: { value: "standby" }, instant_power: { value: 0 } } },
+  meter: { grid_import_power: { value: 3200 } },
+}, new Date("2026-05-31T00:01:00.000Z"));
+await evaluateAutomationRule(repeatedRestoreLogRule, {
+  energy: { battery: { operation_mode: { value: "standby" }, instant_power: { value: 0 } } },
+  meter: { grid_import_power: { value: 3100 } },
+}, new Date("2026-05-31T00:02:00.000Z"));
+assert.equal(repeatedRestoreLogRule.log.length, 2);
+assert.match(repeatedRestoreLogRule.log[0].message, /Grid Import \(3200 W\) still exceeds/);
+assert.match(repeatedRestoreLogRule.log[1].message, /Grid Import \(3100 W\) still exceeds/);
+
 console.log("helper tests passed");
