@@ -19,6 +19,24 @@ const HISTORY_FILE = path.join(HISTORY_DIR, "samples.jsonl");
 const CLI_TIMEOUT_MS = Number(process.env.CLI_TIMEOUT_MS ?? 15000);
 const CLI_FILE = "home-energy-battery-node.js";
 
+const DEFAULT_DASHBOARD_WIDGETS = [
+  { id: "solarPower", group: "trends", visible: true, priority: 10 },
+  { id: "fuelCellPower", group: "trends", visible: true, priority: 20 },
+  { id: "houseDemandPower", group: "trends", visible: true, priority: 30 },
+  { id: "batteryPower", group: "trends", visible: true, priority: 40 },
+  { id: "batterySoc", group: "trends", visible: true, priority: 50 },
+  { id: "gridImportPower", group: "trends", visible: true, priority: 60 },
+  { id: "gridExportPower", group: "trends", visible: true, priority: 70 },
+  { id: "batteryWorking", group: "status", visible: true, priority: 10 },
+  { id: "operationMode", group: "status", visible: true, priority: 20 },
+  { id: "vendorProfile", group: "status", visible: true, priority: 30 },
+  { id: "dischargeLimit", group: "status", visible: true, priority: 40 },
+  { id: "fuelCellStatus", group: "status", visible: true, priority: 50 },
+  { id: "solarSavings", group: "status", visible: true, priority: 60 },
+  { id: "co2Savings", group: "status", visible: true, priority: 70 },
+  { id: "offPeakSavings", group: "status", visible: true, priority: 80 },
+];
+
 // Public defaults use RFC 5737 documentation addresses. Real deployments should
 // set device addresses from the Settings page, where they are persisted in /data.
 const DEFAULT_CONFIG = {
@@ -47,6 +65,7 @@ const DEFAULT_CONFIG = {
     reserveAmps: 5,
     enabledDefaults: false,
   },
+  dashboardWidgets: DEFAULT_DASHBOARD_WIDGETS,
   settingCache: {},
   language: "en",
 };
@@ -415,6 +434,23 @@ function normalizeAutomationConfig(value = {}) {
   };
 }
 
+function normalizeDashboardWidgets(value = []) {
+  const inputById = new Map(
+    (Array.isArray(value) ? value : [])
+      .map((widget) => [String(widget?.id ?? ""), widget])
+      .filter(([id]) => DEFAULT_DASHBOARD_WIDGETS.some((item) => item.id === id)),
+  );
+  return DEFAULT_DASHBOARD_WIDGETS.map((defaults) => {
+    const input = inputById.get(defaults.id) ?? {};
+    return {
+      id: defaults.id,
+      group: defaults.group,
+      visible: configBool(input.visible, defaults.visible),
+      priority: configNumber(input.priority, defaults.priority, 0, 10000),
+    };
+  });
+}
+
 function normalizeSettingCache(value = {}) {
   const out = {};
   for (const key of ["discharge_limit", "osaifu_charge_window", "osaifu_discharge_window"]) {
@@ -455,6 +491,7 @@ function cleanConfig(input = {}) {
     updateIntervalSeconds: configNumber(input.updateIntervalSeconds, DEFAULT_CONFIG.updateIntervalSeconds, 5, 3600),
     rateBands,
     automation: normalizeAutomationConfig(input.automation ?? {}),
+    dashboardWidgets: normalizeDashboardWidgets(input.dashboardWidgets),
     settingCache: normalizeSettingCache(input.settingCache ?? {}),
     language: ["en", "ja"].includes(input.language) ? input.language : DEFAULT_CONFIG.language,
   };
@@ -1393,6 +1430,7 @@ export {
   cleanAutomationRule,
   cleanConfig,
   evaluateAutomationRule,
+  normalizeDashboardWidgets,
   normalizeRateBands,
   normalizeSubnets,
   rateForTimestamp,

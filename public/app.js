@@ -42,6 +42,24 @@ const TREND_LABEL_KEYS = {
   gridImportPower: "gridImport",
 };
 
+const DASHBOARD_WIDGET_DEFAULTS = [
+  { id: "solarPower", group: "trends", labelKey: "solarGeneration", visible: true, priority: 10 },
+  { id: "fuelCellPower", group: "trends", labelKey: "fuelCellGeneration", visible: true, priority: 20 },
+  { id: "houseDemandPower", group: "trends", labelKey: "houseDemand", visible: true, priority: 30 },
+  { id: "batteryPower", group: "trends", labelKey: "batteryPower", visible: true, priority: 40 },
+  { id: "batterySoc", group: "trends", labelKey: "stateOfCharge", visible: true, priority: 50 },
+  { id: "gridImportPower", group: "trends", labelKey: "gridImport", visible: true, priority: 60 },
+  { id: "gridExportPower", group: "trends", labelKey: "gridExport", visible: true, priority: 70 },
+  { id: "batteryWorking", group: "status", labelKey: "batteryWorkingStatus", visible: true, priority: 10 },
+  { id: "operationMode", group: "status", labelKey: "operationMode", visible: true, priority: 20 },
+  { id: "vendorProfile", group: "status", labelKey: "chargingProfile", visible: true, priority: 30 },
+  { id: "dischargeLimit", group: "status", labelKey: "dischargeLimit", visible: true, priority: 40 },
+  { id: "fuelCellStatus", group: "status", labelKey: "fuelCellStatus", visible: true, priority: 50 },
+  { id: "solarSavings", group: "status", labelKey: "solarSavings", visible: true, priority: 60 },
+  { id: "co2Savings", group: "status", labelKey: "co2Savings", visible: true, priority: 70 },
+  { id: "offPeakSavings", group: "status", labelKey: "offPeakSavings", visible: true, priority: 80 },
+];
+
 const TREND_CONFIG = {
   // Each graph declares its own horizon and scaling preferences. Power readings
   // are short-lived, while state of charge changes slowly and gets a longer view.
@@ -164,6 +182,13 @@ const I18N = {
     deviceAddresses: "Device Addresses",
     preferences: "Preferences",
     preferencesRates: "Preferences & Rates",
+    dashboardLayout: "Dashboard Layout",
+    saveDashboardLayout: "Save Dashboard Layout",
+    resetDashboardLayout: "Reset Dashboard Layout",
+    dashboardLayoutSaved: "Dashboard layout saved",
+    dashboardLayoutReset: "Dashboard layout reset",
+    visible: "Visible",
+    priority: "Priority",
     dataDiscovery: "Data & Discovery",
     dataRetention: "Data Retention",
     language: "Language",
@@ -377,6 +402,13 @@ const I18N = {
     deviceAddresses: "機器アドレス",
     preferences: "表示設定",
     preferencesRates: "表示・料金設定",
+    dashboardLayout: "ダッシュボード配置",
+    saveDashboardLayout: "ダッシュボード配置を保存",
+    resetDashboardLayout: "ダッシュボード配置をリセット",
+    dashboardLayoutSaved: "ダッシュボード配置を保存しました",
+    dashboardLayoutReset: "ダッシュボード配置をリセットしました",
+    visible: "表示",
+    priority: "優先順位",
     dataDiscovery: "データと自動検出",
     dataRetention: "保存期間",
     language: "言語",
@@ -582,6 +614,7 @@ function setLanguage(language) {
   if (state.status) renderDashboard(state.status, { recordTrend: false });
   drawAllTrends();
   drawGraphAnalysis();
+  renderDashboardWidgetControls(state.config ?? {});
   setPage(state.currentPage);
 }
 
@@ -1478,9 +1511,128 @@ function updateControls(data) {
   }
 }
 
+function normalizeDashboardWidgets(config = {}) {
+  const inputById = new Map(
+    (Array.isArray(config.dashboardWidgets) ? config.dashboardWidgets : [])
+      .map((widget) => [String(widget?.id ?? ""), widget]),
+  );
+  return DASHBOARD_WIDGET_DEFAULTS.map((defaults) => {
+    const input = inputById.get(defaults.id) ?? {};
+    const priority = Number(input.priority);
+    return {
+      ...defaults,
+      visible:
+        input.visible === undefined || input.visible === null
+          ? defaults.visible
+          : Boolean(input.visible),
+      priority: Number.isFinite(priority) ? priority : defaults.priority,
+    };
+  });
+}
+
+function refreshDashboardSectionVisibility() {
+  $$("[data-widget-section]").forEach((section) => {
+    const visibleWidgets = $$(
+      `[data-widget-group="${section.dataset.widgetSection}"]`,
+    ).filter((widget) => !widget.classList.contains("hidden"));
+    section.classList.toggle("hidden", visibleWidgets.length === 0);
+  });
+}
+
+function syncDashboardWidgetVisibility() {
+  $$("[data-widget-id]").forEach((widget) => {
+    const hiddenByConfig = widget.dataset.widgetHidden === "true";
+    const hiddenByFeature = widget.dataset.featureHidden === "true";
+    widget.classList.toggle("hidden", hiddenByConfig || hiddenByFeature);
+  });
+  refreshDashboardSectionVisibility();
+}
+
+function applyDashboardWidgetLayout(config = {}) {
+  const widgets = normalizeDashboardWidgets(config);
+  for (const group of ["trends", "status"]) {
+    const grid = $(`[data-widget-section="${group}"] .widget-grid`);
+    if (!grid) continue;
+    widgets
+      .filter((widget) => widget.group === group)
+      .sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id))
+      .forEach((widget) => {
+        const el = $(`[data-widget-id="${widget.id}"]`);
+        if (!el) return;
+        el.dataset.widgetHidden = widget.visible ? "false" : "true";
+        grid.append(el);
+      });
+  }
+  syncDashboardWidgetVisibility();
+}
+
+function renderDashboardWidgetControls(config = state.config ?? {}) {
+  const root = $("#dashboardWidgetControls");
+  if (!root) return;
+  root.innerHTML = "";
+  const widgets = normalizeDashboardWidgets(config);
+  for (const group of ["trends", "status"]) {
+    const groupEl = document.createElement("div");
+    groupEl.className = "dashboard-widget-control-group";
+    const heading = document.createElement("h2");
+    heading.textContent = t(group === "trends" ? "trendWidgets" : "statusWidgets");
+    groupEl.append(heading);
+    widgets
+      .filter((widget) => widget.group === group)
+      .sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id))
+      .forEach((widget) => {
+        const row = document.createElement("div");
+        row.className = "dashboard-widget-row";
+        row.dataset.widgetId = widget.id;
+
+        const visibleLabel = document.createElement("label");
+        visibleLabel.className = "check-row";
+        const visible = document.createElement("input");
+        visible.type = "checkbox";
+        visible.checked = widget.visible;
+        visible.dataset.dashboardWidgetVisible = widget.id;
+        const name = document.createElement("span");
+        name.textContent = t(widget.labelKey);
+        visibleLabel.append(visible, name);
+
+        const priorityLabel = document.createElement("label");
+        priorityLabel.className = "priority-field";
+        const priorityText = document.createElement("span");
+        priorityText.textContent = t("priority");
+        const priority = document.createElement("input");
+        priority.type = "number";
+        priority.min = "0";
+        priority.max = "10000";
+        priority.step = "1";
+        priority.inputMode = "numeric";
+        priority.value = String(widget.priority);
+        priority.dataset.dashboardWidgetPriority = widget.id;
+        priorityLabel.append(priorityText, priority);
+
+        row.append(visibleLabel, priorityLabel);
+        groupEl.append(row);
+      });
+    root.append(groupEl);
+  }
+}
+
+function collectDashboardWidgetControls() {
+  return DASHBOARD_WIDGET_DEFAULTS.map((defaults) => {
+    const visible = $(`[data-dashboard-widget-visible="${defaults.id}"]`);
+    const priority = $(`[data-dashboard-widget-priority="${defaults.id}"]`);
+    return {
+      id: defaults.id,
+      visible: visible ? visible.checked : defaults.visible,
+      priority: priority ? priority.value : defaults.priority,
+    };
+  });
+}
+
 function updateConfigControls(config) {
   state.config = config;
   setLanguage(config.language ?? "en");
+  applyDashboardWidgetLayout(config);
+  renderDashboardWidgetControls(config);
   applyFeatureVisibility(config);
   $("#updateIntervalSeconds").value = config.updateIntervalSeconds ?? 15;
   $("#configBatteryHost").value = config.batteryHost ?? "";
@@ -1527,14 +1679,21 @@ function applyFeatureVisibility(features = {}) {
       : features.offPeakSavingsEnabled === true ||
         state.config?.offPeakSavingsEnabled === true;
   $$('[data-feature="solar"]').forEach((el) =>
-    el.classList.toggle("hidden", !solarEnabled),
+    el.dataset.widgetId
+      ? (el.dataset.featureHidden = solarEnabled ? "false" : "true")
+      : el.classList.toggle("hidden", !solarEnabled),
   );
   $$('[data-feature="fuel-cell"]').forEach((el) =>
-    el.classList.toggle("hidden", !fuelCellEnabled),
+    el.dataset.widgetId
+      ? (el.dataset.featureHidden = fuelCellEnabled ? "false" : "true")
+      : el.classList.toggle("hidden", !fuelCellEnabled),
   );
   $$('[data-feature="off-peak-savings"]').forEach((el) =>
-    el.classList.toggle("hidden", !offPeakSavingsEnabled),
+    el.dataset.widgetId
+      ? (el.dataset.featureHidden = offPeakSavingsEnabled ? "false" : "true")
+      : el.classList.toggle("hidden", !offPeakSavingsEnabled),
   );
+  syncDashboardWidgetVisibility();
 }
 
 function strongestFuelCellWatts(fuelCells) {
@@ -2060,6 +2219,7 @@ function initForms() {
       rateBands: state.config?.rateBands,
       historyRetentionDays: state.config?.historyRetentionDays,
       automation: state.config?.automation,
+      dashboardWidgets: state.config?.dashboardWidgets,
       language: state.language,
     };
     try {
@@ -2174,6 +2334,43 @@ function initForms() {
       updateConfigControls(config);
       if (!state.historyMode) scheduleNextRefresh();
       toast(t("preferencesSaved"));
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  $("#dashboardLayoutForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const config = await api("/api/config", {
+        method: "PUT",
+        body: {
+          ...(state.config ?? {}),
+          dashboardWidgets: collectDashboardWidgetControls(),
+        },
+      });
+      updateConfigControls(config);
+      toast(t("dashboardLayoutSaved"));
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  $("#resetDashboardLayoutBtn").addEventListener("click", async () => {
+    try {
+      const config = await api("/api/config", {
+        method: "PUT",
+        body: {
+          ...(state.config ?? {}),
+          dashboardWidgets: DASHBOARD_WIDGET_DEFAULTS.map((widget) => ({
+            id: widget.id,
+            visible: widget.visible,
+            priority: widget.priority,
+          })),
+        },
+      });
+      updateConfigControls(config);
+      toast(t("dashboardLayoutReset"));
     } catch (err) {
       toast(err.message);
     }

@@ -3,6 +3,7 @@ import {
   cleanAutomationRule,
   cleanConfig,
   evaluateAutomationRule,
+  normalizeDashboardWidgets,
   normalizeRateBands,
   normalizeSubnets,
   rateForTimestamp,
@@ -35,10 +36,33 @@ assert.equal(simple.historyRetentionDays, 1095);
 assert.equal(simple.updateIntervalSeconds, 15);
 assert.equal(simple.co2TonnesPerKwh, 0.000423);
 assert.equal(rateForTimestamp(simple.rateBands, "2026-05-31T23:30:00+09:00").yenPerKwh, 42);
+assert.equal(simple.dashboardWidgets.length, 15);
+assert.equal(simple.dashboardWidgets[0].id, "solarPower");
 
 assert.equal(cleanConfig({ updateIntervalSeconds: 2 }).updateIntervalSeconds, 5);
 assert.equal(cleanConfig({ updateIntervalSeconds: 30 }).updateIntervalSeconds, 30);
 assert.equal(cleanConfig({ co2TonnesPerKwh: 0.0005 }).co2TonnesPerKwh, 0.0005);
+
+const normalizedWidgets = normalizeDashboardWidgets([
+  { id: "solarPower", visible: false, priority: 90 },
+  { id: "houseDemandPower", visible: true, priority: "bad" },
+  { id: "unknownWidget", visible: true, priority: 1 },
+]);
+assert.equal(normalizedWidgets.length, 15);
+assert.deepEqual(normalizedWidgets.find((widget) => widget.id === "solarPower"), {
+  id: "solarPower",
+  group: "trends",
+  visible: false,
+  priority: 90,
+});
+assert.deepEqual(normalizedWidgets.find((widget) => widget.id === "houseDemandPower"), {
+  id: "houseDemandPower",
+  group: "trends",
+  visible: true,
+  priority: 30,
+});
+assert.equal(normalizedWidgets.some((widget) => widget.id === "unknownWidget"), false);
+assert.equal(normalizedWidgets.some((widget) => widget.id === "fuelCellPower"), true);
 
 assert.deepEqual(normalizeSubnets(["192.168.1.0/24", "bad", "192.168.1.0/24"]), ["192.168.1.0/24"]);
 
