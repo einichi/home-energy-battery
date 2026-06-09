@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import {
   cleanAutomationRule,
+  cleanAutomationRuleConfig,
   cleanConfig,
   evaluateAutomationRule,
   normalizeDashboardWidgets,
   normalizeRateBands,
   normalizeSubnets,
+  parseJsonWithContext,
   rateForTimestamp,
+  recoverConcatenatedJsonValue,
   sampleFromStatus,
   summarizeSamples,
 } from "../server.js";
@@ -64,6 +67,24 @@ assert.deepEqual(normalizedWidgets.find((widget) => widget.id === "houseDemandPo
 assert.equal(normalizedWidgets.some((widget) => widget.id === "unknownWidget"), false);
 assert.equal(normalizedWidgets.some((widget) => widget.id === "fuelCellPower"), true);
 
+assert.throws(
+  () => parseJsonWithContext("[1]\n[2]", "test.json"),
+  /test\.json at line 2, column 1, position 4/,
+);
+const recoveredState = recoverConcatenatedJsonValue(
+  '{"old":{"lastResult":{"ok":false}}}\n{"new":{"lastResult":{"ok":true}}}',
+  (value) => value && typeof value === "object" && !Array.isArray(value),
+);
+assert.equal(recoveredState.documentCount, 2);
+assert.deepEqual(recoveredState.value, { new: { lastResult: { ok: true } } });
+assert.equal(
+  recoverConcatenatedJsonValue(
+    '[{"id":"old"}]\n[{"id":"new"}]',
+    (value) => value && typeof value === "object" && !Array.isArray(value),
+  ),
+  null,
+);
+
 assert.deepEqual(normalizeSubnets(["192.168.1.0/24", "bad", "192.168.1.0/24"]), ["192.168.1.0/24"]);
 
 const bands = normalizeRateBands({
@@ -113,6 +134,23 @@ assert.equal(rule.payload.mode, "standby");
 assert.equal(rule.restoreAction, "set-mode");
 assert.equal(rule.restorePayload.mode, "auto");
 assert.equal(cleanAutomationRule({}).conditions.source, "gridImportW");
+const mergedRule = cleanAutomationRule({
+  updatedAt: "2026-05-31T00:00:00.000Z",
+  stateUpdatedAt: "2026-05-31T00:01:00.000Z",
+});
+assert.equal(mergedRule.updatedAt, "2026-05-31T00:00:00.000Z");
+assert.equal(mergedRule.stateUpdatedAt, "2026-05-31T00:01:00.000Z");
+const ruleConfig = cleanAutomationRuleConfig({
+  id: "rule-1",
+  enabled: true,
+  state: { awaitingRestore: true },
+  lastResult: { ok: true },
+  log: [{ message: "state only" }],
+});
+assert.equal(ruleConfig.id, "rule-1");
+assert.equal("state" in ruleConfig, false);
+assert.equal("lastResult" in ruleConfig, false);
+assert.equal("log" in ruleConfig, false);
 const skipped = await evaluateAutomationRule(rule, {
   settings: { mode: { decoded: { mode: "eco" } } },
   energy: { battery: { operation_mode: { value: "auto" }, instant_power: { value: 0 } } },

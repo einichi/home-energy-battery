@@ -13,6 +13,7 @@ const PORT = Number(process.env.PORT ?? 8787);
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, "data");
 const SCHEDULES_FILE = path.join(DATA_DIR, "schedules.json");
 const AUTOMATION_RULES_FILE = path.join(DATA_DIR, "automation-rules.json");
+const AUTOMATION_RULE_STATE_FILE = path.join(DATA_DIR, "automation-rule-state.json");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
 const HISTORY_FILE = path.join(HISTORY_DIR, "samples.jsonl");
@@ -136,22 +137,115 @@ function jsonSnippet(text, maxLength = 4000) {
   return `${text.slice(0, maxLength)}\n...<truncated ${text.length - maxLength} chars>`;
 }
 
+function jsonErrorPosition(message) {
+  const match = String(message ?? "").match(/position (\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
+function lineColumnForPosition(text, position) {
+  if (!Number.isInteger(position) || position < 0) return null;
+  const prefix = text.slice(0, position);
+  const lines = prefix.split("\n");
+  return { line: lines.length, column: lines.at(-1).length + 1, position };
+}
+
+function jsonSnippetNear(text, position, radius = 280) {
+  if (!Number.isInteger(position) || position < 0) return jsonSnippet(text, radius * 2);
+  const start = Math.max(0, position - radius);
+  const end = Math.min(text.length, position + radius);
+  const prefix = start > 0 ? `...<${start} chars before>\n` : "";
+  const suffix = end < text.length ? `\n...<${text.length - end} chars after>` : "";
+  const pointer = `${" ".repeat(Math.max(0, position - start))}^`;
+  return `${prefix}${text.slice(start, end)}\n${pointer}${suffix}`;
+}
+
 function parseJsonWithContext(text, source) {
   try {
     return JSON.parse(text);
   } catch (cause) {
-    const err = new Error(`Failed to parse JSON from ${source}: ${cause.message}`);
+    const position = jsonErrorPosition(cause.message);
+    const location = lineColumnForPosition(text, position);
+    const locationText = location
+      ? ` at line ${location.line}, column ${location.column}, position ${location.position}`
+      : "";
+    const err = new Error(`Failed to parse JSON from ${source}${locationText}: ${cause.message}`);
     err.cause = cause;
     err.jsonSource = source;
     err.jsonText = text;
+    err.jsonPosition = position;
+    err.jsonLocation = location;
+    err.jsonSnippet = jsonSnippetNear(text, position);
     throw err;
   }
+}
+
+function splitTopLevelJsonDocuments(text) {
+  const docs = [];
+  let start = null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (start === null) {
+      if (/\s/.test(ch)) continue;
+      if (ch !== "[" && ch !== "{") return [];
+      start = i;
+    }
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === "\"") {
+      inString = true;
+    } else if (ch === "[" || ch === "{") {
+      depth += 1;
+    } else if (ch === "]" || ch === "}") {
+      depth -= 1;
+      if (depth < 0) return [];
+      if (depth === 0) {
+        docs.push({ start, end: i + 1, text: text.slice(start, i + 1) });
+        start = null;
+      }
+    }
+  }
+  return start === null && !inString && depth === 0 ? docs : [];
+}
+
+function recoverConcatenatedJsonValue(text, isValidValue) {
+  const docs = splitTopLevelJsonDocuments(text);
+  if (docs.length <= 1) return null;
+  const values = [];
+  for (const doc of docs) {
+    try {
+      const value = JSON.parse(doc.text);
+      if (isValidValue(value)) values.push({ ...doc, value });
+    } catch {
+      return null;
+    }
+  }
+  if (values.length !== docs.length) return null;
+  return { ...values.at(-1), documentCount: docs.length };
 }
 
 function logDetailedError(label, err) {
   console.error(`${label}:`, err.stack || err.message);
   if (err.jsonSource !== undefined) {
     console.error(`${label} JSON source: ${err.jsonSource}`);
+    if (err.jsonLocation) {
+      console.error(
+        `${label} JSON location: line ${err.jsonLocation.line}, column ${err.jsonLocation.column}, position ${err.jsonLocation.position}`,
+      );
+    }
+    if (err.jsonSnippet !== undefined) {
+      console.error(`${label} JSON near error:\n${err.jsonSnippet}`);
+    }
     console.error(`${label} JSON payload:\n${jsonSnippet(err.jsonText ?? "")}`);
   }
 }
@@ -522,21 +616,95 @@ async function writeConfig(config) {
 
 async function readAutomationRules() {
   await ensureDataDir();
+  const { configs, legacyStates } = await readAutomationRuleConfigs();
+  const states = await readAutomationRuleStates();
+  let shouldWriteState = false;
+  const rules = configs.map((config) => {
+    const state = states[config.id] ?? legacyStates[config.id] ?? {};
+    if (!states[config.id] && legacyStates[config.id]) shouldWriteState = true;
+    return mergeAutomationRule(config, state);
+  });
+  if (shouldWriteState) {
+    await writeAutomationRuleStates(rules);
+    await writeAutomationRules(rules);
+  }
+  return rules;
+}
+
+async function readAutomationRuleConfigs() {
+  await ensureDataDir();
   try {
     const text = await readFile(AUTOMATION_RULES_FILE, "utf8");
     const parsed = parseJsonWithContext(text, AUTOMATION_RULES_FILE);
-    return Array.isArray(parsed) ? parsed.map(cleanAutomationRule) : [];
+    const source = Array.isArray(parsed) ? parsed : [];
+    const configs = source.map(cleanAutomationRuleConfig);
+    const legacyStates = Object.fromEntries(
+      source
+        .filter((rule) => rule && (rule.lastResult !== undefined || rule.state !== undefined || rule.log !== undefined))
+        .map((rule) => [String(rule.id), cleanAutomationRuleState(rule)]),
+    );
+    return { configs, legacyStates };
   } catch (err) {
-    if (err.code === "ENOENT") return [];
+    if (err.code === "ENOENT") return { configs: [], legacyStates: {} };
+    throw err;
+  }
+}
+
+function normalizeAutomationRuleStateFile(value = {}) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return Object.fromEntries(
+    Object.entries(source)
+      .filter(([id]) => id)
+      .map(([id, state]) => [id, cleanAutomationRuleState(state)]),
+  );
+}
+
+async function readAutomationRuleStates() {
+  await ensureDataDir();
+  try {
+    const text = await readFile(AUTOMATION_RULE_STATE_FILE, "utf8");
+    let parsed;
+    let recovered = null;
+    try {
+      parsed = parseJsonWithContext(text, AUTOMATION_RULE_STATE_FILE);
+    } catch (err) {
+      recovered = recoverConcatenatedJsonValue(
+        text,
+        (value) => value && typeof value === "object" && !Array.isArray(value),
+      );
+      if (!recovered) throw err;
+      logDetailedError("automation-rule-state", err);
+      console.error(
+        `automation-rule-state: recovered state from JSON document ${recovered.documentCount} at bytes ${recovered.start}-${recovered.end}`,
+      );
+      parsed = recovered.value;
+    }
+    const cleaned = normalizeAutomationRuleStateFile(parsed);
+    if (recovered) {
+      await writeJsonFileAtomic(AUTOMATION_RULE_STATE_FILE, cleaned);
+      console.error("automation-rule-state: repaired automation-rule-state.json after recovery");
+    }
+    return cleaned;
+  } catch (err) {
+    if (err.code === "ENOENT") return {};
     throw err;
   }
 }
 
 async function writeAutomationRules(rules) {
   await ensureDataDir();
-  const cleaned = rules.map(cleanAutomationRule);
+  const cleaned = rules.map(cleanAutomationRuleConfig);
   await writeJsonFileAtomic(AUTOMATION_RULES_FILE, cleaned);
   return cleaned;
+}
+
+async function writeAutomationRuleStates(rules) {
+  await ensureDataDir();
+  const states = Object.fromEntries(
+    rules.map((rule) => [rule.id, cleanAutomationRuleState(rule)]),
+  );
+  await writeJsonFileAtomic(AUTOMATION_RULE_STATE_FILE, states);
+  return states;
 }
 
 function json(res, status, body) {
@@ -848,9 +1016,8 @@ async function runDueSchedules() {
   if (changed) await writeSchedules(schedules);
 }
 
-function cleanAutomationRule(input = {}) {
+function cleanAutomationRuleConfig(input = {}) {
   const conditions = input.conditions ?? {};
-  const log = Array.isArray(input.log) ? input.log.slice(-100) : [];
   return {
     id: String(input.id || randomUUID()),
     name: String(input.name || "Charging demand guard"),
@@ -872,10 +1039,27 @@ function cleanAutomationRule(input = {}) {
     cooldownSeconds: configNumber(input.cooldownSeconds, 300, 0, 86400),
     createdAt: input.createdAt || new Date().toISOString(),
     updatedAt: input.updatedAt || new Date().toISOString(),
+  };
+}
+
+function cleanAutomationRuleState(input = {}) {
+  return {
     lastResult: input.lastResult ?? null,
     state: input.state && typeof input.state === "object" ? input.state : {},
-    log,
+    log: Array.isArray(input.log) ? input.log.slice(-100) : [],
+    stateUpdatedAt: input.stateUpdatedAt || input.updatedAt || new Date().toISOString(),
   };
+}
+
+function mergeAutomationRule(config, state = {}) {
+  return {
+    ...cleanAutomationRuleConfig(config),
+    ...cleanAutomationRuleState(state),
+  };
+}
+
+function cleanAutomationRule(input = {}) {
+  return mergeAutomationRule(input, input);
 }
 
 function automationDemandWatts(status, source) {
@@ -1001,9 +1185,9 @@ async function runAutomationRules() {
       rule.lastResult = { ok: false, at: now.toISOString(), error: err.message };
       changed = true;
     }
-    rule.updatedAt = now.toISOString();
+    rule.stateUpdatedAt = now.toISOString();
   }
-  if (changed) await writeAutomationRules(rules);
+  if (changed) await writeAutomationRuleStates(rules);
 }
 
 function inferDevice(instances) {
@@ -1332,6 +1516,7 @@ async function api(req, res, url) {
     const rule = cleanAutomationRule({ ...body, id: randomUUID(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
     rules.push(rule);
     await writeAutomationRules(rules);
+    await writeAutomationRuleStates(rules);
     return json(res, 201, rule);
   }
   if (req.method === "PATCH" && url.pathname.startsWith("/api/automation-rules/")) {
@@ -1340,8 +1525,12 @@ async function api(req, res, url) {
     const rules = await readAutomationRules();
     const index = rules.findIndex((item) => item.id === id);
     if (index < 0) return json(res, 404, { error: "automation rule not found" });
-    rules[index] = cleanAutomationRule({ ...rules[index], ...body, id, updatedAt: new Date().toISOString() });
+    rules[index] = mergeAutomationRule(
+      { ...rules[index], ...body, id, updatedAt: new Date().toISOString() },
+      rules[index],
+    );
     await writeAutomationRules(rules);
+    await writeAutomationRuleStates(rules);
     return json(res, 200, rules[index]);
   }
   if (req.method === "DELETE" && url.pathname.startsWith("/api/automation-rules/")) {
@@ -1349,6 +1538,7 @@ async function api(req, res, url) {
     const rules = await readAutomationRules();
     const next = rules.filter((item) => item.id !== id);
     await writeAutomationRules(next);
+    await writeAutomationRuleStates(next);
     return json(res, 200, { ok: next.length !== rules.length });
   }
   if (req.method === "POST" && url.pathname === "/api/schedules") {
@@ -1428,12 +1618,15 @@ export const server = http.createServer(async (req, res) => {
 
 export {
   cleanAutomationRule,
+  cleanAutomationRuleConfig,
   cleanConfig,
   evaluateAutomationRule,
   normalizeDashboardWidgets,
   normalizeRateBands,
   normalizeSubnets,
+  parseJsonWithContext,
   rateForTimestamp,
+  recoverConcatenatedJsonValue,
   sampleFromStatus,
   summarizeSamples,
 };
