@@ -19,6 +19,7 @@ const HISTORY_DIR = path.join(DATA_DIR, "history");
 const HISTORY_FILE = path.join(HISTORY_DIR, "samples.jsonl");
 const CLI_TIMEOUT_MS = Number(process.env.CLI_TIMEOUT_MS ?? 15000);
 const CLI_FILE = "home-energy-battery-node.js";
+const AUTOMATION_CHECK_INTERVAL_MS = 30_000;
 
 const DEFAULT_DASHBOARD_WIDGETS = [
   { id: "solarPower", group: "trends", visible: true, priority: 10 },
@@ -74,6 +75,7 @@ const DEFAULT_CONFIG = {
 let cliQueue = Promise.resolve();
 let scheduleTimer = null;
 let automationTimer = null;
+let automationRunInProgress = false;
 let lastRecordedSample = null;
 const discoveryJobs = new Map();
 const DISCOVERY_JOB_TTL_MS = 10 * 60 * 1000;
@@ -1169,25 +1171,54 @@ async function evaluateAutomationRule(rule, status, now = new Date()) {
 }
 
 async function runAutomationRules() {
+  const startedAt = new Date();
   const rules = await readAutomationRules();
   if (!rules.some((rule) => rule.enabled)) return;
   const status = await readAllStatus();
   const now = new Date();
+  const checkMeta = {
+    checkStartedAt: startedAt.toISOString(),
+    checkFinishedAt: now.toISOString(),
+    checkDurationMs: now.getTime() - startedAt.getTime(),
+  };
+  if (checkMeta.checkDurationMs > AUTOMATION_CHECK_INTERVAL_MS) {
+    console.warn(`automation: check took ${checkMeta.checkDurationMs}ms, longer than ${AUTOMATION_CHECK_INTERVAL_MS}ms interval`);
+  }
   let changed = false;
   for (const rule of rules) {
+    let ruleChanged = false;
     try {
       const result = await evaluateAutomationRule(rule, status, now);
-      changed = changed || result.changed;
-      if (!result.result?.skipped) continue;
-      rule.lastResult = { ok: true, at: now.toISOString(), ...result.result };
-      changed = true;
+      ruleChanged = result.changed;
+      if (result.result?.skipped) {
+        rule.lastResult = { ok: true, at: now.toISOString(), ...result.result, ...checkMeta };
+        ruleChanged = true;
+      } else if (result.changed && rule.lastResult) {
+        rule.lastResult = { ...rule.lastResult, ...checkMeta };
+      }
     } catch (err) {
-      rule.lastResult = { ok: false, at: now.toISOString(), error: err.message };
-      changed = true;
+      rule.lastResult = { ok: false, at: now.toISOString(), error: err.message, ...checkMeta };
+      ruleChanged = true;
     }
-    rule.stateUpdatedAt = now.toISOString();
+    if (ruleChanged) {
+      changed = true;
+      rule.stateUpdatedAt = now.toISOString();
+    }
   }
   if (changed) await writeAutomationRuleStates(rules);
+}
+
+async function runAutomationRulesScheduled() {
+  if (automationRunInProgress) {
+    console.warn("automation: previous check still running; skipping this scheduled interval");
+    return;
+  }
+  automationRunInProgress = true;
+  try {
+    await runAutomationRules();
+  } finally {
+    automationRunInProgress = false;
+  }
 }
 
 function inferDevice(instances) {
@@ -1454,10 +1485,10 @@ function startScheduler() {
     runDueSchedules().catch((err) => logDetailedError("scheduler", err));
   }, 15000);
   automationTimer = setInterval(() => {
-    runAutomationRules().catch((err) => logDetailedError("automation", err));
-  }, 30000);
+    runAutomationRulesScheduled().catch((err) => logDetailedError("automation", err));
+  }, AUTOMATION_CHECK_INTERVAL_MS);
   runDueSchedules().catch((err) => logDetailedError("scheduler", err));
-  runAutomationRules().catch((err) => logDetailedError("automation", err));
+  runAutomationRulesScheduled().catch((err) => logDetailedError("automation", err));
 }
 
 async function api(req, res, url) {

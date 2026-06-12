@@ -1436,6 +1436,10 @@ function updateAutomationControls(rules = state.automationRules) {
   $("#automationRestoreBelow").value = rule.conditions?.restoreBelowAmps ?? "";
   $("#automationRestoreDelay").value =
     rule.conditions?.restoreDelaySeconds ?? "";
+  renderAutomationLog(rule);
+}
+
+function renderAutomationLog(rule) {
   const log = Array.isArray(rule.log) ? rule.log : [];
   const logEl = $("#automationLog");
   logEl.innerHTML = "";
@@ -1465,6 +1469,15 @@ function normalizeAutomationLogMessage(message) {
 async function refreshAutomationRules() {
   state.automationRules = await api("/api/automation-rules");
   updateAutomationControls(state.automationRules);
+  return state.automationRules;
+}
+
+async function refreshAutomationLog() {
+  state.automationRules = await api("/api/automation-rules");
+  const rule =
+    state.automationRules.find((item) => item.type === "backup-demand-guard") ??
+    defaultAutomationRule(state.config ?? {});
+  renderAutomationLog(rule);
   return state.automationRules;
 }
 
@@ -2056,8 +2069,10 @@ async function refreshSchedules() {
 }
 
 async function refreshAll() {
-  if (state.historyMode) return;
-  await Promise.allSettled([refreshStatus()]);
+  const tasks = [];
+  if (!state.historyMode) tasks.push(refreshStatus());
+  if (state.currentPage === "settings") tasks.push(refreshAutomationLog());
+  if (tasks.length) await Promise.allSettled(tasks);
   scheduleNextRefresh();
 }
 
@@ -2581,7 +2596,10 @@ function initForms() {
 
   document.addEventListener("visibilitychange", () => {
     scheduleNextRefresh();
-    if (document.visibilityState === "visible") refreshStatus();
+    if (document.visibilityState === "visible") {
+      if (!state.historyMode) refreshStatus();
+      if (state.currentPage === "settings") refreshAutomationLog();
+    }
   });
   window.addEventListener("resize", drawAllTrends);
 }
