@@ -973,6 +973,16 @@ td code {
   min-height: 30px;
 }
 
+.schedule-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.schedule-actions button {
+  min-height: 30px;
+}
+
 #toast {
   position: fixed;
   right: 20px;

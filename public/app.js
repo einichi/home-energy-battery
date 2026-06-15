@@ -274,6 +274,9 @@ const I18N = {
     noSchedules: "No schedules yet.",
     waiting: "Waiting",
     disabled: "Disabled",
+    paused: "Paused",
+    pause: "Pause",
+    resume: "Resume",
     lastRan: "Last ran",
     savedAddresses: "Saved device addresses",
     suggestedLoaded: "Suggested addresses loaded. Save to apply them.",
@@ -494,6 +497,9 @@ const I18N = {
     noSchedules: "スケジュールはまだありません。",
     waiting: "待機中",
     disabled: "無効",
+    paused: "一時停止中",
+    pause: "一時停止",
+    resume: "再開",
     lastRan: "前回実行",
     savedAddresses: "機器アドレスを保存しました",
     suggestedLoaded: "推奨アドレスを読み込みました。保存すると反映されます。",
@@ -1984,19 +1990,28 @@ function renderSchedules(schedules) {
   }
   for (const schedule of schedules) {
     const tr = document.createElement("tr");
-    const status = schedule.lastResult
+    const status = schedule.completed && schedule.lastResult?.ok
+      ? `${t("lastRan")} ${new Date(schedule.lastResult.at).toLocaleString()}`
+      : schedule.enabled === false
+        ? t("paused")
+      : schedule.lastResult
       ? schedule.lastResult.ok
         ? `${t("lastRan")} ${new Date(schedule.lastResult.at).toLocaleString()}`
         : schedule.lastResult.error
-      : schedule.enabled
-        ? t("waiting")
-        : t("disabled");
+      : t("waiting");
+    const toggleLabel = schedule.enabled === false ? t("resume") : t("pause");
+    const toggleButton = schedule.completed
+      ? ""
+      : `<button class="ghost" data-toggle-enabled="${schedule.id}" data-enabled="${schedule.enabled === false ? "true" : "false"}">${toggleLabel}</button>`;
     tr.innerHTML = `
       <td>${scheduleWhen(schedule)}</td>
       <td>${actionLabel(schedule.action)}</td>
       <td>${schedule.repeat === "daily" ? scheduleDays(schedule) : ""}<br><code>${JSON.stringify(schedule.payload)}</code></td>
       <td>${status}</td>
-      <td><button class="delete" data-delete="${schedule.id}">Delete</button></td>
+      <td class="schedule-actions">
+        ${toggleButton}
+        <button class="delete" data-delete="${schedule.id}">Delete</button>
+      </td>
     `;
     rows.append(tr);
   }
@@ -2588,6 +2603,15 @@ function initForms() {
   });
 
   $("#scheduleRows").addEventListener("click", async (event) => {
+    const toggleId = event.target.dataset.toggleEnabled;
+    if (toggleId) {
+      await api(`/api/schedules/${toggleId}`, {
+        method: "PATCH",
+        body: { enabled: event.target.dataset.enabled === "true" },
+      });
+      await refreshSchedules();
+      return;
+    }
     const id = event.target.dataset.delete;
     if (!id) return;
     await api(`/api/schedules/${id}`, { method: "DELETE" });
