@@ -37,6 +37,8 @@ const DEFAULT_DASHBOARD_WIDGETS = [
   { id: "solarSavings", group: "status", visible: true, priority: 60 },
   { id: "co2Savings", group: "status", visible: true, priority: 70 },
   { id: "offPeakSavings", group: "status", visible: true, priority: 80 },
+  { id: "powerImported", group: "status", visible: true, priority: 90 },
+  { id: "powerExported", group: "status", visible: true, priority: 100 },
 ];
 
 // Public defaults use RFC 5737 documentation addresses. Real deployments should
@@ -333,6 +335,8 @@ function sampleFromStatus(status, config, previousSample) {
   const offPeakSavingsEnabled = config.rateMode !== "simple" || config.offPeakSavingsEnabled === true;
   const offPeakSavingW = offPeakSavingsEnabled && batteryPowerW > 0 && !(solarPowerW > 0) ? batteryPowerW : 0;
   const solarGenerationKwh = deltaHours * (Math.max(0, solarPowerW ?? 0) / 1000);
+  const gridImportKwh = deltaHours * (Math.max(0, gridImportW ?? 0) / 1000);
+  const gridExportKwh = deltaHours * (Math.max(0, gridExportW ?? 0) / 1000);
   const offPeakSavingYen = deltaHours * (offPeakSavingW / 1000) * Math.max(0, highestRate - activeRate);
   const solarSavingYen = solarGenerationKwh * activeRate;
   return {
@@ -345,6 +349,8 @@ function sampleFromStatus(status, config, previousSample) {
     gridExportW,
     gridImportW,
     solarGenerationKwh,
+    gridImportKwh,
+    gridExportKwh,
     offPeakSavingYen,
     solarSavingYen,
     rateYenPerKwh: activeRate,
@@ -372,8 +378,26 @@ function sampleSolarGenerationKwh(sample) {
   return 0;
 }
 
+function samplePowerKwh(sample, directKey, wattsKey, previousSample) {
+  const direct = Number(sample[directKey]);
+  if (Number.isFinite(direct)) return direct;
+  if (!previousSample?.timestamp || !sample?.timestamp) return 0;
+  const watts = Number(sample[wattsKey]);
+  if (!Number.isFinite(watts)) return 0;
+  const deltaHours = Math.max(0, Math.min(1, (new Date(sample.timestamp).getTime() - new Date(previousSample.timestamp).getTime()) / 3_600_000));
+  return deltaHours * (Math.max(0, watts) / 1000);
+}
+
 function summarizeSamples(samples, config = DEFAULT_CONFIG) {
   const solarGenerationKwh = samples.reduce((sum, sample) => sum + sampleSolarGenerationKwh(sample), 0);
+  const gridImportKwh = samples.reduce(
+    (sum, sample, index) => sum + samplePowerKwh(sample, "gridImportKwh", "gridImportW", samples[index - 1]),
+    0,
+  );
+  const gridExportKwh = samples.reduce(
+    (sum, sample, index) => sum + samplePowerKwh(sample, "gridExportKwh", "gridExportW", samples[index - 1]),
+    0,
+  );
   const co2TonnesPerKwh = configNumber(config.co2TonnesPerKwh, DEFAULT_CONFIG.co2TonnesPerKwh, 0, 1);
   return {
     sampleCount: samples.length,
@@ -382,6 +406,8 @@ function summarizeSamples(samples, config = DEFAULT_CONFIG) {
     offPeakSavingYen: samples.reduce((sum, sample) => sum + Number(sample.offPeakSavingYen ?? 0), 0),
     solarSavingYen: samples.reduce((sum, sample) => sum + Number(sample.solarSavingYen ?? 0), 0),
     solarGenerationKwh,
+    gridImportKwh,
+    gridExportKwh,
     co2SavingKg: solarGenerationKwh * co2TonnesPerKwh * 1000,
   };
 }

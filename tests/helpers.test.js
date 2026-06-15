@@ -39,7 +39,7 @@ assert.equal(simple.historyRetentionDays, 1095);
 assert.equal(simple.updateIntervalSeconds, 15);
 assert.equal(simple.co2TonnesPerKwh, 0.000423);
 assert.equal(rateForTimestamp(simple.rateBands, "2026-05-31T23:30:00+09:00").yenPerKwh, 42);
-assert.equal(simple.dashboardWidgets.length, 15);
+assert.equal(simple.dashboardWidgets.length, 17);
 assert.equal(simple.dashboardWidgets[0].id, "solarPower");
 
 assert.equal(cleanConfig({ updateIntervalSeconds: 2 }).updateIntervalSeconds, 5);
@@ -51,7 +51,7 @@ const normalizedWidgets = normalizeDashboardWidgets([
   { id: "houseDemandPower", visible: true, priority: "bad" },
   { id: "unknownWidget", visible: true, priority: 1 },
 ]);
-assert.equal(normalizedWidgets.length, 15);
+assert.equal(normalizedWidgets.length, 17);
 assert.deepEqual(normalizedWidgets.find((widget) => widget.id === "solarPower"), {
   id: "solarPower",
   group: "trends",
@@ -66,6 +66,8 @@ assert.deepEqual(normalizedWidgets.find((widget) => widget.id === "houseDemandPo
 });
 assert.equal(normalizedWidgets.some((widget) => widget.id === "unknownWidget"), false);
 assert.equal(normalizedWidgets.some((widget) => widget.id === "fuelCellPower"), true);
+assert.equal(normalizedWidgets.some((widget) => widget.id === "powerImported"), true);
+assert.equal(normalizedWidgets.some((widget) => widget.id === "powerExported"), true);
 
 assert.throws(
   () => parseJsonWithContext("[1]\n[2]", "test.json"),
@@ -118,15 +120,26 @@ const sample = sampleFromStatus({
 assert.equal(sample.rateYenPerKwh, 40);
 assert.equal(sample.solarSavingYen, 24);
 assert.equal(sample.solarGenerationKwh, 0.6);
+assert.equal(sample.gridImportKwh, 0.1);
+assert.equal(sample.gridExportKwh, 0.05);
 
 const summary = summarizeSamples([
-  { solarSavingYen: 1, offPeakSavingYen: 2, solarGenerationKwh: 0.25 },
-  { solarSavingYen: 3, offPeakSavingYen: 4, solarGenerationKwh: 0.75 },
+  { solarSavingYen: 1, offPeakSavingYen: 2, solarGenerationKwh: 0.25, gridImportKwh: 0.4, gridExportKwh: 0.1 },
+  { solarSavingYen: 3, offPeakSavingYen: 4, solarGenerationKwh: 0.75, gridImportKwh: 0.6, gridExportKwh: 0.2 },
 ], { co2TonnesPerKwh: 0.000423 });
 assert.equal(summary.solarSavingYen, 4);
 assert.equal(summary.offPeakSavingYen, 6);
 assert.equal(summary.solarGenerationKwh, 1);
 assert.equal(summary.co2SavingKg, 0.423);
+assert.equal(summary.gridImportKwh, 1);
+assert.ok(Math.abs(summary.gridExportKwh - 0.3) < 0.000001);
+
+const legacyPowerSummary = summarizeSamples([
+  { timestamp: "2026-05-31T00:00:00.000Z", gridImportW: 1000, gridExportW: 500 },
+  { timestamp: "2026-05-31T00:30:00.000Z", gridImportW: 2000, gridExportW: 1000 },
+]);
+assert.equal(legacyPowerSummary.gridImportKwh, 1);
+assert.equal(legacyPowerSummary.gridExportKwh, 0.5);
 
 const rule = cleanAutomationRule({ enabled: true, conditions: { breakerAmps: 40, reserveAmps: 5, source: "houseDemandW" } });
 assert.equal(rule.action, "set-mode");

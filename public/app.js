@@ -58,6 +58,8 @@ const DASHBOARD_WIDGET_DEFAULTS = [
   { id: "solarSavings", group: "status", labelKey: "solarSavings", visible: true, priority: 60 },
   { id: "co2Savings", group: "status", labelKey: "co2Savings", visible: true, priority: 70 },
   { id: "offPeakSavings", group: "status", labelKey: "offPeakSavings", visible: true, priority: 80 },
+  { id: "powerImported", group: "status", labelKey: "powerImported", visible: true, priority: 90 },
+  { id: "powerExported", group: "status", labelKey: "powerExported", visible: true, priority: 100 },
 ];
 
 const TREND_CONFIG = {
@@ -158,6 +160,8 @@ const I18N = {
     solarSavings: "Solar Savings",
     co2Savings: "CO2 Savings",
     offPeakSavings: "Off-Peak Charge Savings",
+    powerImported: "Power Imported",
+    powerExported: "Power Exported",
     houseDemand: "House Demand",
     gridImport: "Grid Import",
     gridExport: "Grid Export",
@@ -383,6 +387,8 @@ const I18N = {
     solarSavings: "太陽光の節約額",
     co2Savings: "CO2削減量",
     offPeakSavings: "夜間充電の節約額",
+    powerImported: "買電量",
+    powerExported: "売電量",
     houseDemand: "家庭内消費",
     gridImport: "買電",
     gridExport: "売電",
@@ -687,6 +693,13 @@ function numericValue(item) {
 
 function watts(value) {
   return Number.isFinite(value) ? `${Math.round(value)} W` : "-- W";
+}
+
+function energyKwh(value) {
+  if (!Number.isFinite(value)) return "--";
+  return `${new Intl.NumberFormat(state.language === "ja" ? "ja-JP" : "en-US", {
+    maximumFractionDigits: value >= 100 ? 0 : 2,
+  }).format(value)} kWh`;
 }
 
 function yen(value) {
@@ -1824,18 +1837,25 @@ function renderDashboard(data, options = {}) {
   setText("#solarSavings", yen(Number(data.savings?.solarSavingYen)));
   setText("#co2Savings", co2Saved(Number(data.savings?.co2SavingKg)));
   setText("#offPeakSavings", yen(Number(data.savings?.offPeakSavingYen)));
+  setText("#powerImported", energyKwh(Number(data.savings?.gridImportKwh)));
+  setText("#powerExported", energyKwh(Number(data.savings?.gridExportKwh)));
+  const summaryPeriod = state.historyMode
+    ? rangeLabel(data.savings, "selectedRange")
+    : t("today");
   setText(
     "#solarSavingsPeriod",
-    state.historyMode ? rangeLabel(data.savings, "selectedRange") : t("today"),
+    summaryPeriod,
   );
   setText(
     "#co2SavingsPeriod",
-    state.historyMode ? rangeLabel(data.savings, "selectedRange") : t("today"),
+    summaryPeriod,
   );
   setText(
     "#offPeakSavingsPeriod",
-    state.historyMode ? rangeLabel(data.savings, "selectedRange") : t("today"),
+    summaryPeriod,
   );
+  setText("#powerImportedPeriod", summaryPeriod);
+  setText("#powerExportedPeriod", summaryPeriod);
 
   if (recordTrend) {
     pushTrend("batteryPower", batteryWatts, now);
