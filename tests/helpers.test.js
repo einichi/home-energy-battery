@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  clearStaleScheduleRuns,
   cleanAutomationRule,
   cleanAutomationRuleConfig,
   cleanConfig,
@@ -13,6 +14,15 @@ import {
   sampleFromStatus,
   summarizeSamples,
 } from "../server.js";
+
+const staleSchedules = [
+  { id: "stale", running: true, runningSince: "2026-06-15T02:59:01.000Z" },
+  { id: "active", running: true, runningSince: "2026-06-20T02:59:01.000Z" },
+];
+assert.equal(clearStaleScheduleRuns(staleSchedules, new Set(["active"])), true);
+assert.equal(staleSchedules[0].running, false);
+assert.equal(staleSchedules[0].runningSince, null);
+assert.equal(staleSchedules[1].running, true);
 
 const migrated = cleanConfig({
   standardRateYenPerKwh: 36,

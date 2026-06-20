@@ -79,6 +79,7 @@ let scheduleTimer = null;
 let automationTimer = null;
 let automationRunInProgress = false;
 let lastRecordedSample = null;
+const runningScheduleIds = new Set();
 const discoveryJobs = new Map();
 const DISCOVERY_JOB_TTL_MS = 10 * 60 * 1000;
 
@@ -1015,13 +1016,30 @@ function isDue(schedule, now) {
   return schedule.runAt && new Date(schedule.runAt) <= now;
 }
 
+function clearStaleScheduleRuns(schedules, activeIds = runningScheduleIds) {
+  let changed = false;
+  for (const schedule of schedules) {
+    if (!schedule.running || activeIds.has(schedule.id)) continue;
+    schedule.running = false;
+    schedule.runningSince = null;
+    changed = true;
+  }
+  return changed;
+}
+
 async function runDueSchedules() {
   const schedules = await readSchedules();
   const now = new Date();
-  let changed = false;
+  let changed = clearStaleScheduleRuns(schedules);
+  if (changed) {
+    console.warn("scheduler: cleared stale running state from persisted schedule data");
+    await writeSchedules(schedules);
+  }
   for (const schedule of schedules) {
     if (!isDue(schedule, now)) continue;
+    runningScheduleIds.add(schedule.id);
     schedule.running = true;
+    schedule.runningSince = now.toISOString();
     changed = true;
     await writeSchedules(schedules);
     try {
@@ -1036,7 +1054,9 @@ async function runDueSchedules() {
     } catch (err) {
       schedule.lastResult = { ok: false, at: new Date().toISOString(), error: err.message };
     } finally {
+      runningScheduleIds.delete(schedule.id);
       schedule.running = false;
+      schedule.runningSince = null;
       changed = true;
       await writeSchedules(schedules);
     }
@@ -1674,6 +1694,7 @@ export const server = http.createServer(async (req, res) => {
 });
 
 export {
+  clearStaleScheduleRuns,
   cleanAutomationRule,
   cleanAutomationRuleConfig,
   cleanConfig,

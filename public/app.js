@@ -277,6 +277,7 @@ const I18N = {
     everyDay: "Every day",
     noSchedules: "No schedules yet.",
     waiting: "Waiting",
+    running: "Running",
     disabled: "Disabled",
     paused: "Paused",
     pause: "Pause",
@@ -502,6 +503,7 @@ const I18N = {
     everyDay: "毎日",
     noSchedules: "スケジュールはまだありません。",
     waiting: "待機中",
+    running: "実行中",
     disabled: "無効",
     paused: "一時停止中",
     pause: "一時停止",
@@ -2010,7 +2012,9 @@ function renderSchedules(schedules) {
   }
   for (const schedule of schedules) {
     const tr = document.createElement("tr");
-    const status = schedule.completed && schedule.lastResult?.ok
+    const status = schedule.running
+      ? t("running")
+      : schedule.completed && schedule.lastResult?.ok
       ? `${t("lastRan")} ${new Date(schedule.lastResult.at).toLocaleString()}`
       : schedule.enabled === false
         ? t("paused")
