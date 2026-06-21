@@ -2002,6 +2002,39 @@ function scheduleDays(schedule) {
     .join(", ");
 }
 
+function schedulePayloadDetails(schedule) {
+  const payload = schedule.payload ?? {};
+  const operationLabels = {
+    auto: "operationAuto",
+    standby: "operationStandby",
+    rapid: "operationRapid",
+    charge: "operationCharge",
+    discharge: "operationDischarge",
+  };
+  const profileLabels = {
+    osaifu: "profileOsaifu",
+    eco: "profileEco",
+    backup: "profileBackup",
+  };
+
+  switch (schedule.action) {
+    case "vendor-profile":
+      return `${t("chargingProfile")}: ${t(profileLabels[payload.mode] ?? payload.mode)}`;
+    case "set-mode":
+      return `${t("operationMode")}: ${t(operationLabels[payload.mode] ?? payload.mode)}`;
+    case "discharge-limit":
+      return `${t("percent")}: ${payload.percent}%`;
+    case "osaifu-charge-window":
+    case "osaifu-discharge-window":
+      return `${t("startHour")}: ${payload.startHour}:00 / ${t("endHour")}: ${payload.endHour}:00`;
+    case "charge":
+    case "discharge":
+      return `${t("targetWh")}: ${payload.targetWh || t("notSet")}`;
+    default:
+      return JSON.stringify(payload);
+  }
+}
+
 function renderSchedules(schedules) {
   state.schedules = schedules;
   const rows = $("#scheduleRows");
@@ -2030,7 +2063,7 @@ function renderSchedules(schedules) {
     tr.innerHTML = `
       <td>${scheduleWhen(schedule)}</td>
       <td>${actionLabel(schedule.action)}</td>
-      <td>${schedule.repeat === "daily" ? scheduleDays(schedule) : ""}<br><code>${JSON.stringify(schedule.payload)}</code></td>
+      <td>${schedule.repeat === "daily" ? `${scheduleDays(schedule)}<br>` : ""}${schedulePayloadDetails(schedule)}</td>
       <td>${status}</td>
       <td class="schedule-actions">
         ${toggleButton}
