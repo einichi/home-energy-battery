@@ -127,6 +127,7 @@ async function ensureDataDir() {
 }
 
 function numericMetric(item) {
+  if (item?.value === null || item?.value === undefined || item.value === "") return null;
   const value = Number(item?.value);
   return Number.isFinite(value) ? value : null;
 }

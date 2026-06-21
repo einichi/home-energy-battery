@@ -155,6 +155,8 @@ const I18N = {
     batteryWorkingStatus: "Battery Working Status",
     operationMode: "Operation Mode",
     chargingProfile: "Charging Profile",
+    profile: "Profile",
+    mode: "Mode",
     dischargeLimit: "Discharge Limit",
     solarGeneration: "Solar Generation",
     solarSavings: "Solar Savings",
@@ -383,6 +385,8 @@ const I18N = {
     batteryWorkingStatus: "蓄電池の動作状態",
     operationMode: "運転モード",
     chargingProfile: "充電プロファイル",
+    profile: "プロファイル",
+    mode: "モード",
     dischargeLimit: "放電下限",
     solarGeneration: "太陽光発電",
     solarSavings: "太陽光の節約額",
@@ -690,7 +694,8 @@ function metricValue(item, fallback = "--") {
 }
 
 function numericValue(item) {
-  return Number(item?.value ?? 0);
+  if (item?.value === null || item?.value === undefined || item.value === "") return Number.NaN;
+  return Number(item.value);
 }
 
 function watts(value) {
@@ -755,17 +760,18 @@ function historyParams(start, end) {
 }
 
 function sampleValueForTrend(name, sample) {
-  return Number(
-    {
-      batteryPower: sample.batteryPowerW,
-      batterySoc: sample.stateOfChargePercent,
-      solarPower: sample.solarPowerW,
-      houseDemandPower: sample.houseDemandW,
-      gridExportPower: sample.gridExportW,
-      gridImportPower: sample.gridImportW,
-      fuelCellPower: sample.fuelCellPowerW,
-    }[name],
-  );
+  const raw = {
+    batteryPower: sample.batteryPowerW,
+    batterySoc: sample.stateOfChargePercent,
+    solarPower: sample.solarPowerW,
+    houseDemandPower: sample.houseDemandW,
+    gridExportPower: sample.gridExportW,
+    gridImportPower: sample.gridImportW,
+    fuelCellPower: sample.fuelCellPowerW,
+  }[name];
+  if (raw === null || raw === undefined || raw === "") return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
 }
 
 function pushSampleToTrends(sample, options = {}) {
@@ -849,7 +855,7 @@ async function loadHistorySamplesAsync(history, { target = "dashboard", graphNam
         pushSampleToTrends(sample, { draw: false });
       } else {
         const value = sampleValueForTrend(graphName, sample);
-        if (Number.isFinite(value)) state.graphPoints.push({ time, value });
+        state.graphPoints.push({ time, value });
       }
     }
     const parsed = Math.min(index + batch.length, total);
@@ -944,9 +950,9 @@ function pushTrend(name, value, time = Date.now(), options = {}) {
   // Trends are kept client-side for live mode. Historical mode repopulates this
   // same structure from samples loaded from disk.
   const config = TREND_CONFIG[name];
-  if (!config || !Number.isFinite(value)) return;
+  if (!config || !Number.isFinite(time)) return;
   const history = state.trendHistory[name] ?? [];
-  history.push({ time, value });
+  history.push({ time, value: Number.isFinite(value) ? value : null });
   const horizonMs =
     state.historyMode && state.historyHorizonMs
       ? state.historyHorizonMs
@@ -1011,11 +1017,12 @@ function drawTrendCanvas(name, canvas, points, hover, horizonMs) {
     ctx.stroke();
   }
 
-  const values = points.map((point) => point.value);
-  let min = config.min ?? (points.length ? Math.min(...values) : 0);
+  const validPoints = points.filter((point) => Number.isFinite(point.value));
+  const values = validPoints.map((point) => point.value);
+  let min = config.min ?? (values.length ? Math.min(...values) : 0);
   let max =
     config.max ??
-    (points.length ? Math.max(...values) : config.signed ? 1000 : 100);
+    (values.length ? Math.max(...values) : config.signed ? 1000 : 100);
   if (config.includeZero) {
     min = Math.min(min, 0);
     max = Math.max(max, 0);
@@ -1072,7 +1079,7 @@ function drawTrendCanvas(name, canvas, points, hover, horizonMs) {
   ctx.textAlign = "center";
   ctx.fillText(t("timeAxis"), pad.left + chartWidth / 2, height - 3);
 
-  if (!points.length) return;
+  if (!points.length || !validPoints.length) return;
 
   const now = points[points.length - 1].time;
   const start = now - horizonMs;
@@ -1090,36 +1097,70 @@ function drawTrendCanvas(name, canvas, points, hover, horizonMs) {
     ctx.stroke();
   }
 
-  const plotted = points.map((point) => ({
-    x: xFor(point.time),
-    y: yFor(point.value),
-  }));
-  if (plotted.length === 1) {
-    plotted.unshift({ x: pad.left, y: plotted[0].y });
+  const configuredIntervalMs = Math.max(
+    5,
+    Number(state.config?.updateIntervalSeconds ?? ACTIVE_REFRESH_MS / 1000),
+  ) * 1000;
+  const sampleIntervals = points
+    .slice(1)
+    .map((point, index) => point.time - points[index].time)
+    .filter((interval) => Number.isFinite(interval) && interval > 0)
+    .sort((a, b) => a - b);
+  const typicalIntervalMs = sampleIntervals.length
+    ? sampleIntervals[Math.floor((sampleIntervals.length - 1) / 2)]
+    : configuredIntervalMs;
+  const gapThresholdMs = Math.max(configuredIntervalMs, typicalIntervalMs) * 3;
+  const segments = [];
+  let segment = [];
+  for (const point of points) {
+    const previous = segment[segment.length - 1];
+    const startsGap =
+      !Number.isFinite(point.value) ||
+      (previous && point.time - previous.time > gapThresholdMs);
+    if (startsGap) {
+      if (segment.length) segments.push(segment);
+      segment = [];
+      if (!Number.isFinite(point.value)) continue;
+    }
+    segment.push({ time: point.time, x: xFor(point.time), y: yFor(point.value) });
+  }
+  if (segment.length) segments.push(segment);
+
+  for (const plotted of segments) {
+    if (plotted.length > 1) {
+      ctx.beginPath();
+      ctx.moveTo(plotted[0].x, height - pad.bottom);
+      for (const point of plotted) ctx.lineTo(point.x, point.y);
+      ctx.lineTo(plotted[plotted.length - 1].x, height - pad.bottom);
+      ctx.closePath();
+      ctx.fillStyle = config.fill;
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.moveTo(plotted[0].x, plotted[0].y);
+      for (const point of plotted.slice(1)) ctx.lineTo(point.x, point.y);
+      ctx.strokeStyle = config.color;
+      ctx.lineWidth = 2;
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      ctx.stroke();
+    }
+
+    if (plotted.length === 1) {
+      ctx.fillStyle = config.color;
+      ctx.beginPath();
+      ctx.arc(plotted[0].x, plotted[0].y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
-  ctx.beginPath();
-  ctx.moveTo(plotted[0].x, height - pad.bottom);
-  for (const point of plotted) ctx.lineTo(point.x, point.y);
-  ctx.lineTo(plotted[plotted.length - 1].x, height - pad.bottom);
-  ctx.closePath();
-  ctx.fillStyle = config.fill;
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.moveTo(plotted[0].x, plotted[0].y);
-  for (const point of plotted.slice(1)) ctx.lineTo(point.x, point.y);
-  ctx.strokeStyle = config.color;
-  ctx.lineWidth = 2;
-  ctx.lineJoin = "round";
-  ctx.lineCap = "round";
-  ctx.stroke();
-
-  const last = plotted[plotted.length - 1];
-  ctx.fillStyle = config.color;
-  ctx.beginPath();
-  ctx.arc(last.x, last.y, 3, 0, Math.PI * 2);
-  ctx.fill();
+  const lastPoint = points[points.length - 1];
+  if (Number.isFinite(lastPoint.value)) {
+    ctx.fillStyle = config.color;
+    ctx.beginPath();
+    ctx.arc(xFor(lastPoint.time), yFor(lastPoint.value), 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   if (hover && Number.isFinite(hover.time) && Number.isFinite(hover.value)) {
     const hoverX = xFor(hover.time);
@@ -1151,7 +1192,8 @@ function ensureTrendTooltip() {
 function handleTrendPointer(name, event) {
   const config = TREND_CONFIG[name];
   const canvas = $(config.canvas);
-  const points = state.trendHistory[name] ?? [];
+  const allPoints = state.trendHistory[name] ?? [];
+  const points = allPoints.filter((point) => Number.isFinite(point.value));
   if (!canvas || !points.length) return;
   const rect = canvas.getBoundingClientRect();
   const pad = { top: 10, right: 8, bottom: 28, left: 48 };
@@ -1160,7 +1202,7 @@ function handleTrendPointer(name, event) {
     state.historyMode && state.historyHorizonMs
       ? state.historyHorizonMs
       : config.horizonMs;
-  const now = points[points.length - 1].time;
+  const now = allPoints[allPoints.length - 1].time;
   const start = now - horizonMs;
   const x = Math.max(
     pad.left,
@@ -1208,12 +1250,13 @@ function drawGraphAnalysis() {
 function handleGraphPointer(event) {
   const graphName = state.activeGraph;
   const canvas = $("#graphAnalysisTrend");
-  const points = state.graphPoints;
+  const allPoints = state.graphPoints;
+  const points = allPoints.filter((point) => Number.isFinite(point.value));
   if (!canvas || !points.length) return;
   const rect = canvas.getBoundingClientRect();
   const pad = { top: 10, right: 8, bottom: 28, left: 48 };
   const chartWidth = Math.max(1, rect.width - pad.left - pad.right);
-  const now = points[points.length - 1].time;
+  const now = allPoints[allPoints.length - 1].time;
   const start = now - state.graphHistoryHorizonMs;
   const x = Math.max(
     pad.left,
@@ -2019,9 +2062,9 @@ function schedulePayloadDetails(schedule) {
 
   switch (schedule.action) {
     case "vendor-profile":
-      return `${t("chargingProfile")}: ${t(profileLabels[payload.mode] ?? payload.mode)}`;
+      return `${t("profile")}: ${t(profileLabels[payload.mode] ?? payload.mode)}`;
     case "set-mode":
-      return `${t("operationMode")}: ${t(operationLabels[payload.mode] ?? payload.mode)}`;
+      return `${t("mode")}: ${t(operationLabels[payload.mode] ?? payload.mode)}`;
     case "discharge-limit":
       return `${t("percent")}: ${payload.percent}%`;
     case "osaifu-charge-window":

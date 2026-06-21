@@ -133,6 +133,15 @@ assert.equal(sample.solarGenerationKwh, 0.6);
 assert.equal(sample.gridImportKwh, 0.1);
 assert.equal(sample.gridExportKwh, 0.05);
 
+const unavailableSample = sampleFromStatus({
+  read_at: "2026-05-31T12:30:00+09:00",
+  energy: { battery: { instant_power: { value: null }, remaining_percent: {} } },
+  meter: { grid_import_power: { value: null } },
+}, { ...migrated, rateBands: bands });
+assert.equal(unavailableSample.batteryPowerW, null);
+assert.equal(unavailableSample.stateOfChargePercent, null);
+assert.equal(unavailableSample.gridImportW, null);
+
 const summary = summarizeSamples([
   { solarSavingYen: 1, offPeakSavingYen: 2, solarGenerationKwh: 0.25, gridImportKwh: 0.4, gridExportKwh: 0.1 },
   { solarSavingYen: 3, offPeakSavingYen: 4, solarGenerationKwh: 0.75, gridImportKwh: 0.6, gridExportKwh: 0.2 },
