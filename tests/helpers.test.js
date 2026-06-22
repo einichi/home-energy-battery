@@ -190,6 +190,12 @@ const skipped = await evaluateAutomationRule(rule, {
 }, new Date("2026-05-31T00:00:00.000Z"));
 assert.equal(skipped.result.skipped, "conditions not met");
 
+const unavailableDemand = await evaluateAutomationRule(rule, {
+  energy: { battery: { operation_mode: { value: "auto" }, instant_power: { value: null } } },
+  meter: { grid_import_power: { value: null } },
+}, new Date("2026-05-31T00:00:00.000Z"));
+assert.equal(unavailableDemand.result.skipped, "demand unavailable");
+
 const actualChargingSafe = await evaluateAutomationRule(cleanAutomationRule({
   enabled: true,
   conditions: { source: "houseDemandW", breakerAmps: 40, reserveAmps: 5, batteryChargingEstimateW: 1000 },

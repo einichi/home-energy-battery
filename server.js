@@ -78,6 +78,10 @@ let cliQueue = Promise.resolve();
 let scheduleTimer = null;
 let automationTimer = null;
 let automationRunInProgress = false;
+let automationRunContext = null;
+let activeCliContext = null;
+let cliTimingSequence = 0;
+const recentCliTimings = [];
 let lastRecordedSample = null;
 const runningScheduleIds = new Set();
 const discoveryJobs = new Map();
@@ -116,7 +120,26 @@ function runCli(command, args = {}, positional = []) {
 }
 
 function runCliQueued(command, args = {}, positional = []) {
-  const task = cliQueue.then(() => runCli(command, args, positional));
+  const task = cliQueue.then(async () => {
+    const startedMs = Date.now();
+    const context = {
+      command,
+      host: args.host || args["battery-host"] || args["solar-host"] || null,
+      startedAt: new Date(startedMs).toISOString(),
+    };
+    activeCliContext = context;
+    try {
+      return await runCli(command, args, positional);
+    } finally {
+      recentCliTimings.push({
+        ...context,
+        sequence: ++cliTimingSequence,
+        durationMs: Date.now() - startedMs,
+      });
+      if (recentCliTimings.length > 100) recentCliTimings.shift();
+      if (activeCliContext === context) activeCliContext = null;
+    }
+  });
   cliQueue = task.catch(() => {});
   return task;
 }
@@ -242,6 +265,9 @@ function recoverConcatenatedJsonValue(text, isValidValue) {
 
 function logDetailedError(label, err) {
   console.error(`${label}:`, err.stack || err.message);
+  if (err.automationContext) {
+    console.error(`${label} context: ${JSON.stringify(err.automationContext)}`);
+  }
   if (err.jsonSource !== undefined) {
     console.error(`${label} JSON source: ${err.jsonSource}`);
     if (err.jsonLocation) {
@@ -866,7 +892,7 @@ async function settingWithCache(config, key, reader) {
   };
 }
 
-async function readAllStatus() {
+async function readAllStatus(onProbeComplete = () => {}) {
   // One dashboard refresh fans out into several short CLI calls. The queue keeps
   // node-echonet-lite from fighting itself over UDP port 3610.
   const config = await readConfig();
@@ -877,15 +903,23 @@ async function readAllStatus() {
   };
   const batteryConfigured = config.batteryHost && !isDocumentationHost(config.batteryHost);
   const skippedSetting = { available: false, error: "battery host is not configured", lastKnown: null, lastReadAt: null };
+  const probe = async (label, reader) => {
+    const startedAt = Date.now();
+    try {
+      return await reader();
+    } finally {
+      onProbeComplete({ label, durationMs: Date.now() - startedAt });
+    }
+  };
   const [energy, smartMeter, meter, mode, dischargeLimit, chargeWindow, dischargeWindow, vendor] = await Promise.all([
-    batteryConfigured ? safeCli("energy-status", energyArgs) : Promise.resolve({ battery: { configured: false } }),
-    readSmartMeterStatus(config),
-    readMeterStatus(config),
-    batteryConfigured ? safeCli("vendor-profile", { host: config.batteryHost }) : Promise.resolve({ error: "battery host is not configured" }),
-    batteryConfigured ? settingWithCache(config, "discharge_limit", () => safeCli("discharge-limit", { host: config.batteryHost })) : Promise.resolve(skippedSetting),
-    batteryConfigured ? settingWithCache(config, "osaifu_charge_window", () => safeCli("osaifu-charge-window", { host: config.batteryHost })) : Promise.resolve(skippedSetting),
-    batteryConfigured ? settingWithCache(config, "osaifu_discharge_window", () => safeCli("osaifu-discharge-window", { host: config.batteryHost })) : Promise.resolve(skippedSetting),
-    batteryConfigured ? safeCli("dump-vendor", { host: config.batteryHost }) : Promise.resolve({ error: "battery host is not configured" }),
+    probe("energy status", () => batteryConfigured ? safeCli("energy-status", energyArgs) : Promise.resolve({ battery: { configured: false } })),
+    probe("smart meter status", () => readSmartMeterStatus(config)),
+    probe("home power meter status", () => readMeterStatus(config)),
+    probe("charging profile", () => batteryConfigured ? safeCli("vendor-profile", { host: config.batteryHost }) : Promise.resolve({ error: "battery host is not configured" })),
+    probe("discharge limit", () => batteryConfigured ? settingWithCache(config, "discharge_limit", () => safeCli("discharge-limit", { host: config.batteryHost })) : Promise.resolve(skippedSetting)),
+    probe("osaifu charge window", () => batteryConfigured ? settingWithCache(config, "osaifu_charge_window", () => safeCli("osaifu-charge-window", { host: config.batteryHost })) : Promise.resolve(skippedSetting)),
+    probe("osaifu discharge window", () => batteryConfigured ? settingWithCache(config, "osaifu_discharge_window", () => safeCli("osaifu-discharge-window", { host: config.batteryHost })) : Promise.resolve(skippedSetting)),
+    probe("vendor properties", () => batteryConfigured ? safeCli("dump-vendor", { host: config.batteryHost }) : Promise.resolve({ error: "battery host is not configured" })),
   ]);
 
   async function hydrateWindowRaw(windowData, epcHex) {
@@ -907,8 +941,8 @@ async function readAllStatus() {
     return windowData;
   }
 
-  const chargeWindowRead = await hydrateWindowRaw(chargeWindow, "0xF4");
-  const dischargeWindowRead = await hydrateWindowRaw(dischargeWindow, "0xF5");
+  const chargeWindowRead = await probe("osaifu charge window raw fallback", () => hydrateWindowRaw(chargeWindow, "0xF4"));
+  const dischargeWindowRead = await probe("osaifu discharge window raw fallback", () => hydrateWindowRaw(dischargeWindow, "0xF5"));
   const status = {
     hosts: {
       battery: config.batteryHost,
@@ -1112,8 +1146,11 @@ function cleanAutomationRule(input = {}) {
 }
 
 function automationDemandWatts(status, source) {
-  if (source === "gridImportW") return Number(status.meter?.grid_import_power?.value);
-  return Number(status.meter?.house_demand_power?.value);
+  const raw = source === "gridImportW"
+    ? status.meter?.grid_import_power?.value
+    : status.meter?.house_demand_power?.value;
+  if (raw === null || raw === undefined || raw === "") return Number.NaN;
+  return Number(raw);
 }
 
 function batteryOperationMode(status) {
@@ -1123,7 +1160,9 @@ function batteryOperationMode(status) {
 }
 
 function batteryChargingWatts(status) {
-  const watts = Number(status.energy?.battery?.instant_power?.value);
+  const raw = status.energy?.battery?.instant_power?.value;
+  if (raw === null || raw === undefined || raw === "") return null;
+  const watts = Number(raw);
   if (!Number.isFinite(watts)) return null;
   return Math.max(0, watts);
 }
@@ -1149,7 +1188,22 @@ function automationDemandLabel(source) {
   return source === "gridImportW" ? "Grid Import" : "House demand";
 }
 
-async function evaluateAutomationRule(rule, status, now = new Date()) {
+function automationRuleLabel(rule) {
+  return `${rule.name || rule.type || "unnamed rule"} [${rule.id || "unknown id"}]`;
+}
+
+function automationRuleList(rules) {
+  return rules.map(automationRuleLabel).join(", ") || "none";
+}
+
+function activeCliLabel(context) {
+  if (!context) return "none";
+  const elapsedMs = Date.now() - new Date(context.startedAt).getTime();
+  return `${context.command}${context.host ? ` on ${context.host}` : ""} (${elapsedMs}ms)`;
+}
+
+async function evaluateAutomationRule(rule, status, now = new Date(), onPhase = () => {}) {
+  onPhase("evaluating conditions");
   if (!rule.enabled) return { changed: false, result: { skipped: "disabled" } };
   if (rule.type !== "backup-demand-guard") return { changed: false, result: { skipped: "unknown rule type" } };
 
@@ -1167,6 +1221,7 @@ async function evaluateAutomationRule(rule, status, now = new Date()) {
 
   if (operationMode === "auto" && guardDemandW !== null && batteryChargingW > 0 && guardDemandW >= breakerLimitW) {
     if (!canRunAutomation(rule, now)) return { changed: false, result: { skipped: "cooldown" } };
+    onPhase("executing Standby guard action");
     const result = await executeAction(rule.action, rule.payload);
     appendAutomationLog(
       rule,
@@ -1191,6 +1246,7 @@ async function evaluateAutomationRule(rule, status, now = new Date()) {
     const restoreSince = rule.state.restoreSince ? new Date(rule.state.restoreSince).getTime() : now.getTime();
     rule.state.restoreSince = new Date(restoreSince).toISOString();
     if ((now.getTime() - restoreSince) / 1000 >= rule.conditions.restoreDelaySeconds) {
+      onPhase("executing Auto restore action");
       const result = await executeAction(rule.restoreAction, rule.restorePayload);
       appendAutomationLog(
         rule,
@@ -1217,25 +1273,54 @@ async function evaluateAutomationRule(rule, status, now = new Date()) {
   return { changed: false, result: { skipped: "conditions not met", operationMode, demandW, batteryChargingW, actualDemandWithChargingW, guardDemandW, estimatedRestoredDemandW, breakerLimitW } };
 }
 
-async function runAutomationRules() {
+async function runAutomationRules(context = {}) {
   const startedAt = new Date();
+  context.startedAt = startedAt.toISOString();
+  context.phase = "loading automation rules";
   const rules = await readAutomationRules();
-  if (!rules.some((rule) => rule.enabled)) return;
-  const status = await readAllStatus();
-  const now = new Date();
-  const checkMeta = {
-    checkStartedAt: startedAt.toISOString(),
-    checkFinishedAt: now.toISOString(),
-    checkDurationMs: now.getTime() - startedAt.getTime(),
-  };
-  if (checkMeta.checkDurationMs > AUTOMATION_CHECK_INTERVAL_MS) {
-    console.warn(`automation: check took ${checkMeta.checkDurationMs}ms, longer than ${AUTOMATION_CHECK_INTERVAL_MS}ms interval`);
+  const enabledRules = rules.filter((rule) => rule.enabled);
+  context.enabledRules = enabledRules.map(automationRuleLabel);
+  if (!enabledRules.length) {
+    context.phase = "complete; no enabled rules";
+    return;
+  }
+  context.phase = `reading device status for ${automationRuleList(enabledRules)}`;
+  const statusReadStartedAt = Date.now();
+  const cliSequenceStart = cliTimingSequence;
+  const probeTimings = [];
+  const status = await readAllStatus((probe) => {
+    probeTimings.push(probe);
+    context.statusProbeCompletionLatency = probeTimings.map(
+      ({ label, durationMs }) => `${label}=${durationMs}ms`,
+    );
+  });
+  const statusReadDurationMs = Date.now() - statusReadStartedAt;
+  if (statusReadDurationMs > AUTOMATION_CHECK_INTERVAL_MS) {
+    const cliProbes = recentCliTimings
+      .filter(({ sequence }) => sequence > cliSequenceStart)
+      .map(({ command, host, durationMs }) => `${command}${host ? ` on ${host}` : ""}=${durationMs}ms`)
+      .join(", ");
+    console.warn(
+      `automation: device status read for ${automationRuleList(enabledRules)} took ${statusReadDurationMs}ms, longer than ${AUTOMATION_CHECK_INTERVAL_MS}ms interval; CLI probe durations: ${cliProbes || "none"}`,
+    );
   }
   let changed = false;
   for (const rule of rules) {
+    const now = new Date();
+    const ruleLabel = automationRuleLabel(rule);
+    const ruleStartedAt = Date.now();
     let ruleChanged = false;
     try {
-      const result = await evaluateAutomationRule(rule, status, now);
+      const result = await evaluateAutomationRule(rule, status, now, (phase) => {
+        context.phase = `${phase} for ${ruleLabel}`;
+      });
+      const checkFinishedAt = new Date();
+      const checkMeta = {
+        checkStartedAt: startedAt.toISOString(),
+        checkFinishedAt: checkFinishedAt.toISOString(),
+        checkDurationMs: checkFinishedAt.getTime() - startedAt.getTime(),
+        ruleDurationMs: checkFinishedAt.getTime() - ruleStartedAt,
+      };
       ruleChanged = result.changed;
       if (result.result?.skipped) {
         rule.lastResult = { ok: true, at: now.toISOString(), ...result.result, ...checkMeta };
@@ -1244,27 +1329,66 @@ async function runAutomationRules() {
         rule.lastResult = { ...rule.lastResult, ...checkMeta };
       }
     } catch (err) {
-      rule.lastResult = { ok: false, at: now.toISOString(), error: err.message, ...checkMeta };
+      const checkFinishedAt = new Date();
+      rule.lastResult = {
+        ok: false,
+        at: now.toISOString(),
+        error: err.message,
+        checkStartedAt: startedAt.toISOString(),
+        checkFinishedAt: checkFinishedAt.toISOString(),
+        checkDurationMs: checkFinishedAt.getTime() - startedAt.getTime(),
+        ruleDurationMs: checkFinishedAt.getTime() - ruleStartedAt,
+      };
       ruleChanged = true;
+    }
+    const ruleDurationMs = Date.now() - ruleStartedAt;
+    if (ruleDurationMs > AUTOMATION_CHECK_INTERVAL_MS) {
+      console.warn(
+        `automation: rule ${ruleLabel} took ${ruleDurationMs}ms, longer than ${AUTOMATION_CHECK_INTERVAL_MS}ms interval; last phase: ${context.phase}`,
+      );
     }
     if (ruleChanged) {
       changed = true;
       rule.stateUpdatedAt = now.toISOString();
     }
   }
-  if (changed) await writeAutomationRuleStates(rules);
+  if (changed) {
+    context.phase = `persisting state for ${automationRuleList(enabledRules)}`;
+    await writeAutomationRuleStates(rules);
+  }
+  context.phase = "complete";
+  const totalDurationMs = Date.now() - startedAt.getTime();
+  if (totalDurationMs > AUTOMATION_CHECK_INTERVAL_MS) {
+    console.warn(
+      `automation: complete check for ${automationRuleList(enabledRules)} took ${totalDurationMs}ms, longer than ${AUTOMATION_CHECK_INTERVAL_MS}ms interval`,
+    );
+  }
 }
 
 async function runAutomationRulesScheduled() {
   if (automationRunInProgress) {
-    console.warn("automation: previous check still running; skipping this scheduled interval");
+    const elapsedMs = automationRunContext?.startedAt
+      ? Date.now() - new Date(automationRunContext.startedAt).getTime()
+      : null;
+    const duration = Number.isFinite(elapsedMs) ? `; running for ${elapsedMs}ms` : "";
+    const rules = automationRunContext?.enabledRules?.join(", ") || "not loaded yet";
+    const phase = automationRunContext?.phase || "unknown phase";
+    console.warn(
+      `automation: previous check still running${duration}; current phase: ${phase}; active CLI probe: ${activeCliLabel(activeCliContext)}; enabled rules: ${rules}; skipping this scheduled interval`,
+    );
     return;
   }
   automationRunInProgress = true;
+  automationRunContext = {};
   try {
-    await runAutomationRules();
+    await runAutomationRules(automationRunContext);
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    error.automationContext = { ...automationRunContext };
+    throw error;
   } finally {
     automationRunInProgress = false;
+    automationRunContext = null;
   }
 }
 
