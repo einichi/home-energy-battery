@@ -78,6 +78,7 @@ const DEFAULT_CONFIG = {
 };
 
 let cliQueue = Promise.resolve();
+let configQueue = Promise.resolve();
 let scheduleTimer = null;
 let automationTimer = null;
 let automationRunInProgress = false;
@@ -739,9 +740,12 @@ async function readConfig() {
   }
 }
 
-async function writeConfig(config) {
+async function applyConfigChange(apply) {
+  // Read-modify-write of config.json. The caller's `apply` merges its change
+  // onto the freshly-read current config, so it must run after any prior write
+  // has landed -- see updateConfig for the serialization that guarantees this.
   const previous = await readConfig().catch(() => cleanConfig(DEFAULT_CONFIG));
-  const cleaned = cleanConfig({ ...previous, ...config });
+  const cleaned = cleanConfig(apply(previous));
   await ensureDataDir();
   await writeJsonFileAtomic(CONFIG_FILE, cleaned);
   const hostKeys = ["batteryHost", "smartMeterHost", "meterHost", "meterEoj", "solarHost"];
@@ -749,6 +753,20 @@ async function writeConfig(config) {
     || JSON.stringify(previous.fuelCellHosts) !== JSON.stringify(cleaned.fuelCellHosts);
   if (hostChanged) lastRecordedSample = null;
   return cleaned;
+}
+
+function updateConfig(apply) {
+  // Serialize all config writes through one queue so concurrent writers (the
+  // Settings PUT and settingWithCache during a status read) each merge into the
+  // latest persisted config instead of racing read-modify-write and dropping
+  // one another's changes (last-writer-wins).
+  const task = configQueue.then(() => applyConfigChange(apply));
+  configQueue = task.catch(() => {});
+  return task;
+}
+
+function writeConfig(config) {
+  return updateConfig((previous) => ({ ...previous, ...config }));
 }
 
 async function readAutomationRules() {
@@ -954,14 +972,19 @@ async function settingWithCache(config, key, reader) {
   const cached = config.settingCache?.[key] ?? null;
   const data = await reader();
   if (data && !data.error && (data.raw || data.decoded)) {
-    config.settingCache = {
-      ...(config.settingCache ?? {}),
-      [key]: {
-        lastKnown: data,
-        lastReadAt: new Date().toISOString(),
+    // Persist only the settingCache delta against the current on-disk config, so
+    // a concurrent settings change (or a sibling cache write) is preserved
+    // rather than reverted by this status read's stale snapshot.
+    await updateConfig((current) => ({
+      ...current,
+      settingCache: {
+        ...(current.settingCache ?? {}),
+        [key]: {
+          lastKnown: data,
+          lastReadAt: new Date().toISOString(),
+        },
       },
-    };
-    await writeConfig(config);
+    }));
     return { ...data, available: true };
   }
   return {
