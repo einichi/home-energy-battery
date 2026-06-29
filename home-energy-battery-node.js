@@ -229,25 +229,6 @@ function mapToHex(map) {
   return map.map((n) => `0x${n.toString(16).padStart(2, "0").toUpperCase()}`);
 }
 
-function decodePropertyMap(raw) {
-  // Property maps have two valid ECHONET Lite encodings: a short explicit list,
-  // or a 16-byte bitmap. Supporting both makes discovery output readable.
-  if (!raw || raw.length === 0) return [];
-  const count = raw[0];
-  if (raw.length === count + 1) return Array.from(raw.slice(1)).sort((a, b) => a - b);
-  if (raw.length === 17) {
-    const epcs = [];
-    for (let low = 0; low < 16; low += 1) {
-      const bitmap = raw[low + 1];
-      for (let high = 0; high < 8; high += 1) {
-        if (bitmap & (1 << high)) epcs.push(0x80 + low + (high << 4));
-      }
-    }
-    return epcs.sort((a, b) => a - b);
-  }
-  return Array.from(raw);
-}
-
 function metric({ host, eoj, epc, name, raw, value = undefined, unit = undefined, human = undefined }) {
   const out = { host, eoj, epc: `0x${epc.toString(16).padStart(2, "0").toUpperCase()}`, name, raw: rawHex(raw) };
   if (value !== undefined) out.value = value;

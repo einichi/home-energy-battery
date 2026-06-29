@@ -16,5 +16,10 @@ services:
       - DATA_DIR=/data
       - TZ=UTC
     volumes:
-      - ./data:/data
+      # Named volume so the unprivileged container user inherits writable
+      # ownership of /data (a host bind mount would be root-owned on creation).
+      - home-energy-battery-data:/data
     restart: unless-stopped
+
+volumes:
+  home-energy-battery-data:

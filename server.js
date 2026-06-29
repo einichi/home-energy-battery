@@ -1075,7 +1075,6 @@ async function runDueSchedules() {
     runningScheduleIds.add(schedule.id);
     schedule.running = true;
     schedule.runningSince = now.toISOString();
-    changed = true;
     await writeSchedules(schedules);
     try {
       const result = await executeAction(schedule.action, schedule.payload);
@@ -1309,7 +1308,7 @@ async function runAutomationRules(context = {}) {
     const now = new Date();
     const ruleLabel = automationRuleLabel(rule);
     const ruleStartedAt = Date.now();
-    let ruleChanged = false;
+    let ruleChanged;
     try {
       const result = await evaluateAutomationRule(rule, status, now, (phase) => {
         context.phase = `${phase} for ${ruleLabel}`;
@@ -1807,6 +1806,11 @@ async function serveStatic(res, pathname) {
 export const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   try {
+    if (url.pathname === "/healthz") {
+      // Lightweight liveness probe for Docker HEALTHCHECK and orchestrators.
+      // It must not touch devices or disk so it stays fast and side-effect free.
+      return json(res, 200, { status: "ok", uptimeSeconds: Math.round(process.uptime()) });
+    }
     if (url.pathname.startsWith("/api/")) {
       await api(req, res, url);
       return;
