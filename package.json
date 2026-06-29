@@ -5,7 +5,7 @@
   "description": "ECHONET Lite tools for local HEMS energy devices.",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.5.0"
   },
   "scripts": {
     "node:help": "node home-energy-battery-node.js --help",

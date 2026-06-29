@@ -2,10 +2,12 @@
 import { execFile } from "node:child_process";
 import dgram from "node:dgram";
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -17,6 +19,7 @@ const AUTOMATION_RULE_STATE_FILE = path.join(DATA_DIR, "automation-rule-state.js
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
 const HISTORY_FILE = path.join(HISTORY_DIR, "samples.jsonl");
+const HISTORY_DB = path.join(DATA_DIR, "history.db");
 const CLI_TIMEOUT_MS = Number(process.env.CLI_TIMEOUT_MS ?? 15000);
 const CLI_FILE = "home-energy-battery-node.js";
 const AUTOMATION_CHECK_INTERVAL_MS = 30_000;
@@ -83,6 +86,12 @@ let activeCliContext = null;
 let cliTimingSequence = 0;
 const recentCliTimings = [];
 let lastRecordedSample = null;
+let recorderTimer = null;
+let recorderInProgress = false;
+let latestStatus = null;
+let latestStatusAt = 0;
+let historyDb = null;
+let historyInsert = null;
 const runningScheduleIds = new Set();
 const discoveryJobs = new Map();
 const DISCOVERY_JOB_TTL_MS = 10 * 60 * 1000;
@@ -304,13 +313,6 @@ async function writeJsonFileAtomic(file, data) {
   await rename(tmp, file);
 }
 
-async function writeJsonLinesAtomic(file, rows) {
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  const body = rows.map((row) => JSON.stringify(row)).join("\n");
-  await writeFile(tmp, body + (rows.length ? "\n" : ""));
-  await rename(tmp, file);
-}
-
 function rateForTimestamp(rateBands = DEFAULT_CONFIG.rateBands, timestamp = new Date(), fallbackRate = null) {
   const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
   const minute = date.getHours() * 60 + date.getMinutes();
@@ -386,12 +388,111 @@ function sampleFromStatus(status, config, previousSample) {
   };
 }
 
-async function recordStatusSample(status, config) {
-  // JSON Lines keeps persistence simple: each status poll appends one complete
-  // sample, and a partially-written final line is easy to ignore on read.
-  const sample = sampleFromStatus(status, config, lastRecordedSample);
-  lastRecordedSample = sample;
-  await appendFile(HISTORY_FILE, `${JSON.stringify(sample)}\n`);
+// History lives in a SQLite database (node:sqlite): indexed range queries and
+// O(1) retention deletes matter now that the recorder appends a sample on every
+// update interval. sampleFromStatus still defines the row shape; these helpers
+// just map it to and from table columns.
+const SAMPLE_FIELDS = [
+  "batteryPowerW",
+  "stateOfChargePercent",
+  "solarPowerW",
+  "houseDemandW",
+  "fuelCellPowerW",
+  "gridExportW",
+  "gridImportW",
+  "solarGenerationKwh",
+  "gridImportKwh",
+  "gridExportKwh",
+  "offPeakSavingYen",
+  "solarSavingYen",
+  "rateYenPerKwh",
+  "rateLabel",
+];
+
+const HISTORY_INSERT_SQL = `INSERT INTO samples (ts, timestamp, ${SAMPLE_FIELDS.join(", ")}) VALUES (${[
+  "?",
+  "?",
+  ...SAMPLE_FIELDS.map(() => "?"),
+].join(", ")})`;
+
+function initHistorySchema(db) {
+  const columns = SAMPLE_FIELDS.map(
+    (field) => `${field} ${field === "rateLabel" ? "TEXT" : "REAL"}`,
+  ).join(",\n    ");
+  db.exec(`CREATE TABLE IF NOT EXISTS samples (
+    ts INTEGER NOT NULL,
+    timestamp TEXT NOT NULL,
+    ${columns}
+  )`);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_samples_ts ON samples (ts)");
+  return db;
+}
+
+function sampleToRow(sample) {
+  return [
+    new Date(sample.timestamp).getTime(),
+    sample.timestamp,
+    ...SAMPLE_FIELDS.map((field) => sample[field] ?? null),
+  ];
+}
+
+function rowToSample(row) {
+  const sample = { timestamp: row.timestamp };
+  for (const field of SAMPLE_FIELDS) sample[field] = row[field];
+  return sample;
+}
+
+function writeSampleRow(db, sample) {
+  db.prepare(HISTORY_INSERT_SQL).run(...sampleToRow(sample));
+}
+
+function migrateJsonlHistory(db) {
+  // One-time import of the legacy samples.jsonl, then set it aside as a
+  // .migrated backup so it is not imported again on the next startup.
+  if (!existsSync(HISTORY_FILE)) return;
+  let text;
+  try {
+    text = readFileSync(HISTORY_FILE, "utf8");
+  } catch (err) {
+    logDetailedError("history-migration", err);
+    return;
+  }
+  const samples = parseHistorySamples(text).filter((sample) =>
+    Number.isFinite(new Date(sample.timestamp).getTime()),
+  );
+  if (samples.length) {
+    const insert = db.prepare(HISTORY_INSERT_SQL);
+    db.exec("BEGIN");
+    try {
+      for (const sample of samples) insert.run(...sampleToRow(sample));
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+  renameSync(HISTORY_FILE, `${HISTORY_FILE}.migrated`);
+  console.warn(`history: migrated ${samples.length} samples from samples.jsonl into SQLite`);
+}
+
+function getHistoryDb() {
+  if (historyDb) return historyDb;
+  mkdirSync(DATA_DIR, { recursive: true });
+  const db = new DatabaseSync(HISTORY_DB);
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA synchronous = NORMAL");
+  initHistorySchema(db);
+  migrateJsonlHistory(db);
+  historyInsert = db.prepare(HISTORY_INSERT_SQL);
+  historyDb = db;
+  return historyDb;
+}
+
+function recordSample(sample) {
+  const ts = new Date(sample.timestamp).getTime();
+  if (!Number.isFinite(ts)) return sample;
+  getHistoryDb();
+  historyInsert.run(...sampleToRow(sample));
   return sample;
 }
 
@@ -441,47 +542,27 @@ function summarizeSamples(samples, config = DEFAULT_CONFIG) {
 }
 
 async function readHistoryRange(start, end, config = DEFAULT_CONFIG) {
-  // History is read by scanning the JSONL file. This is intentionally boring and
-  // inspectable; a database can replace it later if retention grows large.
-  await ensureDataDir();
   const startMs = start ? new Date(start).getTime() : Date.now() - 30 * 60_000;
   const endMs = end ? new Date(end).getTime() : Date.now();
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs > endMs) {
     throw new Error("valid start and end date/time are required");
   }
-  let text = "";
-  try {
-    text = await readFile(HISTORY_FILE, "utf8");
-  } catch (err) {
-    if (err.code !== "ENOENT") throw err;
-  }
-  const samples = parseHistorySamples(text)
-    .filter((sample) => {
-      const time = new Date(sample.timestamp).getTime();
-      return time >= startMs && time <= endMs;
-    });
+  const db = getHistoryDb();
+  const rows = db
+    .prepare("SELECT * FROM samples WHERE ts >= ? AND ts <= ? ORDER BY ts ASC")
+    .all(startMs, endMs);
+  const samples = rows.map(rowToSample);
   return { samples, summary: summarizeSamples(samples, config) };
 }
 
-async function readAllHistorySamples() {
-  await ensureDataDir();
-  let text = "";
-  try {
-    text = await readFile(HISTORY_FILE, "utf8");
-  } catch (err) {
-    if (err.code !== "ENOENT") throw err;
-  }
-  return parseHistorySamples(text);
-}
-
 async function trimHistory(retentionDays) {
-  await ensureDataDir();
   const days = configNumber(retentionDays, DEFAULT_CONFIG.historyRetentionDays, 1, 3650);
   const cutoff = Date.now() - days * 24 * 60 * 60_000;
-  const samples = await readAllHistorySamples();
-  const kept = samples.filter((sample) => new Date(sample.timestamp).getTime() >= cutoff);
-  await writeJsonLinesAtomic(HISTORY_FILE, kept);
-  return { retentionDays: days, before: samples.length, after: kept.length, deleted: samples.length - kept.length };
+  const db = getHistoryDb();
+  const before = db.prepare("SELECT COUNT(*) AS c FROM samples").get().c;
+  db.prepare("DELETE FROM samples WHERE ts < ?").run(cutoff);
+  const after = db.prepare("SELECT COUNT(*) AS c FROM samples").get().c;
+  return { retentionDays: days, before, after, deleted: before - after };
 }
 
 async function readSchedules() {
@@ -892,9 +973,12 @@ async function settingWithCache(config, key, reader) {
   };
 }
 
-async function readAllStatus(onProbeComplete = () => {}) {
-  // One dashboard refresh fans out into several short CLI calls. The queue keeps
-  // node-echonet-lite from fighting itself over UDP port 3610.
+async function collectStatus(onProbeComplete = () => {}) {
+  // Reads every device value and returns a status snapshot WITHOUT persisting it.
+  // The recorder is the only caller that writes history; /api/status and the
+  // automation loop consume this read-only. One refresh fans out into several
+  // short CLI calls, and the queue keeps node-echonet-lite from fighting itself
+  // over UDP port 3610.
   const config = await readConfig();
   const energyArgs = {
     "battery-host": config.batteryHost,
@@ -976,11 +1060,66 @@ async function readAllStatus(onProbeComplete = () => {}) {
     offPeakSavingsEnabled: config.offPeakSavingsEnabled,
     rateBands: config.rateBands,
   };
-  status.sample = await recordStatusSample(status, config);
+  // Build the sample but do not persist it; the recorder owns writes. deltaHours
+  // is measured against the last persisted sample so the live view stays correct.
+  status.sample = sampleFromStatus(status, config, lastRecordedSample);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   status.savings = (await readHistoryRange(today.toISOString(), status.read_at, config)).summary;
   return status;
+}
+
+function batteryHostConfigured(config) {
+  return Boolean(config.batteryHost) && !isDocumentationHost(config.batteryHost);
+}
+
+async function recordSampleTick() {
+  // The single source of history writes. Runs on the update-interval timer only.
+  if (recorderInProgress) return;
+  recorderInProgress = true;
+  try {
+    const config = await readConfig();
+    const status = await collectStatus();
+    latestStatus = status;
+    latestStatusAt = Date.now();
+    // Skip recording until a real device host is configured so a fresh install
+    // does not accumulate rows full of null readings.
+    if (batteryHostConfigured(config) && status.sample) {
+      recordSample(status.sample);
+      lastRecordedSample = status.sample;
+    }
+  } catch (err) {
+    logDetailedError("recorder", err);
+  } finally {
+    recorderInProgress = false;
+  }
+}
+
+function scheduleNextRecord() {
+  if (recorderTimer) clearTimeout(recorderTimer);
+  // Re-read the interval each cycle so a change on the Settings page applies on
+  // the next tick without any explicit restart.
+  readConfig()
+    .then((config) => {
+      const seconds = configNumber(
+        config.updateIntervalSeconds,
+        DEFAULT_CONFIG.updateIntervalSeconds,
+        5,
+        3600,
+      );
+      recorderTimer = setTimeout(() => {
+        recordSampleTick().finally(scheduleNextRecord);
+      }, seconds * 1000);
+    })
+    .catch((err) => {
+      logDetailedError("recorder-schedule", err);
+      recorderTimer = setTimeout(scheduleNextRecord, DEFAULT_CONFIG.updateIntervalSeconds * 1000);
+    });
+}
+
+async function startRecorder() {
+  await recordSampleTick();
+  scheduleNextRecord();
 }
 
 async function executeAction(action, payload = {}) {
@@ -1283,25 +1422,35 @@ async function runAutomationRules(context = {}) {
     context.phase = "complete; no enabled rules";
     return;
   }
-  context.phase = `reading device status for ${automationRuleList(enabledRules)}`;
-  const statusReadStartedAt = Date.now();
-  const cliSequenceStart = cliTimingSequence;
-  const probeTimings = [];
-  const status = await readAllStatus((probe) => {
-    probeTimings.push(probe);
-    context.statusProbeCompletionLatency = probeTimings.map(
-      ({ label, durationMs }) => `${label}=${durationMs}ms`,
-    );
-  });
-  const statusReadDurationMs = Date.now() - statusReadStartedAt;
-  if (statusReadDurationMs > AUTOMATION_CHECK_INTERVAL_MS) {
-    const cliProbes = recentCliTimings
-      .filter(({ sequence }) => sequence > cliSequenceStart)
-      .map(({ command, host, durationMs }) => `${command}${host ? ` on ${host}` : ""}=${durationMs}ms`)
-      .join(", ");
-    console.warn(
-      `automation: device status read for ${automationRuleList(enabledRules)} took ${statusReadDurationMs}ms, longer than ${AUTOMATION_CHECK_INTERVAL_MS}ms interval; CLI probe durations: ${cliProbes || "none"}`,
-    );
+  // Reuse the recorder's latest reading when it is fresh enough; otherwise do a
+  // read-only collect. Either way the automation loop never writes history, so
+  // recording stays driven solely by the update interval.
+  const cacheAgeMs = latestStatus ? Date.now() - latestStatusAt : Infinity;
+  let status;
+  if (latestStatus && cacheAgeMs <= AUTOMATION_CHECK_INTERVAL_MS) {
+    context.phase = `using cached device status (${cacheAgeMs}ms old) for ${automationRuleList(enabledRules)}`;
+    status = latestStatus;
+  } else {
+    context.phase = `reading device status for ${automationRuleList(enabledRules)}`;
+    const statusReadStartedAt = Date.now();
+    const cliSequenceStart = cliTimingSequence;
+    const probeTimings = [];
+    status = await collectStatus((probe) => {
+      probeTimings.push(probe);
+      context.statusProbeCompletionLatency = probeTimings.map(
+        ({ label, durationMs }) => `${label}=${durationMs}ms`,
+      );
+    });
+    const statusReadDurationMs = Date.now() - statusReadStartedAt;
+    if (statusReadDurationMs > AUTOMATION_CHECK_INTERVAL_MS) {
+      const cliProbes = recentCliTimings
+        .filter(({ sequence }) => sequence > cliSequenceStart)
+        .map(({ command, host, durationMs }) => `${command}${host ? ` on ${host}` : ""}=${durationMs}ms`)
+        .join(", ");
+      console.warn(
+        `automation: device status read for ${automationRuleList(enabledRules)} took ${statusReadDurationMs}ms, longer than ${AUTOMATION_CHECK_INTERVAL_MS}ms interval; CLI probe durations: ${cliProbes || "none"}`,
+      );
+    }
   }
   let changed = false;
   for (const rule of rules) {
@@ -1651,6 +1800,9 @@ function startDiscoveryJob(timeout, mode = "broadcast", subnets = []) {
 }
 
 function startScheduler() {
+  // The recorder is the only writer of history; it polls devices and records a
+  // sample on the configured update interval, independent of any HTTP client.
+  startRecorder().catch((err) => logDetailedError("recorder", err));
   scheduleTimer = setInterval(() => {
     runDueSchedules().catch((err) => logDetailedError("scheduler", err));
   }, 15000);
@@ -1689,7 +1841,14 @@ async function api(req, res, url) {
     return json(res, 200, discoveryJobView(job));
   }
   if (req.method === "GET" && url.pathname === "/api/status") {
-    return json(res, 200, await readAllStatus());
+    // Serve the recorder's latest reading so dashboard polling never triggers
+    // device I/O or a history write. Warm the cache on the first request before
+    // the recorder's initial tick has completed.
+    if (!latestStatus) {
+      latestStatus = await collectStatus();
+      latestStatusAt = Date.now();
+    }
+    return json(res, 200, latestStatus);
   }
   if (req.method === "GET" && url.pathname === "/api/history") {
     const config = await readConfig();
@@ -1828,14 +1987,18 @@ export {
   cleanAutomationRuleConfig,
   cleanConfig,
   evaluateAutomationRule,
+  initHistorySchema,
   normalizeDashboardWidgets,
   normalizeRateBands,
   normalizeSubnets,
   parseJsonWithContext,
   rateForTimestamp,
   recoverConcatenatedJsonValue,
+  rowToSample,
   sampleFromStatus,
+  sampleToRow,
   summarizeSamples,
+  writeSampleRow,
 };
 
 async function main() {
@@ -1853,5 +2016,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 process.on("SIGTERM", () => {
   if (scheduleTimer) clearInterval(scheduleTimer);
   if (automationTimer) clearInterval(automationTimer);
+  if (recorderTimer) clearTimeout(recorderTimer);
   server.close(() => process.exit(0));
 });

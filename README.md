@@ -29,6 +29,9 @@ The `--ignore-scripts` flag avoids possible native `serialport` build failures w
 only need ECHONET Lite over LAN/IPv4. `node-echonet-lite` binds UDP port `3610`,
 so stop other ECHONET clients before using this tool.
 
+The Web UI server requires Node.js 22.5+ because history is stored with the
+built-in [`node:sqlite`](https://nodejs.org/api/sqlite.html) module.
+
 ## CLI Quick Start
 
 Replace the addresses below with known device addresses from your own LAN.
@@ -89,7 +92,10 @@ http://docker-host:8787/
 
 The Web UI has live graphs, status widgets, battery profile settings,
 osaifu-mode charge/discharge windows, discharge limit, direct charge/discharge
-actions, schedules, device discovery, and simple historical recording.
+actions, schedules, device discovery, and historical recording. The server
+samples and records device readings on the configured update interval (a
+single background loop, independent of any open browser), storing them in a
+SQLite database at `/data/history.db`.
 
 ## DISCLAIMER
 
