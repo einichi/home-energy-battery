@@ -12,6 +12,7 @@ const state = {
   status: null,
   schedules: [],
   refreshTimer: null,
+  lastLivePollAt: 0,
   controlsInitialized: false,
   config: null,
   language: "en",
@@ -880,6 +881,7 @@ async function loadLiveTrendHistory() {
   const history = await api(`/api/history?${historyParams(start, end)}`);
   await loadHistorySamplesAsync(history, { target: "dashboard" });
   state.historyMode = previousMode;
+  state.lastLivePollAt = Date.now();
   setLiveModeButton();
   return history;
 }
@@ -2168,6 +2170,7 @@ async function refreshStatus() {
   setServiceState("readingDevices");
   try {
     renderDashboard(await api("/api/status"));
+    state.lastLivePollAt = Date.now();
     setServiceState(
       document.visibilityState === "visible"
         ? "serviceOnline"
@@ -2721,7 +2724,20 @@ function initForms() {
   document.addEventListener("visibilitychange", () => {
     scheduleNextRefresh();
     if (document.visibilityState === "visible") {
-      if (!state.historyMode) refreshStatus();
+      if (!state.historyMode) {
+        // If polling stalled while the tab was backgrounded (throttled timers,
+        // suspended tab), the in-memory trend window has a gap that live polling
+        // won't repair. Re-backfill from persisted history in that case;
+        // otherwise a single fresh poll is enough.
+        const gap = Date.now() - state.lastLivePollAt;
+        if (gap > 2 * refreshInterval()) {
+          loadLiveTrendHistory()
+            .then(() => refreshStatus())
+            .catch(() => refreshStatus());
+        } else {
+          refreshStatus();
+        }
+      }
       if (state.currentPage === "settings") refreshAutomationLog();
     }
   });
