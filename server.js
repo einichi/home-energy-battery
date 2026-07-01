@@ -77,6 +77,7 @@ const DEFAULT_CONFIG = {
 let cliQueue = Promise.resolve();
 let scheduleTimer = null;
 let automationTimer = null;
+let recorderTimer = null;
 let automationRunInProgress = false;
 let automationRunContext = null;
 let activeCliContext = null;
@@ -1662,6 +1663,47 @@ function startScheduler() {
   runAutomationRulesScheduled().catch((err) => logDetailedError("automation", err));
 }
 
+function anyDeviceConfigured(config) {
+  // A real device is any host that isn't blank or one of the placeholder
+  // documentation addresses shipped in DEFAULT_CONFIG.
+  const hosts = [
+    config.batteryHost,
+    config.meterHost,
+    config.smartMeterHost,
+    config.solarEnabled ? config.solarHost : null,
+    ...(config.fuelCellEnabled ? config.fuelCellHosts ?? [] : []),
+  ];
+  return hosts.some((host) => host && !isDocumentationHost(host));
+}
+
+function startBackgroundRecorder() {
+  // History is only useful if it is captured continuously, so the server polls
+  // devices on its own cadence instead of relying on an open browser tab to
+  // drive /api/status. readAllStatus() records one sample per call. A recursive
+  // timer (rescheduled after each read completes) guarantees reads never
+  // overlap, even if one takes longer than the configured interval.
+  const scheduleNext = (intervalMs) => {
+    recorderTimer = setTimeout(tick, intervalMs);
+    if (typeof recorderTimer.unref === "function") recorderTimer.unref();
+  };
+  async function tick() {
+    let intervalMs = DEFAULT_CONFIG.updateIntervalSeconds * 1000;
+    try {
+      const config = await readConfig();
+      intervalMs =
+        Math.max(5, configNumber(config.updateIntervalSeconds, DEFAULT_CONFIG.updateIntervalSeconds, 5, 3600)) * 1000;
+      if (anyDeviceConfigured(config)) {
+        await readAllStatus();
+      }
+    } catch (err) {
+      logDetailedError("recorder", err);
+    } finally {
+      scheduleNext(intervalMs);
+    }
+  }
+  tick();
+}
+
 async function api(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/config") {
     return json(res, 200, { ...(await readConfig()), port: PORT });
@@ -1837,6 +1879,7 @@ export {
 async function main() {
   await ensureDataDir();
   startScheduler();
+  startBackgroundRecorder();
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`HOME ENERGY & BATTERY listening on http://0.0.0.0:${PORT}`);
   });
@@ -1849,5 +1892,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 process.on("SIGTERM", () => {
   if (scheduleTimer) clearInterval(scheduleTimer);
   if (automationTimer) clearInterval(automationTimer);
+  if (recorderTimer) clearTimeout(recorderTimer);
   server.close(() => process.exit(0));
 });
