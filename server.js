@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process";
 import dgram from "node:dgram";
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -427,6 +427,35 @@ function summarizeSamples(samples, config = DEFAULT_CONFIG) {
     (sum, sample, index) => sum + samplePowerKwh(sample, "gridExportKwh", "gridExportW", samples[index - 1]),
     0,
   );
+  const houseDemandKwh = samples.reduce(
+    (sum, sample, index) => sum + samplePowerKwh(sample, "houseDemandKwh", "houseDemandW", samples[index - 1]),
+    0,
+  );
+  const fuelCellKwh = samples.reduce(
+    (sum, sample, index) => sum + samplePowerKwh(sample, "fuelCellKwh", "fuelCellPowerW", samples[index - 1]),
+    0,
+  );
+  const battery = samples.reduce(
+    (acc, sample, index) => {
+      const charged = samplePowerKwh(sample, "batteryChargeKwh", "batteryPowerW", samples[index - 1]);
+      const discharged = samplePowerKwh(
+        { ...sample, batteryPowerW: -Number(sample.batteryPowerW) },
+        "batteryDischargeKwh",
+        "batteryPowerW",
+        samples[index - 1],
+      );
+      acc.chargedKwh += charged;
+      acc.dischargedKwh += discharged;
+      return acc;
+    },
+    { chargedKwh: 0, dischargedKwh: 0 },
+  );
+  const socSamples = samples
+    .map((sample) => Number(sample.stateOfChargePercent))
+    .filter((value) => Number.isFinite(value));
+  const averageStateOfChargePercent = socSamples.length
+    ? socSamples.reduce((sum, value) => sum + value, 0) / socSamples.length
+    : null;
   const co2TonnesPerKwh = configNumber(config.co2TonnesPerKwh, DEFAULT_CONFIG.co2TonnesPerKwh, 0, 1);
   return {
     sampleCount: samples.length,
@@ -437,6 +466,12 @@ function summarizeSamples(samples, config = DEFAULT_CONFIG) {
     solarGenerationKwh,
     gridImportKwh,
     gridExportKwh,
+    houseDemandKwh,
+    fuelCellKwh,
+    batteryChargedKwh: battery.chargedKwh,
+    batteryDischargedKwh: battery.dischargedKwh,
+    batteryNetKwh: battery.chargedKwh - battery.dischargedKwh,
+    averageStateOfChargePercent,
     co2SavingKg: solarGenerationKwh * co2TonnesPerKwh * 1000,
   };
 }
@@ -473,6 +508,26 @@ async function readAllHistorySamples() {
     if (err.code !== "ENOENT") throw err;
   }
   return parseHistorySamples(text);
+}
+
+async function readHistoryStats() {
+  // Summarizes the on-disk history store for the Data Retention settings panel:
+  // how large the JSONL file is and how much of a time span it covers.
+  await ensureDataDir();
+  let sizeBytes = 0;
+  try {
+    sizeBytes = (await stat(HISTORY_FILE)).size;
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+  const samples = await readAllHistorySamples();
+  const earliest = samples[0]?.timestamp ?? null;
+  const latest = samples[samples.length - 1]?.timestamp ?? null;
+  const daysRecorded =
+    earliest && latest
+      ? Math.max(0, (new Date(latest).getTime() - new Date(earliest).getTime()) / 86_400_000)
+      : 0;
+  return { sizeBytes, sampleCount: samples.length, earliest, latest, daysRecorded };
 }
 
 async function trimHistory(retentionDays) {
@@ -1737,6 +1792,9 @@ async function api(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/history") {
     const config = await readConfig();
     return json(res, 200, await readHistoryRange(url.searchParams.get("start"), url.searchParams.get("end"), config));
+  }
+  if (req.method === "GET" && url.pathname === "/api/history/stats") {
+    return json(res, 200, await readHistoryStats());
   }
   if (req.method === "POST" && url.pathname.startsWith("/api/settings/")) {
     const body = await readBody(req);

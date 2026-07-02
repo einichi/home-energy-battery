@@ -335,6 +335,36 @@ label {
   overflow-wrap: anywhere;
 }
 
+.widget-note:empty {
+  display: none;
+}
+
+.data-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 0 0 16px;
+}
+
+.data-stats > div {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #f1f5f9;
+}
+
+.data-stats dt {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.data-stats dd {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 800;
+}
+
 .widget .status-text {
   font-size: 26px;
 }

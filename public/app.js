@@ -5,6 +5,7 @@ const ACTIVE_REFRESH_MS = 15_000;
 const INACTIVE_REFRESH_MS = 5 * 60_000;
 const POWER_TREND_MS = 30 * 60_000;
 const SOC_TREND_MS = POWER_TREND_MS;
+const DASHBOARD_LAYOUT_CACHE_KEY = "hemsDashboardWidgets";
 
 // Frontend state is intentionally kept in one small object. The app has no build
 // step, so avoiding framework state makes it easier to inspect in a browser.
@@ -300,6 +301,13 @@ const I18N = {
     today: "Today",
     selectedRange: "Selected range",
     notSet: "Not set",
+    rangeTotal: "Total over range",
+    rangeAverage: "Average over range",
+    batteryChargedLabel: "Charged",
+    batteryDischargedLabel: "Discharged",
+    databaseSize: "Database size",
+    daysRecorded: "Days recorded",
+    samplesRecorded: "Samples recorded",
     now: "now",
     minAgo: "30m ago",
     timeAxis: "Time",
@@ -528,6 +536,13 @@ const I18N = {
     today: "今日",
     selectedRange: "選択範囲",
     notSet: "未設定",
+    rangeTotal: "期間合計",
+    rangeAverage: "期間平均",
+    batteryChargedLabel: "充電",
+    batteryDischargedLabel: "放電",
+    databaseSize: "データベースサイズ",
+    daysRecorded: "記録日数",
+    samplesRecorded: "記録サンプル数",
     now: "現在",
     minAgo: "30分前",
     timeAxis: "時間",
@@ -1642,7 +1657,52 @@ function applyDashboardWidgetLayout(config = {}) {
         grid.append(el);
       });
   }
+  applyGraphMenuOrder(widgets);
   syncDashboardWidgetVisibility();
+}
+
+function applyGraphMenuOrder(widgets) {
+  // The Graphs menu lists the same trend metrics as the dashboard, so keep it in
+  // the dashboard's configured priority order rather than the static HTML order.
+  const submenu = $(".nav-submenu");
+  if (!submenu) return;
+  widgets
+    .filter((widget) => widget.group === "trends")
+    .sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id))
+    .forEach((widget) => {
+      const button = submenu.querySelector(`[data-graph-page="${widget.id}"]`);
+      if (button) submenu.append(button);
+    });
+}
+
+function cacheDashboardLayout(config) {
+  // Persist the layout so the very first paint on the next visit is already in the
+  // saved order, instead of rendering in HTML order and then reshuffling once the
+  // server config arrives.
+  try {
+    if (Array.isArray(config?.dashboardWidgets)) {
+      localStorage.setItem(
+        DASHBOARD_LAYOUT_CACHE_KEY,
+        JSON.stringify(config.dashboardWidgets),
+      );
+    }
+  } catch (_err) {
+    // localStorage can be unavailable (private mode, disabled storage); the layout
+    // still applies once the server config loads, just without the pre-paint hint.
+  }
+}
+
+function applyCachedDashboardLayout() {
+  try {
+    const cached = localStorage.getItem(DASHBOARD_LAYOUT_CACHE_KEY);
+    if (!cached) return;
+    const dashboardWidgets = JSON.parse(cached);
+    if (Array.isArray(dashboardWidgets)) {
+      applyDashboardWidgetLayout({ dashboardWidgets });
+    }
+  } catch (_err) {
+    // A malformed cache is harmless; the server config will set the order shortly.
+  }
 }
 
 function renderDashboardWidgetControls(config = state.config ?? {}) {
@@ -1711,6 +1771,7 @@ function updateConfigControls(config) {
   state.config = config;
   setLanguage(config.language ?? "en");
   applyDashboardWidgetLayout(config);
+  cacheDashboardLayout(config);
   renderDashboardWidgetControls(config);
   applyFeatureVisibility(config);
   $("#updateIntervalSeconds").value = config.updateIntervalSeconds ?? 15;
@@ -1904,6 +1965,8 @@ function renderDashboard(data, options = {}) {
   setText("#powerImportedPeriod", summaryPeriod);
   setText("#powerExportedPeriod", summaryPeriod);
 
+  applyTrendHeadlines(data);
+
   if (recordTrend) {
     pushTrend("batteryPower", batteryWatts, now);
     pushTrend("batterySoc", soc, now);
@@ -1916,6 +1979,58 @@ function renderDashboard(data, options = {}) {
     drawAllTrends();
   }
 
+}
+
+const TREND_HEADLINE_NOTE_IDS = [
+  "#solarPowerNote",
+  "#fuelCellPowerNote",
+  "#houseDemandPowerNote",
+  "#batteryPowerNote",
+  "#batterySocNote",
+  "#gridImportPowerNote",
+  "#gridExportPowerNote",
+];
+
+function applyTrendHeadlines(data) {
+  // In live mode the big trend numbers stay as instantaneous power/percentage and
+  // carry no note. For a selected historical range an instantaneous value is
+  // meaningless, so show the quantity that answers "how much over this window":
+  // energy totals (kWh) for the power flows and an average for state of charge.
+  if (!state.historyMode) {
+    TREND_HEADLINE_NOTE_IDS.forEach((id) => setText(id, ""));
+    return;
+  }
+  const summary = data.savings ?? {};
+  const total = t("rangeTotal");
+  const setFlow = (valueId, noteId, kwh) => {
+    setText(valueId, energyKwh(Number(kwh)));
+    setText(noteId, total);
+  };
+  setFlow("#solarPower", "#solarPowerNote", summary.solarGenerationKwh);
+  setFlow("#fuelCellPower", "#fuelCellPowerNote", summary.fuelCellKwh);
+  setFlow("#houseDemandPower", "#houseDemandPowerNote", summary.houseDemandKwh);
+  setFlow("#gridImportPower", "#gridImportPowerNote", summary.gridImportKwh);
+  setFlow("#gridExportPower", "#gridExportPowerNote", summary.gridExportKwh);
+
+  setText("#batteryPower", energyKwh(Number(summary.batteryNetKwh)));
+  setText(
+    "#batteryPowerNote",
+    `${t("batteryChargedLabel")} ${energyKwh(Number(summary.batteryChargedKwh))} · ${t("batteryDischargedLabel")} ${energyKwh(Number(summary.batteryDischargedKwh))}`,
+  );
+
+  setText(
+    "#batterySoc",
+    Number.isFinite(summary.averageStateOfChargePercent)
+      ? `${Math.round(summary.averageStateOfChargePercent)}%`
+      : "--%",
+  );
+  setText("#batterySocNote", t("rangeAverage"));
+  if (Number.isFinite(summary.averageStateOfChargePercent)) {
+    $("#batterySocGauge")?.style.setProperty(
+      "--value",
+      Math.max(0, Math.min(100, summary.averageStateOfChargePercent)),
+    );
+  }
 }
 
 function renderInitialStatus(data) {
@@ -2195,6 +2310,7 @@ async function refreshAll() {
 }
 
 async function initialLoad() {
+  applyCachedDashboardLayout();
   setServiceState("readingDevices");
   await loadLiveTrendHistory().catch(() => {});
   const [statusResult, configResult] = await Promise.allSettled([
@@ -2233,6 +2349,36 @@ async function hydrateSettingsView() {
   }
   try {
     await refreshAutomationRules();
+  } catch (err) {
+    toast(err.message);
+  }
+  await refreshHistoryStats();
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const exponent = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const value = bytes / 1024 ** exponent;
+  return `${new Intl.NumberFormat(state.language === "ja" ? "ja-JP" : "en-US", {
+    maximumFractionDigits: value >= 100 || exponent === 0 ? 0 : 1,
+  }).format(value)} ${units[exponent]}`;
+}
+
+async function refreshHistoryStats() {
+  try {
+    const stats = await api("/api/history/stats");
+    setText("#historyStatSize", formatBytes(Number(stats.sizeBytes)));
+    setText(
+      "#historyStatDays",
+      new Intl.NumberFormat(state.language === "ja" ? "ja-JP" : "en-US", {
+        maximumFractionDigits: 1,
+      }).format(Math.max(0, Number(stats.daysRecorded) || 0)),
+    );
+    setText(
+      "#historyStatSamples",
+      Number(stats.sampleCount ?? 0).toLocaleString(),
+    );
   } catch (err) {
     toast(err.message);
   }
@@ -2447,6 +2593,7 @@ function initForms() {
         body: { retentionDays: $("#historyRetentionDays").value },
       });
       toast(`${t("historyTrimmed")}: ${result.deleted}`);
+      await refreshHistoryStats();
     } catch (err) {
       toast(err.message);
     }
