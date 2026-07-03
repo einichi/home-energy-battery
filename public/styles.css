@@ -871,6 +871,13 @@ output {
   animation: progress-sweep 1.2s ease-in-out infinite;
 }
 
+.load-progress .progress-bar i {
+  /* Record loading updates the width many times per second in fast batches; a
+     width transition would lag so far behind that the bar reads near-empty while
+     the count races ahead. Track parsed/total exactly instead. */
+  transition: none;
+}
+
 @keyframes progress-sweep {
   0% {
     transform: translateX(-110%);
