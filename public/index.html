@@ -281,19 +281,21 @@
                   Last year
                 </button>
               </div>
-              <label>
-                <span data-i18n="from">From</span>
-                <input id="graphHistoryStart" type="datetime-local" />
-              </label>
-              <label>
-                <span data-i18n="to">To</span>
-                <input id="graphHistoryEnd" type="datetime-local" />
-              </label>
-              <label id="graphCircuitPickerLabel" class="hidden">
-                <span data-i18n="circuit">Circuit</span>
-                <select id="graphCircuitPicker"></select>
-              </label>
-              <button class="ghost" data-i18n="loadGraphRange">Load Graph</button>
+              <div class="graph-form-controls">
+                <label>
+                  <span data-i18n="from">From</span>
+                  <input id="graphHistoryStart" type="datetime-local" />
+                </label>
+                <label>
+                  <span data-i18n="to">To</span>
+                  <input id="graphHistoryEnd" type="datetime-local" />
+                </label>
+                <label id="graphCircuitPickerLabel" class="graph-circuit-picker hidden">
+                  <span data-i18n="circuit">Circuit</span>
+                  <select id="graphCircuitPicker"></select>
+                </label>
+                <button class="ghost graph-load-button" data-i18n="loadGraphRange">Load Graph</button>
+              </div>
               <div id="graphLoadProgress" class="load-progress hidden" aria-live="polite">
                 <div class="progress-copy">
                   <strong id="graphLoadTitle" data-i18n="loadingGraphData">Loading graph data</strong>
