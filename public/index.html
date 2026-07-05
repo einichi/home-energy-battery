@@ -30,6 +30,7 @@
             <button class="nav-subbutton" data-graph-page="batterySoc" data-i18n="stateOfCharge">State of Charge</button>
             <button class="nav-subbutton" data-graph-page="gridImportPower" data-i18n="gridImport">Grid Import</button>
             <button class="nav-subbutton" data-graph-page="gridExportPower" data-i18n="gridExport">Grid Export</button>
+            <button class="nav-subbutton" data-graph-page="circuits" data-i18n="circuitPower">Circuits</button>
           </div>
         </details>
         <button class="nav-button" data-page="settings" data-i18n="navSettings">
@@ -183,6 +184,11 @@
           </div>
         </section>
 
+        <section class="widget-section hidden" data-circuit-section aria-labelledby="circuitWidgetsTitle">
+          <h1 id="circuitWidgetsTitle" data-i18n="circuitWidgets">Smart Cosmo Circuits</h1>
+          <div id="circuitWidgetGrid" class="widget-grid circuit-grid"></div>
+        </section>
+
         <section class="widget-section" data-widget-section="status" aria-labelledby="statusWidgetsTitle">
           <h1 id="statusWidgetsTitle" data-i18n="statusWidgets">Status & Savings</h1>
           <div class="widget-grid compact">
@@ -282,6 +288,10 @@
               <label>
                 <span data-i18n="to">To</span>
                 <input id="graphHistoryEnd" type="datetime-local" />
+              </label>
+              <label id="graphCircuitPickerLabel" class="hidden">
+                <span data-i18n="circuit">Circuit</span>
+                <select id="graphCircuitPicker"></select>
               </label>
               <button class="ghost" data-i18n="loadGraphRange">Load Graph</button>
               <div id="graphLoadProgress" class="load-progress hidden" aria-live="polite">
@@ -606,7 +616,7 @@
                   />
                 </label>
                 <label>
-                  <span data-i18n="homePowerMeter">Home power meter</span>
+                  <span data-i18n="smartCosmoMeter">Smart Cosmo / home power meter</span>
                   <input
                     id="configMeterHost"
                     inputmode="decimal"
@@ -648,6 +658,17 @@
                 </label>
               </div>
               <button data-i18n="saveAddresses">Save Addresses</button>
+            </form>
+
+            <form id="circuitLabelsForm" class="config-form circuit-label-form">
+              <div class="section-box compact-section-box">
+                <div>
+                  <h2 data-i18n="circuitLabels">Circuit Labels</h2>
+                  <p data-i18n="circuitLabelsHelp">Name Smart Cosmo channels so circuit graphs are easier to read.</p>
+                </div>
+              </div>
+              <div id="circuitLabelControls" class="circuit-label-controls"></div>
+              <button data-i18n="saveCircuitLabels">Save Circuit Labels</button>
             </form>
 
             <div class="discovery-box section-box">

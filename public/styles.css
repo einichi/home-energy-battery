@@ -297,6 +297,14 @@ label {
   min-height: 134px;
 }
 
+.circuit-grid {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.circuit-widget {
+  min-height: 158px;
+}
+
 .widget,
 .panel {
   background: var(--panel);
@@ -436,6 +444,12 @@ label {
   font-weight: 700;
 }
 
+.empty-state {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .level-track,
 .power-track {
   position: relative;
@@ -503,6 +517,23 @@ label {
   gap: 16px;
   align-content: start;
   min-width: 0;
+}
+
+.circuit-label-form {
+  border-top: 1px solid var(--border);
+  margin-top: 14px;
+  padding-top: 14px;
+}
+
+.circuit-label-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.circuit-label-row {
+  display: grid;
+  gap: 6px;
 }
 
 .primary-column {
@@ -1050,6 +1081,10 @@ td code {
 
   .settings-column {
     grid-column: 1;
+  }
+
+  .circuit-label-controls {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -31,6 +31,7 @@ const EPC = {
   METER_CUMULATIVE_UNIT: 0xc2,
   METER_INSTANT_POWER_W: 0xc6,
   METER_INSTANT_POWER_LIST: 0xb7,
+  METER_CUMULATIVE_POWER_LIST: 0xb3,
 };
 
 const ESV_SET_RES = "Set_Res";
@@ -314,6 +315,29 @@ function decodeInstantPowerList(raw) {
       value,
       unit: "W",
       human: value === null ? "no data" : `${value} W`,
+    });
+  }
+  return { start, range, channels };
+}
+
+function decodeCumulativePowerList(raw, unit) {
+  // Per-circuit cumulative energy uses the same start/range header as the
+  // instantaneous list, followed by one 32-bit counter per channel.
+  if (!raw || raw.length < 6 || (raw.length - 2) % 4 !== 0) return null;
+  const start = raw[0] === 0xfd ? null : raw[0];
+  const range = raw[1] === 0xfd ? null : raw[1];
+  const channels = [];
+  for (let offset = 2; offset < raw.length; offset += 4) {
+    const count = raw.readUInt32BE(offset);
+    const value = count === 0xfffffffe || unit === null || unit === undefined
+      ? null
+      : count * unit;
+    channels.push({
+      channel: start === null ? null : start + channels.length,
+      count: count === 0xfffffffe ? null : count,
+      value,
+      unit: "kWh",
+      human: value === null ? "no data" : `${value.toFixed(2)} kWh`,
     });
   }
   return { start, range, channels };
@@ -821,9 +845,11 @@ async function cmdMeterStatus(opts) {
     const unitRaw = await read(EPC.METER_CUMULATIVE_UNIT);
     const instantRaw = await read(EPC.METER_INSTANT_POWER_W);
     const channelsRaw = await read(EPC.METER_INSTANT_POWER_LIST);
+    const cumulativeChannelsRaw = await read(EPC.METER_CUMULATIVE_POWER_LIST);
     const unit = cumulativeUnit(unitRaw);
     const netGridWatts = instantRaw && instantRaw.length === 4 ? instantRaw.readInt32BE(0) : null;
     const channelPower = decodeInstantPowerList(channelsRaw);
+    const channelEnergy = decodeCumulativePowerList(cumulativeChannelsRaw, unit);
     const houseDemandWatts = sumInstantPowerChannels(channelPower);
 
     return {
@@ -899,6 +925,14 @@ async function cmdMeterStatus(opts) {
         name: "channel_instant_power",
         raw: rawHex(channelsRaw),
         decoded: channelPower,
+      },
+      channel_energy: {
+        host,
+        eoj: eojText,
+        epc: "0xB3",
+        name: "channel_cumulative_energy",
+        raw: rawHex(cumulativeChannelsRaw),
+        decoded: channelEnergy,
       },
     };
   });

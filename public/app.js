@@ -26,6 +26,7 @@ const state = {
   historyMode: false,
   historyHorizonMs: null,
   activeGraph: "solarPower",
+  activeCircuit: "1",
   graphPoints: [],
   graphHover: null,
   graphHistoryHorizonMs: POWER_TREND_MS,
@@ -43,6 +44,8 @@ const TREND_LABEL_KEYS = {
   gridExportPower: "gridExport",
   gridImportPower: "gridImport",
 };
+
+const CIRCUIT_GRAPH_PREFIX = "circuit:";
 
 const DASHBOARD_WIDGET_DEFAULTS = [
   { id: "solarPower", group: "trends", labelKey: "solarGeneration", visible: true, priority: 10 },
@@ -152,6 +155,15 @@ const I18N = {
     lastYear: "Last year",
     trendWidgets: "Power Trends",
     statusWidgets: "Status & Savings",
+    circuitWidgets: "Smart Cosmo Circuits",
+    circuitPower: "Circuits",
+    circuit: "Circuit",
+    circuitLabels: "Circuit Labels",
+    circuitLabelsHelp: "Name Smart Cosmo channels so circuit graphs are easier to read.",
+    saveCircuitLabels: "Save Circuit Labels",
+    circuitLabelsSaved: "Circuit labels saved",
+    noCircuitData: "No circuit data available yet.",
+    smartCosmoMeter: "Smart Cosmo / home power meter",
     batteryPower: "Battery Power",
     stateOfCharge: "State of Charge",
     batteryWorkingStatus: "Battery Working Status",
@@ -389,6 +401,15 @@ const I18N = {
     lastYear: "直近1年",
     trendWidgets: "電力トレンド",
     statusWidgets: "状態と節約額",
+    circuitWidgets: "スマートコスモ回路",
+    circuitPower: "回路",
+    circuit: "回路",
+    circuitLabels: "回路ラベル",
+    circuitLabelsHelp: "スマートコスモのチャンネル名を設定して、回路グラフを読みやすくします。",
+    saveCircuitLabels: "回路ラベルを保存",
+    circuitLabelsSaved: "回路ラベルを保存しました",
+    noCircuitData: "回路データはまだありません。",
+    smartCosmoMeter: "スマートコスモ / 家庭内電力メーター",
     batteryPower: "蓄電池の電力",
     stateOfCharge: "蓄電池残量",
     batteryWorkingStatus: "蓄電池の動作状態",
@@ -761,7 +782,73 @@ function resetTrendHistory() {
 }
 
 function trendLabel(name) {
+  if (isCircuitGraph(name)) {
+    return circuitLabel(circuitGraphChannel(name));
+  }
   return t(TREND_LABEL_KEYS[name] ?? name);
+}
+
+function isCircuitGraph(name) {
+  return String(name ?? "").startsWith(CIRCUIT_GRAPH_PREFIX);
+}
+
+function circuitGraphName(channel) {
+  return `${CIRCUIT_GRAPH_PREFIX}${channel}`;
+}
+
+function circuitGraphChannel(name) {
+  return String(name ?? "").slice(CIRCUIT_GRAPH_PREFIX.length);
+}
+
+function circuitLabel(channel) {
+  const id = String(channel);
+  const label = String(state.config?.circuitLabels?.[id] ?? "").trim();
+  return label || `${t("circuit")} ${id}`;
+}
+
+function circuitIdsFromStatus(data = state.status) {
+  const ids = new Set();
+  for (const channel of data?.meter?.channel_power?.decoded?.channels ?? []) {
+    if (Number.isInteger(Number(channel.channel))) ids.add(String(channel.channel));
+  }
+  for (const channel of data?.meter?.channel_energy?.decoded?.channels ?? []) {
+    if (Number.isInteger(Number(channel.channel))) ids.add(String(channel.channel));
+  }
+  for (const circuit of data?.savings?.circuits ?? []) ids.add(String(circuit.channel));
+  return [...ids].filter((id) => Number.isInteger(Number(id))).sort((a, b) => Number(a) - Number(b));
+}
+
+function circuitWattsFromStatus(data = state.status) {
+  const out = {};
+  for (const channel of data?.meter?.channel_power?.decoded?.channels ?? []) {
+    if (Number.isInteger(Number(channel.channel))) {
+      out[String(channel.channel)] = Number.isFinite(Number(channel.value)) ? Number(channel.value) : null;
+    }
+  }
+  return out;
+}
+
+function circuitSummaryMap(summary = {}) {
+  const out = {};
+  for (const circuit of summary.circuits ?? []) {
+    out[String(circuit.channel)] = circuit;
+  }
+  return out;
+}
+
+function ensureCircuitTrendConfig(channel) {
+  const id = String(channel);
+  const name = circuitGraphName(id);
+  if (!TREND_CONFIG[name]) {
+    TREND_CONFIG[name] = {
+      canvas: `#circuitTrend-${id}`,
+      horizonMs: POWER_TREND_MS,
+      color: "#2563eb",
+      fill: "rgba(37, 99, 235, 0.12)",
+      includeZero: true,
+    };
+  }
+  return TREND_CONFIG[name];
 }
 
 function setLiveModeButton() {
@@ -776,6 +863,12 @@ function historyParams(start, end) {
 }
 
 function sampleValueForTrend(name, sample) {
+  if (isCircuitGraph(name)) {
+    const raw = sample.circuitPowerW?.[circuitGraphChannel(name)];
+    if (raw === null || raw === undefined || raw === "") return null;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : null;
+  }
   const raw = {
     batteryPower: sample.batteryPowerW,
     batterySoc: sample.stateOfChargePercent,
@@ -792,6 +885,9 @@ function sampleValueForTrend(name, sample) {
 
 function pushSampleToTrends(sample, options = {}) {
   const time = new Date(sample.timestamp).getTime();
+  for (const channel of Object.keys(sample.circuitPowerW ?? {})) {
+    ensureCircuitTrendConfig(channel);
+  }
   for (const name of Object.keys(TREND_CONFIG)) {
     pushTrend(name, sampleValueForTrend(name, sample), time, options);
   }
@@ -1673,6 +1769,8 @@ function applyGraphMenuOrder(widgets) {
       const button = submenu.querySelector(`[data-graph-page="${widget.id}"]`);
       if (button) submenu.append(button);
     });
+  const circuitButton = submenu.querySelector('[data-graph-page="circuits"]');
+  if (circuitButton) submenu.append(circuitButton);
 }
 
 function cacheDashboardLayout(config) {
@@ -1767,12 +1865,46 @@ function collectDashboardWidgetControls() {
   });
 }
 
+function circuitLabelIds(config = state.config ?? {}, status = state.status) {
+  const ids = new Set([...Object.keys(config.circuitLabels ?? {}), ...circuitIdsFromStatus(status)]);
+  return [...ids].filter((id) => Number.isInteger(Number(id))).sort((a, b) => Number(a) - Number(b));
+}
+
+function renderCircuitLabelControls(config = state.config ?? {}) {
+  const root = $("#circuitLabelControls");
+  if (!root) return;
+  const ids = circuitLabelIds(config);
+  root.innerHTML = ids.length
+    ? ""
+    : `<p class="empty-state">${t("noCircuitData")}</p>`;
+  for (const id of ids) {
+    const row = document.createElement("label");
+    row.className = "circuit-label-row";
+    row.innerHTML = `
+      <span>${t("circuit")} ${id}</span>
+      <input data-circuit-label="${id}" maxlength="80" />
+    `;
+    row.querySelector("input").value = config.circuitLabels?.[id] ?? "";
+    root.append(row);
+  }
+}
+
+function collectCircuitLabels() {
+  const labels = {};
+  $$("[data-circuit-label]").forEach((input) => {
+    const value = input.value.trim();
+    if (value) labels[input.dataset.circuitLabel] = value;
+  });
+  return labels;
+}
+
 function updateConfigControls(config) {
   state.config = config;
   setLanguage(config.language ?? "en");
   applyDashboardWidgetLayout(config);
   cacheDashboardLayout(config);
   renderDashboardWidgetControls(config);
+  renderCircuitLabelControls(config);
   applyFeatureVisibility(config);
   $("#updateIntervalSeconds").value = config.updateIntervalSeconds ?? 15;
   $("#configBatteryHost").value = config.batteryHost ?? "";
@@ -1841,6 +1973,69 @@ function strongestFuelCellWatts(fuelCells) {
     .map((cell) => Number(cell.instant_power?.value))
     .filter(Number.isFinite);
   return values.length ? Math.max(...values) : null;
+}
+
+function renderCircuitWidgets(data) {
+  const grid = $("#circuitWidgetGrid");
+  const section = $("[data-circuit-section]");
+  if (!grid || !section) return;
+  const ids = circuitIdsFromStatus(data);
+  const wattsByChannel = circuitWattsFromStatus(data);
+  const summaries = circuitSummaryMap(data.savings ?? {});
+  section.classList.toggle("hidden", ids.length === 0);
+  grid.innerHTML = ids.length
+    ? ""
+    : `<p class="empty-state">${t("noCircuitData")}</p>`;
+
+  for (const id of ids) {
+    const graphName = circuitGraphName(id);
+    ensureCircuitTrendConfig(id);
+    const article = document.createElement("article");
+    article.className = "widget circuit-widget";
+    article.dataset.circuitChannel = id;
+    const wattsValue = wattsByChannel[id];
+    const summary = summaries[id];
+    const headline = state.historyMode
+      ? energyKwh(Number(summary?.totalKwh ?? 0))
+      : Number.isFinite(wattsValue)
+        ? `${wattsValue} W`
+        : "-- W";
+    const note = state.historyMode
+      ? t("rangeTotal")
+      : summary?.totalKwh
+        ? `${energyKwh(Number(summary.totalKwh))}`
+        : "";
+    article.innerHTML = `
+      <span></span>
+      <strong>${headline}</strong>
+      <small class="widget-note">${note}</small>
+      <canvas class="trend" id="circuitTrend-${id}" width="260" height="78"></canvas>
+    `;
+    article.querySelector("span").textContent = circuitLabel(id);
+    grid.append(article);
+    const canvas = article.querySelector("canvas");
+    canvas.addEventListener("pointermove", (event) => handleTrendPointer(graphName, event));
+    canvas.addEventListener("pointerleave", () => clearTrendPointer(graphName));
+  }
+  updateCircuitGraphPicker(ids);
+  drawAllTrends();
+}
+
+function updateCircuitGraphPicker(ids = circuitIdsFromStatus()) {
+  const label = $("#graphCircuitPickerLabel");
+  const picker = $("#graphCircuitPicker");
+  if (!label || !picker) return;
+  label.classList.toggle("hidden", !isCircuitGraph(state.activeGraph));
+  if (!ids.length) return;
+  const selected = circuitGraphChannel(state.activeGraph) || state.activeCircuit || ids[0];
+  picker.innerHTML = "";
+  for (const id of ids) {
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = circuitLabel(id);
+    picker.append(option);
+  }
+  picker.value = ids.includes(selected) ? selected : ids[0];
 }
 
 function renderDashboard(data, options = {}) {
@@ -1965,6 +2160,8 @@ function renderDashboard(data, options = {}) {
   setText("#powerImportedPeriod", summaryPeriod);
   setText("#powerExportedPeriod", summaryPeriod);
 
+  renderCircuitWidgets(data);
+  if (state.currentPage === "settings") renderCircuitLabelControls();
   applyTrendHeadlines(data);
 
   if (recordTrend) {
@@ -1975,6 +2172,11 @@ function renderDashboard(data, options = {}) {
     pushTrend("gridExportPower", Number(gridExportWatts), now);
     pushTrend("gridImportPower", Number(gridImportWatts), now);
     pushTrend("fuelCellPower", Number(fuelCellWatts), now);
+    for (const [channel, wattsValue] of Object.entries(circuitWattsFromStatus(data))) {
+      ensureCircuitTrendConfig(channel);
+      pushTrend(circuitGraphName(channel), Number(wattsValue), now, { draw: false });
+    }
+    drawAllTrends();
   } else {
     drawAllTrends();
   }
@@ -2068,6 +2270,15 @@ async function renderHistory(history) {
       house_demand_power: { value: latest.houseDemandW, unit: "W" },
       grid_import_power: { value: latest.gridImportW, unit: "W" },
       grid_export_power: { value: latest.gridExportW, unit: "W" },
+      channel_power: {
+        decoded: {
+          channels: Object.entries(latest.circuitPowerW ?? {}).map(([channel, value]) => ({
+            channel: Number(channel),
+            value,
+            unit: "W",
+          })),
+        },
+      },
     },
   };
   renderDashboard(syntheticStatus, { recordTrend: false });
@@ -2087,8 +2298,16 @@ async function loadGraphHistory() {
 }
 
 async function openGraphPage(name) {
-  if (!TREND_CONFIG[name]) return;
-  state.activeGraph = name;
+  let graphName = name;
+  if (name === "circuits") {
+    const ids = circuitIdsFromStatus();
+    graphName = circuitGraphName(state.activeCircuit || ids[0] || "1");
+    ensureCircuitTrendConfig(circuitGraphChannel(graphName));
+  }
+  if (!TREND_CONFIG[graphName]) return;
+  state.activeGraph = graphName;
+  if (isCircuitGraph(graphName)) state.activeCircuit = circuitGraphChannel(graphName);
+  updateCircuitGraphPicker(circuitIdsFromStatus());
   setPage("graph");
   if (!$("#graphHistoryStart").value || !$("#graphHistoryEnd").value) {
     setGraphHistoryRange(24 * 60 * 60_000);
@@ -2244,7 +2463,9 @@ function setPage(page) {
   $$(".nav-subbutton").forEach((button) =>
     button.classList.toggle(
       "active",
-      page === "graph" && button.dataset.graphPage === state.activeGraph,
+      page === "graph" &&
+        (button.dataset.graphPage === state.activeGraph ||
+          (button.dataset.graphPage === "circuits" && isCircuitGraph(state.activeGraph))),
     ),
   );
   $$("[data-dashboard-only]").forEach((el) =>
@@ -2256,6 +2477,7 @@ function setPage(page) {
   } else if (page === "graph") {
     $("#pageEyebrow").textContent = t("graphAnalysis");
     $("#pageTitle").textContent = trendLabel(state.activeGraph);
+    updateCircuitGraphPicker(circuitIdsFromStatus());
     drawGraphAnalysis();
   } else if (page === "settings") {
     $("#pageEyebrow").textContent = t("navSettings");
@@ -2329,8 +2551,10 @@ async function initialLoad() {
     setServiceState("readFailed");
     toast(statusResult.reason.message);
   }
-  if (configResult.status === "fulfilled")
+  if (configResult.status === "fulfilled") {
     updateConfigControls(configResult.value);
+    if (state.status) renderCircuitWidgets(state.status);
+  }
   scheduleNextRefresh();
 }
 
@@ -2436,6 +2660,14 @@ function initForms() {
       toast(err.message);
     }
   });
+  $("#graphCircuitPicker")?.addEventListener("change", async (event) => {
+    const channel = event.target.value;
+    state.activeCircuit = channel;
+    state.activeGraph = circuitGraphName(channel);
+    ensureCircuitTrendConfig(channel);
+    setPage("graph");
+    await loadGraphHistory().catch((err) => toast(err.message));
+  });
   $("#liveBtn").addEventListener("click", async () => {
     state.historyMode = false;
     state.historyHorizonMs = null;
@@ -2499,6 +2731,7 @@ function initForms() {
       historyRetentionDays: state.config?.historyRetentionDays,
       automation: state.config?.automation,
       dashboardWidgets: state.config?.dashboardWidgets,
+      circuitLabels: state.config?.circuitLabels,
       language: state.language,
     };
     try {
@@ -2506,6 +2739,23 @@ function initForms() {
       updateConfigControls(config);
       toast(t("savedAddresses"));
       await refreshStatus();
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+  $("#circuitLabelsForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const config = await api("/api/config", {
+        method: "PUT",
+        body: {
+          circuitLabels: collectCircuitLabels(),
+          dashboardWidgets: state.config?.dashboardWidgets,
+        },
+      });
+      updateConfigControls(config);
+      renderCircuitWidgets(state.status ?? {});
+      toast(t("circuitLabelsSaved"));
     } catch (err) {
       toast(err.message);
     }
@@ -3004,7 +3254,8 @@ function localizeRole(role) {
     {
       Battery: t("battery"),
       "Solar generation": t("solarGeneration"),
-      "Home power meter": t("homePowerMeter"),
+      "Home power meter": t("smartCosmoMeter"),
+      "Smart Cosmo / home power meter": t("smartCosmoMeter"),
       "Utility meter": t("utilityMeter"),
       "Ene-Farm": t("fuelCell"),
       "Water heater": state.language === "ja" ? "給湯器" : "Water heater",

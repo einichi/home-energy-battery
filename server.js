@@ -48,6 +48,7 @@ const DEFAULT_CONFIG = {
   smartMeterHost: "",
   meterHost: "192.0.2.20",
   meterEoj: "0x028701",
+  circuitLabels: {},
   solarHost: "192.0.2.10",
   solarEnabled: true,
   fuelCellHosts: ["192.0.2.30"],
@@ -159,6 +160,102 @@ function numericMetric(item) {
 function strongestFuelCellWatts(fuelCells = []) {
   const values = fuelCells.map((cell) => numericMetric(cell.instant_power)).filter((value) => value !== null);
   return values.length ? Math.max(...values) : null;
+}
+
+function circuitLabelFor(channel, labels = {}) {
+  const label = String(labels?.[channel] ?? "").trim();
+  return label || `Circuit ${channel}`;
+}
+
+function normalizeCircuitLabels(value = {}) {
+  const out = {};
+  const entries = Array.isArray(value)
+    ? value.map((item) => [item?.channel, item?.label])
+    : Object.entries(value ?? {});
+  for (const [channelRaw, labelRaw] of entries) {
+    const channel = Number(channelRaw);
+    const label = String(labelRaw ?? "").trim();
+    if (!Number.isInteger(channel) || channel < 1 || channel > 252 || !label) continue;
+    out[String(channel)] = label.slice(0, 80);
+  }
+  return out;
+}
+
+function circuitChannelMap(channels = []) {
+  const out = {};
+  for (const channel of channels) {
+    const id = Number(channel?.channel);
+    const value = Number(channel?.value);
+    if (!Number.isInteger(id) || id < 1 || id > 252) continue;
+    out[String(id)] = Number.isFinite(value) ? value : null;
+  }
+  return out;
+}
+
+function circuitCumulativeMap(channels = []) {
+  const out = {};
+  for (const channel of channels) {
+    const id = Number(channel?.channel);
+    const value = Number(channel?.value);
+    if (!Number.isInteger(id) || id < 1 || id > 252) continue;
+    out[String(id)] = Number.isFinite(value) ? value : null;
+  }
+  return out;
+}
+
+function circuitEnergyDeltaKwh(current, previous) {
+  if (!previous || current === null || current === undefined) return null;
+  const now = Number(current);
+  const before = Number(previous);
+  if (!Number.isFinite(now) || !Number.isFinite(before)) return null;
+  const delta = now - before;
+  return delta >= 0 ? delta : null;
+}
+
+function circuitKwhForSample(sample, channel, previousSample) {
+  const id = String(channel);
+  const direct = Number(sample.circuitEnergyKwh?.[id]);
+  if (Number.isFinite(direct)) return direct;
+  const cumulative = circuitEnergyDeltaKwh(
+    sample.circuitCumulativeKwh?.[id],
+    previousSample?.circuitCumulativeKwh?.[id],
+  );
+  if (cumulative !== null) return cumulative;
+  if (!previousSample?.timestamp || !sample?.timestamp) return 0;
+  const watts = Number(sample.circuitPowerW?.[id]);
+  if (!Number.isFinite(watts)) return 0;
+  const deltaHours = Math.max(0, Math.min(1, (new Date(sample.timestamp).getTime() - new Date(previousSample.timestamp).getTime()) / 3_600_000));
+  return deltaHours * (Math.max(0, watts) / 1000);
+}
+
+function summarizeCircuits(samples, config = DEFAULT_CONFIG) {
+  const ids = new Set();
+  for (const sample of samples) {
+    for (const key of Object.keys(sample.circuitPowerW ?? {})) ids.add(key);
+    for (const key of Object.keys(sample.circuitCumulativeKwh ?? {})) ids.add(key);
+    for (const key of Object.keys(sample.circuitEnergyKwh ?? {})) ids.add(key);
+  }
+  return [...ids]
+    .map((id) => {
+      const channel = Number(id);
+      const totalKwh = samples.reduce(
+        (sum, sample, index) => sum + circuitKwhForSample(sample, id, samples[index - 1]),
+        0,
+      );
+      const latestWatts = [...samples]
+        .reverse()
+        .map((sample) => sample.circuitPowerW?.[id])
+        .find((value) => value !== null && value !== undefined);
+      return {
+        channel,
+        id,
+        label: circuitLabelFor(id, config.circuitLabels),
+        totalKwh,
+        latestWatts: Number.isFinite(Number(latestWatts)) ? Number(latestWatts) : null,
+      };
+    })
+    .filter((item) => Number.isInteger(item.channel))
+    .sort((a, b) => a.channel - b.channel);
 }
 
 function jsonSnippet(text, maxLength = 4000) {
@@ -355,6 +452,19 @@ function sampleFromStatus(status, config, previousSample) {
   const gridImportW = numericMetric(status.meter?.grid_import_power);
   const gridExportW = numericMetric(status.meter?.grid_export_power);
   const stateOfChargePercent = numericMetric(status.energy?.battery?.remaining_percent);
+  const circuitPowerW = circuitChannelMap(status.meter?.channel_power?.decoded?.channels);
+  const circuitCumulativeKwh = circuitCumulativeMap(status.meter?.channel_energy?.decoded?.channels);
+  const circuitEnergyKwh = {};
+  for (const id of Object.keys({ ...circuitPowerW, ...circuitCumulativeKwh })) {
+    const cumulative = circuitEnergyDeltaKwh(circuitCumulativeKwh[id], previousSample?.circuitCumulativeKwh?.[id]);
+    if (cumulative !== null) {
+      circuitEnergyKwh[id] = cumulative;
+    } else if (previousSample?.timestamp) {
+      const deltaHours = Math.max(0, Math.min(1, (new Date(timestamp).getTime() - new Date(previousSample.timestamp).getTime()) / 3_600_000));
+      const watts = Number(circuitPowerW[id]);
+      if (Number.isFinite(watts)) circuitEnergyKwh[id] = deltaHours * (Math.max(0, watts) / 1000);
+    }
+  }
   const rateBand = rateForTimestamp(config.rateBands, timestamp, config.standardRateYenPerKwh);
   const activeRate = rateBand.yenPerKwh;
   const highestRate = maxDailyRate(config.rateBands, config.standardRateYenPerKwh);
@@ -377,6 +487,9 @@ function sampleFromStatus(status, config, previousSample) {
     fuelCellPowerW,
     gridExportW,
     gridImportW,
+    circuitPowerW,
+    circuitCumulativeKwh,
+    circuitEnergyKwh,
     solarGenerationKwh,
     gridImportKwh,
     gridExportKwh,
@@ -435,6 +548,7 @@ function summarizeSamples(samples, config = DEFAULT_CONFIG) {
     (sum, sample, index) => sum + samplePowerKwh(sample, "fuelCellKwh", "fuelCellPowerW", samples[index - 1]),
     0,
   );
+  const circuits = summarizeCircuits(samples, config);
   const battery = samples.reduce(
     (acc, sample, index) => {
       const charged = samplePowerKwh(sample, "batteryChargeKwh", "batteryPowerW", samples[index - 1]);
@@ -468,6 +582,8 @@ function summarizeSamples(samples, config = DEFAULT_CONFIG) {
     gridExportKwh,
     houseDemandKwh,
     fuelCellKwh,
+    circuits,
+    circuitTotalKwh: circuits.reduce((sum, circuit) => sum + Number(circuit.totalKwh ?? 0), 0),
     batteryChargedKwh: battery.chargedKwh,
     batteryDischargedKwh: battery.dischargedKwh,
     batteryNetKwh: battery.chargedKwh - battery.dischargedKwh,
@@ -683,6 +799,7 @@ function cleanConfig(input = {}) {
     smartMeterHost: String(input.smartMeterHost ?? DEFAULT_CONFIG.smartMeterHost).trim(),
     meterHost: String(input.meterHost ?? DEFAULT_CONFIG.meterHost).trim(),
     meterEoj: String(input.meterEoj ?? DEFAULT_CONFIG.meterEoj).trim() || DEFAULT_CONFIG.meterEoj,
+    circuitLabels: normalizeCircuitLabels(input.circuitLabels ?? DEFAULT_CONFIG.circuitLabels),
     solarHost: String(input.solarHost ?? input.batteryHost ?? DEFAULT_CONFIG.solarHost).trim(),
     solarEnabled: configBool(input.solarEnabled, DEFAULT_CONFIG.solarEnabled),
     fuelCellHosts: normalizeHostList(input.fuelCellHosts ?? DEFAULT_CONFIG.fuelCellHosts),
@@ -1453,7 +1570,7 @@ function inferDevice(instances) {
   const roles = [];
   if (set.has("027d")) roles.push("Battery");
   if (set.has("0279")) roles.push("Solar generation");
-  if (set.has("0287")) roles.push("Home power meter");
+  if (set.has("0287")) roles.push("Smart Cosmo / home power meter");
   if (set.has("0288")) roles.push("Utility meter");
   if (set.has("027c")) roles.push("Ene-Farm");
   if (set.has("0272")) roles.push("Water heater");
@@ -1924,6 +2041,7 @@ export {
   cleanAutomationRuleConfig,
   cleanConfig,
   evaluateAutomationRule,
+  normalizeCircuitLabels,
   normalizeDashboardWidgets,
   normalizeRateBands,
   normalizeSubnets,
@@ -1932,6 +2050,7 @@ export {
   recoverConcatenatedJsonValue,
   sampleFromStatus,
   summarizeSamples,
+  summarizeCircuits,
 };
 
 async function main() {

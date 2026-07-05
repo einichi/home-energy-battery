@@ -5,6 +5,7 @@ import {
   cleanAutomationRuleConfig,
   cleanConfig,
   evaluateAutomationRule,
+  normalizeCircuitLabels,
   normalizeDashboardWidgets,
   normalizeRateBands,
   normalizeSubnets,
@@ -48,6 +49,7 @@ assert.equal(simple.rateBands.length, 1);
 assert.equal(simple.historyRetentionDays, 1095);
 assert.equal(simple.updateIntervalSeconds, 15);
 assert.equal(simple.co2TonnesPerKwh, 0.000423);
+assert.deepEqual(simple.circuitLabels, {});
 assert.equal(rateForTimestamp(simple.rateBands, "2026-05-31T23:30:00+09:00").yenPerKwh, 42);
 assert.equal(simple.dashboardWidgets.length, 17);
 assert.equal(simple.dashboardWidgets[0].id, "solarPower");
@@ -55,6 +57,8 @@ assert.equal(simple.dashboardWidgets[0].id, "solarPower");
 assert.equal(cleanConfig({ updateIntervalSeconds: 2 }).updateIntervalSeconds, 5);
 assert.equal(cleanConfig({ updateIntervalSeconds: 30 }).updateIntervalSeconds, 30);
 assert.equal(cleanConfig({ co2TonnesPerKwh: 0.0005 }).co2TonnesPerKwh, 0.0005);
+assert.deepEqual(normalizeCircuitLabels({ 1: "Kitchen", 2: "", bad: "Nope", 253: "Too high" }), { 1: "Kitchen" });
+assert.deepEqual(cleanConfig({ circuitLabels: [{ channel: 6, label: "EV charger" }] }).circuitLabels, { 6: "EV charger" });
 
 const normalizedWidgets = normalizeDashboardWidgets([
   { id: "solarPower", visible: false, priority: 90 },
@@ -125,13 +129,36 @@ const sample = sampleFromStatus({
     house_demand_power: { value: 1800 },
     grid_import_power: { value: 200 },
     grid_export_power: { value: 100 },
+    channel_power: {
+      decoded: {
+        channels: [
+          { channel: 1, value: 120 },
+          { channel: 2, value: 80 },
+        ],
+      },
+    },
+    channel_energy: {
+      decoded: {
+        channels: [
+          { channel: 1, value: 10.5 },
+          { channel: 2, value: 20.25 },
+        ],
+      },
+    },
   },
-}, { ...migrated, rateBands: bands }, { timestamp: "2026-05-31T11:45:00+09:00" });
+}, { ...migrated, rateBands: bands }, {
+  timestamp: "2026-05-31T11:45:00+09:00",
+  circuitCumulativeKwh: { 1: 10, 2: 20 },
+});
 assert.equal(sample.rateYenPerKwh, 40);
 assert.equal(sample.solarSavingYen, 24);
 assert.equal(sample.solarGenerationKwh, 0.6);
 assert.equal(sample.gridImportKwh, 0.1);
 assert.equal(sample.gridExportKwh, 0.05);
+assert.equal(sample.circuitPowerW["1"], 120);
+assert.equal(sample.circuitCumulativeKwh["2"], 20.25);
+assert.equal(sample.circuitEnergyKwh["1"], 0.5);
+assert.equal(sample.circuitEnergyKwh["2"], 0.25);
 
 const unavailableSample = sampleFromStatus({
   read_at: "2026-05-31T12:30:00+09:00",
@@ -143,15 +170,19 @@ assert.equal(unavailableSample.stateOfChargePercent, null);
 assert.equal(unavailableSample.gridImportW, null);
 
 const summary = summarizeSamples([
-  { solarSavingYen: 1, offPeakSavingYen: 2, solarGenerationKwh: 0.25, gridImportKwh: 0.4, gridExportKwh: 0.1 },
-  { solarSavingYen: 3, offPeakSavingYen: 4, solarGenerationKwh: 0.75, gridImportKwh: 0.6, gridExportKwh: 0.2 },
-], { co2TonnesPerKwh: 0.000423 });
+  { solarSavingYen: 1, offPeakSavingYen: 2, solarGenerationKwh: 0.25, gridImportKwh: 0.4, gridExportKwh: 0.1, circuitEnergyKwh: { 1: 0.2 } },
+  { solarSavingYen: 3, offPeakSavingYen: 4, solarGenerationKwh: 0.75, gridImportKwh: 0.6, gridExportKwh: 0.2, circuitEnergyKwh: { 1: 0.3, 2: 0.1 }, circuitPowerW: { 2: 50 } },
+], { co2TonnesPerKwh: 0.000423, circuitLabels: { 1: "Kitchen" } });
 assert.equal(summary.solarSavingYen, 4);
 assert.equal(summary.offPeakSavingYen, 6);
 assert.equal(summary.solarGenerationKwh, 1);
 assert.equal(summary.co2SavingKg, 0.423);
 assert.equal(summary.gridImportKwh, 1);
 assert.ok(Math.abs(summary.gridExportKwh - 0.3) < 0.000001);
+assert.equal(summary.circuits.find((item) => item.channel === 1).label, "Kitchen");
+assert.equal(summary.circuits.find((item) => item.channel === 1).totalKwh, 0.5);
+assert.equal(summary.circuits.find((item) => item.channel === 2).totalKwh, 0.1);
+assert.equal(summary.circuitTotalKwh, 0.6);
 
 const legacyPowerSummary = summarizeSamples([
   { timestamp: "2026-05-31T00:00:00.000Z", gridImportW: 1000, gridExportW: 500 },
