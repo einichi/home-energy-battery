@@ -67,6 +67,20 @@ const DASHBOARD_WIDGET_DEFAULTS = [
   { id: "powerExported", group: "status", labelKey: "powerExported", visible: true, priority: 100 },
 ];
 
+const DASHBOARD_WIDGET_FEATURES = {
+  solarPower: "solar",
+  fuelCellPower: "fuel-cell",
+  houseDemandPower: "smart-cosmo",
+  gridImportPower: "smart-cosmo",
+  gridExportPower: "smart-cosmo",
+  fuelCellStatus: "fuel-cell",
+  solarSavings: "solar",
+  co2Savings: "solar",
+  offPeakSavings: "off-peak-savings",
+  powerImported: "smart-cosmo",
+  powerExported: "smart-cosmo",
+};
+
 const TREND_CONFIG = {
   // Each graph declares its own horizon and scaling preferences. Power readings
   // are short-lived, while state of charge changes slowly and gets a longer view.
@@ -164,6 +178,7 @@ const I18N = {
     circuitLabelsSaved: "Circuit labels saved",
     noCircuitData: "No circuit data available yet.",
     smartCosmoMeter: "Smart Cosmo / home power meter",
+    smartCosmoEnabled: "Show Smart Cosmo / home power meter",
     batteryPower: "Battery Power",
     stateOfCharge: "State of Charge",
     batteryWorkingStatus: "Battery Working Status",
@@ -410,6 +425,7 @@ const I18N = {
     circuitLabelsSaved: "回路ラベルを保存しました",
     noCircuitData: "回路データはまだありません。",
     smartCosmoMeter: "スマートコスモ / 家庭内電力メーター",
+    smartCosmoEnabled: "スマートコスモ / 家庭内電力メーターを表示",
     batteryPower: "蓄電池の電力",
     stateOfCharge: "蓄電池残量",
     batteryWorkingStatus: "蓄電池の動作状態",
@@ -1821,6 +1837,11 @@ function renderDashboardWidgetControls(config = state.config ?? {}) {
         const row = document.createElement("div");
         row.className = "dashboard-widget-row";
         row.dataset.widgetId = widget.id;
+        const feature = DASHBOARD_WIDGET_FEATURES[widget.id];
+        if (feature) {
+          row.dataset.feature = feature;
+          row.classList.toggle("hidden", !featureEnabled(config, feature));
+        }
 
         const visibleLabel = document.createElement("label");
         visibleLabel.className = "check-row";
@@ -1870,22 +1891,52 @@ function circuitLabelIds(config = state.config ?? {}, status = state.status) {
   return [...ids].filter((id) => Number.isInteger(Number(id))).sort((a, b) => Number(a) - Number(b));
 }
 
-function renderCircuitLabelControls(config = state.config ?? {}) {
+function circuitLabelsAreBeingEdited() {
+  const form = $("#circuitLabelsForm");
+  return form?.dataset.dirty === "true" || document.activeElement?.matches("[data-circuit-label]");
+}
+
+function renderCircuitLabelControls(config = state.config ?? {}, options = {}) {
   const root = $("#circuitLabelControls");
   if (!root) return;
-  const ids = circuitLabelIds(config);
-  root.innerHTML = ids.length
+  const preserveExisting = options.preserveExisting === true;
+  const existingValues = {};
+  $$("[data-circuit-label]").forEach((input) => {
+    existingValues[input.dataset.circuitLabel] = input.value;
+  });
+  const activeInput = document.activeElement?.matches("[data-circuit-label]")
+    ? document.activeElement
+    : null;
+  const activeId = activeInput?.dataset.circuitLabel;
+  const activeSelection = activeInput
+    ? { start: activeInput.selectionStart, end: activeInput.selectionEnd }
+    : null;
+  const ids = new Set(circuitLabelIds(config));
+  if (preserveExisting) {
+    for (const id of Object.keys(existingValues)) ids.add(id);
+  }
+  const sortedIds = [...ids].filter((id) => Number.isInteger(Number(id))).sort((a, b) => Number(a) - Number(b));
+  root.innerHTML = sortedIds.length
     ? ""
     : `<p class="empty-state">${t("noCircuitData")}</p>`;
-  for (const id of ids) {
+  for (const id of sortedIds) {
     const row = document.createElement("label");
     row.className = "circuit-label-row";
     row.innerHTML = `
       <span>${t("circuit")} ${id}</span>
       <input data-circuit-label="${id}" maxlength="80" />
     `;
-    row.querySelector("input").value = config.circuitLabels?.[id] ?? "";
+    row.querySelector("input").value = preserveExisting && Object.hasOwn(existingValues, id)
+      ? existingValues[id]
+      : config.circuitLabels?.[id] ?? "";
     root.append(row);
+  }
+  if (activeId) {
+    const nextActive = root.querySelector(`[data-circuit-label="${activeId}"]`);
+    nextActive?.focus();
+    if (nextActive && activeSelection) {
+      nextActive.setSelectionRange(activeSelection.start, activeSelection.end);
+    }
   }
 }
 
@@ -1904,7 +1955,7 @@ function updateConfigControls(config) {
   applyDashboardWidgetLayout(config);
   cacheDashboardLayout(config);
   renderDashboardWidgetControls(config);
-  renderCircuitLabelControls(config);
+  renderCircuitLabelControls(config, { preserveExisting: circuitLabelsAreBeingEdited() });
   applyFeatureVisibility(config);
   $("#updateIntervalSeconds").value = config.updateIntervalSeconds ?? 15;
   $("#configBatteryHost").value = config.batteryHost ?? "";
@@ -1916,6 +1967,7 @@ function updateConfigControls(config) {
     ",",
   );
   $("#configSolarEnabled").checked = config.solarEnabled !== false;
+  $("#configSmartCosmoEnabled").checked = config.smartCosmoEnabled !== false;
   $("#configFuelCellEnabled").checked = config.fuelCellEnabled !== false;
   const rateMode = rateModeFromConfig(config);
   const modeInput = document.querySelector(
@@ -1936,35 +1988,35 @@ function updateConfigControls(config) {
   updateRateModeVisibility(rateMode);
   updateAutomationControls();
   $("#configSolarHost").disabled = config.solarEnabled === false;
+  $("#configMeterHost").disabled = config.smartCosmoEnabled === false;
   $("#configFuelCellHosts").disabled = config.fuelCellEnabled === false;
 }
 
-function applyFeatureVisibility(features = {}) {
-  // Hide optional equipment/widgets for homes without solar, fuel cell, or
-  // off-peak savings calculations enabled.
-  const solarEnabled = features.solarEnabled !== false;
-  const fuelCellEnabled = features.fuelCellEnabled !== false;
-  const featureRateMode = features.rateMode ?? state.config?.rateMode;
-  const offPeakSavingsEnabled =
-    featureRateMode !== "simple" && featureRateMode !== undefined
+function featureEnabled(features = {}, feature) {
+  if (feature === "smart-cosmo") return features.smartCosmoEnabled !== false;
+  if (feature === "solar") return features.solarEnabled !== false;
+  if (feature === "fuel-cell") return features.fuelCellEnabled !== false;
+  if (feature === "off-peak-savings") {
+    const featureRateMode = features.rateMode ?? state.config?.rateMode;
+    return featureRateMode !== "simple" && featureRateMode !== undefined
       ? true
       : features.offPeakSavingsEnabled === true ||
         state.config?.offPeakSavingsEnabled === true;
-  $$('[data-feature="solar"]').forEach((el) =>
-    el.dataset.widgetId
-      ? (el.dataset.featureHidden = solarEnabled ? "false" : "true")
-      : el.classList.toggle("hidden", !solarEnabled),
-  );
-  $$('[data-feature="fuel-cell"]').forEach((el) =>
-    el.dataset.widgetId
-      ? (el.dataset.featureHidden = fuelCellEnabled ? "false" : "true")
-      : el.classList.toggle("hidden", !fuelCellEnabled),
-  );
-  $$('[data-feature="off-peak-savings"]').forEach((el) =>
-    el.dataset.widgetId
-      ? (el.dataset.featureHidden = offPeakSavingsEnabled ? "false" : "true")
-      : el.classList.toggle("hidden", !offPeakSavingsEnabled),
-  );
+  }
+  return true;
+}
+
+function applyFeatureVisibility(features = {}) {
+  // Hide optional equipment/widgets for homes without the corresponding device
+  // or calculation enabled.
+  for (const feature of ["smart-cosmo", "solar", "fuel-cell", "off-peak-savings"]) {
+    const enabled = featureEnabled(features, feature);
+    $$(`[data-feature="${feature}"]`).forEach((el) =>
+      el.dataset.widgetId
+        ? (el.dataset.featureHidden = enabled ? "false" : "true")
+        : el.classList.toggle("hidden", !enabled),
+    );
+  }
   syncDashboardWidgetVisibility();
 }
 
@@ -1979,6 +2031,13 @@ function renderCircuitWidgets(data) {
   const grid = $("#circuitWidgetGrid");
   const section = $("[data-circuit-section]");
   if (!grid || !section) return;
+  const smartCosmoEnabled = data.features?.smartCosmoEnabled !== false && state.config?.smartCosmoEnabled !== false;
+  if (!smartCosmoEnabled) {
+    grid.innerHTML = "";
+    section.classList.add("hidden");
+    updateCircuitGraphPicker([]);
+    return;
+  }
   const ids = circuitIdsFromStatus(data);
   const wattsByChannel = circuitWattsFromStatus(data);
   const summaries = circuitSummaryMap(data.savings ?? {});
@@ -2161,7 +2220,9 @@ function renderDashboard(data, options = {}) {
   setText("#powerExportedPeriod", summaryPeriod);
 
   renderCircuitWidgets(data);
-  if (state.currentPage === "settings") renderCircuitLabelControls();
+  if (state.currentPage === "settings") {
+    renderCircuitLabelControls(state.config ?? {}, { preserveExisting: circuitLabelsAreBeingEdited() });
+  }
   applyTrendHeadlines(data);
 
   if (recordTrend) {
@@ -2699,16 +2760,24 @@ function initForms() {
   if (window.matchMedia("(max-width: 720px)").matches) {
     $(".nav-section")?.removeAttribute("open");
   }
-  ["#configSolarEnabled", "#configFuelCellEnabled"].forEach((selector) => {
+  ["#configSolarEnabled", "#configSmartCosmoEnabled", "#configFuelCellEnabled"].forEach((selector) => {
     $(selector).addEventListener("change", () => {
       const features = {
         solarEnabled: $("#configSolarEnabled").checked,
+        smartCosmoEnabled: $("#configSmartCosmoEnabled").checked,
         fuelCellEnabled: $("#configFuelCellEnabled").checked,
       };
       $("#configSolarHost").disabled = !features.solarEnabled;
+      $("#configMeterHost").disabled = !features.smartCosmoEnabled;
       $("#configFuelCellHosts").disabled = !features.fuelCellEnabled;
       applyFeatureVisibility(features);
     });
+  });
+
+  $("#circuitLabelsForm")?.addEventListener("input", (event) => {
+    if (event.target.matches("[data-circuit-label]")) {
+      event.currentTarget.dataset.dirty = "true";
+    }
   });
 
   $("#deviceConfigForm").addEventListener("submit", async (event) => {
@@ -2716,6 +2785,7 @@ function initForms() {
     const body = {
       batteryHost: $("#configBatteryHost").value,
       meterHost: $("#configMeterHost").value,
+      smartCosmoEnabled: $("#configSmartCosmoEnabled").checked,
       solarHost: $("#configSolarHost").value,
       solarEnabled: $("#configSolarEnabled").checked,
       fuelCellHosts: $("#configFuelCellHosts").value,
@@ -2753,6 +2823,7 @@ function initForms() {
           dashboardWidgets: state.config?.dashboardWidgets,
         },
       });
+      delete $("#circuitLabelsForm").dataset.dirty;
       updateConfigControls(config);
       renderCircuitWidgets(state.status ?? {});
       toast(t("circuitLabelsSaved"));

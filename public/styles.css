@@ -543,12 +543,6 @@ label {
   min-width: 0;
 }
 
-.circuit-label-form {
-  border-top: 1px solid var(--border);
-  margin-top: 14px;
-  padding-top: 14px;
-}
-
 .circuit-label-controls {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1147,12 +1141,16 @@ td code {
     order: 5;
   }
 
-  .rates-panel {
+  .circuit-label-panel {
     order: 6;
   }
 
-  .data-panel {
+  .rates-panel {
     order: 7;
+  }
+
+  .data-panel {
+    order: 8;
   }
 }
 

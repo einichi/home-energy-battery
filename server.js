@@ -48,6 +48,7 @@ const DEFAULT_CONFIG = {
   smartMeterHost: "",
   meterHost: "192.0.2.20",
   meterEoj: "0x028701",
+  smartCosmoEnabled: true,
   circuitLabels: {},
   solarHost: "192.0.2.10",
   solarEnabled: true,
@@ -448,12 +449,16 @@ function sampleFromStatus(status, config, previousSample) {
   const batteryPowerW = numericMetric(status.energy?.battery?.instant_power);
   const solarPowerW = config.solarEnabled === false ? null : numericMetric(status.energy?.solar?.instant_power);
   const fuelCellPowerW = config.fuelCellEnabled === false ? null : strongestFuelCellWatts(status.energy?.fuel_cells);
-  const houseDemandW = numericMetric(status.meter?.house_demand_power);
-  const gridImportW = numericMetric(status.meter?.grid_import_power);
-  const gridExportW = numericMetric(status.meter?.grid_export_power);
+  const houseDemandW = config.smartCosmoEnabled === false ? null : numericMetric(status.meter?.house_demand_power);
+  const gridImportW = config.smartCosmoEnabled === false ? null : numericMetric(status.meter?.grid_import_power);
+  const gridExportW = config.smartCosmoEnabled === false ? null : numericMetric(status.meter?.grid_export_power);
   const stateOfChargePercent = numericMetric(status.energy?.battery?.remaining_percent);
-  const circuitPowerW = circuitChannelMap(status.meter?.channel_power?.decoded?.channels);
-  const circuitCumulativeKwh = circuitCumulativeMap(status.meter?.channel_energy?.decoded?.channels);
+  const circuitPowerW = config.smartCosmoEnabled === false
+    ? {}
+    : circuitChannelMap(status.meter?.channel_power?.decoded?.channels);
+  const circuitCumulativeKwh = config.smartCosmoEnabled === false
+    ? {}
+    : circuitCumulativeMap(status.meter?.channel_energy?.decoded?.channels);
   const circuitEnergyKwh = {};
   for (const id of Object.keys({ ...circuitPowerW, ...circuitCumulativeKwh })) {
     const cumulative = circuitEnergyDeltaKwh(circuitCumulativeKwh[id], previousSample?.circuitCumulativeKwh?.[id]);
@@ -799,6 +804,7 @@ function cleanConfig(input = {}) {
     smartMeterHost: String(input.smartMeterHost ?? DEFAULT_CONFIG.smartMeterHost).trim(),
     meterHost: String(input.meterHost ?? DEFAULT_CONFIG.meterHost).trim(),
     meterEoj: String(input.meterEoj ?? DEFAULT_CONFIG.meterEoj).trim() || DEFAULT_CONFIG.meterEoj,
+    smartCosmoEnabled: configBool(input.smartCosmoEnabled, DEFAULT_CONFIG.smartCosmoEnabled),
     circuitLabels: normalizeCircuitLabels(input.circuitLabels ?? DEFAULT_CONFIG.circuitLabels),
     solarHost: String(input.solarHost ?? input.batteryHost ?? DEFAULT_CONFIG.solarHost).trim(),
     solarEnabled: configBool(input.solarEnabled, DEFAULT_CONFIG.solarEnabled),
@@ -1016,7 +1022,7 @@ async function readSmartMeterStatus(config) {
 }
 
 async function readMeterStatus(config) {
-  if (!config.meterHost || isDocumentationHost(config.meterHost)) {
+  if (config.smartCosmoEnabled === false || !config.meterHost || isDocumentationHost(config.meterHost)) {
     return { configured: false, host: null };
   }
   try {
@@ -1120,11 +1126,12 @@ async function readAllStatus(onProbeComplete = () => {}) {
     hosts: {
       battery: config.batteryHost,
       smart_meter: config.smartMeterHost || null,
-      meter: config.meterHost || null,
+      meter: config.smartCosmoEnabled ? config.meterHost || null : null,
       solar: config.solarEnabled ? config.solarHost : null,
       fuel_cells: config.fuelCellEnabled ? config.fuelCellHosts : [],
     },
     features: {
+      smartCosmoEnabled: config.smartCosmoEnabled,
       solarEnabled: config.solarEnabled,
       fuelCellEnabled: config.fuelCellEnabled,
       rateMode: config.rateMode,
@@ -1712,7 +1719,10 @@ function suggestedConfigFromDiscovery(devices, currentConfig) {
       next.solarHost = host;
       next.solarEnabled = true;
     }
-    if (instances.some((item) => item.toLowerCase().startsWith("0287"))) next.meterHost = host;
+    if (instances.some((item) => item.toLowerCase().startsWith("0287"))) {
+      next.meterHost = host;
+      next.smartCosmoEnabled = true;
+    }
     if (instances.some((item) => item.toLowerCase().startsWith("0288"))) next.smartMeterHost = host;
     if (instances.some((item) => item.toLowerCase().startsWith("027c"))) {
       fuelCellHosts.add(host);
@@ -1840,7 +1850,7 @@ function anyDeviceConfigured(config) {
   // documentation addresses shipped in DEFAULT_CONFIG.
   const hosts = [
     config.batteryHost,
-    config.meterHost,
+    config.smartCosmoEnabled ? config.meterHost : null,
     config.smartMeterHost,
     config.solarEnabled ? config.solarHost : null,
     ...(config.fuelCellEnabled ? config.fuelCellHosts ?? [] : []),

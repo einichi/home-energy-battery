@@ -49,6 +49,7 @@ assert.equal(simple.rateBands.length, 1);
 assert.equal(simple.historyRetentionDays, 1095);
 assert.equal(simple.updateIntervalSeconds, 15);
 assert.equal(simple.co2TonnesPerKwh, 0.000423);
+assert.equal(simple.smartCosmoEnabled, true);
 assert.deepEqual(simple.circuitLabels, {});
 assert.equal(rateForTimestamp(simple.rateBands, "2026-05-31T23:30:00+09:00").yenPerKwh, 42);
 assert.equal(simple.dashboardWidgets.length, 17);
@@ -56,6 +57,7 @@ assert.equal(simple.dashboardWidgets[0].id, "solarPower");
 
 assert.equal(cleanConfig({ updateIntervalSeconds: 2 }).updateIntervalSeconds, 5);
 assert.equal(cleanConfig({ updateIntervalSeconds: 30 }).updateIntervalSeconds, 30);
+assert.equal(cleanConfig({ smartCosmoEnabled: false }).smartCosmoEnabled, false);
 assert.equal(cleanConfig({ co2TonnesPerKwh: 0.0005 }).co2TonnesPerKwh, 0.0005);
 assert.deepEqual(normalizeCircuitLabels({ 1: "Kitchen", 2: "", bad: "Nope", 253: "Too high" }), { 1: "Kitchen" });
 assert.deepEqual(cleanConfig({ circuitLabels: [{ channel: 6, label: "EV charger" }] }).circuitLabels, { 6: "EV charger" });
@@ -159,6 +161,19 @@ assert.equal(sample.circuitPowerW["1"], 120);
 assert.equal(sample.circuitCumulativeKwh["2"], 20.25);
 assert.equal(sample.circuitEnergyKwh["1"], 0.5);
 assert.equal(sample.circuitEnergyKwh["2"], 0.25);
+
+const smartCosmoDisabledSample = sampleFromStatus({
+  read_at: "2026-05-31T12:15:00+09:00",
+  meter: {
+    house_demand_power: { value: 1800 },
+    grid_import_power: { value: 200 },
+    grid_export_power: { value: 100 },
+    channel_power: { decoded: { channels: [{ channel: 1, value: 120 }] } },
+  },
+}, { ...migrated, smartCosmoEnabled: false });
+assert.equal(smartCosmoDisabledSample.houseDemandW, null);
+assert.equal(smartCosmoDisabledSample.gridImportW, null);
+assert.deepEqual(smartCosmoDisabledSample.circuitPowerW, {});
 
 const unavailableSample = sampleFromStatus({
   read_at: "2026-05-31T12:30:00+09:00",
