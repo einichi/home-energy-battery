@@ -4,6 +4,7 @@ import {
   cleanAutomationRule,
   cleanAutomationRuleConfig,
   cleanConfig,
+  countGuardTriggersForRange,
   evaluateAutomationRule,
   normalizeCircuitLabels,
   normalizeDashboardWidgets,
@@ -52,7 +53,7 @@ assert.equal(simple.co2TonnesPerKwh, 0.000423);
 assert.equal(simple.smartCosmoEnabled, true);
 assert.deepEqual(simple.circuitLabels, {});
 assert.equal(rateForTimestamp(simple.rateBands, "2026-05-31T23:30:00+09:00").yenPerKwh, 42);
-assert.equal(simple.dashboardWidgets.length, 17);
+assert.equal(simple.dashboardWidgets.length, 18);
 assert.equal(simple.dashboardWidgets[0].id, "solarPower");
 
 assert.equal(cleanConfig({ updateIntervalSeconds: 2 }).updateIntervalSeconds, 5);
@@ -67,7 +68,7 @@ const normalizedWidgets = normalizeDashboardWidgets([
   { id: "houseDemandPower", visible: true, priority: "bad" },
   { id: "unknownWidget", visible: true, priority: 1 },
 ]);
-assert.equal(normalizedWidgets.length, 17);
+assert.equal(normalizedWidgets.length, 18);
 assert.deepEqual(normalizedWidgets.find((widget) => widget.id === "solarPower"), {
   id: "solarPower",
   group: "trends",
@@ -84,6 +85,7 @@ assert.equal(normalizedWidgets.some((widget) => widget.id === "unknownWidget"), 
 assert.equal(normalizedWidgets.some((widget) => widget.id === "fuelCellPower"), true);
 assert.equal(normalizedWidgets.some((widget) => widget.id === "powerImported"), true);
 assert.equal(normalizedWidgets.some((widget) => widget.id === "powerExported"), true);
+assert.equal(normalizedWidgets.some((widget) => widget.id === "guardTriggerCount"), true);
 
 assert.throws(
   () => parseJsonWithContext("[1]\n[2]", "test.json"),
@@ -186,7 +188,7 @@ assert.equal(unavailableSample.gridImportW, null);
 
 const summary = summarizeSamples([
   { solarSavingYen: 1, offPeakSavingYen: 2, solarGenerationKwh: 0.25, gridImportKwh: 0.4, gridExportKwh: 0.1, circuitEnergyKwh: { 1: 0.2 } },
-  { solarSavingYen: 3, offPeakSavingYen: 4, solarGenerationKwh: 0.75, gridImportKwh: 0.6, gridExportKwh: 0.2, circuitEnergyKwh: { 1: 0.3, 2: 0.1 }, circuitPowerW: { 2: 50 } },
+  { solarSavingYen: 3, offPeakSavingYen: 4, solarGenerationKwh: 0.75, gridImportKwh: 0.6, gridExportKwh: 0.2, circuitEnergyKwh: { 1: 0.3, 2: 0.1 }, circuitPowerW: { 2: 50 }, guardTriggerCount: 1 },
 ], { co2TonnesPerKwh: 0.000423, circuitLabels: { 1: "Kitchen" } });
 assert.equal(summary.solarSavingYen, 4);
 assert.equal(summary.offPeakSavingYen, 6);
@@ -198,6 +200,30 @@ assert.equal(summary.circuits.find((item) => item.channel === 1).label, "Kitchen
 assert.equal(summary.circuits.find((item) => item.channel === 1).totalKwh, 0.5);
 assert.equal(summary.circuits.find((item) => item.channel === 2).totalKwh, 0.1);
 assert.equal(summary.circuitTotalKwh, 0.6);
+assert.equal(summary.guardTriggerCount, 1);
+
+const guardRules = [{
+  type: "backup-demand-guard",
+  log: [
+    { at: "2026-05-31T01:00:00.000Z", kind: "guard", message: "new guard" },
+    { at: "2026-05-31T02:00:00.000Z", message: "Grid Import (4000 W) exceeds Charge Demand Guard limit (3500 W), setting operation mode from auto to Standby" },
+    { at: "2026-05-31T03:00:00.000Z", kind: "restore", message: "restore" },
+  ],
+}];
+assert.equal(
+  countGuardTriggersForRange(guardRules, "2026-05-31T00:00:00.000Z", "2026-05-31T02:30:00.000Z"),
+  2,
+);
+assert.equal(
+  countGuardTriggersForRange(
+    guardRules,
+    "2026-05-31T00:00:00.000Z",
+    "2026-05-31T02:30:00.000Z",
+    { excludeTimes: new Set(["2026-05-31T01:00:00.000Z"]) },
+  ),
+  1,
+);
+assert.equal(countGuardTriggersForRange(guardRules, null, "2026-05-31T01:30:00.000Z"), 1);
 
 const legacyPowerSummary = summarizeSamples([
   { timestamp: "2026-05-31T00:00:00.000Z", gridImportW: 1000, gridExportW: 500 },

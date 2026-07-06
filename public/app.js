@@ -33,6 +33,7 @@ const state = {
   graphLoadToken: 0,
   historyLoadToken: 0,
   automationRules: [],
+  isComposing: false,
   discoveryInProgress: false,
 };
 
@@ -66,6 +67,7 @@ const DASHBOARD_WIDGET_DEFAULTS = [
   { id: "offPeakSavings", group: "status", labelKey: "offPeakSavings", visible: true, priority: 80 },
   { id: "powerImported", group: "status", labelKey: "powerImported", visible: true, priority: 90 },
   { id: "powerExported", group: "status", labelKey: "powerExported", visible: true, priority: 100 },
+  { id: "guardTriggerCount", group: "status", labelKey: "guardTriggerCount", visible: true, priority: 110 },
 ];
 
 const DASHBOARD_WIDGET_FEATURES = {
@@ -194,6 +196,7 @@ const I18N = {
     offPeakSavings: "Off-Peak Charge Savings",
     powerImported: "Power Imported",
     powerExported: "Power Exported",
+    guardTriggerCount: "Demand Guard Triggers",
     houseDemand: "House Demand",
     gridImport: "Grid Import",
     gridExport: "Grid Export",
@@ -441,6 +444,7 @@ const I18N = {
     offPeakSavings: "夜間充電の節約額",
     powerImported: "買電量",
     powerExported: "売電量",
+    guardTriggerCount: "ブレーカー落ちガード作動回数",
     houseDemand: "家庭内消費",
     gridImport: "買電",
     gridExport: "売電",
@@ -1653,6 +1657,13 @@ function renderAutomationLog(rule) {
   }
 }
 
+function settingsInputIsActive() {
+  const active = document.activeElement;
+  return state.currentPage === "settings" &&
+    (state.isComposing ||
+      Boolean(active?.closest?.("#settingsPage") && active.matches("input, textarea, select, button")));
+}
+
 function normalizeAutomationLogMessage(message) {
   return String(message)
     .replace(/^House demand/, "Grid Import")
@@ -1667,6 +1678,7 @@ async function refreshAutomationRules() {
 }
 
 async function refreshAutomationLog() {
+  if (settingsInputIsActive()) return state.automationRules;
   state.automationRules = await api("/api/automation-rules");
   const rule =
     state.automationRules.find((item) => item.type === "backup-demand-guard") ??
@@ -2201,6 +2213,12 @@ function renderDashboard(data, options = {}) {
   setText("#offPeakSavings", yen(Number(data.savings?.offPeakSavingYen)));
   setText("#powerImported", energyKwh(Number(data.savings?.gridImportKwh)));
   setText("#powerExported", energyKwh(Number(data.savings?.gridExportKwh)));
+  setText(
+    "#guardTriggerCount",
+    Number(data.savings?.guardTriggerCount ?? 0).toLocaleString(
+      state.language === "ja" ? "ja-JP" : "en-US",
+    ),
+  );
   const summaryPeriod = state.historyMode
     ? rangeLabel(data.savings, "selectedRange")
     : t("today");
@@ -2218,9 +2236,10 @@ function renderDashboard(data, options = {}) {
   );
   setText("#powerImportedPeriod", summaryPeriod);
   setText("#powerExportedPeriod", summaryPeriod);
+  setText("#guardTriggerCountPeriod", summaryPeriod);
 
   renderCircuitWidgets(data);
-  if (state.currentPage === "settings") {
+  if (state.currentPage === "settings" && !settingsInputIsActive()) {
     renderCircuitLabelControls(state.config ?? {}, { preserveExisting: circuitLabelsAreBeingEdited() });
   }
   applyTrendHeadlines(data);
@@ -2681,6 +2700,12 @@ async function mutate(path, body, success) {
 }
 
 function initForms() {
+  $("#settingsPage")?.addEventListener("compositionstart", () => {
+    state.isComposing = true;
+  });
+  $("#settingsPage")?.addEventListener("compositionend", () => {
+    state.isComposing = false;
+  });
   ["#chargeStart", "#chargeEnd", "#dischargeStart", "#dischargeEnd"].forEach(
     (selector) => selectHourOptions($(selector)),
   );

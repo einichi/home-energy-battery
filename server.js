@@ -39,6 +39,7 @@ const DEFAULT_DASHBOARD_WIDGETS = [
   { id: "offPeakSavings", group: "status", visible: true, priority: 80 },
   { id: "powerImported", group: "status", visible: true, priority: 90 },
   { id: "powerExported", group: "status", visible: true, priority: 100 },
+  { id: "guardTriggerCount", group: "status", visible: true, priority: 110 },
 ];
 
 // Public defaults use RFC 5737 documentation addresses. Real deployments should
@@ -514,6 +515,14 @@ async function recordStatusSample(status, config) {
   return sample;
 }
 
+async function recordGuardTriggerSample(at = new Date()) {
+  await ensureDataDir();
+  await appendFile(HISTORY_FILE, `${JSON.stringify({
+    timestamp: at.toISOString(),
+    guardTriggerCount: 1,
+  })}\n`);
+}
+
 function sampleSolarGenerationKwh(sample) {
   const direct = Number(sample.solarGenerationKwh);
   if (Number.isFinite(direct)) return direct;
@@ -535,7 +544,7 @@ function samplePowerKwh(sample, directKey, wattsKey, previousSample) {
   return deltaHours * (Math.max(0, watts) / 1000);
 }
 
-function summarizeSamples(samples, config = DEFAULT_CONFIG) {
+function summarizeSamples(samples, config = DEFAULT_CONFIG, extras = {}) {
   const solarGenerationKwh = samples.reduce((sum, sample) => sum + sampleSolarGenerationKwh(sample), 0);
   const gridImportKwh = samples.reduce(
     (sum, sample, index) => sum + samplePowerKwh(sample, "gridImportKwh", "gridImportW", samples[index - 1]),
@@ -576,6 +585,10 @@ function summarizeSamples(samples, config = DEFAULT_CONFIG) {
     ? socSamples.reduce((sum, value) => sum + value, 0) / socSamples.length
     : null;
   const co2TonnesPerKwh = configNumber(config.co2TonnesPerKwh, DEFAULT_CONFIG.co2TonnesPerKwh, 0, 1);
+  const guardTriggerCount = samples.reduce(
+    (sum, sample) => sum + Math.max(0, Number(sample.guardTriggerCount ?? 0) || 0),
+    0,
+  ) + Math.max(0, Number(extras.guardTriggerCount ?? 0) || 0);
   return {
     sampleCount: samples.length,
     start: samples[0]?.timestamp ?? null,
@@ -594,7 +607,30 @@ function summarizeSamples(samples, config = DEFAULT_CONFIG) {
     batteryNetKwh: battery.chargedKwh - battery.dischargedKwh,
     averageStateOfChargePercent,
     co2SavingKg: solarGenerationKwh * co2TonnesPerKwh * 1000,
+    guardTriggerCount,
   };
+}
+
+function isGuardTriggerLog(entry) {
+  return entry?.kind === "guard" ||
+    String(entry?.message ?? "").includes("exceeds Charge Demand Guard limit");
+}
+
+function countGuardTriggersForRange(rules, start, end, options = {}) {
+  const startMs = start ? new Date(start).getTime() : Number.NEGATIVE_INFINITY;
+  const endMs = end ? new Date(end).getTime() : Number.POSITIVE_INFINITY;
+  if (Number.isNaN(startMs) || Number.isNaN(endMs)) return 0;
+  const excludeTimes = options.excludeTimes ?? new Set();
+  return rules
+    .filter((rule) => rule.type === "backup-demand-guard")
+    .flatMap((rule) => Array.isArray(rule.log) ? rule.log : [])
+    .filter((entry) => {
+      if (!isGuardTriggerLog(entry)) return false;
+      const atMs = new Date(entry.at).getTime();
+      if (excludeTimes.has(entry.at)) return false;
+      return Number.isFinite(atMs) && atMs >= startMs && atMs <= endMs;
+    })
+    .length;
 }
 
 async function readHistoryRange(start, end, config = DEFAULT_CONFIG) {
@@ -617,7 +653,18 @@ async function readHistoryRange(start, end, config = DEFAULT_CONFIG) {
       const time = new Date(sample.timestamp).getTime();
       return time >= startMs && time <= endMs;
     });
-  return { samples, summary: summarizeSamples(samples, config) };
+  const guardTriggerSampleTimes = new Set(
+    samples
+      .filter((sample) => Number(sample.guardTriggerCount ?? 0) > 0 && sample.timestamp)
+      .map((sample) => sample.timestamp),
+  );
+  const guardTriggerCount = countGuardTriggersForRange(
+    await readAutomationRules(),
+    new Date(startMs).toISOString(),
+    new Date(endMs).toISOString(),
+    { excludeTimes: guardTriggerSampleTimes },
+  );
+  return { samples, summary: summarizeSamples(samples, config, { guardTriggerCount }) };
 }
 
 async function readAllHistorySamples() {
@@ -1323,10 +1370,10 @@ function formatWatts(value) {
   return `${Math.round(Number(value) || 0)} W`;
 }
 
-function appendAutomationLog(rule, message, at = new Date()) {
+function appendAutomationLog(rule, message, at = new Date(), kind = null) {
   rule.log = [
     ...(Array.isArray(rule.log) ? rule.log : []),
-    { at: at.toISOString(), message },
+    { at: at.toISOString(), message, ...(kind ? { kind } : {}) },
   ].slice(-100);
 }
 
@@ -1373,7 +1420,9 @@ async function evaluateAutomationRule(rule, status, now = new Date(), onPhase = 
       rule,
       `${demandLabel} (${formatWatts(guardDemandW)}) exceeds Charge Demand Guard limit (${formatWatts(breakerLimitW)}), setting operation mode from ${operationMode} to Standby`,
       now,
+      "guard",
     );
+    await recordGuardTriggerSample(now);
     rule.state = {
       ...rule.state,
       awaitingRestore: true,
@@ -1398,6 +1447,7 @@ async function evaluateAutomationRule(rule, status, now = new Date(), onPhase = 
         rule,
         `${demandLabel} (${formatWatts(demandW)}) now below Guard restore limit (${formatWatts(restoreLimitW)}), setting operation mode to Auto`,
         now,
+        "restore",
       );
       rule.state = { ...rule.state, awaitingRestore: false, restoreSince: null };
       rule.lastResult = { ok: true, at: now.toISOString(), kind: "restore", demandW, estimatedRestoredDemandW, breakerLimitW, restoreLimitW, result };
@@ -1411,6 +1461,7 @@ async function evaluateAutomationRule(rule, status, now = new Date(), onPhase = 
       rule,
       `${demandLabel} (${formatWatts(demandW)}) still exceeds Guard restore limit (${formatWatts(restoreLimitW)}), maintaining Standby operation mode`,
       now,
+      "maintain",
     );
     rule.state = { ...rule.state, restoreSince: null };
     return { changed: true, result: { skipped: "restore demand still high", demandW, restoreLimitW } };
@@ -2221,6 +2272,7 @@ export {
   cleanAutomationRule,
   cleanAutomationRuleConfig,
   cleanConfig,
+  countGuardTriggersForRange,
   evaluateAutomationRule,
   normalizeCircuitLabels,
   normalizeDashboardWidgets,
