@@ -175,10 +175,13 @@ const I18N = {
     circuitWidgets: "Smart Cosmo Circuits",
     circuitPower: "Circuits",
     circuit: "Circuit",
-    circuitLabels: "Circuit Labels",
-    circuitLabelsHelp: "Name Smart Cosmo channels so circuit graphs are easier to read.",
-    saveCircuitLabels: "Save Circuit Labels",
-    circuitLabelsSaved: "Circuit labels saved",
+    circuitSettings: "Smart Cosmo Circuits",
+    circuitSettingsHelp: "Name channels and choose how dashboard circuits are ordered.",
+    circuitSort: "Circuit order",
+    circuitSortByNumber: "Circuit number",
+    circuitSortByEnergy: "Selected-period kWh",
+    saveCircuitSettings: "Save Circuit Settings",
+    circuitSettingsSaved: "Circuit settings saved",
     noCircuitData: "No circuit data available yet.",
     smartCosmoMeter: "Smart Cosmo / home power meter",
     smartCosmoEnabled: "Show Smart Cosmo / home power meter",
@@ -423,10 +426,13 @@ const I18N = {
     circuitWidgets: "スマートコスモ回路",
     circuitPower: "回路",
     circuit: "回路",
-    circuitLabels: "回路ラベル",
-    circuitLabelsHelp: "スマートコスモのチャンネル名を設定して、回路グラフを読みやすくします。",
-    saveCircuitLabels: "回路ラベルを保存",
-    circuitLabelsSaved: "回路ラベルを保存しました",
+    circuitSettings: "スマートコスモ回路",
+    circuitSettingsHelp: "チャンネル名と回路の表示順を設定します。",
+    circuitSort: "回路の並び順",
+    circuitSortByNumber: "回路番号",
+    circuitSortByEnergy: "選択期間のkWh",
+    saveCircuitSettings: "回路設定を保存",
+    circuitSettingsSaved: "回路設定を保存しました",
     noCircuitData: "回路データはまだありません。",
     smartCosmoMeter: "スマートコスモ / 家庭内電力メーター",
     smartCosmoEnabled: "スマートコスモ / 家庭内電力メーターを表示",
@@ -837,6 +843,21 @@ function circuitIdsFromStatus(data = state.status) {
   }
   for (const circuit of data?.savings?.circuits ?? []) ids.add(String(circuit.channel));
   return [...ids].filter((id) => Number.isInteger(Number(id))).sort((a, b) => Number(a) - Number(b));
+}
+
+function circuitSortMode(config = state.config ?? {}) {
+  return config.circuitSortMode === "energy" ? "energy" : "number";
+}
+
+function sortCircuitIds(ids, summaries = {}, config = state.config ?? {}) {
+  const sorted = [...ids].filter((id) => Number.isInteger(Number(id)));
+  if (circuitSortMode(config) !== "energy") {
+    return sorted.sort((a, b) => Number(a) - Number(b));
+  }
+  return sorted.sort((a, b) => {
+    const energyDiff = Number(summaries[b]?.totalKwh ?? 0) - Number(summaries[a]?.totalKwh ?? 0);
+    return energyDiff || Number(a) - Number(b);
+  });
 }
 
 function circuitWattsFromStatus(data = state.status) {
@@ -1970,6 +1991,7 @@ function updateConfigControls(config) {
   renderDashboardWidgetControls(config);
   renderCircuitLabelControls(config, { preserveExisting: circuitLabelsAreBeingEdited() });
   applyFeatureVisibility(config);
+  $("#circuitSortMode").value = circuitSortMode(config);
   $("#updateIntervalSeconds").value = config.updateIntervalSeconds ?? 15;
   $("#configBatteryHost").value = config.batteryHost ?? "";
   $("#configMeterHost").value = config.meterHost ?? "";
@@ -2050,9 +2072,9 @@ function renderCircuitWidgets(data) {
     updateCircuitGraphPicker([]);
     return;
   }
-  const ids = circuitIdsFromStatus(data);
   const wattsByChannel = circuitWattsFromStatus(data);
   const summaries = circuitSummaryMap(data.savings ?? {});
+  const ids = sortCircuitIds(circuitIdsFromStatus(data), summaries);
   section.classList.toggle("hidden", ids.length === 0);
   grid.innerHTML = ids.length
     ? ""
@@ -2097,16 +2119,20 @@ function updateCircuitGraphPicker(ids = circuitIdsFromStatus()) {
   const picker = $("#graphCircuitPicker");
   if (!label || !picker) return;
   label.classList.toggle("hidden", !isCircuitGraph(state.activeGraph));
-  if (!ids.length) return;
-  const selected = circuitGraphChannel(state.activeGraph) || state.activeCircuit || ids[0];
+  const sortedIds = sortCircuitIds(ids, circuitSummaryMap(state.status?.savings ?? {}));
+  if (!sortedIds.length) {
+    picker.innerHTML = "";
+    return;
+  }
+  const selected = circuitGraphChannel(state.activeGraph) || state.activeCircuit || sortedIds[0];
   picker.innerHTML = "";
-  for (const id of ids) {
+  for (const id of sortedIds) {
     const option = document.createElement("option");
     option.value = id;
     option.textContent = circuitLabel(id);
     picker.append(option);
   }
-  picker.value = ids.includes(selected) ? selected : ids[0];
+  picker.value = sortedIds.includes(selected) ? selected : sortedIds[0];
 }
 
 function renderDashboard(data, options = {}) {
@@ -2805,6 +2831,10 @@ function initForms() {
       event.currentTarget.dataset.dirty = "true";
     }
   });
+  $("#circuitSortMode")?.addEventListener("change", (event) => {
+    if (state.config) state.config = { ...state.config, circuitSortMode: event.target.value };
+    renderCircuitWidgets(state.status ?? {});
+  });
 
   $("#deviceConfigForm").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -2827,6 +2857,7 @@ function initForms() {
       automation: state.config?.automation,
       dashboardWidgets: state.config?.dashboardWidgets,
       circuitLabels: state.config?.circuitLabels,
+      circuitSortMode: state.config?.circuitSortMode,
       language: state.language,
     };
     try {
@@ -2845,13 +2876,14 @@ function initForms() {
         method: "PUT",
         body: {
           circuitLabels: collectCircuitLabels(),
+          circuitSortMode: $("#circuitSortMode").value,
           dashboardWidgets: state.config?.dashboardWidgets,
         },
       });
       delete $("#circuitLabelsForm").dataset.dirty;
       updateConfigControls(config);
       renderCircuitWidgets(state.status ?? {});
-      toast(t("circuitLabelsSaved"));
+      toast(t("circuitSettingsSaved"));
     } catch (err) {
       toast(err.message);
     }

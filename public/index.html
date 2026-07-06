@@ -711,13 +711,20 @@
 
           <div class="panel circuit-label-panel" data-feature="smart-cosmo">
             <div class="panel-title">
-              <h1 data-i18n="circuitLabels">Circuit Labels</h1>
-              <p data-i18n="circuitLabelsHelp">Name Smart Cosmo channels so circuit graphs are easier to read.</p>
+              <h1 data-i18n="circuitSettings">Smart Cosmo Circuits</h1>
+              <p data-i18n="circuitSettingsHelp">Name channels and choose how dashboard circuits are ordered.</p>
             </div>
 
             <form id="circuitLabelsForm" class="config-form circuit-label-form">
+              <label>
+                <span data-i18n="circuitSort">Circuit order</span>
+                <select id="circuitSortMode">
+                  <option value="number" data-i18n="circuitSortByNumber">Circuit number</option>
+                  <option value="energy" data-i18n="circuitSortByEnergy">Selected-period kWh</option>
+                </select>
+              </label>
               <div id="circuitLabelControls" class="circuit-label-controls"></div>
-              <button data-i18n="saveCircuitLabels">Save Circuit Labels</button>
+              <button data-i18n="saveCircuitSettings">Save Circuit Settings</button>
             </form>
           </div>
 

@@ -50,6 +50,7 @@ const DEFAULT_CONFIG = {
   meterEoj: "0x028701",
   smartCosmoEnabled: true,
   circuitLabels: {},
+  circuitSortMode: "number",
   solarHost: "192.0.2.10",
   solarEnabled: true,
   fuelCellHosts: ["192.0.2.30"],
@@ -825,6 +826,10 @@ function normalizeDashboardWidgets(value = []) {
   });
 }
 
+function normalizeCircuitSortMode(value) {
+  return ["number", "energy"].includes(value) ? value : DEFAULT_CONFIG.circuitSortMode;
+}
+
 function normalizeSettingCache(value = {}) {
   const out = {};
   for (const key of ["discharge_limit", "osaifu_charge_window", "osaifu_discharge_window"]) {
@@ -852,6 +857,7 @@ function cleanConfig(input = {}) {
     meterEoj: String(input.meterEoj ?? DEFAULT_CONFIG.meterEoj).trim() || DEFAULT_CONFIG.meterEoj,
     smartCosmoEnabled: configBool(input.smartCosmoEnabled, DEFAULT_CONFIG.smartCosmoEnabled),
     circuitLabels: normalizeCircuitLabels(input.circuitLabels ?? DEFAULT_CONFIG.circuitLabels),
+    circuitSortMode: normalizeCircuitSortMode(input.circuitSortMode),
     solarHost: String(input.solarHost ?? input.batteryHost ?? DEFAULT_CONFIG.solarHost).trim(),
     solarEnabled: configBool(input.solarEnabled, DEFAULT_CONFIG.solarEnabled),
     fuelCellHosts: normalizeHostList(input.fuelCellHosts ?? DEFAULT_CONFIG.fuelCellHosts),
