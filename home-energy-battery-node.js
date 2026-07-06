@@ -90,7 +90,6 @@ const EOJ_CLASS_NAMES = {
   "027C": "fuel_cell",
   "027D": "storage_battery",
   "0287": "power_distribution_board_metering",
-  "0288": "low_voltage_smart_electric_energy_meter",
   "05FF": "controller",
 };
 

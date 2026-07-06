@@ -45,7 +45,6 @@ const DEFAULT_DASHBOARD_WIDGETS = [
 // set device addresses from the Settings page, where they are persisted in /data.
 const DEFAULT_CONFIG = {
   batteryHost: "192.0.2.10",
-  smartMeterHost: "",
   meterHost: "192.0.2.20",
   meterEoj: "0x028701",
   smartCosmoEnabled: true,
@@ -82,6 +81,7 @@ let automationTimer = null;
 let recorderTimer = null;
 let automationRunInProgress = false;
 let automationRunContext = null;
+let discoveryRunContext = null;
 let activeCliContext = null;
 let cliTimingSequence = 0;
 const recentCliTimings = [];
@@ -801,7 +801,6 @@ function cleanConfig(input = {}) {
   const offPeakRate = configNumber(input.offPeakRateYenPerKwh, Math.min(...rateBands.map((band) => band.yenPerKwh)));
   return {
     batteryHost: String(input.batteryHost ?? DEFAULT_CONFIG.batteryHost).trim(),
-    smartMeterHost: String(input.smartMeterHost ?? DEFAULT_CONFIG.smartMeterHost).trim(),
     meterHost: String(input.meterHost ?? DEFAULT_CONFIG.meterHost).trim(),
     meterEoj: String(input.meterEoj ?? DEFAULT_CONFIG.meterEoj).trim() || DEFAULT_CONFIG.meterEoj,
     smartCosmoEnabled: configBool(input.smartCosmoEnabled, DEFAULT_CONFIG.smartCosmoEnabled),
@@ -842,7 +841,7 @@ async function writeConfig(config) {
   const cleaned = cleanConfig({ ...previous, ...config });
   await ensureDataDir();
   await writeJsonFileAtomic(CONFIG_FILE, cleaned);
-  const hostKeys = ["batteryHost", "smartMeterHost", "meterHost", "meterEoj", "solarHost"];
+  const hostKeys = ["batteryHost", "meterHost", "meterEoj", "solarHost"];
   const hostChanged = hostKeys.some((key) => previous[key] !== cleaned[key])
     || JSON.stringify(previous.fuelCellHosts) !== JSON.stringify(cleaned.fuelCellHosts);
   if (hostChanged) lastRecordedSample = null;
@@ -991,36 +990,6 @@ function isDocumentationHost(host) {
   return /^(192\.0\.2|198\.51\.100|203\.0\.113)\.\d{1,3}$/.test(String(host ?? ""));
 }
 
-async function readSmartMeterStatus(config) {
-  if (!config.smartMeterHost || isDocumentationHost(config.smartMeterHost)) {
-    return { configured: false, host: null };
-  }
-  try {
-    const power = await runCliQueued("raw-get", { host: config.smartMeterHost, eoj: "0x028801" }, ["0xE7"]);
-    const raw = parseRawHex(power.raw);
-    return {
-      configured: true,
-      host: config.smartMeterHost,
-      instant_power: {
-        host: config.smartMeterHost,
-        eoj: "0x028801",
-        epc: "0xE7",
-        name: "smart_meter_instant_power",
-        raw: power.raw,
-        value: raw ? raw.readIntBE(0, raw.length) : null,
-        unit: "W",
-        human: raw ? `${raw.readIntBE(0, raw.length)} W` : null,
-      },
-    };
-  } catch (err) {
-    return {
-      configured: true,
-      host: config.smartMeterHost,
-      error: err.message,
-    };
-  }
-}
-
 async function readMeterStatus(config) {
   if (config.smartCosmoEnabled === false || !config.meterHost || isDocumentationHost(config.meterHost)) {
     return { configured: false, host: null };
@@ -1090,9 +1059,8 @@ async function readAllStatus(onProbeComplete = () => {}) {
       onProbeComplete({ label, durationMs: Date.now() - startedAt });
     }
   };
-  const [energy, smartMeter, meter, mode, dischargeLimit, chargeWindow, dischargeWindow, vendor] = await Promise.all([
+  const [energy, meter, mode, dischargeLimit, chargeWindow, dischargeWindow, vendor] = await Promise.all([
     probe("energy status", () => batteryConfigured ? safeCli("energy-status", energyArgs) : Promise.resolve({ battery: { configured: false } })),
-    probe("smart meter status", () => readSmartMeterStatus(config)),
     probe("home power meter status", () => readMeterStatus(config)),
     probe("charging profile", () => batteryConfigured ? safeCli("vendor-profile", { host: config.batteryHost }) : Promise.resolve({ error: "battery host is not configured" })),
     probe("discharge limit", () => batteryConfigured ? settingWithCache(config, "discharge_limit", () => safeCli("discharge-limit", { host: config.batteryHost })) : Promise.resolve(skippedSetting)),
@@ -1125,7 +1093,6 @@ async function readAllStatus(onProbeComplete = () => {}) {
   const status = {
     hosts: {
       battery: config.batteryHost,
-      smart_meter: config.smartMeterHost || null,
       meter: config.smartCosmoEnabled ? config.meterHost || null : null,
       solar: config.solarEnabled ? config.solarHost : null,
       fuel_cells: config.fuelCellEnabled ? config.fuelCellHosts : [],
@@ -1138,7 +1105,6 @@ async function readAllStatus(onProbeComplete = () => {}) {
       offPeakSavingsEnabled: config.offPeakSavingsEnabled,
     },
     energy,
-    smart_meter: smartMeter,
     meter,
     settings: {
       mode,
@@ -1546,6 +1512,12 @@ async function runAutomationRules(context = {}) {
 }
 
 async function runAutomationRulesScheduled() {
+  if (discoveryInProgress()) {
+    console.warn(
+      `automation: discovery is running (${discoveryRunContext.label}); skipping this scheduled interval`,
+    );
+    return;
+  }
   if (automationRunInProgress) {
     const elapsedMs = automationRunContext?.startedAt
       ? Date.now() - new Date(automationRunContext.startedAt).getTime()
@@ -1578,7 +1550,6 @@ function inferDevice(instances) {
   if (set.has("027d")) roles.push("Battery");
   if (set.has("0279")) roles.push("Solar generation");
   if (set.has("0287")) roles.push("Smart Cosmo / home power meter");
-  if (set.has("0288")) roles.push("Utility meter");
   if (set.has("027c")) roles.push("Ene-Farm");
   if (set.has("0272")) roles.push("Water heater");
   if ([...set].some((item) => item.startsWith("0f"))) roles.push("Controller");
@@ -1595,7 +1566,6 @@ function localNetworkHints(config) {
     config.batteryHost,
     config.meterHost,
     config.solarHost,
-    config.smartMeterHost,
     ...config.fuelCellHosts,
   ].filter(Boolean);
   const configuredSubnets = [...new Set(hosts.map(subnetFromHost).filter(Boolean))];
@@ -1621,6 +1591,10 @@ function ipRangeFromCidr(cidr) {
   return Array.from({ length: 254 }, (_, i) => `${prefix}.${i + 1}`);
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function instanceListRequest(tid) {
   // Raw active-scan request: controller EOJ 0x05FF01 asks node profile 0x0EF001
   // for EPC 0xD6, the self-node instance list.
@@ -1632,6 +1606,20 @@ function instanceListRequest(tid) {
     0x62,
     0x01,
     0xd6, 0x00,
+  ]);
+}
+
+function propertyRequest(tid, eojHexText, epcHexText) {
+  const eoj = Buffer.from(eojHexText.replace(/^0x/i, ""), "hex");
+  const epc = Number.parseInt(epcHexText.replace(/^0x/i, ""), 16);
+  return Buffer.from([
+    0x10, 0x81,
+    (tid >> 8) & 0xff, tid & 0xff,
+    0x05, 0xff, 0x01,
+    eoj[0], eoj[1], eoj[2],
+    0x62,
+    0x01,
+    epc, 0x00,
   ]);
 }
 
@@ -1660,53 +1648,189 @@ function parseInstanceListResponse(msg) {
   return null;
 }
 
+function parseTid(msg) {
+  return msg.length >= 4 && msg[0] === 0x10 && msg[1] === 0x81
+    ? msg.readUInt16BE(2)
+    : null;
+}
+
+function isGetResponse(msg) {
+  return msg.length >= 14 && msg[0] === 0x10 && msg[1] === 0x81 && msg[10] === 0x72;
+}
+
+function addDiscoveredInstance(found, host, instance) {
+  const normalized = String(instance).toLowerCase();
+  found[host] = found[host] ?? { all_instances: [], storage_battery_instances: [] };
+  if (!found[host].all_instances.includes(normalized)) found[host].all_instances.push(normalized);
+  if (normalized.startsWith("027d")) {
+    const batteryInstance = Number.parseInt(normalized.slice(4, 6), 16);
+    if (!found[host].storage_battery_instances.includes(batteryInstance)) {
+      found[host].storage_battery_instances.push(batteryInstance);
+    }
+  }
+}
+
+function mergeDiscoveredDevices(...deviceSets) {
+  const merged = {};
+  for (const devices of deviceSets) {
+    for (const [host, device] of Object.entries(devices ?? {})) {
+      merged[host] = merged[host] ?? { all_instances: [], storage_battery_instances: [] };
+      for (const instance of device.all_instances ?? []) {
+        const normalized = String(instance).toLowerCase();
+        if (!merged[host].all_instances.includes(normalized)) {
+          merged[host].all_instances.push(normalized);
+        }
+        if (normalized.startsWith("027d")) {
+          const batteryInstance = Number.parseInt(normalized.slice(4, 6), 16);
+          if (!merged[host].storage_battery_instances.includes(batteryInstance)) {
+            merged[host].storage_battery_instances.push(batteryInstance);
+          }
+        }
+      }
+    }
+  }
+  return merged;
+}
+
 async function activeScanSubnets(subnets, timeoutMs, progress = () => {}) {
   // Broadcast discovery is polite but not always reliable through controllers or
-  // Docker networking, so this optional scan pokes each /24 address directly.
+  // Docker networking, so this scan pokes each /24 address directly. It binds an
+  // ephemeral source port instead of ECHONET's 3610 so it can run even if another
+  // local reader has recently held the standard port.
   const socket = dgram.createSocket("udp4");
   const tidToHost = new Map();
+  const tidToDirectProbe = new Map();
   const found = {};
   let tid = 1;
-  const hosts = subnets.flatMap(ipRangeFromCidr);
+  const hosts = [...new Set(subnets.flatMap(ipRangeFromCidr))];
   let scanned = 0;
+  const retryRounds = 3;
+  const batchSize = 16;
 
   await new Promise((resolve, reject) => {
-    socket.once("error", reject);
+    const bindEphemeral = () => {
+      socket.removeAllListeners("error");
+      socket.once("error", reject);
+      socket.bind(0, "0.0.0.0", resolve);
+    };
+    socket.once("error", (err) => {
+      if (err.code === "EADDRINUSE") {
+        bindEphemeral();
+      } else {
+        reject(err);
+      }
+    });
     socket.bind(3610, "0.0.0.0", resolve);
   });
 
   socket.on("message", (msg, rinfo) => {
     const parsed = parseInstanceListResponse(msg);
-    if (!parsed) return;
-    const host = tidToHost.get(parsed.tid) ?? rinfo.address;
-    found[host] = found[host] ?? { all_instances: [], storage_battery_instances: [] };
-    for (const instance of parsed.instances) {
-      if (!found[host].all_instances.includes(instance)) found[host].all_instances.push(instance);
-      if (instance.startsWith("027d")) {
-        const batteryInstance = Number.parseInt(instance.slice(4, 6), 16);
-        if (!found[host].storage_battery_instances.includes(batteryInstance)) {
-          found[host].storage_battery_instances.push(batteryInstance);
-        }
+    if (parsed) {
+      const host = tidToHost.get(parsed.tid) ?? rinfo.address;
+      for (const instance of parsed.instances) {
+        addDiscoveredInstance(found, host, instance);
       }
+      progress({ found: Object.keys(found).length });
+      return;
     }
-    progress({ found: Object.keys(found).length });
+    const tidValue = parseTid(msg);
+    const directProbe = tidValue ? tidToDirectProbe.get(tidValue) : null;
+    if (directProbe && isGetResponse(msg)) {
+      addDiscoveredInstance(found, directProbe.host ?? rinfo.address, directProbe.instance);
+      progress({ found: Object.keys(found).length });
+    }
   });
 
   progress({ phase: "active-scan", total: hosts.length, scanned: 0, found: 0 });
-  for (const host of hosts) {
-    tid = (tid % 0xfffe) + 1;
-    tidToHost.set(tid, host);
-    socket.send(instanceListRequest(tid), 3610, host, () => {});
-    scanned += 1;
-    if (scanned === hosts.length || scanned % 8 === 0) {
-      progress({ phase: "active-scan", total: hosts.length, scanned, found: Object.keys(found).length });
+  for (let round = 0; round < retryRounds; round += 1) {
+    for (let index = 0; index < hosts.length; index += 1) {
+      const host = hosts[index];
+      tid = (tid % 0xfffe) + 1;
+      tidToHost.set(tid, host);
+      socket.send(instanceListRequest(tid), 3610, host, () => {});
+      if (round === 0) {
+        for (const probe of KNOWN_DISCOVERY_PROBES) {
+          const epc = probe.epcs[0];
+          tid = (tid % 0xfffe) + 1;
+          tidToDirectProbe.set(tid, {
+            host,
+            instance: probe.eoj.slice(2).toLowerCase(),
+          });
+          socket.send(propertyRequest(tid, probe.eoj, epc), 3610, host, () => {});
+        }
+      }
+      if (round === 0) scanned += 1;
+      if (
+        round === 0 &&
+        (scanned === hosts.length || scanned % batchSize === 0)
+      ) {
+        progress({ phase: "active-scan", total: hosts.length, scanned, found: Object.keys(found).length });
+      }
+      if ((index + 1) % batchSize === 0) await sleep(20);
     }
+    await sleep(120);
   }
 
   progress({ phase: "waiting", total: hosts.length, scanned, found: Object.keys(found).length });
   await new Promise((resolve) => setTimeout(resolve, timeoutMs));
   socket.close();
   return found;
+}
+
+const KNOWN_DISCOVERY_PROBES = [
+  { eoj: "0x027D01", epcs: ["0xE4", "0xDA"] },
+  { eoj: "0x027901", epcs: ["0xE0"] },
+  { eoj: "0x028701", epcs: ["0xC6", "0xB7"] },
+  { eoj: "0x027C01", epcs: ["0xC4", "0xCB"] },
+];
+
+function configuredDiscoveryHosts(config) {
+  return [
+    config.batteryHost,
+    config.smartCosmoEnabled ? config.meterHost : null,
+    config.solarEnabled ? config.solarHost : null,
+    ...(config.fuelCellEnabled ? config.fuelCellHosts ?? [] : []),
+  ].filter((host) => host && !isDocumentationHost(host));
+}
+
+async function enrichDiscoveredDevices(devices, config, progress = () => {}) {
+  const hosts = [...new Set([...Object.keys(devices), ...configuredDiscoveryHosts(config)])];
+  if (!hosts.length) return devices;
+  const enriched = mergeDiscoveredDevices(devices);
+  let scanned = 0;
+  progress({ phase: "identifying", total: hosts.length, scanned: 0, found: Object.keys(enriched).length });
+  for (const host of hosts) {
+    const instances = [];
+    for (const probe of KNOWN_DISCOVERY_PROBES) {
+      const eoj = probe.eoj;
+      let detected = false;
+      try {
+        const result = await runCliQueued("inspect-host", { host, eoj, timeout: 2 });
+        const entry = result?.[eoj.toLowerCase()];
+        detected = entry && !entry.error;
+      } catch {
+        // Silent hosts are normal during subnet discovery.
+      }
+      for (const epc of probe.epcs) {
+        if (detected) break;
+        try {
+          const result = await runCliQueued("raw-get", { host, eoj, timeout: 2 }, [epc]);
+          detected = typeof result?.raw === "string" && result.raw.startsWith("0x");
+        } catch {
+          // Not every device exposes every role. Keep trying the remaining hints.
+        }
+      }
+      if (detected) instances.push(eoj.slice(2).toLowerCase());
+    }
+    if (instances.length) {
+      enriched[host] = mergeDiscoveredDevices(enriched, {
+        [host]: { all_instances: instances, storage_battery_instances: [] },
+      })[host];
+    }
+    scanned += 1;
+    progress({ phase: "identifying", total: hosts.length, scanned, found: Object.keys(enriched).length });
+  }
+  return enriched;
 }
 
 function suggestedConfigFromDiscovery(devices, currentConfig) {
@@ -1723,7 +1847,6 @@ function suggestedConfigFromDiscovery(devices, currentConfig) {
       next.meterHost = host;
       next.smartCosmoEnabled = true;
     }
-    if (instances.some((item) => item.toLowerCase().startsWith("0288"))) next.smartMeterHost = host;
     if (instances.some((item) => item.toLowerCase().startsWith("027c"))) {
       fuelCellHosts.add(host);
       next.fuelCellEnabled = true;
@@ -1750,25 +1873,40 @@ async function discoverDevices(timeout = 5, mode = "broadcast", progress = () =>
   const config = await readConfig();
   const network = localNetworkHints(config);
   const scanTimeout = Number(timeout) || 5;
+  const subnets = normalizeSubnets(requestedSubnets).length
+    ? normalizeSubnets(requestedSubnets)
+    : network.userSubnets.length
+      ? network.userSubnets
+      : network.configuredSubnets.length
+        ? network.configuredSubnets
+        : network.containerSubnets;
   if (mode === "active") {
-    const subnets = normalizeSubnets(requestedSubnets).length
-      ? normalizeSubnets(requestedSubnets)
-      : network.userSubnets.length
-        ? network.userSubnets
-        : network.configuredSubnets.length
-          ? network.configuredSubnets
-          : network.containerSubnets;
-    const devices = await activeScanSubnets(
+    const activeDevices = await activeScanSubnets(
       subnets,
       Math.max(1000, scanTimeout * 1000),
+      (patch) => progress({ ...patch, network }),
+    );
+    const devices = await enrichDiscoveredDevices(
+      activeDevices,
+      config,
       (patch) => progress({ ...patch, network }),
     );
     return discoveryResult(devices, network, config);
   }
 
-  progress({ phase: "broadcast", total: 1, scanned: 0, found: 0, network });
-  const devices = await runCliQueued("discover", { timeout: scanTimeout });
-  progress({ phase: "broadcast", total: 1, scanned: 1, found: Object.keys(devices).length, network });
+  const activeDevices = await activeScanSubnets(
+    subnets,
+    Math.max(1000, scanTimeout * 1000),
+    (patch) => progress({ ...patch, network }),
+  );
+  progress({ phase: "broadcast", total: 0, scanned: 0, found: Object.keys(activeDevices).length, network });
+  const broadcastDevices = await runCliQueued("discover", { timeout: scanTimeout });
+  progress({ phase: "broadcast", total: 0, scanned: 0, found: Object.keys(mergeDiscoveredDevices(activeDevices, broadcastDevices)).length, network });
+  const devices = await enrichDiscoveredDevices(
+    mergeDiscoveredDevices(activeDevices, broadcastDevices),
+    config,
+    (patch) => progress({ ...patch, network }),
+  );
   return discoveryResult(devices, network, config);
 }
 
@@ -1799,6 +1937,25 @@ function updateDiscoveryJob(job, patch) {
   Object.assign(job, patch, { updatedAt: new Date().toISOString() });
 }
 
+function discoveryInProgress() {
+  return discoveryRunContext !== null;
+}
+
+async function withDiscoveryRun(label, fn) {
+  if (discoveryRunContext) {
+    throw new Error(`discovery already running (${discoveryRunContext.label})`);
+  }
+  discoveryRunContext = {
+    label,
+    startedAt: new Date().toISOString(),
+  };
+  try {
+    return await fn();
+  } finally {
+    discoveryRunContext = null;
+  }
+}
+
 function startDiscoveryJob(timeout, mode = "broadcast", subnets = []) {
   cleanupDiscoveryJobs();
   const job = {
@@ -1815,7 +1972,9 @@ function startDiscoveryJob(timeout, mode = "broadcast", subnets = []) {
     updatedAt: new Date().toISOString(),
   };
   discoveryJobs.set(job.id, job);
-  discoverDevices(timeout, mode, (patch) => updateDiscoveryJob(job, patch), subnets)
+  withDiscoveryRun(`${mode} discovery`, () =>
+    discoverDevices(timeout, mode, (patch) => updateDiscoveryJob(job, patch), subnets),
+  )
     .then((result) => {
       updateDiscoveryJob(job, {
         status: "complete",
@@ -1851,7 +2010,6 @@ function anyDeviceConfigured(config) {
   const hosts = [
     config.batteryHost,
     config.smartCosmoEnabled ? config.meterHost : null,
-    config.smartMeterHost,
     config.solarEnabled ? config.solarHost : null,
     ...(config.fuelCellEnabled ? config.fuelCellHosts ?? [] : []),
   ];
@@ -1874,7 +2032,9 @@ function startBackgroundRecorder() {
       const config = await readConfig();
       intervalMs =
         Math.max(5, configNumber(config.updateIntervalSeconds, DEFAULT_CONFIG.updateIntervalSeconds, 5, 3600)) * 1000;
-      if (anyDeviceConfigured(config)) {
+      if (discoveryInProgress()) {
+        console.warn(`recorder: discovery is running (${discoveryRunContext.label}); skipping this poll`);
+      } else if (anyDeviceConfigured(config)) {
         await readAllStatus();
       }
     } catch (err) {
@@ -1900,7 +2060,13 @@ async function api(req, res, url) {
   }
   if (req.method === "POST" && url.pathname === "/api/discovery") {
     const body = await readBody(req);
-    return json(res, 200, await discoverDevices(body.timeout, body.mode, () => {}, body.subnets));
+    return json(
+      res,
+      200,
+      await withDiscoveryRun(`${body.mode ?? "broadcast"} discovery`, () =>
+        discoverDevices(body.timeout, body.mode, () => {}, body.subnets),
+      ),
+    );
   }
   if (req.method === "POST" && url.pathname === "/api/discovery/jobs") {
     const body = await readBody(req);
@@ -1914,6 +2080,11 @@ async function api(req, res, url) {
     return json(res, 200, discoveryJobView(job));
   }
   if (req.method === "GET" && url.pathname === "/api/status") {
+    if (discoveryInProgress()) {
+      return json(res, 409, {
+        error: `discovery is running (${discoveryRunContext.label}); status polling is paused`,
+      });
+    }
     return json(res, 200, await readAllStatus());
   }
   if (req.method === "GET" && url.pathname === "/api/history") {

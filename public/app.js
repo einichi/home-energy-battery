@@ -33,6 +33,7 @@ const state = {
   graphLoadToken: 0,
   historyLoadToken: 0,
   automationRules: [],
+  discoveryInProgress: false,
 };
 
 const TREND_LABEL_KEYS = {
@@ -263,7 +264,6 @@ const I18N = {
     homePowerMeter: "Home power meter",
     solar: "Solar",
     fuelCell: "Ene-Farm",
-    utilityMeter: "Utility meter",
     discoverySubnets: "Discovery subnets",
     optional: "optional",
     saveAddresses: "Save Addresses",
@@ -277,6 +277,7 @@ const I18N = {
     discoveryBroadcast: "Listening for device announcements",
     discoveryActiveScan: "Scanning subnet addresses",
     discoveryWaiting: "Waiting for device replies",
+    discoveryIdentifying: "Identifying device roles",
     discoveryComplete: "Discovery complete",
     discoveryFailed: "Discovery failed",
     discoveryProgressCount: "{scanned} of {total} addresses checked",
@@ -508,7 +509,6 @@ const I18N = {
     homePowerMeter: "家庭内電力メーター",
     solar: "太陽光",
     fuelCell: "エネファーム",
-    utilityMeter: "スマートメーター",
     discoverySubnets: "検出サブネット",
     optional: "任意",
     saveAddresses: "アドレスを保存",
@@ -522,6 +522,7 @@ const I18N = {
     discoveryBroadcast: "機器からの応答を待機中",
     discoveryActiveScan: "サブネット内のアドレスをスキャン中",
     discoveryWaiting: "機器からの返信を待機中",
+    discoveryIdentifying: "機器の種類を識別中",
     discoveryComplete: "自動検出が完了しました",
     discoveryFailed: "自動検出に失敗しました",
     discoveryProgressCount: "{scanned} / {total} アドレス確認済み",
@@ -1962,7 +1963,6 @@ function updateConfigControls(config) {
   $("#configMeterHost").value = config.meterHost ?? "";
   $("#configSolarHost").value = config.solarHost ?? "";
   $("#configFuelCellHosts").value = (config.fuelCellHosts ?? []).join(",");
-  $("#configSmartMeterHost").value = config.smartMeterHost ?? "";
   $("#configDiscoverySubnets").value = (config.discoverySubnets ?? []).join(
     ",",
   );
@@ -2565,6 +2565,7 @@ function scheduleNextRefresh() {
 
 async function refreshStatus() {
   if (state.historyMode) return;
+  if (state.discoveryInProgress) return;
   setServiceState("readingDevices");
   try {
     renderDashboard(await api("/api/status"));
@@ -2790,7 +2791,6 @@ function initForms() {
       solarEnabled: $("#configSolarEnabled").checked,
       fuelCellHosts: $("#configFuelCellHosts").value,
       fuelCellEnabled: $("#configFuelCellEnabled").checked,
-      smartMeterHost: $("#configSmartMeterHost").value,
       discoverySubnets: $("#configDiscoverySubnets").value,
       meterEoj: state.config?.meterEoj,
       rateMode: state.config?.rateMode,
@@ -2993,6 +2993,8 @@ function initForms() {
 
   async function startDiscovery(mode, button) {
     const buttons = [$("#broadcastDiscoverBtn"), $("#activeScanBtn")];
+    state.discoveryInProgress = true;
+    clearTimeout(state.refreshTimer);
     buttons.forEach((item) => {
       item.disabled = true;
     });
@@ -3021,11 +3023,13 @@ function initForms() {
       $("#discoveryResults").innerHTML = "";
       toast(err.message);
     } finally {
+      state.discoveryInProgress = false;
       buttons.forEach((item) => {
         item.disabled = false;
       });
       $("#broadcastDiscoverBtn").textContent = t("broadcastDiscovery");
       $("#activeScanBtn").textContent = t("activeSubnetScan");
+      scheduleNextRefresh();
     }
   }
 
@@ -3225,6 +3229,7 @@ function discoveryPhaseKey(phase) {
       broadcast: "discoveryBroadcast",
       "active-scan": "discoveryActiveScan",
       waiting: "discoveryWaiting",
+      identifying: "discoveryIdentifying",
       complete: "discoveryComplete",
       failed: "discoveryFailed",
     }[phase] ?? "discoveryStarting"
@@ -3327,7 +3332,6 @@ function localizeRole(role) {
       "Solar generation": t("solarGeneration"),
       "Home power meter": t("smartCosmoMeter"),
       "Smart Cosmo / home power meter": t("smartCosmoMeter"),
-      "Utility meter": t("utilityMeter"),
       "Ene-Farm": t("fuelCell"),
       "Water heater": state.language === "ja" ? "給湯器" : "Water heater",
       Controller: state.language === "ja" ? "コントローラー" : "Controller",
