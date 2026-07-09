@@ -6,6 +6,8 @@ controlling ECHONET Lite home-energy devices that are specific to my home. It us
 UDP/LAN communication and adds a focused CLI, a small HTTP API, and a Dockerized
 Web UI.
 
+<img width="3350" height="2336" alt="image" src="https://github.com/user-attachments/assets/f8081b99-bc15-4df6-942c-9fc2f7d97b35" />
+
 I have a Daiwa House pre-built (建売り) home which came with:
 
 - Panasonic ホームナビゲーション
