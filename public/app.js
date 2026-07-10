@@ -2475,6 +2475,23 @@ function scheduleWhen(schedule) {
   return new Date(schedule.runAt).toLocaleString();
 }
 
+function scheduleWhenSortValue(schedule) {
+  if (schedule.repeat === "daily" && /^\d{2}:\d{2}$/.test(schedule.time ?? "")) {
+    const [hours, minutes] = schedule.time.split(":").map(Number);
+    return hours * 60 + minutes;
+  }
+  const timestamp = new Date(schedule.runAt ?? schedule.createdAt ?? 0).getTime();
+  return Number.isFinite(timestamp) ? timestamp : Number.MAX_SAFE_INTEGER;
+}
+
+function sortSchedulesByWhen(schedules = []) {
+  return [...schedules].sort((a, b) => {
+    const whenDiff = scheduleWhenSortValue(a) - scheduleWhenSortValue(b);
+    if (whenDiff) return whenDiff;
+    return String(a.createdAt ?? a.id ?? "").localeCompare(String(b.createdAt ?? b.id ?? ""));
+  });
+}
+
 function scheduleDays(schedule) {
   const days =
     Array.isArray(schedule.days) && schedule.days.length
@@ -2521,14 +2538,15 @@ function schedulePayloadDetails(schedule) {
 }
 
 function renderSchedules(schedules) {
-  state.schedules = schedules;
+  const sortedSchedules = sortSchedulesByWhen(schedules);
+  state.schedules = sortedSchedules;
   const rows = $("#scheduleRows");
   rows.innerHTML = "";
-  if (!schedules.length) {
+  if (!sortedSchedules.length) {
     rows.innerHTML = `<tr><td colspan="5">${t("noSchedules")}</td></tr>`;
     return;
   }
-  for (const schedule of schedules) {
+  for (const schedule of sortedSchedules) {
     const tr = document.createElement("tr");
     const status = schedule.running
       ? t("running")
