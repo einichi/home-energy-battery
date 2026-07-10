@@ -935,6 +935,26 @@ function pushSampleToTrends(sample, options = {}) {
   }
 }
 
+function ensureCircuitTrendConfigsForSamples(samples = []) {
+  for (const sample of samples) {
+    for (const channel of Object.keys(sample.circuitPowerW ?? {})) {
+      ensureCircuitTrendConfig(channel);
+    }
+  }
+}
+
+function appendSampleToTrendBuffers(sample) {
+  const time = new Date(sample.timestamp).getTime();
+  if (!Number.isFinite(time)) return false;
+  for (const name of Object.keys(TREND_CONFIG)) {
+    (state.trendHistory[name] ??= []).push({
+      time,
+      value: sampleValueForTrend(name, sample),
+    });
+  }
+  return true;
+}
+
 function setHistoryRange(durationMs, end = new Date()) {
   $("#historyEnd").value = localDateTimeValue(end);
   $("#historyStart").value = localDateTimeValue(new Date(end.getTime() - durationMs));
@@ -992,6 +1012,7 @@ async function loadHistorySamplesAsync(history, { target = "dashboard", graphNam
   setLoadProgress(prefix, 0, total, true);
   if (target === "dashboard") {
     resetTrendHistory();
+    ensureCircuitTrendConfigsForSamples(samples);
     state.historyHorizonMs = historyHorizonForSamples(samples);
   } else {
     state.graphPoints = [];
@@ -999,6 +1020,8 @@ async function loadHistorySamplesAsync(history, { target = "dashboard", graphNam
     state.graphHistoryHorizonMs = historyHorizonForSamples(samples);
   }
   const batchSize = 400;
+  let lastDrawAt = 0;
+  let drewFinalBatch = false;
   for (let index = 0; index < samples.length; index += batchSize) {
     if (token !== state[tokenKey]) return false;
     const batch = samples.slice(index, index + batchSize);
@@ -1006,7 +1029,7 @@ async function loadHistorySamplesAsync(history, { target = "dashboard", graphNam
       const time = new Date(sample.timestamp).getTime();
       if (!Number.isFinite(time)) continue;
       if (target === "dashboard") {
-        pushSampleToTrends(sample, { draw: false });
+        appendSampleToTrendBuffers(sample);
       } else {
         const value = sampleValueForTrend(graphName, sample);
         state.graphPoints.push({ time, value });
@@ -1014,12 +1037,19 @@ async function loadHistorySamplesAsync(history, { target = "dashboard", graphNam
     }
     const parsed = Math.min(index + batch.length, total);
     setLoadProgress(prefix, parsed, total, true);
-    if (target === "dashboard") drawAllTrends();
-    else drawGraphAnalysis();
+    const now = Date.now();
+    if (now - lastDrawAt > 250 || parsed === total) {
+      if (target === "dashboard") drawAllTrends();
+      else drawGraphAnalysis();
+      lastDrawAt = now;
+      drewFinalBatch = parsed === total;
+    }
     await nextFrame();
   }
-  if (target === "dashboard") drawAllTrends();
-  else drawGraphAnalysis();
+  if (!drewFinalBatch) {
+    if (target === "dashboard") drawAllTrends();
+    else drawGraphAnalysis();
+  }
   finishLoadProgress(prefix, total, total);
   return true;
 }
@@ -1172,12 +1202,19 @@ function drawTrendCanvas(name, canvas, points, hover, horizonMs) {
     ctx.stroke();
   }
 
-  const validPoints = points.filter((point) => Number.isFinite(point.value));
-  const values = validPoints.map((point) => point.value);
-  let min = config.min ?? (values.length ? Math.min(...values) : 0);
+  let validCount = 0;
+  let observedMin = Infinity;
+  let observedMax = -Infinity;
+  for (const point of points) {
+    if (!Number.isFinite(point.value)) continue;
+    validCount += 1;
+    observedMin = Math.min(observedMin, point.value);
+    observedMax = Math.max(observedMax, point.value);
+  }
+  let min = config.min ?? (validCount ? observedMin : 0);
   let max =
     config.max ??
-    (values.length ? Math.max(...values) : config.signed ? 1000 : 100);
+    (validCount ? observedMax : config.signed ? 1000 : 100);
   if (config.includeZero) {
     min = Math.min(min, 0);
     max = Math.max(max, 0);
@@ -1234,7 +1271,7 @@ function drawTrendCanvas(name, canvas, points, hover, horizonMs) {
   ctx.textAlign = "center";
   ctx.fillText(t("timeAxis"), pad.left + chartWidth / 2, height - 3);
 
-  if (!points.length || !validPoints.length) return;
+  if (!points.length || !validCount) return;
 
   const now = points[points.length - 1].time;
   const start = now - horizonMs;
@@ -1256,13 +1293,16 @@ function drawTrendCanvas(name, canvas, points, hover, horizonMs) {
     5,
     Number(state.config?.updateIntervalSeconds ?? ACTIVE_REFRESH_MS / 1000),
   ) * 1000;
-  const sampleIntervals = points
-    .slice(1)
-    .map((point, index) => point.time - points[index].time)
-    .filter((interval) => Number.isFinite(interval) && interval > 0)
-    .sort((a, b) => a - b);
-  const typicalIntervalMs = sampleIntervals.length
-    ? sampleIntervals[Math.floor((sampleIntervals.length - 1) / 2)]
+  let intervalTotal = 0;
+  let intervalCount = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const interval = points[index].time - points[index - 1].time;
+    if (!Number.isFinite(interval) || interval <= 0) continue;
+    intervalTotal += interval;
+    intervalCount += 1;
+  }
+  const typicalIntervalMs = intervalCount
+    ? intervalTotal / intervalCount
     : configuredIntervalMs;
   const gapThresholdMs = Math.max(configuredIntervalMs, typicalIntervalMs) * 3;
   const segments = [];

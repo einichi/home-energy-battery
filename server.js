@@ -2,10 +2,12 @@
 import { execFile } from "node:child_process";
 import dgram from "node:dgram";
 import { randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { appendFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -399,6 +401,44 @@ function parseHistorySamples(text) {
     .filter(Boolean);
 }
 
+async function readHistorySamplesInRange(startMs, endMs) {
+  try {
+    await stat(HISTORY_FILE);
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  }
+  const samples = [];
+  const stream = createReadStream(HISTORY_FILE, { encoding: "utf8" });
+  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  let lineNumber = 0;
+  try {
+    for await (const line of lines) {
+      lineNumber += 1;
+      if (!line.trim()) continue;
+      let sample = null;
+      try {
+        sample = parseJsonWithContext(line, `${HISTORY_FILE}:line ${lineNumber}`);
+      } catch (err) {
+        logDetailedError("history", err);
+        continue;
+      }
+      const time = new Date(sample.timestamp).getTime();
+      if (!Number.isFinite(time)) continue;
+      if (time > endMs) {
+        lines.close();
+        stream.destroy();
+        break;
+      }
+      if (time >= startMs) samples.push(sample);
+    }
+  } finally {
+    lines.close();
+    if (!stream.destroyed) stream.destroy();
+  }
+  return samples;
+}
+
 async function writeJsonFileAtomic(file, data) {
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`);
@@ -643,17 +683,7 @@ async function readHistoryRange(start, end, config = DEFAULT_CONFIG) {
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs > endMs) {
     throw new Error("valid start and end date/time are required");
   }
-  let text = "";
-  try {
-    text = await readFile(HISTORY_FILE, "utf8");
-  } catch (err) {
-    if (err.code !== "ENOENT") throw err;
-  }
-  const samples = parseHistorySamples(text)
-    .filter((sample) => {
-      const time = new Date(sample.timestamp).getTime();
-      return time >= startMs && time <= endMs;
-    });
+  const samples = await readHistorySamplesInRange(startMs, endMs);
   const guardTriggerSampleTimes = new Set(
     samples
       .filter((sample) => Number(sample.guardTriggerCount ?? 0) > 0 && sample.timestamp)
