@@ -248,6 +248,34 @@
             <strong id="guardTriggerCount">--</strong>
             <small id="guardTriggerCountPeriod" class="widget-note">--</small>
           </article>
+          <article class="widget energy-sources-widget" data-widget-id="energySources" data-widget-group="status" data-feature="energy-sources">
+            <header class="energy-sources-header">
+              <span data-i18n="energySources">Energy Sources</span>
+              <small id="energySourcesPeriod" class="widget-note">--</small>
+            </header>
+            <div class="energy-sources-bar" aria-hidden="true">
+              <i id="energyPeakBar" class="energy-source-peak"></i>
+              <i id="energyOffPeakBar" class="energy-source-off-peak"></i>
+              <i id="energySolarBar" class="energy-source-solar"></i>
+            </div>
+            <div class="energy-source-metrics">
+              <div class="energy-source-metric">
+                <span><i class="energy-source-swatch energy-source-peak"></i><span data-i18n="peakGridEnergy">Peak grid</span></span>
+                <strong id="energyPeakValue">--</strong>
+                <small id="energyPeakShare">--</small>
+              </div>
+              <div class="energy-source-metric">
+                <span><i class="energy-source-swatch energy-source-off-peak"></i><span data-i18n="offPeakGridEnergy">Off-peak grid</span></span>
+                <strong id="energyOffPeakValue">--</strong>
+                <small><span id="energyOffPeakShare">--</span> · <span data-i18n="includesBatteryCharging">Includes battery charging</span></small>
+              </div>
+              <div class="energy-source-metric">
+                <span><i class="energy-source-swatch energy-source-solar"></i><span data-i18n="solarUsedOnSite">Solar used on site</span></span>
+                <strong id="energySolarValue">--</strong>
+                <small id="energySolarShare">--</small>
+              </div>
+            </div>
+          </article>
           </div>
         </section>
       </section>

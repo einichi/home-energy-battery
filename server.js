@@ -50,6 +50,7 @@ const DEFAULT_DASHBOARD_WIDGETS = [
   { id: "powerImported", group: "status", visible: true, priority: 90 },
   { id: "powerExported", group: "status", visible: true, priority: 100 },
   { id: "guardTriggerCount", group: "status", visible: true, priority: 110 },
+  { id: "energySources", group: "status", visible: true, priority: 120 },
 ];
 
 // Public defaults use RFC 5737 documentation addresses. Real deployments should
@@ -1433,6 +1434,44 @@ function hasPowerSample(sample, directKey, wattsKey, previousSample) {
   return Boolean(previousSample?.timestamp && sample?.timestamp && Number.isFinite(Number(sample?.[wattsKey])));
 }
 
+function summarizeEnergySources(samples, config, solarGenerationKwh, gridExportKwh) {
+  const standardRate = configNumber(
+    config.standardRateYenPerKwh,
+    DEFAULT_CONFIG.standardRateYenPerKwh,
+    0,
+    1000,
+  );
+  const grid = samples.reduce(
+    (totals, sample, index) => {
+      const importedKwh = samplePowerKwh(
+        sample,
+        "gridImportKwh",
+        "gridImportW",
+        samples[index - 1],
+      );
+      const recordedRate = Number(sample.rateYenPerKwh);
+      const activeRate = Number.isFinite(recordedRate)
+        ? recordedRate
+        : rateForTimestamp(config.rateBands, sample.timestamp, standardRate).yenPerKwh;
+      if (activeRate < standardRate) totals.offPeakGridKwh += importedKwh;
+      else totals.peakGridKwh += importedKwh;
+      return totals;
+    },
+    { peakGridKwh: 0, offPeakGridKwh: 0 },
+  );
+  const solarUsedKwh = Math.max(0, solarGenerationKwh - gridExportKwh);
+  const totalKwh = grid.peakGridKwh + grid.offPeakGridKwh + solarUsedKwh;
+  const percent = (value) => totalKwh > 0 ? (value / totalKwh) * 100 : 0;
+  return {
+    ...grid,
+    solarUsedKwh,
+    totalKwh,
+    peakGridPercent: percent(grid.peakGridKwh),
+    offPeakGridPercent: percent(grid.offPeakGridKwh),
+    solarUsedPercent: percent(solarUsedKwh),
+  };
+}
+
 function summarizeSamples(samples, config = DEFAULT_CONFIG, extras = {}) {
   const solarGenerationKwh = samples.reduce((sum, sample) => sum + sampleSolarGenerationKwh(sample), 0);
   const gridImportKwh = samples.reduce(
@@ -1478,6 +1517,12 @@ function summarizeSamples(samples, config = DEFAULT_CONFIG, extras = {}) {
     (sum, sample) => sum + Math.max(0, Number(sample.guardTriggerCount ?? 0) || 0),
     0,
   ) + Math.max(0, Number(extras.guardTriggerCount ?? 0) || 0);
+  const energySources = summarizeEnergySources(
+    samples,
+    config,
+    solarGenerationKwh,
+    gridExportKwh,
+  );
   return {
     sampleCount: samples.length,
     start: samples[0]?.timestamp ?? null,
@@ -1497,6 +1542,7 @@ function summarizeSamples(samples, config = DEFAULT_CONFIG, extras = {}) {
     averageStateOfChargePercent,
     co2SavingKg: solarGenerationKwh * co2TonnesPerKwh * 1000,
     guardTriggerCount,
+    energySources,
   };
 }
 

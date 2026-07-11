@@ -64,7 +64,7 @@ assert.equal(simple.smartCosmoEnabled, true);
 assert.deepEqual(simple.circuitLabels, {});
 assert.equal(simple.circuitSortMode, "number");
 assert.equal(rateForTimestamp(simple.rateBands, "2026-05-31T23:30:00+09:00").yenPerKwh, 42);
-assert.equal(simple.dashboardWidgets.length, 18);
+assert.equal(simple.dashboardWidgets.length, 19);
 assert.equal(simple.dashboardWidgets[0].id, "solarPower");
 assert.deepEqual(simple.batteryCapabilities, { usableCapacityKwh: null, maximumChargeWatts: null });
 assert.equal(simple.solarPlanner.enabled, false);
@@ -285,7 +285,7 @@ const normalizedWidgets = normalizeDashboardWidgets([
   { id: "houseDemandPower", visible: true, priority: "bad" },
   { id: "unknownWidget", visible: true, priority: 1 },
 ]);
-assert.equal(normalizedWidgets.length, 18);
+assert.equal(normalizedWidgets.length, 19);
 assert.deepEqual(normalizedWidgets.find((widget) => widget.id === "solarPower"), {
   id: "solarPower",
   group: "trends",
@@ -303,6 +303,7 @@ assert.equal(normalizedWidgets.some((widget) => widget.id === "fuelCellPower"), 
 assert.equal(normalizedWidgets.some((widget) => widget.id === "powerImported"), true);
 assert.equal(normalizedWidgets.some((widget) => widget.id === "powerExported"), true);
 assert.equal(normalizedWidgets.some((widget) => widget.id === "guardTriggerCount"), true);
+assert.equal(normalizedWidgets.some((widget) => widget.id === "energySources"), true);
 
 assert.throws(
   () => parseJsonWithContext("[1]\n[2]", "test.json"),
@@ -439,6 +440,40 @@ assert.equal(summary.circuits.find((item) => item.channel === 1).totalKwh, 0.5);
 assert.equal(summary.circuits.find((item) => item.channel === 2).totalKwh, 0.1);
 assert.equal(summary.circuitTotalKwh, 0.6);
 assert.equal(summary.guardTriggerCount, 1);
+
+const energySourceSummary = summarizeSamples([
+  {
+    timestamp: "2026-07-11T01:30:00+09:00",
+    gridImportKwh: 0.4,
+    gridExportKwh: 0,
+    solarGenerationKwh: 0,
+  },
+  {
+    timestamp: "2026-07-11T08:00:00+09:00",
+    gridImportKwh: 0.5,
+    gridExportKwh: 0.2,
+    solarGenerationKwh: 1.2,
+  },
+  {
+    timestamp: "2026-07-11T11:30:00+09:00",
+    gridImportKwh: 0.6,
+    gridExportKwh: 0,
+    solarGenerationKwh: 0,
+  },
+], {
+  standardRateYenPerKwh: 25.77,
+  rateBands: [
+    { start: "01:00", end: "05:00", yenPerKwh: 14.6, label: "Night" },
+    { start: "11:00", end: "13:00", yenPerKwh: 12.6, label: "Day" },
+  ],
+});
+assert.equal(energySourceSummary.energySources.peakGridKwh, 0.5);
+assert.equal(energySourceSummary.energySources.offPeakGridKwh, 1);
+assert.equal(energySourceSummary.energySources.solarUsedKwh, 1);
+assert.equal(energySourceSummary.energySources.totalKwh, 2.5);
+assert.equal(energySourceSummary.energySources.peakGridPercent, 20);
+assert.equal(energySourceSummary.energySources.offPeakGridPercent, 40);
+assert.equal(energySourceSummary.energySources.solarUsedPercent, 40);
 
 const reportSamples = [
   {

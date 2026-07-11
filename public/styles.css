@@ -325,6 +325,86 @@ label {
   grid-column: span 2;
 }
 
+.energy-sources-widget {
+  grid-column: 1 / -1;
+  min-height: 190px;
+  align-content: stretch;
+}
+
+.energy-sources-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.energy-sources-bar {
+  display: flex;
+  width: 100%;
+  height: 24px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #edf2f7;
+}
+
+.energy-sources-bar i {
+  display: block;
+  width: 0;
+  transition: width 180ms ease;
+}
+
+.energy-source-peak {
+  background: #d96656;
+}
+
+.energy-source-off-peak {
+  background: #16877f;
+}
+
+.energy-source-solar {
+  background: #e2aa31;
+}
+
+.energy-source-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+}
+
+.energy-source-metric {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.energy-source-metric > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.energy-source-metric strong {
+  font-size: 24px;
+}
+
+.energy-source-metric small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.energy-source-metric small span {
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+.energy-source-swatch {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  border-radius: 2px;
+}
+
 .widget span {
   font-size: 13px;
   font-weight: 800;
@@ -1637,5 +1717,10 @@ td code {
   .payload-grid {
     grid-column: span 1;
     width: 100%;
+  }
+
+  .energy-source-metrics {
+    grid-template-columns: 1fr;
+    gap: 14px;
   }
 }

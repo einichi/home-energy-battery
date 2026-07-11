@@ -85,6 +85,7 @@ const DASHBOARD_WIDGET_DEFAULTS = [
   { id: "powerImported", group: "status", labelKey: "powerImported", visible: true, priority: 90 },
   { id: "powerExported", group: "status", labelKey: "powerExported", visible: true, priority: 100 },
   { id: "guardTriggerCount", group: "status", labelKey: "guardTriggerCount", visible: true, priority: 110 },
+  { id: "energySources", group: "status", labelKey: "energySources", visible: true, priority: 120 },
 ];
 
 const DASHBOARD_WIDGET_FEATURES = {
@@ -99,6 +100,7 @@ const DASHBOARD_WIDGET_FEATURES = {
   offPeakSavings: "off-peak-savings",
   powerImported: "smart-cosmo",
   powerExported: "smart-cosmo",
+  energySources: "energy-sources",
 };
 
 const TREND_CONFIG = {
@@ -244,6 +246,11 @@ const I18N = {
     powerImported: "Power Imported",
     powerExported: "Power Exported",
     guardTriggerCount: "Demand Guard Triggers",
+    energySources: "Energy Sources",
+    peakGridEnergy: "Peak grid",
+    offPeakGridEnergy: "Off-peak grid",
+    solarUsedOnSite: "Solar used on site",
+    includesBatteryCharging: "Includes battery charging",
     houseDemand: "House Demand",
     gridImport: "Grid Import",
     gridExport: "Grid Export",
@@ -567,6 +574,11 @@ const I18N = {
     powerImported: "買電量",
     powerExported: "売電量",
     guardTriggerCount: "ブレーカー落ちガード作動回数",
+    energySources: "エネルギー供給内訳",
+    peakGridEnergy: "通常・ピーク時間帯の買電",
+    offPeakGridEnergy: "割安時間帯の買電",
+    solarUsedOnSite: "自家消費した太陽光",
+    includesBatteryCharging: "蓄電池充電を含む",
     houseDemand: "家庭内消費",
     gridImport: "買電",
     gridExport: "売電",
@@ -2344,6 +2356,9 @@ function featureEnabled(features = {}, feature) {
   if (feature === "smart-cosmo") return features.smartCosmoEnabled !== false;
   if (feature === "solar") return features.solarEnabled !== false;
   if (feature === "fuel-cell") return features.fuelCellEnabled !== false;
+  if (feature === "energy-sources") {
+    return featureEnabled(features, "smart-cosmo") && featureEnabled(features, "solar");
+  }
   if (feature === "off-peak-savings") {
     const featureRateMode = features.rateMode ?? state.config?.rateMode;
     return featureRateMode !== "simple" && featureRateMode !== undefined
@@ -2357,7 +2372,7 @@ function featureEnabled(features = {}, feature) {
 function applyFeatureVisibility(features = {}) {
   // Hide optional equipment/widgets for homes without the corresponding device
   // or calculation enabled.
-  for (const feature of ["smart-cosmo", "solar", "fuel-cell", "off-peak-savings"]) {
+  for (const feature of ["smart-cosmo", "solar", "fuel-cell", "off-peak-savings", "energy-sources"]) {
     const enabled = featureEnabled(features, feature);
     $$(`[data-feature="${feature}"]`).forEach((el) =>
       el.dataset.widgetId
@@ -2447,6 +2462,25 @@ function updateCircuitGraphPicker(ids = circuitIdsFromStatus()) {
     picker.append(option);
   }
   picker.value = sortedIds.includes(selected) ? selected : sortedIds[0];
+}
+
+function renderEnergySources(summary = {}, periodLabel = "--") {
+  const sources = summary.energySources;
+  const hasData = Number(summary.sampleCount) > 0 && sources;
+  const segments = [
+    ["Peak", "peakGridKwh", "peakGridPercent"],
+    ["OffPeak", "offPeakGridKwh", "offPeakGridPercent"],
+    ["Solar", "solarUsedKwh", "solarUsedPercent"],
+  ];
+  for (const [suffix, valueKey, percentKey] of segments) {
+    const value = Number(sources?.[valueKey]);
+    const share = Math.max(0, Math.min(100, Number(sources?.[percentKey]) || 0));
+    setText(`#energy${suffix}Value`, hasData && Number.isFinite(value) ? energyKwh(value) : "--");
+    setText(`#energy${suffix}Share`, hasData ? `${Math.round(share)}%` : "--");
+    const bar = $(`#energy${suffix}Bar`);
+    if (bar) bar.style.width = `${hasData ? share : 0}%`;
+  }
+  setText("#energySourcesPeriod", periodLabel);
 }
 
 function renderDashboard(data, options = {}) {
@@ -2577,6 +2611,7 @@ function renderDashboard(data, options = {}) {
   setText("#powerImportedPeriod", summaryPeriod);
   setText("#powerExportedPeriod", summaryPeriod);
   setText("#guardTriggerCountPeriod", summaryPeriod);
+  renderEnergySources(data.savings, summaryPeriod);
 
   renderCircuitWidgets(data);
   if (state.currentPage === "settings" && !settingsInputIsActive()) {
