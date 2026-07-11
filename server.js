@@ -880,6 +880,7 @@ function aggregateDemandDays(samples) {
   return [...days.values()].map((day) => ({
     ...day,
     coverage: day.buckets.size / 48,
+    daytimeCoverage: [...day.buckets.keys()].filter((index) => index >= 12 && index < 36).length / 24,
     values: new Map([...day.buckets].map(([index, bucket]) => [index, bucket.sum / bucket.count])),
   }));
 }
@@ -888,17 +889,27 @@ function predictHouseDemand(samples, targetDate = new Date(), temperatureByDay =
   const target = targetDate instanceof Date ? targetDate : new Date(targetDate);
   const targetIsWeekend = [0, 6].includes(target.getDay());
   const targetTemperature = Number(temperatureByDay.get(localDayKey(target)));
-  const validDays = aggregateDemandDays(samples).filter((day) => day.coverage >= 0.8);
+  const recordedDays = aggregateDemandDays(samples);
+  const validDays = recordedDays.filter((day) => day.daytimeCoverage >= 0.8);
   const candidates = validDays
-    .filter((day) => [0, 6].includes(day.date.getDay()) === targetIsWeekend)
     .map((day) => {
-      const ageDays = Math.max(1, (target.getTime() - day.date.getTime()) / 86_400_000);
+      const ageDays = (target.getTime() - day.date.getTime()) / 86_400_000;
+      const sameDayType = [0, 6].includes(day.date.getDay()) === targetIsWeekend;
       const temperature = Number(temperatureByDay.get(day.key));
       const temperatureDistance = Number.isFinite(targetTemperature) && Number.isFinite(temperature)
         ? Math.abs(targetTemperature - temperature)
         : 5;
-      return { ...day, score: temperatureDistance * 2 + ageDays / 14, weight: 1 / (1 + ageDays / 14 + temperatureDistance) };
+      const dayTypePenalty = sameDayType ? 0 : 14;
+      const baseWeight = 1 / (1 + ageDays / 14 + temperatureDistance);
+      return {
+        ...day,
+        ageDays,
+        sameDayType,
+        score: dayTypePenalty + temperatureDistance * 2 + ageDays / 14,
+        weight: baseWeight * (sameDayType ? 1 : 0.35),
+      };
     })
+    .filter((day) => day.ageDays > 0 && day.ageDays <= 42)
     .sort((a, b) => a.score - b.score)
     .slice(0, 8);
   const profile = new Map();
@@ -911,13 +922,17 @@ function predictHouseDemand(samples, targetDate = new Date(), temperatureByDay =
   return {
     available: validDays.length >= 7 && candidates.length >= 4 && profile.size >= 39,
     reason: validDays.length < 7
-      ? "at least seven recorded demand days are required"
+      ? `house-demand history has ${validDays.length} of ${recordedDays.length} days with at least 80% daytime coverage; 7 are required`
       : candidates.length < 4
-      ? "at least four comparable demand days are required"
+      ? `only ${candidates.length} usable demand days were found in the previous six weeks; 4 are required`
       : profile.size < 39
         ? "house-demand history coverage is below 80%"
         : null,
     comparableDays: candidates.map((day) => day.key),
+    sameDayTypeDays: candidates.filter((day) => day.sameDayType).map((day) => day.key),
+    usedDayTypeFallback: candidates.some((day) => !day.sameDayType),
+    recordedDayCount: recordedDays.length,
+    validDayCount: validDays.length,
     profile,
   };
 }
@@ -1088,6 +1103,12 @@ function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {
     requiredGridChargeKwh: requiredKwh,
     ...optimized,
     comparableDemandDays: demand.comparableDays,
+    demandHistory: {
+      recordedDayCount: demand.recordedDayCount,
+      validDayCount: demand.validDayCount,
+      sameDayTypeDayCount: demand.sameDayTypeDays.length,
+      usedDayTypeFallback: demand.usedDayTypeFallback,
+    },
     solarCalibration: calibration,
     batteryCapacity: capacityEstimate,
     slots: optimized.slots,
@@ -1730,6 +1751,12 @@ function optionalConfigNumber(value, min, max) {
   return Math.max(min, Math.min(max, n));
 }
 
+function optionalSteppedConfigNumber(value, min, max, step) {
+  const number = optionalConfigNumber(value, min, max);
+  if (number === null) return null;
+  return Math.max(min, Math.min(max, Math.round(number / step) * step));
+}
+
 function isValidTime(value) {
   if (!/^\d{2}:\d{2}$/.test(String(value ?? ""))) return false;
   const [hh, mm] = String(value).split(":").map(Number);
@@ -1796,7 +1823,7 @@ function normalizeAutomationConfig(value = {}) {
 function normalizeBatteryCapabilities(value = {}) {
   return {
     usableCapacityKwh: optionalConfigNumber(value.usableCapacityKwh, 0.1, 1000),
-    maximumChargeWatts: optionalConfigNumber(value.maximumChargeWatts, 1, 100000),
+    maximumChargeWatts: optionalSteppedConfigNumber(value.maximumChargeWatts, 50, 100000, 50),
   };
 }
 

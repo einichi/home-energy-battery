@@ -70,6 +70,9 @@ assert.equal(simple.solarPlanner.enabled, false);
 assert.equal(simple.solarPlanner.systemLossPercent, 14);
 assert.equal(simple.solarPlanner.targetSocPercent, 100);
 assert.equal(simple.solarPlanner.forecastMarginPercent, 10);
+assert.equal(cleanConfig({ batteryCapabilities: { maximumChargeWatts: 2200 } }).batteryCapabilities.maximumChargeWatts, 2200);
+assert.equal(cleanConfig({ batteryCapabilities: { maximumChargeWatts: 2224 } }).batteryCapabilities.maximumChargeWatts, 2200);
+assert.equal(cleanConfig({ batteryCapabilities: { maximumChargeWatts: 2225 } }).batteryCapabilities.maximumChargeWatts, 2250);
 
 assert.equal(solarPowerFromIrradiance(500, {
   solarPlanner: { arrayPeakKw: 5, systemLossPercent: 14 },
@@ -158,6 +161,27 @@ for (let week = 1; week <= 8; week += 1) {
 const demandPrediction = predictHouseDemand(demandSamples, new Date(2026, 6, 13));
 assert.equal(demandPrediction.available, true);
 assert.equal(demandPrediction.profile.size, 48);
+
+const youngDemandHistory = [];
+for (let daysAgo = 1; daysAgo <= 10; daysAgo += 1) {
+  const day = new Date(2026, 6, 12 - daysAgo);
+  for (let bucket = 0; bucket < 48; bucket += 1) {
+    youngDemandHistory.push({
+      timestamp: new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(bucket / 2), bucket % 2 ? 30 : 0).toISOString(),
+      houseDemandW: 900 + daysAgo * 20,
+    });
+  }
+}
+const youngWeekendPrediction = predictHouseDemand(youngDemandHistory, new Date(2026, 6, 12));
+assert.equal(youngWeekendPrediction.available, true);
+assert.equal(youngWeekendPrediction.validDayCount, 10);
+assert.equal(youngWeekendPrediction.sameDayTypeDays.length, 3);
+assert.equal(youngWeekendPrediction.usedDayTypeFallback, true);
+
+const incompleteDemandHistory = youngDemandHistory.filter((sample) => new Date(sample.timestamp).getHours() < 8);
+const incompletePrediction = predictHouseDemand(incompleteDemandHistory, new Date(2026, 6, 12));
+assert.equal(incompletePrediction.available, false);
+assert.match(incompletePrediction.reason, /0 of 10 days.*daytime coverage/);
 
 const capacitySamples = [{ timestamp: "2026-07-11T00:00:00.000Z", stateOfChargePercent: 20, batteryPowerW: 1000 }];
 for (let index = 1; index <= 6; index += 1) {
