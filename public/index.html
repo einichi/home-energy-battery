@@ -966,7 +966,7 @@
           <div class="panel solar-planner-panel">
             <div class="panel-title">
               <h1 data-i18n="solarForecastCharging">Solar Forecast & Charging</h1>
-              <p data-i18n="solarPlannerHelp">Use weather and household history to reserve discounted charging only for the predicted solar shortfall.</p>
+              <p data-i18n="solarPlannerHelp">Charge toward the configured maximum in each discounted period while preserving forecast solar headroom and deferring energy to cheaper upcoming periods.</p>
             </div>
             <form id="solarPlannerForm" class="config-form">
               <label class="check-row">
@@ -981,7 +981,7 @@
                 <label><span data-i18n="panelTilt">Panel tilt (degrees)</span><input id="solarPlannerTilt" type="number" min="0" max="90" step="1" inputmode="numeric" /></label>
                 <label><span data-i18n="panelAzimuth">Panel azimuth (0 south, -90 east, 90 west)</span><input id="solarPlannerAzimuth" type="number" min="-180" max="180" step="1" inputmode="numeric" /></label>
                 <label><span data-i18n="systemLoss">Initial system loss (%)</span><input id="solarPlannerLoss" type="number" min="0" max="50" step="1" inputmode="decimal" /></label>
-                <label><span data-i18n="sunsetSocTarget">End-of-solar-day SOC target (%)</span><input id="solarPlannerTargetSoc" type="number" min="50" max="100" step="1" inputmode="numeric" /></label>
+                <label><span data-i18n="sunsetSocTarget">Maximum off-peak SOC target (%)</span><input id="solarPlannerTargetSoc" type="number" min="50" max="100" step="1" inputmode="numeric" /></label>
                 <label><span data-i18n="forecastMargin">Forecast confidence margin (%)</span><input id="solarPlannerMargin" type="number" min="0" max="50" step="1" inputmode="decimal" /></label>
               </div>
               <div class="planner-actions">
@@ -1001,7 +1001,7 @@
               <div><dt data-i18n="plannerConfidence">Forecast confidence</dt><dd id="solarPlannerConfidence">--</dd></div>
               <div><dt data-i18n="plannerState">Planner state</dt><dd id="solarPlannerState">--</dd></div>
             </dl>
-            <h2 class="guard-log-title" data-i18n="selectedRateWindows">Selected rate windows</h2>
+            <h2 class="guard-log-title" data-i18n="selectedRateWindows">Discounted window plan</h2>
             <div id="solarPlannerWindows" class="planner-windows"></div>
             <h2 class="guard-log-title" data-i18n="decisionLog">Decision log</h2>
             <div id="solarPlannerLog" class="automation-log" aria-live="polite"></div>

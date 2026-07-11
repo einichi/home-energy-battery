@@ -16,6 +16,7 @@ import {
   optimizeDiscountedChargeSlots,
   parseJsonWithContext,
   parseOpenMeteoForecast,
+  planChronologicalDiscountedCharging,
   plannerTimezoneError,
   rateForTimestamp,
   recoverConcatenatedJsonValue,
@@ -147,6 +148,81 @@ const standardOnly = optimizeDiscountedChargeSlots({
 });
 assert.equal(standardOnly.slots.length, 0);
 assert.equal(standardOnly.unmetChargeKwh, 2);
+
+function chronologicalSlot(hour, band, netKwh = 0, highSolarNetKwh = netKwh) {
+  const startMs = Date.parse("2026-07-12T00:00:00.000Z") + hour * 3_600_000;
+  return {
+    startMs,
+    endMs: startMs + 30 * 60_000,
+    band,
+    demandW: 1000,
+    netKwh,
+    highSolarNetKwh,
+    chargeCapacityKwh: band ? 1 : 0,
+  };
+}
+
+const userTariffTimeline = [];
+for (let halfHour = 0; halfHour < 38; halfHour += 1) {
+  const hour = halfHour / 2;
+  const band = hour >= 1 && hour < 5
+    ? { start: "01:00", end: "05:00", yenPerKwh: 14.6, label: "Night" }
+    : hour >= 11 && hour < 13
+      ? { start: "11:00", end: "13:00", yenPerKwh: 12.6, label: "Day" }
+      : null;
+  const netKwh = hour >= 5 && hour < 11 ? -0.2 : hour >= 13 ? -0.1 : 0;
+  userTariffTimeline.push(chronologicalSlot(hour, band, netKwh));
+}
+const userTariffPlan = planChronologicalDiscountedCharging({
+  timeline: userTariffTimeline,
+  currentStoredKwh: 1.5,
+  capacityKwh: 5,
+  dischargeFloorKwh: 1,
+  maximumTargetPercent: 100,
+  maximumChargeWatts: 2000,
+});
+assert.equal(userTariffPlan.windows.length, 2);
+assert.equal(userTariffPlan.windows[0].bridgeToCheaperWindow, true);
+assert.ok(Math.abs(userTariffPlan.windows[0].targetStoredKwh - 3.4) < 0.0001);
+assert.ok(Math.abs(userTariffPlan.windows[0].plannedChargeKwh - 1.9) < 0.0001);
+assert.equal(userTariffPlan.windows[1].targetSocPercent, 100);
+assert.ok(Math.abs(userTariffPlan.windows[1].plannedChargeKwh - 4) < 0.0001);
+assert.ok(Math.abs(userTariffPlan.expectedEndStoredKwh - 3.8) < 0.0001);
+
+const solarHeadroomTimeline = userTariffTimeline.map((slot) => ({ ...slot }));
+for (let index = 26; index < 30; index += 1) {
+  solarHeadroomTimeline[index].netKwh = 0.2;
+  solarHeadroomTimeline[index].highSolarNetKwh = 0.25;
+}
+const solarHeadroomPlan = planChronologicalDiscountedCharging({
+  timeline: solarHeadroomTimeline,
+  currentStoredKwh: 1.5,
+  capacityKwh: 5,
+  dischargeFloorKwh: 1,
+  maximumTargetPercent: 100,
+  maximumChargeWatts: 2000,
+});
+assert.ok(Math.abs(solarHeadroomPlan.windows[1].solarHeadroomKwh - 1) < 0.0001);
+assert.equal(solarHeadroomPlan.windows[1].targetSocPercent, 80);
+
+const moreExpensiveLaterTimeline = [
+  chronologicalSlot(1, { start: "01:00", end: "02:00", yenPerKwh: 10, label: "Cheapest" }),
+  chronologicalSlot(1.5, { start: "01:00", end: "02:00", yenPerKwh: 10, label: "Cheapest" }),
+  chronologicalSlot(2, null, -0.2),
+  chronologicalSlot(2.5, null, -0.2),
+  chronologicalSlot(3, { start: "03:00", end: "04:00", yenPerKwh: 20, label: "Later" }),
+  chronologicalSlot(3.5, { start: "03:00", end: "04:00", yenPerKwh: 20, label: "Later" }),
+];
+const moreExpensiveLaterPlan = planChronologicalDiscountedCharging({
+  timeline: moreExpensiveLaterTimeline,
+  currentStoredKwh: 3,
+  capacityKwh: 5,
+  dischargeFloorKwh: 1,
+  maximumTargetPercent: 100,
+  maximumChargeWatts: 2000,
+});
+assert.equal(moreExpensiveLaterPlan.windows[0].bridgeToCheaperWindow, false);
+assert.equal(moreExpensiveLaterPlan.windows[0].targetSocPercent, 100);
 
 const demandSamples = [];
 for (let week = 1; week <= 8; week += 1) {

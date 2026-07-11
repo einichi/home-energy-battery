@@ -288,7 +288,7 @@ const I18N = {
     saveBatteryCapabilities: "Save Battery Capabilities",
     batteryCapabilitiesSaved: "Battery capabilities saved",
     solarForecastCharging: "Solar Forecast & Charging",
-    solarPlannerHelp: "Use weather and household history to reserve discounted charging only for the predicted solar shortfall.",
+    solarPlannerHelp: "Charge toward the configured maximum in each discounted period while preserving forecast solar headroom and deferring energy to cheaper upcoming periods.",
     enableSolarPlanner: "Enable adaptive solar charging",
     latitude: "Latitude",
     longitude: "Longitude",
@@ -296,7 +296,7 @@ const I18N = {
     panelTilt: "Panel tilt (degrees)",
     panelAzimuth: "Panel azimuth (0 south, -90 east, 90 west)",
     systemLoss: "Initial system loss (%)",
-    sunsetSocTarget: "End-of-solar-day SOC target (%)",
+    sunsetSocTarget: "Maximum off-peak SOC target (%)",
     forecastMargin: "Forecast confidence margin (%)",
     saveSolarPlanner: "Save Solar Planner",
     solarPlannerSaved: "Solar planner saved",
@@ -313,7 +313,10 @@ const I18N = {
     plannerConfidence: "Forecast confidence",
     calibratedForecast: "calibrated",
     initialForecastModel: "initial model",
-    selectedRateWindows: "Selected rate windows",
+    selectedRateWindows: "Discounted window plan",
+    windowTarget: "target",
+    solarHeadroom: "solar headroom",
+    bridgeCharge: "bridge to cheaper period",
     decisionLog: "Decision log",
     forecastDataAttribution: "Weather forecasts:",
     schedulesDisabledByPlanner: "Schedules are preserved but disabled while adaptive solar charging is enabled.",
@@ -606,7 +609,7 @@ const I18N = {
     saveBatteryCapabilities: "蓄電池性能を保存",
     batteryCapabilitiesSaved: "蓄電池性能を保存しました",
     solarForecastCharging: "太陽光予測と充電",
-    solarPlannerHelp: "天気予報と家庭の使用履歴から太陽光不足分のみを割安な料金帯で充電します。",
+    solarPlannerHelp: "各割安料金帯で設定上限までの充電を目指し、予測される太陽光の余地を残しつつ、より安い後続時間帯へ充電を繰り延べます。",
     enableSolarPlanner: "太陽光適応充電を有効にする",
     latitude: "緯度",
     longitude: "経度",
@@ -614,7 +617,7 @@ const I18N = {
     panelTilt: "パネル傾斜角 (度)",
     panelAzimuth: "パネル方位角 (南0、東-90、西90)",
     systemLoss: "初期システム損失 (%)",
-    sunsetSocTarget: "日没時の充電率目標 (%)",
+    sunsetSocTarget: "割安時間帯の最大充電率目標 (%)",
     forecastMargin: "予測信頼余裕 (%)",
     saveSolarPlanner: "太陽光充電設定を保存",
     solarPlannerSaved: "太陽光充電設定を保存しました",
@@ -631,7 +634,10 @@ const I18N = {
     plannerConfidence: "予測信頼度",
     calibratedForecast: "学習済み",
     initialForecastModel: "初期モデル",
-    selectedRateWindows: "選択した料金時間帯",
+    selectedRateWindows: "割安料金帯の充電計画",
+    windowTarget: "目標",
+    solarHeadroom: "太陽光用空き容量",
+    bridgeCharge: "より安い時間帯までのつなぎ充電",
     decisionLog: "判断ログ",
     forecastDataAttribution: "天気予報:",
     schedulesDisabledByPlanner: "太陽光適応充電が有効な間、スケジュールは保存されたまま実行されません。",
@@ -1956,8 +1962,16 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
         : status.reason ?? "Unavailable";
   const windows = $("#solarPlannerWindows");
   windows.innerHTML = "";
+  for (const windowPlan of plan.windows ?? []) {
+    const row = document.createElement("div");
+    const bridge = windowPlan.bridgeToCheaperWindow ? ` · ${t("bridgeCharge")}` : "";
+    row.className = "planner-window-summary";
+    row.textContent = `${windowPlan.label} · ${new Date(windowPlan.start).toLocaleTimeString()}–${new Date(windowPlan.end).toLocaleTimeString()} · ${t("windowTarget")} ${Number(windowPlan.targetSocPercent).toFixed(0)}% · ${t("solarHeadroom")} ${formatPlannerKwh(windowPlan.solarHeadroomKwh)} · ${formatPlannerKwh(windowPlan.plannedChargeKwh)}${bridge}`;
+    windows.append(row);
+  }
   for (const slot of plan.slots ?? []) {
     const row = document.createElement("div");
+    row.className = "planner-slot-summary";
     row.textContent = `${new Date(slot.start).toLocaleString()} - ${new Date(slot.end).toLocaleTimeString()} · ${slot.targetWh} Wh · ${slot.yenPerKwh} yen/kWh`;
     windows.append(row);
   }

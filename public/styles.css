@@ -1198,6 +1198,16 @@ output {
   font-size: 12px;
 }
 
+.planner-window-summary {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.planner-slot-summary {
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+}
+
 .data-attribution {
   margin-top: 12px;
   color: var(--muted);
