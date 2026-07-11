@@ -1136,6 +1136,74 @@ output {
   font-weight: 800;
 }
 
+.battery-capabilities-form {
+  margin-bottom: 16px;
+}
+
+.planner-notice {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.planner-disabled {
+  opacity: 0.68;
+}
+
+.planner-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(2, minmax(120px, auto));
+  gap: 10px;
+}
+
+.planner-actions button {
+  grid-column: auto;
+}
+
+.planner-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 16px 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--border);
+}
+
+.planner-status-grid div {
+  min-width: 0;
+  padding: 10px;
+  background: #fff;
+}
+
+.planner-status-grid dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.planner-status-grid dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.planner-windows {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.data-attribution {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .trend-tooltip {
   position: fixed;
   z-index: 50;
@@ -1317,8 +1385,12 @@ td code {
     order: 7;
   }
 
-  .data-panel {
+  .solar-planner-panel {
     order: 8;
+  }
+
+  .data-panel {
+    order: 9;
   }
 }
 
@@ -1528,6 +1600,11 @@ td code {
   .rate-form .feature-options,
   .rate-mode-options,
   .rate-mode-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .planner-actions,
+  .planner-status-grid {
     grid-template-columns: 1fr;
   }
 

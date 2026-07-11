@@ -7,14 +7,22 @@ import {
   cleanConfig,
   countGuardTriggersForRange,
   evaluateAutomationRule,
+  estimateEffectiveBatteryCapacity,
+  forecastIsFresh,
   normalizeCircuitLabels,
   normalizeDashboardWidgets,
   normalizeRateBands,
   normalizeSubnets,
+  optimizeDiscountedChargeSlots,
   parseJsonWithContext,
+  parseOpenMeteoForecast,
+  plannerTimezoneError,
   rateForTimestamp,
   recoverConcatenatedJsonValue,
   sampleFromStatus,
+  solarPlannerBaseAvailability,
+  solarPowerFromIrradiance,
+  predictHouseDemand,
   summarizeSamples,
 } from "../server.js";
 
@@ -57,6 +65,111 @@ assert.equal(simple.circuitSortMode, "number");
 assert.equal(rateForTimestamp(simple.rateBands, "2026-05-31T23:30:00+09:00").yenPerKwh, 42);
 assert.equal(simple.dashboardWidgets.length, 18);
 assert.equal(simple.dashboardWidgets[0].id, "solarPower");
+assert.deepEqual(simple.batteryCapabilities, { usableCapacityKwh: null, maximumChargeWatts: null });
+assert.equal(simple.solarPlanner.enabled, false);
+assert.equal(simple.solarPlanner.systemLossPercent, 14);
+assert.equal(simple.solarPlanner.targetSocPercent, 100);
+assert.equal(simple.solarPlanner.forecastMarginPercent, 10);
+
+assert.equal(solarPowerFromIrradiance(500, {
+  solarPlanner: { arrayPeakKw: 5, systemLossPercent: 14 },
+}), 2150);
+assert.equal(solarPowerFromIrradiance(2000, {
+  solarPlanner: { arrayPeakKw: 5, systemLossPercent: 14 },
+}), 5000);
+assert.equal(forecastIsFresh({ fetchedAt: "2026-07-11T00:00:00.000Z" }, new Date("2026-07-11T05:59:00.000Z")), true);
+assert.equal(forecastIsFresh({ fetchedAt: "2026-07-11T00:00:00.000Z" }, new Date("2026-07-11T06:01:00.000Z")), false);
+const parsedForecast = parseOpenMeteoForecast({
+  timezone: "Asia/Tokyo",
+  utc_offset_seconds: 32400,
+  hourly: {
+    time: ["2026-07-11T12:00"],
+    shortwave_radiation: [800],
+    global_tilted_irradiance: [900],
+    cloud_cover: [20],
+    temperature_2m: [31],
+  },
+  daily: { time: ["2026-07-11"], sunrise: ["2026-07-11T04:35"], sunset: ["2026-07-11T18:58"] },
+}, new Date("2026-07-11T00:00:00.000Z"));
+assert.equal(parsedForecast.hours[0].tiltedIrradianceWm2, 900);
+assert.equal(parsedForecast.days[0].sunset, "2026-07-11T18:58");
+const originalTimezone = process.env.TZ;
+process.env.TZ = "Asia/Tokyo";
+assert.equal(plannerTimezoneError(parsedForecast), null);
+process.env.TZ = "UTC";
+assert.match(plannerTimezoneError(parsedForecast), /does not match/);
+if (originalTimezone === undefined) delete process.env.TZ;
+else process.env.TZ = originalTimezone;
+
+const plannerConfig = cleanConfig({
+  solarEnabled: true,
+  smartCosmoEnabled: true,
+  rateMode: "multi",
+  standardRateYenPerKwh: 40,
+  rateBands: [
+    { start: "23:00", end: "01:00", yenPerKwh: 15, label: "Cheapest" },
+    { start: "01:00", end: "03:00", yenPerKwh: 20, label: "Night" },
+  ],
+  automation: { breakerVoltage: 100, breakerAmps: 60, reserveAmps: 5 },
+  batteryCapabilities: { usableCapacityKwh: 10, maximumChargeWatts: 2000 },
+  solarPlanner: { enabled: true, latitude: -33.8, longitude: -151.2, arrayPeakKw: 5 },
+});
+assert.equal(solarPlannerBaseAvailability(plannerConfig).available, true);
+assert.equal(solarPlannerBaseAvailability(cleanConfig({ ...plannerConfig, rateMode: "simple" })).available, false);
+const optimizedSlots = optimizeDiscountedChargeSlots({
+  config: plannerConfig,
+  start: new Date(2026, 6, 11, 23, 0),
+  end: new Date(2026, 6, 12, 3, 0),
+  requiredKwh: 4.5,
+});
+assert.equal(optimizedSlots.plannedChargeKwh, 4.5);
+assert.equal(optimizedSlots.unmetChargeKwh, 0);
+assert.equal(optimizedSlots.slots[0].yenPerKwh, 15);
+assert.equal(optimizedSlots.slots.at(-1).yenPerKwh, 20);
+assert.equal(optimizedSlots.slots.filter((slot) => slot.yenPerKwh === 15).at(-1).end, new Date(2026, 6, 12, 1, 0).toISOString());
+const smallCharge = optimizeDiscountedChargeSlots({
+  config: plannerConfig,
+  start: new Date(2026, 6, 11, 23, 0),
+  end: new Date(2026, 6, 12, 3, 0),
+  requiredKwh: 0.5,
+});
+assert.equal(smallCharge.slots.length, 1);
+assert.equal(smallCharge.slots[0].start, new Date(2026, 6, 12, 0, 45).toISOString());
+assert.equal(smallCharge.slots[0].end, new Date(2026, 6, 12, 1, 0).toISOString());
+const standardOnly = optimizeDiscountedChargeSlots({
+  config: plannerConfig,
+  start: new Date(2026, 6, 11, 12, 0),
+  end: new Date(2026, 6, 11, 18, 0),
+  requiredKwh: 2,
+});
+assert.equal(standardOnly.slots.length, 0);
+assert.equal(standardOnly.unmetChargeKwh, 2);
+
+const demandSamples = [];
+for (let week = 1; week <= 8; week += 1) {
+  const day = new Date(2026, 6, 13 - week * 7);
+  for (let bucket = 0; bucket < 48; bucket += 1) {
+    demandSamples.push({
+      timestamp: new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(bucket / 2), bucket % 2 ? 30 : 0).toISOString(),
+      houseDemandW: 1000 + week * 10,
+    });
+  }
+}
+const demandPrediction = predictHouseDemand(demandSamples, new Date(2026, 6, 13));
+assert.equal(demandPrediction.available, true);
+assert.equal(demandPrediction.profile.size, 48);
+
+const capacitySamples = [{ timestamp: "2026-07-11T00:00:00.000Z", stateOfChargePercent: 20, batteryPowerW: 1000 }];
+for (let index = 1; index <= 6; index += 1) {
+  capacitySamples.push({
+    timestamp: new Date(Date.parse("2026-07-11T00:00:00.000Z") + index * 15 * 60_000).toISOString(),
+    stateOfChargePercent: 20 + index * 10,
+    batteryPowerW: 1000,
+  });
+}
+const capacity = estimateEffectiveBatteryCapacity(capacitySamples, 2);
+assert.equal(capacity.sessionCount, 6);
+assert.equal(capacity.learnedCapacityKwh, 2.5);
 
 assert.equal(cleanConfig({ updateIntervalSeconds: 2 }).updateIntervalSeconds, 5);
 assert.equal(cleanConfig({ updateIntervalSeconds: 30 }).updateIntervalSeconds, 30);

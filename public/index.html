@@ -549,6 +549,7 @@
             <div class="panel schedule-panel">
               <div class="panel-title">
                 <h1 data-i18n="schedules">Schedules</h1>
+                <p id="schedulePlannerNotice" class="planner-notice hidden" data-i18n="schedulesDisabledByPlanner">Schedules are preserved but disabled while adaptive solar charging is enabled.</p>
               </div>
 
               <form id="scheduleForm" class="schedule-form">
@@ -637,6 +638,23 @@
                 <h1 data-i18n="automationRules">Automation Rules</h1>
               </div>
 
+              <form id="batteryCapabilitiesForm" class="config-form battery-capabilities-form">
+                <fieldset class="feature-options">
+                  <legend data-i18n="batteryCapabilities">Battery Capabilities</legend>
+                  <div class="compact-field-grid">
+                    <label>
+                      <span data-i18n="usableBatteryCapacity">Usable battery capacity (kWh)</span>
+                      <input id="batteryUsableCapacity" type="number" min="0.1" step="0.1" inputmode="decimal" />
+                    </label>
+                    <label>
+                      <span data-i18n="maximumBatteryChargeWatts">Maximum battery charge watts</span>
+                      <input id="batteryMaximumChargeWatts" type="number" min="1" step="100" inputmode="numeric" />
+                    </label>
+                  </div>
+                  <button data-i18n="saveBatteryCapabilities">Save Battery Capabilities</button>
+                </fieldset>
+              </form>
+
               <form id="automationRuleForm" class="config-form">
                 <fieldset class="feature-options">
                   <legend data-i18n="backupDemandGuard">Charging Demand Guard</legend>
@@ -652,10 +670,6 @@
                     <label>
                       <span data-i18n="reserveAmps">Reserve amps</span>
                       <input id="automationReserveAmps" type="number" min="0" step="1" inputmode="numeric" />
-                    </label>
-                    <label>
-                      <span data-i18n="batteryChargeEstimate">Maximum battery charge watts</span>
-                      <input id="automationBatteryEstimate" type="number" min="0" step="100" inputmode="numeric" />
                     </label>
                     <label>
                       <span data-i18n="restoreBelowAmps">Restore below amps</span>
@@ -947,6 +961,51 @@
               </a>
               <button data-i18n="saveCo2Release">Save CO2 Release</button>
             </form>
+          </div>
+
+          <div class="panel solar-planner-panel">
+            <div class="panel-title">
+              <h1 data-i18n="solarForecastCharging">Solar Forecast & Charging</h1>
+              <p data-i18n="solarPlannerHelp">Use weather and household history to reserve discounted charging only for the predicted solar shortfall.</p>
+            </div>
+            <form id="solarPlannerForm" class="config-form">
+              <label class="check-row">
+                <input id="solarPlannerEnabled" type="checkbox" />
+                <span data-i18n="enableSolarPlanner">Enable adaptive solar charging</span>
+              </label>
+              <p id="solarPlannerAvailability" class="planner-notice" aria-live="polite"></p>
+              <div class="compact-field-grid">
+                <label><span data-i18n="latitude">Latitude</span><input id="solarPlannerLatitude" type="number" min="-90" max="90" step="0.000001" inputmode="decimal" /></label>
+                <label><span data-i18n="longitude">Longitude</span><input id="solarPlannerLongitude" type="number" min="-180" max="180" step="0.000001" inputmode="decimal" /></label>
+                <label><span data-i18n="arrayPeakCapacity">Array peak capacity (kW)</span><input id="solarPlannerArrayPeak" type="number" min="0.1" step="0.1" inputmode="decimal" /></label>
+                <label><span data-i18n="panelTilt">Panel tilt (degrees)</span><input id="solarPlannerTilt" type="number" min="0" max="90" step="1" inputmode="numeric" /></label>
+                <label><span data-i18n="panelAzimuth">Panel azimuth (0 south, -90 east, 90 west)</span><input id="solarPlannerAzimuth" type="number" min="-180" max="180" step="1" inputmode="numeric" /></label>
+                <label><span data-i18n="systemLoss">Initial system loss (%)</span><input id="solarPlannerLoss" type="number" min="0" max="50" step="1" inputmode="decimal" /></label>
+                <label><span data-i18n="sunsetSocTarget">End-of-solar-day SOC target (%)</span><input id="solarPlannerTargetSoc" type="number" min="50" max="100" step="1" inputmode="numeric" /></label>
+                <label><span data-i18n="forecastMargin">Forecast confidence margin (%)</span><input id="solarPlannerMargin" type="number" min="0" max="50" step="1" inputmode="decimal" /></label>
+              </div>
+              <div class="planner-actions">
+                <button data-i18n="saveSolarPlanner">Save Solar Planner</button>
+                <button id="solarPlannerRecalculate" class="ghost" type="button" data-i18n="recalculatePlan">Recalculate</button>
+                <button id="solarPlannerResume" class="ghost" type="button" data-i18n="resumePlanner">Resume Planner</button>
+              </div>
+            </form>
+            <dl class="planner-status-grid">
+              <div><dt data-i18n="forecastAge">Forecast age</dt><dd id="solarPlannerForecastAge">--</dd></div>
+              <div><dt data-i18n="predictedSolar">Predicted solar</dt><dd id="solarPlannerPredictedSolar">--</dd></div>
+              <div><dt data-i18n="predictedDemand">Predicted demand</dt><dd id="solarPlannerPredictedDemand">--</dd></div>
+              <div><dt data-i18n="predictedSurplus">Predicted surplus</dt><dd id="solarPlannerPredictedSurplus">--</dd></div>
+              <div><dt data-i18n="plannedGridCharge">Planned grid charge</dt><dd id="solarPlannerGridCharge">--</dd></div>
+              <div><dt data-i18n="expectedSunsetSoc">Expected sunset SOC</dt><dd id="solarPlannerSunsetSoc">--</dd></div>
+              <div><dt data-i18n="learnedCapacity">Learned usable capacity</dt><dd id="solarPlannerLearnedCapacity">--</dd></div>
+              <div><dt data-i18n="plannerConfidence">Forecast confidence</dt><dd id="solarPlannerConfidence">--</dd></div>
+              <div><dt data-i18n="plannerState">Planner state</dt><dd id="solarPlannerState">--</dd></div>
+            </dl>
+            <h2 class="guard-log-title" data-i18n="selectedRateWindows">Selected rate windows</h2>
+            <div id="solarPlannerWindows" class="planner-windows"></div>
+            <h2 class="guard-log-title" data-i18n="decisionLog">Decision log</h2>
+            <div id="solarPlannerLog" class="automation-log" aria-live="polite"></div>
+            <p class="data-attribution"><span data-i18n="forecastDataAttribution">Weather forecasts:</span> <a href="https://open-meteo.com/en/docs/jma-api" target="_blank" rel="noreferrer">Open-Meteo / JMA</a></p>
           </div>
 
           <div class="panel data-panel">

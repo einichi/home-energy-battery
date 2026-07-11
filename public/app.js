@@ -35,6 +35,7 @@ const state = {
   reportData: null,
   reportBucket: "day",
   automationRules: [],
+  solarPlannerStatus: null,
   isComposing: false,
   discoveryInProgress: false,
 };
@@ -281,6 +282,48 @@ const I18N = {
     savePreferences: "Save Preferences",
     preferencesSaved: "Preferences saved",
     electricityRates: "Electricity Rates",
+    batteryCapabilities: "Battery Capabilities",
+    usableBatteryCapacity: "Usable battery capacity (kWh)",
+    maximumBatteryChargeWatts: "Maximum battery charge watts",
+    saveBatteryCapabilities: "Save Battery Capabilities",
+    batteryCapabilitiesSaved: "Battery capabilities saved",
+    solarForecastCharging: "Solar Forecast & Charging",
+    solarPlannerHelp: "Use weather and household history to reserve discounted charging only for the predicted solar shortfall.",
+    enableSolarPlanner: "Enable adaptive solar charging",
+    latitude: "Latitude",
+    longitude: "Longitude",
+    arrayPeakCapacity: "Array peak capacity (kW)",
+    panelTilt: "Panel tilt (degrees)",
+    panelAzimuth: "Panel azimuth (0 south, -90 east, 90 west)",
+    systemLoss: "Initial system loss (%)",
+    sunsetSocTarget: "End-of-solar-day SOC target (%)",
+    forecastMargin: "Forecast confidence margin (%)",
+    saveSolarPlanner: "Save Solar Planner",
+    solarPlannerSaved: "Solar planner saved",
+    recalculatePlan: "Recalculate",
+    resumePlanner: "Resume Planner",
+    forecastAge: "Forecast age",
+    predictedSolar: "Predicted solar",
+    predictedDemand: "Predicted demand",
+    predictedSurplus: "Predicted surplus",
+    plannedGridCharge: "Planned grid charge",
+    expectedSunsetSoc: "Expected sunset SOC",
+    learnedCapacity: "Learned usable capacity",
+    plannerState: "Planner state",
+    plannerConfidence: "Forecast confidence",
+    calibratedForecast: "calibrated",
+    initialForecastModel: "initial model",
+    selectedRateWindows: "Selected rate windows",
+    decisionLog: "Decision log",
+    forecastDataAttribution: "Weather forecasts:",
+    schedulesDisabledByPlanner: "Schedules are preserved but disabled while adaptive solar charging is enabled.",
+    noPlannedWindows: "No discounted charging windows selected.",
+    noPlannerLog: "No planner decisions yet.",
+    plannerNeedsRates: "Off-Peak or Multi-Rate pricing is required.",
+    plannerNeedsSolar: "Solar generation must be enabled.",
+    plannerNeedsDemand: "Overall house demand must be enabled.",
+    plannerCharging: "Charging",
+    plannerReady: "Ready",
     rateMode: "Rate Mode",
     rateModeSimple: "Simple",
     rateModeOffPeak: "Off-Peak",
@@ -557,6 +600,48 @@ const I18N = {
     savePreferences: "表示設定を保存",
     preferencesSaved: "表示設定を保存しました",
     electricityRates: "電気料金",
+    batteryCapabilities: "蓄電池性能",
+    usableBatteryCapacity: "使用可能な蓄電容量 (kWh)",
+    maximumBatteryChargeWatts: "最大蓄電池充電電力 (W)",
+    saveBatteryCapabilities: "蓄電池性能を保存",
+    batteryCapabilitiesSaved: "蓄電池性能を保存しました",
+    solarForecastCharging: "太陽光予測と充電",
+    solarPlannerHelp: "天気予報と家庭の使用履歴から太陽光不足分のみを割安な料金帯で充電します。",
+    enableSolarPlanner: "太陽光適応充電を有効にする",
+    latitude: "緯度",
+    longitude: "経度",
+    arrayPeakCapacity: "太陽光パネル最大容量 (kW)",
+    panelTilt: "パネル傾斜角 (度)",
+    panelAzimuth: "パネル方位角 (南0、東-90、西90)",
+    systemLoss: "初期システム損失 (%)",
+    sunsetSocTarget: "日没時の充電率目標 (%)",
+    forecastMargin: "予測信頼余裕 (%)",
+    saveSolarPlanner: "太陽光充電設定を保存",
+    solarPlannerSaved: "太陽光充電設定を保存しました",
+    recalculatePlan: "再計算",
+    resumePlanner: "プランナーを再開",
+    forecastAge: "予報の経過時間",
+    predictedSolar: "予測太陽光発電量",
+    predictedDemand: "予測使用電力量",
+    predictedSurplus: "予測余剰電力量",
+    plannedGridCharge: "予定買電充電量",
+    expectedSunsetSoc: "予測日没時充電率",
+    learnedCapacity: "学習済み使用可能容量",
+    plannerState: "プランナー状態",
+    plannerConfidence: "予測信頼度",
+    calibratedForecast: "学習済み",
+    initialForecastModel: "初期モデル",
+    selectedRateWindows: "選択した料金時間帯",
+    decisionLog: "判断ログ",
+    forecastDataAttribution: "天気予報:",
+    schedulesDisabledByPlanner: "太陽光適応充電が有効な間、スケジュールは保存されたまま実行されません。",
+    noPlannedWindows: "割安な充電時間帯は選択されていません。",
+    noPlannerLog: "プランナーの判断履歴はまだありません。",
+    plannerNeedsRates: "夜間料金または複数料金の設定が必要です。",
+    plannerNeedsSolar: "太陽光発電を有効にしてください。",
+    plannerNeedsDemand: "家庭全体の使用電力を有効にしてください。",
+    plannerCharging: "充電中",
+    plannerReady: "準備完了",
     rateMode: "料金モード",
     rateModeSimple: "シンプル",
     rateModeOffPeak: "夜間料金",
@@ -1749,7 +1834,7 @@ function defaultAutomationRule(config = {}) {
       breakerAmps: config.automation?.breakerAmps ?? 40,
       breakerVoltage: config.automation?.breakerVoltage ?? 100,
       reserveAmps: config.automation?.reserveAmps ?? 5,
-      batteryChargingEstimateW: 1000,
+      batteryChargingEstimateW: config.batteryCapabilities?.maximumChargeWatts ?? 1000,
       restoreBelowAmps: Math.max(
         1,
         (config.automation?.breakerAmps ?? 40) - 10,
@@ -1771,8 +1856,6 @@ function updateAutomationControls(rules = state.automationRules) {
   $("#automationEnabled").checked = rule.enabled === true;
   $("#automationBreakerAmps").value = rule.conditions?.breakerAmps ?? "";
   $("#automationReserveAmps").value = rule.conditions?.reserveAmps ?? "";
-  $("#automationBatteryEstimate").value =
-    rule.conditions?.batteryChargingEstimateW ?? "";
   $("#automationRestoreBelow").value = rule.conditions?.restoreBelowAmps ?? "";
   $("#automationRestoreDelay").value =
     rule.conditions?.restoreDelaySeconds ?? "";
@@ -1827,6 +1910,88 @@ async function refreshAutomationLog() {
     defaultAutomationRule(state.config ?? {});
   renderAutomationLog(rule);
   return state.automationRules;
+}
+
+function plannerConfiguredInUi(config = state.config ?? {}) {
+  return config.solarPlanner?.enabled === true && config.solarEnabled !== false && config.rateMode !== "simple";
+}
+
+function updateSchedulePlannerState(config = state.config ?? {}) {
+  const disabled = plannerConfiguredInUi(config);
+  $("#schedulePlannerNotice")?.classList.toggle("hidden", !disabled);
+  $(".schedule-panel")?.classList.toggle("planner-disabled", disabled);
+  $$("#scheduleForm input, #scheduleForm select, #scheduleForm button, #scheduleRows button").forEach((control) => {
+    control.disabled = disabled;
+  });
+}
+
+function formatPlannerKwh(value) {
+  return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
+    ? `${Number(value).toFixed(2)} kWh`
+    : "--";
+}
+
+function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
+  if (!status) return;
+  state.solarPlannerStatus = status;
+  const plan = status.plan ?? {};
+  $("#solarPlannerForecastAge").textContent = Number.isFinite(status.forecast?.ageMs)
+    ? `${Math.round(status.forecast.ageMs / 60_000)} min`
+    : "--";
+  $("#solarPlannerPredictedSolar").textContent = formatPlannerKwh(plan.predictedSolarKwh);
+  $("#solarPlannerPredictedDemand").textContent = formatPlannerKwh(plan.predictedDemandKwh);
+  $("#solarPlannerPredictedSurplus").textContent = formatPlannerKwh(plan.predictedSurplusKwh);
+  $("#solarPlannerGridCharge").textContent = formatPlannerKwh(plan.plannedChargeKwh);
+  $("#solarPlannerSunsetSoc").textContent = Number.isFinite(Number(plan.expectedSunsetSocPercent))
+    ? `${Number(plan.expectedSunsetSocPercent).toFixed(0)}%`
+    : "--";
+  $("#solarPlannerLearnedCapacity").textContent = formatPlannerKwh(status.learnedCapacityKwh);
+  $("#solarPlannerConfidence").textContent = `${state.config?.solarPlanner?.forecastMarginPercent ?? 10}% · ${plan.solarCalibration?.learned ? t("calibratedForecast") : t("initialForecastModel")}`;
+  $("#solarPlannerState").textContent = status.owner === "planner"
+    ? t("plannerCharging")
+    : status.paused
+      ? t("paused")
+      : status.available
+        ? t("plannerReady")
+        : status.reason ?? "Unavailable";
+  const windows = $("#solarPlannerWindows");
+  windows.innerHTML = "";
+  for (const slot of plan.slots ?? []) {
+    const row = document.createElement("div");
+    row.textContent = `${new Date(slot.start).toLocaleString()} - ${new Date(slot.end).toLocaleTimeString()} · ${slot.targetWh} Wh · ${slot.yenPerKwh} yen/kWh`;
+    windows.append(row);
+  }
+  if (!windows.children.length) windows.textContent = t("noPlannedWindows");
+  const log = $("#solarPlannerLog");
+  log.innerHTML = "";
+  for (const entry of [...(status.log ?? [])].reverse()) {
+    const row = document.createElement("div");
+    row.innerHTML = `<time>${new Date(entry.at).toLocaleString()}</time><span></span>`;
+    row.querySelector("span").textContent = entry.message;
+    log.append(row);
+  }
+  if (!log.children.length) log.textContent = t("noPlannerLog");
+  $("#solarPlannerResume").disabled = !status.paused;
+}
+
+function updateSolarPlannerAvailability(config = state.config ?? {}) {
+  const reasons = [];
+  if (config.solarEnabled === false) reasons.push(t("plannerNeedsSolar"));
+  if (config.rateMode === "simple") reasons.push(t("plannerNeedsRates"));
+  if (config.smartCosmoEnabled === false) reasons.push(t("plannerNeedsDemand"));
+  const enable = $("#solarPlannerEnabled");
+  enable.disabled = reasons.length > 0;
+  $("#solarPlannerAvailability").textContent = reasons.length
+    ? `${t("unavailable")}: ${reasons.join(", ")}`
+    : state.solarPlannerStatus?.reason ?? "";
+  updateSchedulePlannerState(config);
+}
+
+async function refreshSolarPlanner() {
+  const status = await api("/api/solar-planner");
+  renderSolarPlannerStatus(status);
+  updateSolarPlannerAvailability();
+  return status;
 }
 
 function updateControls(data) {
@@ -2135,6 +2300,19 @@ function updateConfigControls(config) {
   $("#multiStandardRate").value = config.standardRateYenPerKwh ?? "";
   $("#co2TonnesPerKwh").value = config.co2TonnesPerKwh ?? "";
   $("#historyRetentionDays").value = config.historyRetentionDays ?? "";
+  $("#batteryUsableCapacity").value = config.batteryCapabilities?.usableCapacityKwh ?? "";
+  $("#batteryMaximumChargeWatts").value = config.batteryCapabilities?.maximumChargeWatts
+    ?? state.automationRules.find((rule) => rule.type === "backup-demand-guard")?.conditions?.batteryChargingEstimateW
+    ?? "";
+  $("#solarPlannerEnabled").checked = config.solarPlanner?.enabled === true;
+  $("#solarPlannerLatitude").value = config.solarPlanner?.latitude ?? "";
+  $("#solarPlannerLongitude").value = config.solarPlanner?.longitude ?? "";
+  $("#solarPlannerArrayPeak").value = config.solarPlanner?.arrayPeakKw ?? "";
+  $("#solarPlannerTilt").value = config.solarPlanner?.panelTiltDegrees ?? 30;
+  $("#solarPlannerAzimuth").value = config.solarPlanner?.panelAzimuthDegrees ?? 0;
+  $("#solarPlannerLoss").value = config.solarPlanner?.systemLossPercent ?? 14;
+  $("#solarPlannerTargetSoc").value = config.solarPlanner?.targetSocPercent ?? 100;
+  $("#solarPlannerMargin").value = config.solarPlanner?.forecastMarginPercent ?? 10;
   renderRateBands(
     rateMode === "multi"
       ? (config.rateBands ?? [])
@@ -2145,6 +2323,7 @@ function updateConfigControls(config) {
   $("#configSolarHost").disabled = config.solarEnabled === false;
   $("#configMeterHost").disabled = config.smartCosmoEnabled === false;
   $("#configFuelCellHosts").disabled = config.fuelCellEnabled === false;
+  updateSolarPlannerAvailability(config);
 }
 
 function featureEnabled(features = {}, feature) {
@@ -2955,6 +3134,7 @@ function renderSchedules(schedules) {
   rows.innerHTML = "";
   if (!sortedSchedules.length) {
     rows.innerHTML = `<tr><td colspan="5">${t("noSchedules")}</td></tr>`;
+    updateSchedulePlannerState();
     return;
   }
   for (const schedule of sortedSchedules) {
@@ -2986,6 +3166,7 @@ function renderSchedules(schedules) {
     `;
     rows.append(tr);
   }
+  updateSchedulePlannerState();
 }
 
 function setPage(page) {
@@ -3069,7 +3250,10 @@ async function refreshSchedules() {
 async function refreshAll() {
   const tasks = [];
   if (!state.historyMode) tasks.push(refreshStatus());
-  if (state.currentPage === "settings") tasks.push(refreshAutomationLog());
+  if (state.currentPage === "settings") {
+    tasks.push(refreshAutomationLog());
+    tasks.push(refreshSolarPlanner());
+  }
   if (tasks.length) await Promise.allSettled(tasks);
   scheduleNextRefresh();
 }
@@ -3097,6 +3281,7 @@ async function initialLoad() {
   if (configResult.status === "fulfilled") {
     updateConfigControls(configResult.value);
     if (state.status) renderCircuitWidgets(state.status);
+    refreshSolarPlanner().catch(() => {});
   }
   scheduleNextRefresh();
 }
@@ -3109,17 +3294,15 @@ async function hydrateSettingsView() {
   } catch (err) {
     toast(err.message);
   }
-  try {
-    updateControls(await api("/api/status"));
-  } catch (err) {
-    toast(err.message);
+  const results = await Promise.allSettled([
+    api("/api/status").then(updateControls),
+    refreshAutomationRules(),
+    refreshSolarPlanner(),
+    refreshHistoryStats(),
+  ]);
+  for (const result of results) {
+    if (result.status === "rejected") toast(result.reason.message);
   }
-  try {
-    await refreshAutomationRules();
-  } catch (err) {
-    toast(err.message);
-  }
-  await refreshHistoryStats();
 }
 
 function formatBytes(bytes) {
@@ -3285,6 +3468,7 @@ function initForms() {
       $("#configMeterHost").disabled = !features.smartCosmoEnabled;
       $("#configFuelCellHosts").disabled = !features.fuelCellEnabled;
       applyFeatureVisibility(features);
+      updateSolarPlannerAvailability({ ...(state.config ?? {}), ...features });
     });
   });
 
@@ -3404,9 +3588,74 @@ function initForms() {
   });
 
   $$('input[name="rateMode"]').forEach((input) => {
-    input.addEventListener("change", () =>
-      updateRateModeVisibility(input.value),
-    );
+    input.addEventListener("change", () => {
+      updateRateModeVisibility(input.value);
+      updateSolarPlannerAvailability({ ...(state.config ?? {}), rateMode: input.value });
+    });
+  });
+
+  $("#batteryCapabilitiesForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const config = await api("/api/config", {
+        method: "PUT",
+        body: {
+          ...(state.config ?? {}),
+          batteryCapabilities: {
+            usableCapacityKwh: $("#batteryUsableCapacity").value,
+            maximumChargeWatts: $("#batteryMaximumChargeWatts").value,
+          },
+        },
+      });
+      updateConfigControls(config);
+      toast(t("batteryCapabilitiesSaved"));
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  $("#solarPlannerForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const config = await api("/api/config", {
+        method: "PUT",
+        body: {
+          ...(state.config ?? {}),
+          solarPlanner: {
+            enabled: $("#solarPlannerEnabled").checked,
+            latitude: $("#solarPlannerLatitude").value,
+            longitude: $("#solarPlannerLongitude").value,
+            arrayPeakKw: $("#solarPlannerArrayPeak").value,
+            panelTiltDegrees: $("#solarPlannerTilt").value,
+            panelAzimuthDegrees: $("#solarPlannerAzimuth").value,
+            systemLossPercent: $("#solarPlannerLoss").value,
+            targetSocPercent: $("#solarPlannerTargetSoc").value,
+            forecastMarginPercent: $("#solarPlannerMargin").value,
+          },
+        },
+      });
+      updateConfigControls(config);
+      await refreshSolarPlanner();
+      toast(t("solarPlannerSaved"));
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  $("#solarPlannerRecalculate").addEventListener("click", async () => {
+    try {
+      renderSolarPlannerStatus(await api("/api/solar-planner/recalculate", { method: "POST", body: {} }));
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  $("#solarPlannerResume").addEventListener("click", async () => {
+    try {
+      renderSolarPlannerStatus(await api("/api/solar-planner/resume", { method: "POST", body: {} }));
+    } catch (err) {
+      toast(err.message);
+    }
   });
 
   $("#historyConfigForm").addEventListener("submit", async (event) => {
@@ -3572,7 +3821,8 @@ function initForms() {
         breakerAmps: $("#automationBreakerAmps").value,
         breakerVoltage: state.config?.automation?.breakerVoltage ?? 100,
         reserveAmps: $("#automationReserveAmps").value,
-        batteryChargingEstimateW: $("#automationBatteryEstimate").value,
+        batteryChargingEstimateW: state.config?.batteryCapabilities?.maximumChargeWatts
+          ?? $("#batteryMaximumChargeWatts").value,
         restoreBelowAmps: $("#automationRestoreBelow").value,
         restoreDelaySeconds: $("#automationRestoreDelay").value,
       },
@@ -3582,6 +3832,17 @@ function initForms() {
       restorePayload: { mode: "auto" },
     };
     try {
+      state.config = await api("/api/config", {
+        method: "PUT",
+        body: {
+          ...(state.config ?? {}),
+          automation: {
+            ...(state.config?.automation ?? {}),
+            breakerAmps: $("#automationBreakerAmps").value,
+            reserveAmps: $("#automationReserveAmps").value,
+          },
+        },
+      });
       if (existing)
         await api(`/api/automation-rules/${existing.id}`, {
           method: "PATCH",
