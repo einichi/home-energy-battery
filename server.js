@@ -519,7 +519,13 @@ function sampleFromStatus(status, config, previousSample) {
     ? Math.max(0, Math.min(1, (new Date(timestamp).getTime() - new Date(previousSample.timestamp).getTime()) / 3_600_000))
     : 0;
   const offPeakSavingsEnabled = config.rateMode !== "simple" || config.offPeakSavingsEnabled === true;
-  const offPeakSavingW = offPeakSavingsEnabled && batteryPowerW > 0 && !(solarPowerW > 0) ? batteryPowerW : 0;
+  // Grid import is already net of on-site generation, so it is the best cap on
+  // how much of the battery's charging power can be attributed to bought energy.
+  // When no grid meter is available, subtract solar as a conservative fallback.
+  const gridChargingW = gridImportW === null
+    ? Math.max(0, Number(batteryPowerW) - Math.max(0, Number(solarPowerW) || 0))
+    : Math.min(Math.max(0, Number(batteryPowerW) || 0), Math.max(0, gridImportW));
+  const offPeakSavingW = offPeakSavingsEnabled && batteryPowerW > 0 ? gridChargingW : 0;
   const solarGenerationKwh = deltaHours * (Math.max(0, solarPowerW ?? 0) / 1000);
   const gridImportKwh = deltaHours * (Math.max(0, gridImportW ?? 0) / 1000);
   const gridExportKwh = deltaHours * (Math.max(0, gridExportW ?? 0) / 1000);
@@ -583,6 +589,11 @@ function samplePowerKwh(sample, directKey, wattsKey, previousSample) {
   if (!Number.isFinite(watts)) return 0;
   const deltaHours = Math.max(0, Math.min(1, (new Date(sample.timestamp).getTime() - new Date(previousSample.timestamp).getTime()) / 3_600_000));
   return deltaHours * (Math.max(0, watts) / 1000);
+}
+
+function hasPowerSample(sample, directKey, wattsKey, previousSample) {
+  if (Number.isFinite(Number(sample?.[directKey]))) return true;
+  return Boolean(previousSample?.timestamp && sample?.timestamp && Number.isFinite(Number(sample?.[wattsKey])));
 }
 
 function summarizeSamples(samples, config = DEFAULT_CONFIG, extras = {}) {
@@ -652,6 +663,256 @@ function summarizeSamples(samples, config = DEFAULT_CONFIG, extras = {}) {
   };
 }
 
+function normalizeReportBucket(value) {
+  if (["day", "week", "month"].includes(value)) return value;
+  throw new Error("bucket must be day, week, or month");
+}
+
+function startOfReportBucket(date, bucket) {
+  const local = new Date(date);
+  if (bucket === "month") return new Date(local.getFullYear(), local.getMonth(), 1);
+  if (bucket === "week") {
+    const start = new Date(local.getFullYear(), local.getMonth(), local.getDate());
+    const dayOffset = (start.getDay() + 6) % 7;
+    start.setDate(start.getDate() - dayOffset);
+    return start;
+  }
+  return new Date(local.getFullYear(), local.getMonth(), local.getDate());
+}
+
+function endOfReportBucket(start, bucket) {
+  const end = new Date(start);
+  if (bucket === "month") end.setMonth(end.getMonth() + 1);
+  else if (bucket === "week") end.setDate(end.getDate() + 7);
+  else end.setDate(end.getDate() + 1);
+  return end;
+}
+
+function reportBucketKey(start, bucket) {
+  const year = start.getFullYear();
+  const month = String(start.getMonth() + 1).padStart(2, "0");
+  const day = String(start.getDate()).padStart(2, "0");
+  if (bucket === "month") return `${year}-${month}`;
+  return `${year}-${month}-${day}`;
+}
+
+function reportBucketLabel(start, bucket) {
+  if (bucket === "month") {
+    return `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}`;
+  }
+  if (bucket === "week") {
+    const end = new Date(endOfReportBucket(start, bucket).getTime() - 1);
+    return `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")} - ${String(end.getMonth() + 1).padStart(2, "0")}-${String(end.getDate()).padStart(2, "0")}`;
+  }
+  return `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
+}
+
+function emptyReportBucket(start, bucket) {
+  const end = endOfReportBucket(start, bucket);
+  return {
+    key: reportBucketKey(start, bucket),
+    label: reportBucketLabel(start, bucket),
+    start: start.toISOString(),
+    end: end.toISOString(),
+    sampleCount: 0,
+    houseDemandKwh: 0,
+    solarGenerationKwh: 0,
+    gridImportKwh: 0,
+    gridExportKwh: 0,
+    fuelCellKwh: 0,
+    batteryChargedKwh: 0,
+    batteryDischargedKwh: 0,
+    solarSavingYen: 0,
+    offPeakSavingYen: 0,
+    co2SavingKg: 0,
+    peakDemandW: null,
+    _valid: {
+      houseDemandKwh: 0,
+      solarGenerationKwh: 0,
+      gridImportKwh: 0,
+      gridExportKwh: 0,
+      fuelCellKwh: 0,
+      batteryChargedKwh: 0,
+      batteryDischargedKwh: 0,
+    },
+  };
+}
+
+function addReportEnergy(bucket, key, value, valid) {
+  if (!valid) return;
+  bucket[key] += Number(value) || 0;
+  bucket._valid[key] += 1;
+}
+
+function finalizeReportBucket(bucket, previousBucket) {
+  const out = { ...bucket };
+  delete out._valid;
+  for (const key of [
+    "houseDemandKwh",
+    "solarGenerationKwh",
+    "gridImportKwh",
+    "gridExportKwh",
+    "fuelCellKwh",
+    "batteryChargedKwh",
+    "batteryDischargedKwh",
+  ]) {
+    if (!bucket._valid[key]) out[key] = null;
+  }
+  out.previousHouseDemandKwh = previousBucket?.houseDemandKwh ?? null;
+  out.houseDemandDeltaKwh =
+    Number.isFinite(out.houseDemandKwh) && Number.isFinite(out.previousHouseDemandKwh)
+      ? out.houseDemandKwh - out.previousHouseDemandKwh
+      : null;
+  out.houseDemandDeltaPercent =
+    Number.isFinite(out.houseDemandDeltaKwh) && Number.isFinite(out.previousHouseDemandKwh) && out.previousHouseDemandKwh !== 0
+      ? (out.houseDemandDeltaKwh / out.previousHouseDemandKwh) * 100
+      : null;
+  return out;
+}
+
+function summarizeReportBuckets(buckets) {
+  const sum = (key) => {
+    const values = buckets
+      .map((bucket) => bucket[key])
+      .filter((value) => typeof value === "number" && Number.isFinite(value));
+    return values.length ? values.reduce((total, value) => total + value, 0) : null;
+  };
+  const peaks = buckets.map((bucket) => Number(bucket.peakDemandW)).filter(Number.isFinite);
+  const houseDemandKwh = sum("houseDemandKwh");
+  const solarGenerationKwh = sum("solarGenerationKwh");
+  return {
+    houseDemandKwh,
+    solarGenerationKwh,
+    gridImportKwh: sum("gridImportKwh"),
+    gridExportKwh: sum("gridExportKwh"),
+    fuelCellKwh: sum("fuelCellKwh"),
+    batteryChargedKwh: sum("batteryChargedKwh"),
+    batteryDischargedKwh: sum("batteryDischargedKwh"),
+    solarSavingYen: buckets.reduce((total, bucket) => total + Number(bucket.solarSavingYen ?? 0), 0),
+    offPeakSavingYen: buckets.reduce((total, bucket) => total + Number(bucket.offPeakSavingYen ?? 0), 0),
+    co2SavingKg: buckets.reduce((total, bucket) => total + Number(bucket.co2SavingKg ?? 0), 0),
+    peakDemandW: peaks.length ? Math.max(...peaks) : null,
+    solarCoveragePercent:
+      Number.isFinite(houseDemandKwh) && houseDemandKwh > 0 && Number.isFinite(solarGenerationKwh)
+        ? (solarGenerationKwh / houseDemandKwh) * 100
+        : null,
+    sampleCount: buckets.reduce((total, bucket) => total + Number(bucket.sampleCount ?? 0), 0),
+  };
+}
+
+function createEnergyReportAccumulator({ start, end, bucket = "day", config = DEFAULT_CONFIG, previousSample = null } = {}) {
+  const bucketMode = normalizeReportBucket(bucket);
+  const startMs = start ? new Date(start).getTime() : Number.NaN;
+  const endMs = end ? new Date(end).getTime() : Number.NaN;
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs >= endMs) {
+    throw new Error("valid start and end date/time are required");
+  }
+  const co2TonnesPerKwh = configNumber(config.co2TonnesPerKwh, DEFAULT_CONFIG.co2TonnesPerKwh, 0, 1);
+  const byKey = new Map();
+  let prev = previousSample;
+
+  return {
+    process(sample) {
+      const time = new Date(sample.timestamp).getTime();
+      if (!Number.isFinite(time)) {
+        prev = sample;
+        return "skipped";
+      }
+      if (time < startMs) {
+        prev = sample;
+        return "before";
+      }
+      if (time >= endMs) return "after";
+      const bucketStart = startOfReportBucket(new Date(time), bucketMode);
+      const key = reportBucketKey(bucketStart, bucketMode);
+      if (!byKey.has(key)) byKey.set(key, emptyReportBucket(bucketStart, bucketMode));
+      const row = byKey.get(key);
+      row.sampleCount += 1;
+      addReportEnergy(
+        row,
+        "houseDemandKwh",
+        samplePowerKwh(sample, "houseDemandKwh", "houseDemandW", prev),
+        hasPowerSample(sample, "houseDemandKwh", "houseDemandW", prev),
+      );
+      addReportEnergy(
+        row,
+        "gridImportKwh",
+        samplePowerKwh(sample, "gridImportKwh", "gridImportW", prev),
+        hasPowerSample(sample, "gridImportKwh", "gridImportW", prev),
+      );
+      addReportEnergy(
+        row,
+        "gridExportKwh",
+        samplePowerKwh(sample, "gridExportKwh", "gridExportW", prev),
+        hasPowerSample(sample, "gridExportKwh", "gridExportW", prev),
+      );
+      addReportEnergy(
+        row,
+        "fuelCellKwh",
+        samplePowerKwh(sample, "fuelCellKwh", "fuelCellPowerW", prev),
+        hasPowerSample(sample, "fuelCellKwh", "fuelCellPowerW", prev),
+      );
+      addReportEnergy(
+        row,
+        "batteryChargedKwh",
+        samplePowerKwh(sample, "batteryChargeKwh", "batteryPowerW", prev),
+        hasPowerSample(sample, "batteryChargeKwh", "batteryPowerW", prev),
+      );
+      addReportEnergy(
+        row,
+        "batteryDischargedKwh",
+        samplePowerKwh({ ...sample, batteryPowerW: -Number(sample.batteryPowerW) }, "batteryDischargeKwh", "batteryPowerW", prev),
+        hasPowerSample(sample, "batteryDischargeKwh", "batteryPowerW", prev),
+      );
+      const solarGenerationKwh = sampleSolarGenerationKwh(sample);
+      addReportEnergy(
+        row,
+        "solarGenerationKwh",
+        solarGenerationKwh,
+        Number.isFinite(Number(sample.solarGenerationKwh)) || hasPowerSample(sample, "solarGenerationKwh", "solarPowerW", prev),
+      );
+      row.solarSavingYen += Number(sample.solarSavingYen ?? 0) || 0;
+      row.offPeakSavingYen += Number(sample.offPeakSavingYen ?? 0) || 0;
+      row.co2SavingKg += solarGenerationKwh * co2TonnesPerKwh * 1000;
+      const demand = Number(sample.houseDemandW);
+      if (Number.isFinite(demand)) row.peakDemandW = Math.max(row.peakDemandW ?? demand, demand);
+      prev = sample;
+      return "included";
+    },
+    finish() {
+      const buckets = [];
+      let cursor = startOfReportBucket(new Date(startMs), bucketMode);
+      while (cursor.getTime() < endMs) {
+        const key = reportBucketKey(cursor, bucketMode);
+        const raw = byKey.get(key) ?? emptyReportBucket(cursor, bucketMode);
+        buckets.push(finalizeReportBucket(raw, buckets.at(-1)));
+        cursor = endOfReportBucket(cursor, bucketMode);
+      }
+      return {
+        start: new Date(startMs).toISOString(),
+        end: new Date(endMs).toISOString(),
+        bucket: bucketMode,
+        buckets,
+        totals: summarizeReportBuckets(buckets),
+        features: {
+          solarEnabled: config.solarEnabled !== false,
+          smartCosmoEnabled: config.smartCosmoEnabled !== false,
+          fuelCellEnabled: config.fuelCellEnabled !== false,
+        },
+      };
+    },
+  };
+}
+
+function aggregateEnergyReportSamples(samples, options = {}) {
+  const accumulator = createEnergyReportAccumulator(options);
+  for (const sample of samples) {
+    const result = accumulator.process(sample);
+    if (result === "after") break;
+  }
+  return accumulator.finish();
+}
+
 function isGuardTriggerLog(entry) {
   return entry?.kind === "guard" ||
     String(entry?.message ?? "").includes("exceeds Charge Demand Guard limit");
@@ -680,7 +941,7 @@ async function readHistoryRange(start, end, config = DEFAULT_CONFIG) {
   await ensureDataDir();
   const startMs = start ? new Date(start).getTime() : Date.now() - 30 * 60_000;
   const endMs = end ? new Date(end).getTime() : Date.now();
-  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs > endMs) {
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs >= endMs) {
     throw new Error("valid start and end date/time are required");
   }
   const samples = await readHistorySamplesInRange(startMs, endMs);
@@ -696,6 +957,73 @@ async function readHistoryRange(start, end, config = DEFAULT_CONFIG) {
     { excludeTimes: guardTriggerSampleTimes },
   );
   return { samples, summary: summarizeSamples(samples, config, { guardTriggerCount }) };
+}
+
+async function readEnergyReport(start, end, bucket, config = DEFAULT_CONFIG) {
+  await ensureDataDir();
+  const bucketMode = normalizeReportBucket(bucket ?? "day");
+  const startMs = start ? new Date(start).getTime() : Date.now() - 30 * 86_400_000;
+  const endMs = end ? new Date(end).getTime() : Date.now();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs >= endMs) {
+    throw new Error("valid start and end date/time are required");
+  }
+  try {
+    await stat(HISTORY_FILE);
+  } catch (err) {
+    if (err.code === "ENOENT") {
+      return {
+        ...aggregateEnergyReportSamples([], {
+          start: new Date(startMs).toISOString(),
+          end: new Date(endMs).toISOString(),
+          bucket: bucketMode,
+          config,
+        }),
+        meta: { recordsRead: 0, recordsIncluded: 0, invalidRecords: 0 },
+      };
+    }
+    throw err;
+  }
+
+  const accumulator = createEnergyReportAccumulator({
+    start: new Date(startMs).toISOString(),
+    end: new Date(endMs).toISOString(),
+    bucket: bucketMode,
+    config,
+  });
+  const stream = createReadStream(HISTORY_FILE, { encoding: "utf8" });
+  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  let lineNumber = 0;
+  let recordsIncluded = 0;
+  let invalidRecords = 0;
+  try {
+    for await (const line of lines) {
+      lineNumber += 1;
+      if (!line.trim()) continue;
+      let sample = null;
+      try {
+        sample = parseJsonWithContext(line, `${HISTORY_FILE}:line ${lineNumber}`);
+      } catch (err) {
+        invalidRecords += 1;
+        logDetailedError("history", err);
+        continue;
+      }
+      const result = accumulator.process(sample);
+      if (result === "included") recordsIncluded += 1;
+      if (result === "after") {
+        lines.close();
+        stream.destroy();
+        break;
+      }
+    }
+  } finally {
+    lines.close();
+    if (!stream.destroyed) stream.destroy();
+  }
+
+  return {
+    ...accumulator.finish(),
+    meta: { recordsRead: lineNumber, recordsIncluded, invalidRecords },
+  };
 }
 
 async function readAllHistorySamples() {
@@ -2181,6 +2509,19 @@ async function api(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/history/stats") {
     return json(res, 200, await readHistoryStats());
   }
+  if (req.method === "GET" && url.pathname === "/api/reports/energy") {
+    const config = await readConfig();
+    return json(
+      res,
+      200,
+      await readEnergyReport(
+        url.searchParams.get("start"),
+        url.searchParams.get("end"),
+        url.searchParams.get("bucket"),
+        config,
+      ),
+    );
+  }
   if (req.method === "POST" && url.pathname.startsWith("/api/settings/")) {
     const body = await readBody(req);
     const action = url.pathname.replace("/api/settings/", "");
@@ -2304,6 +2645,7 @@ export const server = http.createServer(async (req, res) => {
 });
 
 export {
+  aggregateEnergyReportSamples,
   clearStaleScheduleRuns,
   cleanAutomationRule,
   cleanAutomationRuleConfig,

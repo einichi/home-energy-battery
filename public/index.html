@@ -33,6 +33,9 @@
             <button class="nav-subbutton" data-feature="smart-cosmo" data-graph-page="circuits" data-i18n="circuitPower">Circuits</button>
           </div>
         </details>
+        <button class="nav-button" data-page="reports" data-i18n="navReports">
+          Reports
+        </button>
         <button class="nav-button" data-page="settings" data-i18n="navSettings">
           Settings
         </button>
@@ -245,6 +248,123 @@
             <strong id="guardTriggerCount">--</strong>
             <small id="guardTriggerCountPeriod" class="widget-note">--</small>
           </article>
+          </div>
+        </section>
+      </section>
+
+      <section id="reportsPage" class="page" aria-label="Reports">
+        <section class="reports-workspace">
+          <div class="panel reports-panel">
+            <div class="panel-title">
+              <span class="label" data-i18n="energyReports">Energy Reports</span>
+              <h1 data-i18n="exactUsageReports">Energy Usage</h1>
+              <p data-i18n="reportsHelp">Compare exact usage totals by day, week, or month.</p>
+            </div>
+            <form id="reportsForm" class="history-form reports-form">
+              <fieldset class="segmented report-mode-picker">
+                <legend data-i18n="reportMode">Report mode</legend>
+                <label>
+                  <input type="radio" name="reportBucket" value="day" checked />
+                  <span data-i18n="dailyReport">Daily</span>
+                </label>
+                <label>
+                  <input type="radio" name="reportBucket" value="week" />
+                  <span data-i18n="weeklyReport">Weekly</span>
+                </label>
+                <label>
+                  <input type="radio" name="reportBucket" value="month" />
+                  <span data-i18n="monthlyReport">Monthly</span>
+                </label>
+              </fieldset>
+              <div class="report-range-row">
+                <div id="reportQuickRanges" class="quick-ranges report-ranges" aria-label="Report quick ranges"></div>
+                <label class="report-date-field">
+                  <span data-i18n="from">From</span>
+                  <input id="reportStart" type="datetime-local" />
+                </label>
+                <label class="report-date-field">
+                  <span data-i18n="to">To</span>
+                  <input id="reportEnd" type="datetime-local" />
+                </label>
+                <button class="ghost report-load-button" data-i18n="loadReport">Load Report</button>
+              </div>
+              <div id="reportLoadProgress" class="load-progress hidden" aria-live="polite">
+                <div class="progress-copy">
+                  <strong id="reportLoadTitle" data-i18n="loadingReportData">Loading report data</strong>
+                  <span id="reportLoadDetail"></span>
+                </div>
+                <div class="progress-bar indeterminate" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                  <i id="reportLoadFill"></i>
+                </div>
+              </div>
+            </form>
+          </div>
+
+          <section class="report-summary-grid" aria-label="Report Summary">
+            <article class="widget report-card" data-report-feature="smart-cosmo">
+              <span data-i18n="usageKwh">Usage</span>
+              <strong id="reportUsageTotal">--</strong>
+              <small class="widget-note" data-i18n="usageKwhHelp">House demand</small>
+            </article>
+            <article class="widget report-card" data-report-feature="smart-cosmo">
+              <span data-i18n="gridImport">Grid Import</span>
+              <strong id="reportImportTotal">--</strong>
+              <small class="widget-note" data-i18n="gridImportHelp">Bought from grid</small>
+            </article>
+            <article class="widget report-card" data-report-feature="solar">
+              <span data-i18n="solarGeneration">Solar Generation</span>
+              <strong id="reportSolarTotal">--</strong>
+              <small class="widget-note" data-i18n="solarCoverage">Solar coverage</small>
+            </article>
+            <article class="widget report-card" data-report-feature="smart-cosmo">
+              <span data-i18n="gridExport">Grid Export</span>
+              <strong id="reportExportTotal">--</strong>
+              <small class="widget-note" data-i18n="sentToGrid">Sent to grid</small>
+            </article>
+            <article class="widget report-card" data-report-feature="smart-cosmo">
+              <span data-i18n="peakDemand">Peak Demand</span>
+              <strong id="reportPeakDemand">--</strong>
+              <small class="widget-note" data-i18n="selectedRange">Selected range</small>
+            </article>
+            <article class="widget report-card" data-report-feature="solar">
+              <span data-i18n="co2Savings">CO2 Savings</span>
+              <strong id="reportCo2Total">--</strong>
+              <small class="widget-note" data-i18n="selectedRange">Selected range</small>
+            </article>
+          </section>
+
+          <div class="panel report-chart-panel">
+            <div class="panel-title">
+              <h1 data-i18n="usageTrend">Usage Trend</h1>
+              <p id="reportMeta" class="graph-meta">--</p>
+            </div>
+            <div id="reportChartLegend" class="report-chart-legend" aria-label="Chart series"></div>
+            <canvas id="reportTrendChart" class="report-chart" width="1200" height="360"></canvas>
+          </div>
+
+          <div class="panel report-table-panel">
+            <div class="panel-title">
+              <h1 data-i18n="exactKwhTable">Exact kWh by Period</h1>
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th data-i18n="period">Period</th>
+                    <th data-i18n="usageKwh" data-report-feature="smart-cosmo">Usage</th>
+                    <th data-i18n="change" data-report-feature="smart-cosmo">Change</th>
+                    <th data-i18n="solarGeneration" data-report-feature="solar">Solar Generation</th>
+                    <th data-i18n="gridImport" data-report-feature="smart-cosmo">Grid Import</th>
+                    <th data-i18n="gridExport" data-report-feature="smart-cosmo">Grid Export</th>
+                    <th data-i18n="fuelCellGeneration" data-report-feature="fuel-cell">Ene-Farm Generation</th>
+                    <th data-i18n="peakDemand" data-report-feature="smart-cosmo">Peak Demand</th>
+                  </tr>
+                </thead>
+                <tbody id="reportRows">
+                  <tr><td colspan="8" data-i18n="noReportData">No report data loaded yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </section>
       </section>

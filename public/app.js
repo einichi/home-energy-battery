@@ -32,6 +32,8 @@ const state = {
   graphHistoryHorizonMs: POWER_TREND_MS,
   graphLoadToken: 0,
   historyLoadToken: 0,
+  reportData: null,
+  reportBucket: "day",
   automationRules: [],
   isComposing: false,
   discoveryInProgress: false,
@@ -48,6 +50,20 @@ const TREND_LABEL_KEYS = {
 };
 
 const CIRCUIT_GRAPH_PREFIX = "circuit:";
+const REPORT_PRESETS = {
+  day: [
+    { key: "last7Days", amount: 7, unit: "day" },
+    { key: "last30Days", amount: 30, unit: "day" },
+  ],
+  week: [
+    { key: "last8Weeks", amount: 8, unit: "week" },
+    { key: "last26Weeks", amount: 26, unit: "week" },
+  ],
+  month: [
+    { key: "last6Months", amount: 6, unit: "month" },
+    { key: "last12Months", amount: 12, unit: "month" },
+  ],
+};
 
 const DASHBOARD_WIDGET_DEFAULTS = [
   { id: "solarPower", group: "trends", labelKey: "solarGeneration", visible: true, priority: 10 },
@@ -148,6 +164,7 @@ const I18N = {
     brand: "HOME ENERGY <strong>& BATTERY</strong>",
     navDashboard: "Dashboard",
     navGraphs: "Graphs",
+    navReports: "Reports",
     navSettings: "Settings",
     liveDashboard: "Live dashboard",
     homeEnergyFlow: "Home energy flow",
@@ -160,6 +177,9 @@ const I18N = {
     loadingGraphData: "Loading graph data",
     fetchingGraphRecords: "Fetching records...",
     parsedGraphRecords: "Parsed {parsed} / {total} records",
+    loadingReportData: "Loading report data",
+    fetchingReportRecords: "Aggregating report records...",
+    parsedReportRecords: "Scanned {parsed} records",
     graphRecordCount: "{count} records",
     last1Hour: "Last 1 hour",
     last8Hours: "Last 8 hours",
@@ -170,6 +190,29 @@ const I18N = {
     last3Months: "Last 3 months",
     last6Months: "Last 6 months",
     lastYear: "Last year",
+    energyReports: "Energy Reports",
+    exactUsageReports: "Energy Usage",
+    reportsHelp: "Compare exact usage totals by day, week, or month.",
+    reportMode: "Report mode",
+    dailyReport: "Daily",
+    weeklyReport: "Weekly",
+    monthlyReport: "Monthly",
+    last8Weeks: "Last 8 weeks",
+    last26Weeks: "Last 26 weeks",
+    last12Months: "Last 12 months",
+    loadReport: "Load Report",
+    usageKwh: "Usage",
+    usageKwhHelp: "House demand",
+    gridImportHelp: "Bought from grid",
+    solarCoverage: "Solar coverage",
+    sentToGrid: "Sent to grid",
+    peakDemand: "Peak Demand",
+    usageTrend: "Usage Trend",
+    exactKwhTable: "Exact kWh by Period",
+    period: "Period",
+    change: "Change",
+    noReportData: "No report data loaded yet.",
+    reportBucketCount: "{count} periods",
     trendWidgets: "Power Trends",
     statusWidgets: "Status & Savings",
     circuitWidgets: "Smart Cosmo Circuits",
@@ -399,6 +442,7 @@ const I18N = {
     brand: "ホームエネルギー <strong>& バッテリー</strong>",
     navDashboard: "ダッシュボード",
     navGraphs: "グラフ",
+    navReports: "レポート",
     navSettings: "設定",
     liveDashboard: "ライブ表示",
     homeEnergyFlow: "家庭内の電力フロー",
@@ -411,6 +455,9 @@ const I18N = {
     loadingGraphData: "グラフデータを読み込み中",
     fetchingGraphRecords: "レコードを取得中...",
     parsedGraphRecords: "{parsed} / {total} レコード解析済み",
+    loadingReportData: "レポートデータを読み込み中",
+    fetchingReportRecords: "レポートレコードを集計中...",
+    parsedReportRecords: "{parsed} レコードを読み取り済み",
     graphRecordCount: "{count} レコード",
     last1Hour: "直近1時間",
     last8Hours: "直近8時間",
@@ -421,6 +468,29 @@ const I18N = {
     last3Months: "直近3か月",
     last6Months: "直近6か月",
     lastYear: "直近1年",
+    energyReports: "エネルギーレポート",
+    exactUsageReports: "電力使用量",
+    reportsHelp: "日・週・月ごとの正確な使用量合計を比較します。",
+    reportMode: "レポート単位",
+    dailyReport: "日別",
+    weeklyReport: "週別",
+    monthlyReport: "月別",
+    last8Weeks: "直近8週",
+    last26Weeks: "直近26週",
+    last12Months: "直近12か月",
+    loadReport: "レポートを読み込む",
+    usageKwh: "使用量",
+    usageKwhHelp: "家庭内消費",
+    gridImportHelp: "買電量",
+    solarCoverage: "太陽光カバー率",
+    sentToGrid: "送電量",
+    peakDemand: "最大需要",
+    usageTrend: "使用量トレンド",
+    exactKwhTable: "期間別の正確なkWh",
+    period: "期間",
+    change: "増減",
+    noReportData: "レポートデータはまだ読み込まれていません。",
+    reportBucketCount: "{count} 期間",
     trendWidgets: "電力トレンド",
     statusWidgets: "状態と節約額",
     circuitWidgets: "スマートコスモ回路",
@@ -694,6 +764,8 @@ function setLanguage(language) {
   const serviceKey = $("#serviceState")?.dataset.stateKey;
   if (serviceKey) setServiceState(serviceKey);
   if (state.status) renderDashboard(state.status, { recordTrend: false });
+  renderReportQuickRanges(reportBucket());
+  if (state.reportData) renderReport(state.reportData);
   drawAllTrends();
   drawGraphAnalysis();
   renderDashboardWidgetControls(state.config ?? {});
@@ -792,6 +864,13 @@ function co2Saved(valueKg) {
   return `${new Intl.NumberFormat(state.language === "ja" ? "ja-JP" : "en-US", {
     maximumFractionDigits: valueKg >= 100 ? 0 : 2,
   }).format(valueKg)} kg`;
+}
+
+function percentage(value) {
+  if (!Number.isFinite(value)) return "--";
+  return `${new Intl.NumberFormat(state.language === "ja" ? "ja-JP" : "en-US", {
+    maximumFractionDigits: Math.abs(value) >= 100 ? 0 : 1,
+  }).format(value)}%`;
 }
 
 function localDateTimeValue(date) {
@@ -973,14 +1052,16 @@ function setLoadProgress(prefix, parsed = 0, total = 0, visible = true) {
   if (!container || !detail || !fill || !bar) return;
   container.classList.toggle("hidden", !visible);
   const percent = total ? Math.round((parsed / total) * 100) : 0;
+  const isReport = prefix === "report";
   detail.textContent = total
-    ? template("parsedGraphRecords", {
+    ? template(isReport ? "parsedReportRecords" : "parsedGraphRecords", {
         parsed: parsed.toLocaleString(),
         total: total.toLocaleString(),
       })
-    : t("fetchingGraphRecords");
+    : t(isReport ? "fetchingReportRecords" : "fetchingGraphRecords");
   fill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
   bar.setAttribute("aria-valuenow", String(percent));
+  bar.classList.toggle("indeterminate", visible && !total);
 }
 
 function finishLoadProgress(prefix, parsed, total) {
@@ -2461,6 +2542,296 @@ async function openGraphPage(name) {
   await loadGraphHistory().catch((err) => toast(err.message));
 }
 
+function reportBucket() {
+  return document.querySelector('input[name="reportBucket"]:checked')?.value ?? "day";
+}
+
+function addReportRange(date, amount, unit) {
+  const next = new Date(date);
+  if (unit === "month") next.setMonth(next.getMonth() + amount);
+  else if (unit === "week") next.setDate(next.getDate() + amount * 7);
+  else next.setDate(next.getDate() + amount);
+  return next;
+}
+
+function startOfLocalReportBucket(date, bucket) {
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  if (bucket === "month") return new Date(start.getFullYear(), start.getMonth(), 1);
+  if (bucket === "week") {
+    const mondayOffset = (start.getDay() + 6) % 7;
+    start.setDate(start.getDate() - mondayOffset);
+  }
+  return start;
+}
+
+function setReportRange(amount, unit, end = new Date()) {
+  // Reports compare complete calendar periods. Ending at the current bucket's
+  // boundary avoids mixing a partial day, week, or month with full periods.
+  const bucketEnd = startOfLocalReportBucket(end, unit);
+  $("#reportEnd").value = localDateTimeValue(bucketEnd);
+  $("#reportStart").value = localDateTimeValue(addReportRange(bucketEnd, -amount, unit));
+}
+
+function renderReportQuickRanges(bucket = reportBucket()) {
+  const root = $("#reportQuickRanges");
+  if (!root) return;
+  root.innerHTML = "";
+  for (const preset of REPORT_PRESETS[bucket] ?? REPORT_PRESETS.day) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ghost";
+    button.dataset.reportAmount = preset.amount;
+    button.dataset.reportUnit = preset.unit;
+    button.textContent = t(preset.key);
+    root.append(button);
+  }
+}
+
+function setDefaultReportRange(bucket = reportBucket()) {
+  const defaults = {
+    day: REPORT_PRESETS.day[0],
+    week: REPORT_PRESETS.week[0],
+    month: REPORT_PRESETS.month[0],
+  };
+  const preset = defaults[bucket] ?? REPORT_PRESETS.day[0];
+  setReportRange(preset.amount, preset.unit);
+}
+
+function reportParams(start, end, bucket) {
+  return new URLSearchParams({
+    start: start.toISOString(),
+    end: end.toISOString(),
+    bucket,
+  });
+}
+
+function setReportFeatureVisibility(features = {}) {
+  const enabled = {
+    solar: features.solarEnabled !== false,
+    "smart-cosmo": features.smartCosmoEnabled !== false,
+    "fuel-cell": features.fuelCellEnabled !== false,
+  };
+  $$("[data-report-feature]").forEach((el) => {
+    el.classList.toggle("hidden", enabled[el.dataset.reportFeature] === false);
+  });
+}
+
+function formatReportDelta(bucket) {
+  const delta = Number(bucket.houseDemandDeltaKwh);
+  if (!Number.isFinite(delta)) return "--";
+  const sign = delta > 0 ? "+" : "";
+  return `${sign}${energyKwh(delta)} (${percentage(Number(bucket.houseDemandDeltaPercent))})`;
+}
+
+function renderReportSummary(report) {
+  const totals = report?.totals ?? {};
+  setText("#reportUsageTotal", energyKwh(Number(totals.houseDemandKwh)));
+  setText("#reportImportTotal", energyKwh(Number(totals.gridImportKwh)));
+  setText("#reportSolarTotal", energyKwh(Number(totals.solarGenerationKwh)));
+  setText("#reportExportTotal", energyKwh(Number(totals.gridExportKwh)));
+  setText("#reportPeakDemand", watts(Number(totals.peakDemandW)));
+  setText("#reportCo2Total", co2Saved(Number(totals.co2SavingKg)));
+  const solarCardNote = $("#reportSolarTotal")?.closest(".report-card")?.querySelector(".widget-note");
+  if (solarCardNote) solarCardNote.textContent = `${t("solarCoverage")}: ${percentage(Number(totals.solarCoveragePercent))}`;
+}
+
+function renderReportRows(report) {
+  const rows = $("#reportRows");
+  if (!rows) return;
+  const buckets = report?.buckets ?? [];
+  rows.innerHTML = "";
+  if (!buckets.length) {
+    rows.innerHTML = `<tr><td colspan="8">${t("noReportData")}</td></tr>`;
+    return;
+  }
+  for (const bucket of buckets) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${bucket.label}</td>
+      <td data-report-feature="smart-cosmo">${energyKwh(Number(bucket.houseDemandKwh))}</td>
+      <td data-report-feature="smart-cosmo">${formatReportDelta(bucket)}</td>
+      <td data-report-feature="solar">${energyKwh(Number(bucket.solarGenerationKwh))}</td>
+      <td data-report-feature="smart-cosmo">${energyKwh(Number(bucket.gridImportKwh))}</td>
+      <td data-report-feature="smart-cosmo">${energyKwh(Number(bucket.gridExportKwh))}</td>
+      <td data-report-feature="fuel-cell">${energyKwh(Number(bucket.fuelCellKwh))}</td>
+      <td data-report-feature="smart-cosmo">${watts(Number(bucket.peakDemandW))}</td>
+    `;
+    rows.append(tr);
+  }
+}
+
+function reportChartSeries(features = {}) {
+  return [
+    {
+      key: "houseDemandKwh",
+      color: "#127c78",
+      label: t("houseDemand"),
+      style: "bar",
+      enabled: features.smartCosmoEnabled !== false,
+    },
+    {
+      key: "solarGenerationKwh",
+      color: "#d8872c",
+      label: t("solarGeneration"),
+      style: "line",
+      enabled: features.solarEnabled !== false,
+    },
+    {
+      key: "gridImportKwh",
+      color: "#dc2626",
+      label: t("gridImport"),
+      style: "line",
+      enabled: features.smartCosmoEnabled !== false,
+    },
+    {
+      key: "gridExportKwh",
+      color: "#16a34a",
+      label: t("gridExport"),
+      style: "line",
+      enabled: features.smartCosmoEnabled !== false,
+    },
+  ].filter((item) => item.enabled);
+}
+
+function renderReportChartLegend(features) {
+  const legend = $("#reportChartLegend");
+  if (!legend) return;
+  legend.replaceChildren(
+    ...reportChartSeries(features).map((item) => {
+      const entry = document.createElement("span");
+      entry.className = "report-chart-legend-item";
+      const swatch = document.createElement("i");
+      swatch.className = `report-chart-swatch is-${item.style}`;
+      swatch.style.setProperty("--series-color", item.color);
+      const label = document.createElement("span");
+      label.textContent = item.label;
+      entry.append(swatch, label);
+      return entry;
+    }),
+  );
+}
+
+function drawReportChart(report = state.reportData) {
+  const canvas = $("#reportTrendChart");
+  if (!canvas) return;
+  const buckets = report?.buckets ?? [];
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(1, Math.round(rect.width || canvas.width));
+  const height = Math.max(1, Math.round(rect.height || canvas.height));
+  const dpr = window.devicePixelRatio || 1;
+  if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  const pad = { top: 18, right: 18, bottom: 54, left: 58 };
+  const chartWidth = Math.max(1, width - pad.left - pad.right);
+  const chartHeight = Math.max(1, height - pad.top - pad.bottom);
+  ctx.strokeStyle = "#dbe5ef";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 4; i += 1) {
+    const y = pad.top + (chartHeight * i) / 3;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(width - pad.right, y);
+    ctx.stroke();
+  }
+  const features = report?.features ?? {};
+  const series = reportChartSeries(features);
+  const values = buckets.flatMap((bucket) =>
+    series.map((item) => Number(bucket[item.key])).filter(Number.isFinite),
+  );
+  const max = Math.max(1, ...values);
+  ctx.fillStyle = "#64748b";
+  ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  ctx.fillText(`${Math.round(max)} kWh`, pad.left - 6, pad.top);
+  ctx.fillText("0 kWh", pad.left - 6, pad.top + chartHeight);
+  if (!buckets.length || !series.length || !values.length) {
+    ctx.textAlign = "center";
+    ctx.fillText(t("noReportData"), width / 2, height / 2);
+    return;
+  }
+  const step = chartWidth / buckets.length;
+  const barWidth = Math.min(34, Math.max(8, step * 0.48));
+  const xFor = (index) => pad.left + step * index + step / 2;
+  const yFor = (value) => pad.top + chartHeight - (value / max) * chartHeight;
+
+  ctx.fillStyle = "rgba(18, 124, 120, 0.72)";
+  buckets.forEach((bucket, index) => {
+    const value = Number(bucket.houseDemandKwh);
+    if (!Number.isFinite(value)) return;
+    const x = xFor(index) - barWidth / 2;
+    const y = yFor(value);
+    ctx.fillRect(x, y, barWidth, pad.top + chartHeight - y);
+  });
+
+  for (const item of series.filter((entry) => entry.key !== "houseDemandKwh")) {
+    ctx.beginPath();
+    let started = false;
+    buckets.forEach((bucket, index) => {
+      const value = Number(bucket[item.key]);
+      if (!Number.isFinite(value)) {
+        started = false;
+        return;
+      }
+      const x = xFor(index);
+      const y = yFor(value);
+      if (!started) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+      started = true;
+    });
+    ctx.strokeStyle = item.color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = "#64748b";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  const labelEvery = Math.max(1, Math.ceil(buckets.length / Math.floor(chartWidth / 90)));
+  buckets.forEach((bucket, index) => {
+    if (index % labelEvery !== 0 && index !== buckets.length - 1) return;
+    ctx.save();
+    ctx.translate(xFor(index), height - 18);
+    ctx.rotate(-Math.PI / 5);
+    ctx.fillText(bucket.label, 0, 0);
+    ctx.restore();
+  });
+}
+
+function renderReport(report) {
+  state.reportData = report;
+  renderReportSummary(report);
+  renderReportRows(report);
+  setReportFeatureVisibility(report.features);
+  renderReportChartLegend(report.features);
+  $("#reportMeta").textContent = template("reportBucketCount", {
+    count: (report.buckets ?? []).length.toLocaleString(),
+  });
+  drawReportChart(report);
+}
+
+async function loadReport() {
+  const start = new Date($("#reportStart").value);
+  const end = new Date($("#reportEnd").value);
+  const bucket = reportBucket();
+  setLoadProgress("report", 0, 0, true);
+  try {
+    const report = await api(`/api/reports/energy?${reportParams(start, end, bucket)}`);
+    renderReport(report);
+    const recordsRead = Number(report.meta?.recordsRead ?? 0);
+    finishLoadProgress("report", recordsRead, recordsRead);
+    setServiceState("historicalData");
+  } catch (err) {
+    setLoadProgress("report", 0, 0, false);
+    throw err;
+  }
+}
+
 function schedulePayloadFields(action) {
   // Schedule payloads mirror the same action names used by immediate buttons, so
   // the server can execute scheduled and manual actions through one code path.
@@ -2643,6 +3014,13 @@ function setPage(page) {
     $("#pageTitle").textContent = trendLabel(state.activeGraph);
     updateCircuitGraphPicker(circuitIdsFromStatus());
     drawGraphAnalysis();
+  } else if (page === "reports") {
+    $("#pageEyebrow").textContent = t("energyReports");
+    $("#pageTitle").textContent = t("exactUsageReports");
+    drawReportChart();
+    if (!state.reportData) {
+      loadReport().catch((err) => toast(err.message));
+    }
   } else if (page === "settings") {
     $("#pageEyebrow").textContent = t("navSettings");
     $("#pageTitle").textContent = t("navSettings");
@@ -2799,6 +3177,8 @@ function initForms() {
   });
   setHistoryRange(30 * 60_000);
   setGraphHistoryRange(24 * 60 * 60_000);
+  renderReportQuickRanges("day");
+  setDefaultReportRange("day");
   setLiveModeButton();
   $$("[data-range-ms]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -2827,6 +3207,30 @@ function initForms() {
     event.preventDefault();
     try {
       await loadGraphHistory();
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+  $$('input[name="reportBucket"]').forEach((input) => {
+    input.addEventListener("change", () => {
+      state.reportBucket = input.value;
+      renderReportQuickRanges(input.value);
+      setDefaultReportRange(input.value);
+      if (state.currentPage === "reports") {
+        loadReport().catch((err) => toast(err.message));
+      }
+    });
+  });
+  $("#reportQuickRanges")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-report-amount]");
+    if (!button) return;
+    setReportRange(Number(button.dataset.reportAmount), button.dataset.reportUnit);
+    $("#reportsForm").requestSubmit();
+  });
+  $("#reportsForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await loadReport();
     } catch (err) {
       toast(err.message);
     }
@@ -3328,7 +3732,10 @@ function initForms() {
       if (state.currentPage === "settings") refreshAutomationLog();
     }
   });
-  window.addEventListener("resize", drawAllTrends);
+  window.addEventListener("resize", () => {
+    drawAllTrends();
+    drawReportChart();
+  });
 }
 
 function collectScheduleDays() {

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  aggregateEnergyReportSamples,
   clearStaleScheduleRuns,
   cleanAutomationRule,
   cleanAutomationRuleConfig,
@@ -167,6 +168,27 @@ assert.equal(sample.circuitCumulativeKwh["2"], 20.25);
 assert.equal(sample.circuitEnergyKwh["1"], 0.5);
 assert.equal(sample.circuitEnergyKwh["2"], 0.25);
 
+const offPeakTimestamp = new Date(2026, 4, 31, 1, 0).toISOString();
+const previousOffPeakTimestamp = new Date(2026, 4, 31, 0, 30).toISOString();
+const mixedGridSolarCharge = sampleFromStatus({
+  read_at: offPeakTimestamp,
+  energy: {
+    battery: { instant_power: { value: 1000 } },
+    solar: { instant_power: { value: 600 } },
+  },
+  meter: { grid_import_power: { value: 700 } },
+}, { ...migrated, rateBands: bands }, { timestamp: previousOffPeakTimestamp });
+assert.equal(mixedGridSolarCharge.offPeakSavingYen, 7);
+
+const mixedChargeWithoutGridMeter = sampleFromStatus({
+  read_at: offPeakTimestamp,
+  energy: {
+    battery: { instant_power: { value: 1000 } },
+    solar: { instant_power: { value: 600 } },
+  },
+}, { ...migrated, rateBands: bands }, { timestamp: previousOffPeakTimestamp });
+assert.equal(mixedChargeWithoutGridMeter.offPeakSavingYen, 4);
+
 const smartCosmoDisabledSample = sampleFromStatus({
   read_at: "2026-05-31T12:15:00+09:00",
   meter: {
@@ -204,6 +226,111 @@ assert.equal(summary.circuits.find((item) => item.channel === 1).totalKwh, 0.5);
 assert.equal(summary.circuits.find((item) => item.channel === 2).totalKwh, 0.1);
 assert.equal(summary.circuitTotalKwh, 0.6);
 assert.equal(summary.guardTriggerCount, 1);
+
+const reportSamples = [
+  {
+    timestamp: "2026-07-01T00:15:00",
+    houseDemandKwh: 1,
+    solarGenerationKwh: 0.4,
+    gridImportKwh: 0.5,
+    gridExportKwh: 0.1,
+    fuelCellKwh: 0.2,
+    batteryChargeKwh: 0.3,
+    batteryDischargeKwh: 0,
+    solarSavingYen: 12,
+    offPeakSavingYen: 1,
+    houseDemandW: 1200,
+  },
+  {
+    timestamp: "2026-07-01T12:15:00",
+    houseDemandKwh: 2,
+    solarGenerationKwh: 0.8,
+    gridImportKwh: 0.3,
+    gridExportKwh: 0.2,
+    fuelCellKwh: 0.1,
+    batteryChargeKwh: 0,
+    batteryDischargeKwh: 0.4,
+    solarSavingYen: 24,
+    offPeakSavingYen: 2,
+    houseDemandW: 2400,
+  },
+  {
+    timestamp: "2026-07-02T00:15:00",
+    houseDemandKwh: 6,
+    solarGenerationKwh: 1.5,
+    gridImportKwh: 1,
+    gridExportKwh: 0.4,
+    fuelCellKwh: 0.3,
+    batteryChargeKwh: 0.1,
+    batteryDischargeKwh: 0.2,
+    solarSavingYen: 45,
+    offPeakSavingYen: 3,
+    houseDemandW: 1800,
+  },
+];
+const dailyReport = aggregateEnergyReportSamples(reportSamples, {
+  start: "2026-07-01T00:00:00",
+  end: "2026-07-03T00:00:00",
+  bucket: "day",
+  config: { co2TonnesPerKwh: 0.000423 },
+});
+assert.equal(dailyReport.buckets.length, 2);
+assert.equal(dailyReport.buckets[0].key, "2026-07-01");
+assert.equal(dailyReport.buckets[0].houseDemandKwh, 3);
+assert.equal(dailyReport.buckets[0].gridImportKwh, 0.8);
+assert.equal(dailyReport.buckets[0].peakDemandW, 2400);
+assert.equal(dailyReport.buckets[1].previousHouseDemandKwh, 3);
+assert.equal(dailyReport.buckets[1].houseDemandDeltaKwh, 3);
+assert.equal(dailyReport.buckets[1].houseDemandDeltaPercent, 100);
+assert.equal(dailyReport.totals.houseDemandKwh, 9);
+assert.equal(dailyReport.totals.solarGenerationKwh, 2.7);
+assert.ok(Math.abs(dailyReport.totals.solarCoveragePercent - 30) < 0.000001);
+
+const dailyReportWithGap = aggregateEnergyReportSamples(reportSamples.slice(0, 1), {
+  start: "2026-07-01T00:00:00",
+  end: "2026-07-03T00:00:00",
+  bucket: "day",
+});
+assert.equal(dailyReportWithGap.buckets.length, 2);
+assert.equal(dailyReportWithGap.buckets[1].key, "2026-07-02");
+assert.equal(dailyReportWithGap.buckets[1].houseDemandKwh, null);
+assert.equal(dailyReportWithGap.buckets[1].sampleCount, 0);
+
+const missingUsageReport = aggregateEnergyReportSamples([
+  { timestamp: "2026-07-01T01:00:00", solarGenerationKwh: 0.5 },
+], {
+  start: "2026-07-01T00:00:00",
+  end: "2026-07-02T00:00:00",
+  bucket: "day",
+});
+assert.equal(missingUsageReport.buckets[0].houseDemandKwh, null);
+assert.equal(missingUsageReport.totals.houseDemandKwh, null);
+
+const weeklyReport = aggregateEnergyReportSamples(reportSamples, {
+  start: "2026-07-01T00:00:00",
+  end: "2026-07-03T00:00:00",
+  bucket: "week",
+});
+assert.equal(weeklyReport.buckets[0].key, "2026-06-29");
+assert.equal(weeklyReport.buckets[0].houseDemandKwh, 9);
+
+const monthlyReport = aggregateEnergyReportSamples(reportSamples, {
+  start: "2026-07-01T00:00:00",
+  end: "2026-07-31T23:59:00",
+  bucket: "month",
+});
+assert.equal(monthlyReport.buckets[0].key, "2026-07");
+assert.equal(monthlyReport.buckets[0].houseDemandKwh, 9);
+
+const disabledFeatureReport = aggregateEnergyReportSamples(reportSamples, {
+  start: "2026-07-01T00:00:00",
+  end: "2026-07-03T00:00:00",
+  bucket: "day",
+  config: { solarEnabled: false, smartCosmoEnabled: false, fuelCellEnabled: false },
+});
+assert.equal(disabledFeatureReport.features.solarEnabled, false);
+assert.equal(disabledFeatureReport.features.smartCosmoEnabled, false);
+assert.equal(disabledFeatureReport.features.fuelCellEnabled, false);
 
 const guardRules = [{
   type: "backup-demand-guard",
