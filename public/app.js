@@ -332,6 +332,9 @@ const I18N = {
     plannerNeedsRates: "Off-Peak or Multi-Rate pricing is required.",
     plannerNeedsSolar: "Solar generation must be enabled.",
     plannerNeedsDemand: "Overall house demand must be enabled.",
+    plannerNeedsLocation: "Latitude and longitude are required.",
+    plannerNeedsArray: "Array peak capacity is required.",
+    plannerNeedsBattery: "Usable battery capacity and maximum charge watts are required.",
     plannerCharging: "Charging",
     plannerReady: "Ready",
     rateMode: "Rate Mode",
@@ -658,6 +661,9 @@ const I18N = {
     plannerNeedsRates: "夜間料金または複数料金の設定が必要です。",
     plannerNeedsSolar: "太陽光発電を有効にしてください。",
     plannerNeedsDemand: "家庭全体の使用電力を有効にしてください。",
+    plannerNeedsLocation: "緯度と経度を入力してください。",
+    plannerNeedsArray: "太陽光パネル最大容量を入力してください。",
+    plannerNeedsBattery: "使用可能な蓄電容量と最大充電電力を入力してください。",
     plannerCharging: "充電中",
     plannerReady: "準備完了",
     rateMode: "料金モード",
@@ -2005,11 +2011,35 @@ function updateSolarPlannerAvailability(config = state.config ?? {}) {
   if (config.solarEnabled === false) reasons.push(t("plannerNeedsSolar"));
   if (config.rateMode === "simple") reasons.push(t("plannerNeedsRates"));
   if (config.smartCosmoEnabled === false) reasons.push(t("plannerNeedsDemand"));
+  const requiredNumber = (selector, fallback) => {
+    const field = $(selector);
+    const value = field ? field.value : fallback;
+    return value === "" || value === null || value === undefined ? Number.NaN : Number(value);
+  };
+  const latitude = requiredNumber("#solarPlannerLatitude", config.solarPlanner?.latitude);
+  const longitude = requiredNumber("#solarPlannerLongitude", config.solarPlanner?.longitude);
+  const arrayPeakKw = requiredNumber("#solarPlannerArrayPeak", config.solarPlanner?.arrayPeakKw);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) reasons.push(t("plannerNeedsLocation"));
+  if (!Number.isFinite(arrayPeakKw) || arrayPeakKw <= 0) reasons.push(t("plannerNeedsArray"));
+  const capacityValue = config.batteryCapabilities?.usableCapacityKwh;
+  const chargeWattsValue = config.batteryCapabilities?.maximumChargeWatts;
+  const usableCapacityKwh = capacityValue === null || capacityValue === undefined ? Number.NaN : Number(capacityValue);
+  const maximumChargeWatts = chargeWattsValue === null || chargeWattsValue === undefined ? Number.NaN : Number(chargeWattsValue);
+  if (!Number.isFinite(usableCapacityKwh) || usableCapacityKwh <= 0
+    || !Number.isFinite(maximumChargeWatts) || maximumChargeWatts <= 0) {
+    reasons.push(t("plannerNeedsBattery"));
+  }
   const enable = $("#solarPlannerEnabled");
-  enable.disabled = reasons.length > 0;
+  const enabled = enable.checked;
+  const configuredEnabled = config.solarPlanner?.enabled === true;
+  enable.disabled = reasons.length > 0 && !enabled;
+  const planUnavailable = configuredEnabled && state.solarPlannerStatus?.plan?.available === false;
+  $("#solarPlannerRecalculate").disabled = !enabled || !configuredEnabled || reasons.length > 0 || planUnavailable;
+  $("#solarPlannerResume").disabled = !configuredEnabled || !state.solarPlannerStatus?.paused || reasons.length > 0;
+  const runtimeReason = configuredEnabled ? state.solarPlannerStatus?.reason : null;
   $("#solarPlannerAvailability").textContent = reasons.length
-    ? `${t("unavailable")}: ${reasons.join(", ")}`
-    : state.solarPlannerStatus?.reason ?? "";
+    ? `${t("unavailable")}: ${reasons.join(" ")}`
+    : runtimeReason ?? "";
   updateSchedulePlannerState(config);
 }
 
@@ -3643,6 +3673,10 @@ function initForms() {
     });
   });
 
+  $("#solarPlannerForm").addEventListener("input", () => {
+    updateSolarPlannerAvailability(state.config ?? {});
+  });
+
   $("#batteryCapabilitiesForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
@@ -3694,6 +3728,7 @@ function initForms() {
   $("#solarPlannerRecalculate").addEventListener("click", async () => {
     try {
       renderSolarPlannerStatus(await api("/api/solar-planner/recalculate", { method: "POST", body: {} }));
+      updateSolarPlannerAvailability();
     } catch (err) {
       toast(err.message);
     }
@@ -3702,6 +3737,7 @@ function initForms() {
   $("#solarPlannerResume").addEventListener("click", async () => {
     try {
       renderSolarPlannerStatus(await api("/api/solar-planner/resume", { method: "POST", body: {} }));
+      updateSolarPlannerAvailability();
     } catch (err) {
       toast(err.message);
     }

@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
+  activePlannerSlotStopReason,
   aggregateEnergyReportSamples,
   clearStaleScheduleRuns,
   cleanAutomationRule,
@@ -8,20 +12,26 @@ import {
   countGuardTriggersForRange,
   evaluateAutomationRule,
   estimateEffectiveBatteryCapacity,
+  forecastHourForInterval,
   forecastIsFresh,
+  learnedSolarFactor,
   normalizeCircuitLabels,
   normalizeDashboardWidgets,
   normalizeRateBands,
   normalizeSubnets,
+  nextPlanningBoundary,
   optimizeDiscountedChargeSlots,
   parseJsonWithContext,
   parseOpenMeteoForecast,
   planChronologicalDiscountedCharging,
   plannerLiveChargeHeadroom,
+  plannerLiveImportSafety,
   plannerTimezoneError,
   rateForTimestamp,
+  readRecentHistorySamples,
   recoverConcatenatedJsonValue,
   sampleFromStatus,
+  shouldTriggerDemandGuard,
   solarPlannerBaseAvailability,
   solarPowerFromIrradiance,
   predictHouseDemand,
@@ -98,6 +108,26 @@ const parsedForecast = parseOpenMeteoForecast({
 }, new Date("2026-07-11T00:00:00.000Z"));
 assert.equal(parsedForecast.hours[0].tiltedIrradianceWm2, 900);
 assert.equal(parsedForecast.days[0].sunset, "2026-07-11T18:58");
+const precedingHourForecast = {
+  hours: [
+    { timestamp: "2026-07-11T10:00:00.000Z", tiltedIrradianceWm2: 100 },
+    { timestamp: "2026-07-11T11:00:00.000Z", tiltedIrradianceWm2: 500 },
+  ],
+};
+assert.equal(forecastHourForInterval(
+  precedingHourForecast,
+  "2026-07-11T10:15:00.000Z",
+  "2026-07-11T10:45:00.000Z",
+).tiltedIrradianceWm2, 500);
+const partialIntervalStart = new Date(2026, 6, 11, 11, 5, 30);
+assert.equal(
+  nextPlanningBoundary(partialIntervalStart, new Date(2026, 6, 11, 12, 0)),
+  new Date(2026, 6, 11, 11, 30).getTime(),
+);
+assert.equal(
+  nextPlanningBoundary(new Date(2026, 6, 11, 11, 30), new Date(2026, 6, 11, 12, 0)),
+  new Date(2026, 6, 11, 12, 0).getTime(),
+);
 const originalTimezone = process.env.TZ;
 process.env.TZ = "Asia/Tokyo";
 assert.equal(plannerTimezoneError(parsedForecast), null);
@@ -170,6 +200,62 @@ assert.equal(plannerLiveChargeHeadroom({
 assert.equal(plannerLiveChargeHeadroom({
   meter: { grid_import_power: { value: null } },
 }, plannerConfig).available, false);
+assert.equal(plannerLiveImportSafety({
+  meter: { grid_import_power: { value: 5400 } },
+}, plannerConfig).available, true);
+assert.equal(plannerLiveImportSafety({
+  meter: { grid_import_power: { value: 5500 } },
+}, plannerConfig).available, false);
+assert.equal(plannerLiveImportSafety({
+  meter: { grid_import_power: { value: null } },
+}, plannerConfig).available, false);
+assert.equal(shouldTriggerDemandGuard({
+  operationMode: "charging",
+  batteryChargingW: 2000,
+  guardDemandW: 5600,
+  breakerLimitW: 5500,
+}), true);
+assert.equal(shouldTriggerDemandGuard({
+  operationMode: "standby",
+  batteryChargingW: 2000,
+  guardDemandW: 5600,
+  breakerLimitW: 5500,
+}), false);
+
+const activePlannerNow = new Date(2026, 6, 11, 23, 30);
+const activePlannerSlot = {
+  start: new Date(2026, 6, 11, 23, 0).toISOString(),
+  end: new Date(2026, 6, 12, 0, 0).toISOString(),
+  targetWh: 1000,
+  targetSocPercent: 100,
+};
+assert.equal(activePlannerSlotStopReason({
+  owner: "planner",
+  activeSlot: activePlannerSlot,
+  activePlanCreatedAt: "old-plan",
+  activeChargedKwh: 0.2,
+}, plannerConfig, {
+  createdAt: "new-plan",
+  slots: [{ ...activePlannerSlot, targetWh: 800 }],
+}, activePlannerNow), null);
+assert.match(activePlannerSlotStopReason({
+  owner: "planner",
+  activeSlot: activePlannerSlot,
+  activePlanCreatedAt: "old-plan",
+  activeChargedKwh: 0.2,
+}, plannerConfig, {
+  createdAt: "new-plan",
+  slots: [{ ...activePlannerSlot, targetWh: 600 }],
+}, activePlannerNow), /remaining charge target/);
+assert.match(activePlannerSlotStopReason({
+  owner: "planner",
+  activeSlot: activePlannerSlot,
+  activePlanCreatedAt: "old-plan",
+  activeChargedKwh: 0.2,
+}, plannerConfig, {
+  createdAt: "new-plan",
+  slots: [],
+}, activePlannerNow), /no longer includes/);
 
 function chronologicalSlot(hour, band, netKwh = 0, highSolarNetKwh = netKwh) {
   const startMs = Date.parse("2026-07-12T00:00:00.000Z") + hour * 3_600_000;
@@ -309,6 +395,52 @@ for (let index = 1; index <= 6; index += 1) {
 const capacity = estimateEffectiveBatteryCapacity(capacitySamples, 2);
 assert.equal(capacity.sessionCount, 6);
 assert.equal(capacity.learnedCapacityKwh, 2.5);
+
+const reversingCapacity = estimateEffectiveBatteryCapacity([
+  { timestamp: "2026-07-11T00:00:00.000Z", stateOfChargePercent: 20, batteryPowerW: 1000 },
+  { timestamp: "2026-07-11T00:15:00.000Z", stateOfChargePercent: 28, batteryPowerW: 1000 },
+  { timestamp: "2026-07-11T00:30:00.000Z", stateOfChargePercent: 24, batteryPowerW: -1000 },
+  { timestamp: "2026-07-11T00:45:00.000Z", stateOfChargePercent: 31, batteryPowerW: 1000 },
+], 5);
+assert.equal(reversingCapacity.sessionCount, 0);
+assert.equal(reversingCapacity.learnedCapacityKwh, null);
+
+const alignedSolarSamples = [];
+const alignedWeather = [];
+for (let day = 1; day <= 7; day += 1) {
+  const sampleTime = Date.parse(`2026-07-${String(day).padStart(2, "0")}T12:00:00.000Z`);
+  alignedSolarSamples.push({ timestamp: new Date(sampleTime).toISOString(), solarPowerW: 1000 });
+  alignedWeather.push(
+    { timestamp: new Date(sampleTime).toISOString(), tiltedIrradianceWm2: 100 },
+    { timestamp: new Date(sampleTime + 3_600_000).toISOString(), tiltedIrradianceWm2: 500 },
+  );
+}
+const alignedSolarFactor = learnedSolarFactor(alignedSolarSamples, alignedWeather, plannerConfig);
+assert.equal(alignedSolarFactor.learned, true);
+assert.equal(alignedSolarFactor.factor, 2);
+
+const historyTailDir = await mkdtemp(path.join(os.tmpdir(), "home-energy-history-tail-"));
+try {
+  const historyFile = path.join(historyTailDir, "samples.jsonl");
+  const historyStart = Date.parse("2026-01-01T00:00:00.000Z");
+  const rows = Array.from({ length: 7000 }, (_, index) => ({
+    timestamp: new Date(historyStart + index * 60_000).toISOString(),
+    houseDemandW: index,
+    rateLabel: `\u591c\u9593-${index}`,
+    padding: "x".repeat(80),
+  }));
+  await writeFile(historyFile, `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`);
+  const recent = await readRecentHistorySamples(
+    historyStart + 6990 * 60_000,
+    historyStart + 6999 * 60_000,
+    historyFile,
+  );
+  assert.equal(recent.length, 10);
+  assert.equal(recent[0].houseDemandW, 6990);
+  assert.equal(recent.at(-1).rateLabel, "\u591c\u9593-6999");
+} finally {
+  await rm(historyTailDir, { recursive: true, force: true });
+}
 
 assert.equal(cleanConfig({ updateIntervalSeconds: 2 }).updateIntervalSeconds, 5);
 assert.equal(cleanConfig({ updateIntervalSeconds: 30 }).updateIntervalSeconds, 30);

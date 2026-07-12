@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import dgram from "node:dgram";
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { appendFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -30,6 +30,7 @@ const SOLAR_FORECAST_REFRESH_MS = 3 * 60 * 60_000;
 const SOLAR_FORECAST_MAX_AGE_MS = 6 * 60 * 60_000;
 const SOLAR_PLAN_REFRESH_MS = 30 * 60_000;
 const SOLAR_ACTIVE_PLAN_REFRESH_MS = 5 * 60_000;
+const SOLAR_HISTORY_CACHE_MS = 30 * 60_000;
 
 const DEFAULT_DASHBOARD_WIDGETS = [
   { id: "solarPower", group: "trends", visible: true, priority: 10 },
@@ -114,6 +115,7 @@ let activeCliContext = null;
 let cliTimingSequence = 0;
 const recentCliTimings = [];
 let lastRecordedSample = null;
+let solarPlannerHistoryCache = null;
 const runningScheduleIds = new Set();
 const discoveryJobs = new Map();
 const DISCOVERY_JOB_TTL_MS = 10 * 60 * 1000;
@@ -464,6 +466,91 @@ async function readHistorySamplesInRange(startMs, endMs) {
   return samples;
 }
 
+async function readRecentHistorySamples(startMs, endMs, file = HISTORY_FILE, project = (sample) => sample) {
+  let handle;
+  try {
+    handle = await open(file, "r");
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  }
+  const samples = [];
+  const chunkSize = 512 * 1024;
+  let carry = Buffer.alloc(0);
+  let reachedStart = false;
+  try {
+    let position = (await handle.stat()).size;
+    const parseLine = (line) => {
+      if (!line.trim()) return;
+      let sample;
+      try {
+        sample = parseJsonWithContext(line, `${file}:recent-tail`);
+      } catch (err) {
+        logDetailedError("history", err);
+        return;
+      }
+      const time = new Date(sample.timestamp).getTime();
+      if (!Number.isFinite(time) || time > endMs) return;
+      if (time < startMs) {
+        reachedStart = true;
+        return;
+      }
+      const projected = project(sample);
+      if (projected) samples.push(projected);
+    };
+    while (position > 0 && !reachedStart) {
+      const bytesToRead = Math.min(chunkSize, position);
+      position -= bytesToRead;
+      const buffer = Buffer.allocUnsafe(bytesToRead);
+      const { bytesRead } = await handle.read(buffer, 0, bytesToRead, position);
+      const chunk = buffer.subarray(0, bytesRead);
+      const data = carry.length ? Buffer.concat([chunk, carry]) : chunk;
+      const firstNewline = data.indexOf(0x0a);
+      if (firstNewline < 0) {
+        carry = data;
+        continue;
+      }
+      carry = data.subarray(0, firstNewline);
+      const lines = data.subarray(firstNewline + 1).toString("utf8").split("\n");
+      for (let index = lines.length - 1; index >= 0 && !reachedStart; index -= 1) {
+        parseLine(lines[index]);
+      }
+    }
+    if (!reachedStart && carry.length) parseLine(carry.toString("utf8"));
+  } finally {
+    await handle.close();
+  }
+  return samples.reverse();
+}
+
+function solarPlannerHistorySample(sample) {
+  const compact = { timestamp: sample.timestamp };
+  let hasPlannerMetric = false;
+  for (const key of ["stateOfChargePercent", "batteryPowerW", "solarPowerW", "houseDemandW"]) {
+    if (sample[key] === undefined) continue;
+    compact[key] = sample[key];
+    if (sample[key] !== null) hasPlannerMetric = true;
+  }
+  return hasPlannerMetric ? compact : null;
+}
+
+async function readSolarPlannerHistory(now = new Date()) {
+  const endMs = now.getTime();
+  const startMs = endMs - 90 * 86_400_000;
+  if (solarPlannerHistoryCache
+    && endMs >= solarPlannerHistoryCache.loadedAt
+    && endMs - solarPlannerHistoryCache.loadedAt < SOLAR_HISTORY_CACHE_MS
+    && solarPlannerHistoryCache.startMs <= startMs) {
+    return solarPlannerHistoryCache.samples.filter((sample) => {
+      const time = new Date(sample.timestamp).getTime();
+      return time >= startMs && time <= endMs;
+    });
+  }
+  const samples = await readRecentHistorySamples(startMs, endMs, HISTORY_FILE, solarPlannerHistorySample);
+  solarPlannerHistoryCache = { loadedAt: endMs, startMs, samples };
+  return [...samples];
+}
+
 async function writeJsonFileAtomic(file, data) {
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`);
@@ -483,6 +570,7 @@ function cleanSolarPlannerState(value = {}) {
     plan: value.plan ?? null,
     owner: value.owner === "planner" ? "planner" : null,
     activeSlot: value.activeSlot ?? null,
+    activePlanCreatedAt: value.activePlanCreatedAt ?? null,
     activeChargedKwh: Math.max(0, Number(value.activeChargedKwh) || 0),
     activeLastCheckedAt: value.activeLastCheckedAt ?? null,
     pausedUntil: value.pausedUntil ?? null,
@@ -618,12 +706,6 @@ async function refreshSolarPlannerForecast(config, { fetchImpl = fetch, now = ne
     }
   }
   return writeSolarPlannerState(state);
-}
-
-async function solarPlannerContext() {
-  const state = await readSolarPlannerState();
-  const historicalWeather = await readJsonLinesFile(SOLAR_WEATHER_HISTORY_FILE);
-  return { ...state, historicalWeather };
 }
 
 function solarPlannerView(config, state, now = new Date()) {
@@ -774,6 +856,7 @@ function forecastIsFresh(forecast, now = new Date()) {
 function estimateEffectiveBatteryCapacity(samples, configuredCapacityKwh) {
   const estimates = [];
   let anchor = null;
+  let direction = 0;
   let energyKwh = 0;
   let previous = null;
   for (const sample of samples) {
@@ -783,16 +866,31 @@ function estimateEffectiveBatteryCapacity(samples, configuredCapacityKwh) {
     if (!anchor) anchor = { soc, time };
     if (previous) {
       const dtHours = Math.max(0, Math.min(0.25, (time - previous.time) / 3_600_000));
-      const watts = Number(sample.batteryPowerW);
-      if (Number.isFinite(watts)) energyKwh += Math.abs(watts) * dtHours / 1000;
+      const watts = sample.batteryPowerW === null || sample.batteryPowerW === undefined
+        ? Number.NaN
+        : Number(sample.batteryPowerW);
+      const socDirection = Math.sign(soc - previous.soc);
+      const powerDirection = Number.isFinite(watts) ? Math.sign(watts) : 0;
+      const observedDirection = powerDirection || socDirection;
+      if (observedDirection && direction && observedDirection !== direction) {
+        anchor = { soc: previous.soc, time: previous.time };
+        direction = observedDirection;
+        energyKwh = 0;
+      } else if (!direction && observedDirection) {
+        direction = observedDirection;
+      }
+      if (Number.isFinite(watts) && direction && powerDirection === direction) {
+        energyKwh += Math.abs(watts) * dtHours / 1000;
+      }
     }
-    const deltaSoc = Math.abs(soc - anchor.soc);
+    const deltaSoc = direction ? (soc - anchor.soc) * direction : 0;
     if (deltaSoc >= 10 && energyKwh > 0) {
       estimates.push(energyKwh / (deltaSoc / 100));
       anchor = { soc, time };
+      direction = 0;
       energyKwh = 0;
     }
-    previous = { time };
+    previous = { soc, time };
   }
   const configured = Number(configuredCapacityKwh);
   const filtered = estimates.filter((value) => Number.isFinite(value) && value > 0);
@@ -1184,7 +1282,7 @@ function learnedSolarFactor(samples, historicalWeather, config) {
     const solarW = Number(sample.solarPowerW);
     const time = new Date(sample.timestamp);
     if (!Number.isFinite(solarW) || Number.isNaN(time.getTime())) continue;
-    const weather = weatherByHour.get(Math.floor(time.getTime() / 3_600_000));
+    const weather = weatherByHour.get(Math.floor(time.getTime() / 3_600_000) + 1);
     const irradiance = Number(weather?.tiltedIrradianceWm2);
     if (!Number.isFinite(irradiance) || irradiance < 50) continue;
     const key = localDayKey(time);
@@ -1213,12 +1311,29 @@ function learnedSolarFactor(samples, historicalWeather, config) {
   };
 }
 
-function forecastHourForTime(forecast, time) {
-  const target = new Date(time).getTime();
+function forecastHourForInterval(forecast, start, end) {
+  const midpoint = (new Date(start).getTime() + new Date(end).getTime()) / 2;
+  const target = Math.ceil(midpoint / 3_600_000) * 3_600_000;
   return (forecast?.hours ?? []).reduce((best, hour) => {
     const distance = Math.abs(new Date(hour.timestamp).getTime() - target);
     return !best || distance < best.distance ? { hour, distance } : best;
   }, null)?.hour ?? null;
+}
+
+function nextPlanningBoundary(time, end, intervalMinutes = 30) {
+  const current = new Date(time);
+  const endMs = new Date(end).getTime();
+  if (!Number.isFinite(current.getTime()) || !Number.isFinite(endMs)) return Number.NaN;
+  const next = new Date(current);
+  next.setSeconds(0, 0);
+  const elapsedInHour = next.getMinutes();
+  const nextMinute = (Math.floor(elapsedInHour / intervalMinutes) + 1) * intervalMinutes;
+  if (nextMinute >= 60) {
+    next.setHours(next.getHours() + 1, 0, 0, 0);
+  } else {
+    next.setMinutes(nextMinute, 0, 0);
+  }
+  return Math.min(endMs, next.getTime());
 }
 
 function nextForecastSunset(forecast, now = new Date()) {
@@ -1229,15 +1344,15 @@ function nextForecastSunset(forecast, now = new Date()) {
 }
 
 function planningSunsetWithDiscountedWindow(config, forecast, now = new Date()) {
-  const stepMs = 30 * 60_000;
-  const startMs = Math.ceil(now.getTime() / stepMs) * stepMs;
+  const startMs = now.getTime();
   return (forecast?.days ?? [])
     .map((day) => ({ ...day, timestamp: new Date(day.sunset).getTime() }))
     .filter((day) => Number.isFinite(day.timestamp) && day.timestamp > startMs)
     .sort((a, b) => a.timestamp - b.timestamp)
     .find((day) => {
-      for (let time = startMs; time < day.timestamp; time += stepMs) {
+      for (let time = startMs; time < day.timestamp;) {
         if (explicitDiscountedBand(config, new Date(time))) return true;
+        time = nextPlanningBoundary(time, day.timestamp);
       }
       return false;
     }) ?? null;
@@ -1250,21 +1365,20 @@ function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {
   const sunset = planningSunsetWithDiscountedWindow(config, state.forecast, now);
   if (!sunset) return { available: false, reason: "no discounted window is available before the forecast horizon ends", createdAt: now.toISOString(), slots: [] };
   const temperatures = temperatureByDayFromWeather([...(state.historicalWeather ?? []), ...(state.forecast.hours ?? [])]);
-  const latest = samples.at(-1) ?? {};
-  const soc = Number(latest.stateOfChargePercent);
+  const latestSocSample = samples.findLast((sample) => Number.isFinite(Number(sample.stateOfChargePercent)));
+  const soc = Number(latestSocSample?.stateOfChargePercent);
   if (!Number.isFinite(soc)) return { available: false, reason: "battery state of charge is unavailable", createdAt: now.toISOString(), slots: [] };
   const capacityEstimate = estimateEffectiveBatteryCapacity(samples, config.batteryCapabilities.usableCapacityKwh);
   const capacityKwh = Number(capacityEstimate.capacityKwh);
   const dischargeLimit = Number(config.settingCache?.discharge_limit?.lastKnown?.decoded?.percent ?? 20);
   const calibration = learnedSolarFactor(samples, state.historicalWeather, config);
-  const stepMs = 30 * 60_000;
-  const startMs = Math.ceil(now.getTime() / stepMs) * stepMs;
+  const startMs = now.getTime();
   const demandByDay = new Map();
   const timeline = [];
   let predictedSolarKwh = 0;
   let predictedDemandKwh = 0;
   let predictedSurplusKwh = 0;
-  for (let time = startMs; time < sunset.timestamp; time += stepMs) {
+  for (let time = startMs; time < sunset.timestamp;) {
     const date = new Date(time);
     const dayKey = localDayKey(date);
     if (!demandByDay.has(dayKey)) {
@@ -1273,14 +1387,14 @@ function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {
       demandByDay.set(dayKey, prediction);
     }
     const demand = demandByDay.get(dayKey);
-    const hour = forecastHourForTime(state.forecast, time);
+    const slotEndMs = nextPlanningBoundary(time, sunset.timestamp);
+    const hour = forecastHourForInterval(state.forecast, time, slotEndMs);
     const factor = calibration.groupFactors?.[solarCalibrationGroup(date)] ?? calibration.factor;
     const rawSolarW = solarPowerFromIrradiance(hour?.tiltedIrradianceWm2, config, factor);
     const margin = Number(config.solarPlanner.forecastMarginPercent) / 100;
     const solarW = rawSolarW * (1 - margin);
     const highSolarW = Math.min(Number(config.solarPlanner.arrayPeakKw) * 1000, rawSolarW * (1 + margin));
     const slotDemandW = Number(demand.profile.get(halfHourIndex(date)) ?? 0);
-    const slotEndMs = Math.min(time + stepMs, sunset.timestamp);
     const durationHours = (slotEndMs - time) / 3_600_000;
     const solarKwh = solarW * durationHours / 1000;
     const highSolarKwh = highSolarW * durationHours / 1000;
@@ -1303,6 +1417,7 @@ function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {
         ? maximumChargeWatts * durationHours / 1000
         : 0,
     });
+    time = slotEndMs;
   }
   const demandPredictions = [...demandByDay.values()];
   const optimized = planChronologicalDiscountedCharging({
@@ -1414,6 +1529,13 @@ async function recordStatusSample(status, config) {
   const sample = sampleFromStatus(status, config, lastRecordedSample);
   lastRecordedSample = sample;
   await appendFile(HISTORY_FILE, `${JSON.stringify(sample)}\n`);
+  if (solarPlannerHistoryCache) {
+    const plannerSample = solarPlannerHistorySample(sample);
+    if (plannerSample) solarPlannerHistoryCache.samples.push(plannerSample);
+    solarPlannerHistoryCache.samples = solarPlannerHistoryCache.samples.filter(
+      (item) => new Date(item.timestamp).getTime() >= solarPlannerHistoryCache.startMs,
+    );
+  }
   return sample;
 }
 
@@ -1964,6 +2086,7 @@ async function trimHistory(retentionDays) {
   const samples = await readAllHistorySamples();
   const kept = samples.filter((sample) => new Date(sample.timestamp).getTime() >= cutoff);
   await writeJsonLinesAtomic(HISTORY_FILE, kept);
+  solarPlannerHistoryCache = null;
   const contextualCutoff = Date.now() - Math.min(days, 365) * 24 * 60 * 60_000;
   for (const file of [SOLAR_FORECAST_HISTORY_FILE, SOLAR_WEATHER_HISTORY_FILE]) {
     const records = await readJsonLinesFile(file);
@@ -2196,25 +2319,33 @@ async function writeConfig(config) {
   const previous = await readConfig().catch(() => cleanConfig(DEFAULT_CONFIG));
   const cleaned = cleanConfig({ ...previous, ...config });
   await ensureDataDir();
-  await writeJsonFileAtomic(CONFIG_FILE, cleaned);
   const hostKeys = ["batteryHost", "meterHost", "meterEoj", "solarHost"];
   const hostChanged = hostKeys.some((key) => previous[key] !== cleaned[key])
     || JSON.stringify(previous.fuelCellHosts) !== JSON.stringify(cleaned.fuelCellHosts);
-  if (hostChanged) lastRecordedSample = null;
   const plannerInputsChanged = JSON.stringify({
+    batteryHost: previous.batteryHost,
+    meterHost: previous.meterHost,
+    meterEoj: previous.meterEoj,
+    solarHost: previous.solarHost,
     solarEnabled: previous.solarEnabled,
     smartCosmoEnabled: previous.smartCosmoEnabled,
     rateMode: previous.rateMode,
     rateBands: previous.rateBands,
     standardRateYenPerKwh: previous.standardRateYenPerKwh,
+    automation: previous.automation,
     batteryCapabilities: previous.batteryCapabilities,
     solarPlanner: previous.solarPlanner,
   }) !== JSON.stringify({
+    batteryHost: cleaned.batteryHost,
+    meterHost: cleaned.meterHost,
+    meterEoj: cleaned.meterEoj,
+    solarHost: cleaned.solarHost,
     solarEnabled: cleaned.solarEnabled,
     smartCosmoEnabled: cleaned.smartCosmoEnabled,
     rateMode: cleaned.rateMode,
     rateBands: cleaned.rateBands,
     standardRateYenPerKwh: cleaned.standardRateYenPerKwh,
+    automation: cleaned.automation,
     batteryCapabilities: cleaned.batteryCapabilities,
     solarPlanner: cleaned.solarPlanner,
   });
@@ -2236,11 +2367,16 @@ async function writeConfig(config) {
       state.forecast = null;
       state.historicalWeatherFetchedAt = null;
     }
-    if (plannerConfiguredActive(previous) && !plannerConfiguredActive(cleaned) && state.owner === "planner") {
-      await releasePlannerCharge(state, "Adaptive solar charging was disabled");
+    if (state.owner === "planner") {
+      const reason = plannerConfiguredActive(cleaned)
+        ? "Adaptive solar charging configuration changed"
+        : "Adaptive solar charging was disabled";
+      await releasePlannerCharge(state, reason, new Date(), previous.batteryHost);
     }
     await writeSolarPlannerState(state);
   }
+  await writeJsonFileAtomic(CONFIG_FILE, cleaned);
+  if (hostChanged) lastRecordedSample = null;
   return cleaned;
 }
 
@@ -2726,6 +2862,14 @@ function batteryChargingWatts(status) {
   return Math.max(0, watts);
 }
 
+function shouldTriggerDemandGuard({ operationMode, batteryChargingW, guardDemandW, breakerLimitW }) {
+  const mode = String(operationMode ?? "").toLowerCase();
+  return mode !== "standby"
+    && Number(batteryChargingW) > 0
+    && Number.isFinite(Number(guardDemandW))
+    && Number(guardDemandW) >= Number(breakerLimitW);
+}
+
 function canRunAutomation(rule, now) {
   if (rule.lastResult?.skipped) return true;
   const lastAt = rule.lastResult?.at ? new Date(rule.lastResult.at).getTime() : 0;
@@ -2782,7 +2926,7 @@ async function evaluateAutomationRule(rule, status, now = new Date(), onPhase = 
   const restoreLimitW = rule.conditions.restoreBelowAmps * rule.conditions.breakerVoltage;
   const demandLabel = automationDemandLabel(rule.conditions.source);
 
-  if (operationMode === "auto" && guardDemandW !== null && batteryChargingW > 0 && guardDemandW >= breakerLimitW) {
+  if (shouldTriggerDemandGuard({ operationMode, batteryChargingW, guardDemandW, breakerLimitW })) {
     if (!canRunAutomation(rule, now)) return { changed: false, result: { skipped: "cooldown" } };
     onPhase("executing Standby guard action");
     const result = await executeAction(rule.action, rule.payload);
@@ -2867,12 +3011,13 @@ async function resumeSolarPlanner(now = new Date()) {
   return writeSolarPlannerState(state);
 }
 
-async function releasePlannerCharge(state, reason, now = new Date()) {
+async function releasePlannerCharge(state, reason, now = new Date(), batteryHost = null) {
   if (state.owner !== "planner") return false;
-  await executeAction("set-mode", { mode: "auto" });
+  await executeAction("set-mode", { mode: "auto", ...(batteryHost ? { host: batteryHost } : {}) });
   appendSolarPlannerLog(state, `${reason}; setting operation mode to Auto`, "stop", now);
   state.owner = null;
   state.activeSlot = null;
+  state.activePlanCreatedAt = null;
   state.activeChargedKwh = 0;
   state.activeLastCheckedAt = null;
   return true;
@@ -2900,8 +3045,54 @@ function plannerLiveChargeHeadroom(status, config) {
   return { available, gridImportW, maximumChargeWatts, breakerLimitW };
 }
 
+function plannerLiveImportSafety(status, config) {
+  const rawGridImportW = status.meter?.grid_import_power?.value;
+  const gridImportW = rawGridImportW === null || rawGridImportW === undefined || rawGridImportW === ""
+    ? Number.NaN
+    : Number(rawGridImportW);
+  const breakerLimitW = Math.max(
+    0,
+    (Number(config.automation?.breakerAmps) - Number(config.automation?.reserveAmps))
+      * Number(config.automation?.breakerVoltage),
+  );
+  return {
+    available: Number.isFinite(gridImportW) && (breakerLimitW <= 0 || gridImportW < breakerLimitW),
+    gridImportW,
+    breakerLimitW,
+  };
+}
+
+function activePlannerSlotStopReason(state, config, plan, now = new Date()) {
+  if (state.owner !== "planner") return null;
+  if (!explicitDiscountedBand(config, now)) return "Current rate is no longer discounted";
+  const replacement = plannerSlotAt(plan, now);
+  if (!replacement) return "Recalculated plan no longer includes the active charging period";
+  const planChanged = state.activePlanCreatedAt !== plan?.createdAt;
+  if (planChanged) {
+    const activeRemainingWh = Math.max(
+      0,
+      Number(state.activeSlot?.targetWh ?? 0) - Number(state.activeChargedKwh ?? 0) * 1000,
+    );
+    const replacementWh = Number(replacement.targetWh);
+    if (!Number.isFinite(replacementWh) || Math.abs(replacementWh - activeRemainingWh) > 50) {
+      return "Recalculated plan changed the remaining charge target";
+    }
+  }
+  const activeTarget = Number(state.activeSlot?.targetSocPercent ?? config.solarPlanner.targetSocPercent);
+  const replacementTarget = Number(replacement.targetSocPercent ?? config.solarPlanner.targetSocPercent);
+  if (Number.isFinite(activeTarget) && Number.isFinite(replacementTarget) && replacementTarget < activeTarget - 0.1) {
+    return "Recalculated plan reduced the active SOC target";
+  }
+  const activeEnd = new Date(state.activeSlot?.end).getTime();
+  const replacementEnd = new Date(replacement.end).getTime();
+  if (Number.isFinite(activeEnd) && Number.isFinite(replacementEnd) && replacementEnd < activeEnd) {
+    return "Recalculated plan shortened the active charging period";
+  }
+  return null;
+}
+
 async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
-  let state = await solarPlannerContext();
+  let state = await readSolarPlannerState();
   const paused = state.pausedUntil && new Date(state.pausedUntil).getTime() > now.getTime();
   const guardActive = rules.some((rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore);
   const base = solarPlannerBaseAvailability(config);
@@ -2918,6 +3109,7 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     if (state.owner === "planner") {
       state.owner = null;
       state.activeSlot = null;
+      state.activePlanCreatedAt = null;
       state.activeChargedKwh = 0;
       state.activeLastCheckedAt = null;
       state.plan = null;
@@ -2927,16 +3119,21 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     return writeSolarPlannerState(state);
   }
 
-  const historyStart = now.getTime() - 90 * 86_400_000;
-  const samples = await readHistorySamplesInRange(historyStart, now.getTime());
-  const liveSoc = Number(status.energy?.battery?.remaining_percent?.value);
-  samples.push({
-    timestamp: now.toISOString(),
-    stateOfChargePercent: Number.isFinite(liveSoc) ? liveSoc : null,
-    batteryPowerW: numericMetric(status.energy?.battery?.instant_power),
-    solarPowerW: numericMetric(status.energy?.solar?.instant_power),
-    houseDemandW: numericMetric(status.meter?.house_demand_power),
-  });
+  const liveSoc = numericMetric(status.energy?.battery?.remaining_percent);
+  const liveHouseDemandW = numericMetric(status.meter?.house_demand_power);
+  const liveGridImportW = numericMetric(status.meter?.grid_import_power);
+  const missingTelemetry = [
+    [liveSoc, "battery state of charge"],
+    [liveHouseDemandW, "house demand"],
+    [liveGridImportW, "grid import"],
+  ].filter(([value]) => !Number.isFinite(value)).map(([, label]) => label);
+  if (missingTelemetry.length) {
+    const reason = `${missingTelemetry.join(", ")} unavailable`;
+    if (state.owner === "planner") await releasePlannerCharge(state, reason, now);
+    state.lastResult = { ok: true, at: now.toISOString(), skipped: reason };
+    return writeSolarPlannerState(state);
+  }
+
   const planAge = now.getTime() - new Date(state.plan?.createdAt ?? 0).getTime();
   const activeDiscountedBand = explicitDiscountedBand(config, now);
   const planRefreshMs = activeDiscountedBand ? SOLAR_ACTIVE_PLAN_REFRESH_MS : SOLAR_PLAN_REFRESH_MS;
@@ -2944,6 +3141,15 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     && Number.isFinite(Number(state.plan?.currentSocPercent))
     && Math.abs(liveSoc - Number(state.plan.currentSocPercent)) >= 2;
   if (!state.plan || !Number.isFinite(planAge) || planAge >= planRefreshMs || socChangedMaterially) {
+    const samples = await readSolarPlannerHistory(now);
+    samples.push({
+      timestamp: now.toISOString(),
+      stateOfChargePercent: liveSoc,
+      batteryPowerW: numericMetric(status.energy?.battery?.instant_power),
+      solarPowerW: numericMetric(status.energy?.solar?.instant_power),
+      houseDemandW: liveHouseDemandW,
+    });
+    state = { ...state, historicalWeather: await readJsonLinesFile(SOLAR_WEATHER_HISTORY_FILE) };
     state.plan = buildSolarChargingPlan({ config, state, samples, now });
     appendSolarPlannerLog(
       state,
@@ -2965,9 +3171,9 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     const elapsedHours = Math.max(0, Math.min(0.1, (now.getTime() - new Date(state.activeLastCheckedAt).getTime()) / 3_600_000));
     state.activeChargedKwh += chargingWatts * elapsedHours / 1000;
   }
-  state.activeLastCheckedAt = now.toISOString();
-  const soc = Number(status.energy?.battery?.remaining_percent?.value);
-  const gridExportW = Number(status.meter?.grid_export_power?.value);
+  if (state.owner === "planner") state.activeLastCheckedAt = now.toISOString();
+  const soc = liveSoc;
+  const gridExportW = numericMetric(status.meter?.grid_export_power);
   const liveExportNeedsHeadroom = Number.isFinite(gridExportW) && gridExportW > 50;
   if (state.solarHeadroomHoldUntil && new Date(state.solarHeadroomHoldUntil).getTime() <= now.getTime()) {
     state.solarHeadroomHoldUntil = null;
@@ -2975,24 +3181,39 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
   const activeTargetKwh = Number(state.activeSlot?.targetWh ?? 0) / 1000;
   const activeTargetSocPercent = Number(state.activeSlot?.targetSocPercent ?? config.solarPlanner.targetSocPercent);
   const activeExpired = state.activeSlot && now.getTime() >= new Date(state.activeSlot.end).getTime();
+  const activePlanStopReason = activePlannerSlotStopReason(state, config, state.plan, now);
+  const liveImportSafety = plannerLiveImportSafety(status, config);
+  const activeEnergyTargetReached = state.owner === "planner" && state.activeChargedKwh >= activeTargetKwh;
+  const activeSocTargetReached = state.owner === "planner" && soc >= activeTargetSocPercent;
   if (state.owner === "planner" && (
     activeExpired
-    || state.activeChargedKwh >= activeTargetKwh
-    || (Number.isFinite(soc) && soc >= activeTargetSocPercent)
+    || activePlanStopReason
+    || !liveImportSafety.available
+    || activeEnergyTargetReached
+    || activeSocTargetReached
     || liveExportNeedsHeadroom
   )) {
-    const stopReason = activeExpired
-      ? "Planned discounted window ended"
-      : liveExportNeedsHeadroom
-        ? "Live grid export indicates solar needs battery headroom"
-        : "Planned charge target reached";
+    let stopReason = "Planned charge target reached";
+    if (activeExpired) stopReason = "Planned discounted window ended";
+    else if (activePlanStopReason) stopReason = activePlanStopReason;
+    else if (!liveImportSafety.available) stopReason = "Live grid import reached the breaker reserve limit";
+    else if (liveExportNeedsHeadroom) stopReason = "Live grid export indicates solar needs battery headroom";
     if (liveExportNeedsHeadroom && state.activeSlot?.windowEnd) {
       state.solarHeadroomHoldUntil = state.activeSlot.windowEnd;
     }
     await releasePlannerCharge(state, stopReason, now);
+    if (activeEnergyTargetReached || activeSocTargetReached) state.plan = null;
+  } else if (state.owner === "planner" && state.activePlanCreatedAt !== state.plan.createdAt) {
+    const replacement = plannerSlotAt(state.plan, now);
+    state.activeSlot = {
+      ...state.activeSlot,
+      ...replacement,
+      targetWh: state.activeSlot?.targetWh,
+    };
+    state.activePlanCreatedAt = state.plan.createdAt;
   }
 
-  const slot = plannerSlotAt(state.plan, now);
+  const slot = explicitDiscountedBand(config, now) ? plannerSlotAt(state.plan, now) : null;
   if (liveExportNeedsHeadroom && slot?.windowEnd) state.solarHeadroomHoldUntil = slot.windowEnd;
   const solarHeadroomHoldActive = Boolean(
     state.solarHeadroomHoldUntil && new Date(state.solarHeadroomHoldUntil).getTime() > now.getTime(),
@@ -3014,6 +3235,7 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     const result = await executeAction("charge", { targetWh: slot.targetWh });
     state.owner = "planner";
     state.activeSlot = slot;
+    state.activePlanCreatedAt = state.plan.createdAt;
     state.activeChargedKwh = 0;
     state.activeLastCheckedAt = now.toISOString();
     state.lastResult = { ok: true, at: now.toISOString(), kind: "charge", slot, result };
@@ -3746,14 +3968,15 @@ async function api(req, res, url) {
     const config = await readConfig();
     const availability = solarPlannerBaseAvailability(config);
     if (!availability.available) return json(res, 409, { error: availability.reason });
-    let state = await refreshSolarPlannerForecast(config, { forceHistorical: true });
-    if (!state.forecast || !forecastIsFresh(state.forecast) || state.lastForecastError) {
+    const now = new Date();
+    let state = await refreshSolarPlannerForecast(config, { forceHistorical: true, now });
+    if (!state.forecast || !forecastIsFresh(state.forecast, now) || state.lastForecastError) {
       return json(res, 503, solarPlannerView(config, state));
     }
-    const samples = await readHistorySamplesInRange(Date.now() - 90 * 86_400_000, Date.now());
+    const samples = await readSolarPlannerHistory(now);
     state = { ...state, historicalWeather: await readJsonLinesFile(SOLAR_WEATHER_HISTORY_FILE) };
-    state.plan = buildSolarChargingPlan({ config, state, samples });
-    appendSolarPlannerLog(state, "Plan recalculated manually", "plan");
+    state.plan = buildSolarChargingPlan({ config, state, samples, now });
+    appendSolarPlannerLog(state, "Plan recalculated manually", "plan", now);
     state = await writeSolarPlannerState(state);
     return json(res, 200, solarPlannerView(config, state));
   }
@@ -3892,6 +4115,7 @@ export const server = http.createServer(async (req, res) => {
 });
 
 export {
+  activePlannerSlotStopReason,
   aggregateEnergyReportSamples,
   buildSolarChargingPlan,
   clearStaleScheduleRuns,
@@ -3901,21 +4125,26 @@ export {
   countGuardTriggersForRange,
   evaluateAutomationRule,
   estimateEffectiveBatteryCapacity,
+  forecastHourForInterval,
   forecastIsFresh,
   learnedSolarFactor,
   normalizeCircuitLabels,
   normalizeDashboardWidgets,
   normalizeRateBands,
   normalizeSubnets,
+  nextPlanningBoundary,
   optimizeDiscountedChargeSlots,
   parseJsonWithContext,
   parseOpenMeteoForecast,
   planChronologicalDiscountedCharging,
   plannerLiveChargeHeadroom,
+  plannerLiveImportSafety,
   plannerTimezoneError,
   rateForTimestamp,
+  readRecentHistorySamples,
   recoverConcatenatedJsonValue,
   sampleFromStatus,
+  shouldTriggerDemandGuard,
   solarPlannerBaseAvailability,
   solarPowerFromIrradiance,
   summarizeSamples,
