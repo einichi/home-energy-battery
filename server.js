@@ -565,9 +565,14 @@ async function writeJsonLinesAtomic(file, rows) {
 }
 
 function cleanSolarPlannerState(value = {}) {
+  const plan = value.plan?.available === false
+    && value.plan.reason === "discounted windows cannot safely reach their planned SOC targets"
+    && Number(value.plan.plannedChargeKwh) > 0
+    ? { ...value.plan, ...discountedPlanStatus(value.plan) }
+    : value.plan ?? null;
   return {
     forecast: value.forecast ?? null,
-    plan: value.plan ?? null,
+    plan,
     owner: value.owner === "planner" ? "planner" : null,
     activeSlot: value.activeSlot ?? null,
     activePlanCreatedAt: value.activePlanCreatedAt ?? null,
@@ -728,6 +733,7 @@ function solarPlannerView(config, state, now = new Date()) {
         || state.lastForecastError?.error
         || planUnavailableReason
         || (!forecastIsFresh(state.forecast, now) ? "solar forecast is stale or unavailable" : null),
+    warning: state.plan?.warning ?? null,
     paused,
     pausedUntil: state.pausedUntil,
     forecast: state.forecast ? {
@@ -1140,6 +1146,27 @@ function planChronologicalDiscountedCharging({
   };
 }
 
+function discountedPlanStatus(plan = {}) {
+  const unmetChargeKwh = Math.max(0, Number(plan.unmetChargeKwh) || 0);
+  if (unmetChargeKwh <= 0.0001) return { available: true, reason: null, warning: null };
+  const plannedChargeKwh = Math.max(0, Number(plan.plannedChargeKwh) || 0);
+  if (plannedChargeKwh <= 0.0001) {
+    return {
+      available: false,
+      reason: "no discounted charging capacity remains before the planned targets",
+      warning: null,
+    };
+  }
+  const requestedChargeKwh = Number.isFinite(Number(plan.requiredGridChargeKwh))
+    ? Number(plan.requiredGridChargeKwh)
+    : plannedChargeKwh + unmetChargeKwh;
+  return {
+    available: true,
+    reason: null,
+    warning: `Discounted windows can provide ${plannedChargeKwh.toFixed(2)} kWh of ${requestedChargeKwh.toFixed(2)} kWh requested; charging all available slots with a ${unmetChargeKwh.toFixed(2)} kWh shortfall`,
+  };
+}
+
 function localDayKey(date) {
   const d = date instanceof Date ? date : new Date(date);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -1428,9 +1455,9 @@ function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {
     maximumTargetPercent: Number(config.solarPlanner.targetSocPercent),
     maximumChargeWatts: Number(config.batteryCapabilities.maximumChargeWatts),
   });
+  const planStatus = discountedPlanStatus(optimized);
   return {
-    available: optimized.unmetChargeKwh <= 0.0001,
-    reason: optimized.unmetChargeKwh > 0 ? "discounted windows cannot safely reach their planned SOC targets" : null,
+    ...planStatus,
     createdAt: now.toISOString(),
     targetDate: sunset.date,
     targetSunset: new Date(sunset.timestamp).toISOString(),
@@ -3154,9 +3181,9 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     appendSolarPlannerLog(
       state,
       state.plan.available
-        ? `Plan recalculated: ${state.plan.predictedSolarKwh.toFixed(2)} kWh solar, ${state.plan.predictedDemandKwh.toFixed(2)} kWh demand, ${state.plan.plannedChargeKwh.toFixed(2)} kWh discounted charging`
+        ? `Plan recalculated: ${state.plan.predictedSolarKwh.toFixed(2)} kWh solar, ${state.plan.predictedDemandKwh.toFixed(2)} kWh demand, ${state.plan.plannedChargeKwh.toFixed(2)} kWh discounted charging${state.plan.warning ? `; ${state.plan.warning}` : ""}`
         : `Planner unavailable: ${state.plan.reason}`,
-      "plan",
+      state.plan.warning ? "warning" : "plan",
       now,
     );
   }
@@ -3976,7 +4003,12 @@ async function api(req, res, url) {
     const samples = await readSolarPlannerHistory(now);
     state = { ...state, historicalWeather: await readJsonLinesFile(SOLAR_WEATHER_HISTORY_FILE) };
     state.plan = buildSolarChargingPlan({ config, state, samples, now });
-    appendSolarPlannerLog(state, "Plan recalculated manually", "plan", now);
+    appendSolarPlannerLog(
+      state,
+      `Plan recalculated manually${state.plan.warning ? `; ${state.plan.warning}` : ""}`,
+      state.plan.warning ? "warning" : "plan",
+      now,
+    );
     state = await writeSolarPlannerState(state);
     return json(res, 200, solarPlannerView(config, state));
   }
@@ -4122,7 +4154,9 @@ export {
   cleanAutomationRule,
   cleanAutomationRuleConfig,
   cleanConfig,
+  cleanSolarPlannerState,
   countGuardTriggersForRange,
+  discountedPlanStatus,
   evaluateAutomationRule,
   estimateEffectiveBatteryCapacity,
   forecastHourForInterval,

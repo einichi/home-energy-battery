@@ -337,6 +337,7 @@ const I18N = {
     plannerNeedsBattery: "Usable battery capacity and maximum charge watts are required.",
     plannerCharging: "Charging",
     plannerReady: "Ready",
+    plannerReadyPartial: "Ready - charging as much as discounted windows allow",
     rateMode: "Rate Mode",
     rateModeSimple: "Simple",
     rateModeOffPeak: "Off-Peak",
@@ -666,6 +667,7 @@ const I18N = {
     plannerNeedsBattery: "使用可能な蓄電容量と最大充電電力を入力してください。",
     plannerCharging: "充電中",
     plannerReady: "準備完了",
+    plannerReadyPartial: "準備完了 - 割引時間帯で可能な量を充電します",
     rateMode: "料金モード",
     rateModeSimple: "シンプル",
     rateModeOffPeak: "夜間料金",
@@ -1976,7 +1978,7 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
     : status.paused
       ? t("paused")
       : status.available
-        ? t("plannerReady")
+        ? status.warning ? t("plannerReadyPartial") : t("plannerReady")
         : status.reason ?? "Unavailable";
   const windows = $("#solarPlannerWindows");
   windows.innerHTML = "";
@@ -2036,7 +2038,11 @@ function updateSolarPlannerAvailability(config = state.config ?? {}) {
   const planUnavailable = configuredEnabled && state.solarPlannerStatus?.plan?.available === false;
   $("#solarPlannerRecalculate").disabled = !enabled || !configuredEnabled || reasons.length > 0 || planUnavailable;
   $("#solarPlannerResume").disabled = !configuredEnabled || !state.solarPlannerStatus?.paused || reasons.length > 0;
-  const runtimeReason = configuredEnabled ? state.solarPlannerStatus?.reason : null;
+  const runtimeReason = configuredEnabled
+    ? state.solarPlannerStatus?.available
+      ? state.solarPlannerStatus?.warning
+      : state.solarPlannerStatus?.reason
+    : null;
   $("#solarPlannerAvailability").textContent = reasons.length
     ? `${t("unavailable")}: ${reasons.join(" ")}`
     : runtimeReason ?? "";

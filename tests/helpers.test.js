@@ -9,7 +9,9 @@ import {
   cleanAutomationRule,
   cleanAutomationRuleConfig,
   cleanConfig,
+  cleanSolarPlannerState,
   countGuardTriggersForRange,
+  discountedPlanStatus,
   evaluateAutomationRule,
   estimateEffectiveBatteryCapacity,
   forecastHourForInterval,
@@ -329,6 +331,38 @@ assert.equal(floorClippedWindowPlan.slots.length, 4);
 assert.ok(Math.abs(floorClippedWindowPlan.plannedChargeKwh - 4) < 0.0001);
 assert.ok(floorClippedWindowPlan.unmetChargeKwh < 0.0001);
 assert.ok(Math.abs(floorClippedWindowPlan.expectedEndStoredKwh - 4) < 0.0001);
+
+const constrainedWindowPlan = planChronologicalDiscountedCharging({
+  timeline: [0, 0.5].map((hour) => chronologicalSlot(
+    hour,
+    { start: "00:00", end: "01:00", yenPerKwh: 10, label: "Short window" },
+  )),
+  currentStoredKwh: 0.5,
+  capacityKwh: 5,
+  dischargeFloorKwh: 0.5,
+  maximumTargetPercent: 100,
+  maximumChargeWatts: 2000,
+});
+const constrainedPlanStatus = discountedPlanStatus(constrainedWindowPlan);
+assert.equal(constrainedWindowPlan.plannedChargeKwh, 2);
+assert.equal(constrainedWindowPlan.unmetChargeKwh, 2.5);
+assert.equal(constrainedPlanStatus.available, true);
+assert.equal(constrainedPlanStatus.reason, null);
+assert.match(constrainedPlanStatus.warning, /charging all available slots.*2\.50 kWh shortfall/);
+assert.equal(discountedPlanStatus({ plannedChargeKwh: 0, unmetChargeKwh: 2 }).available, false);
+const migratedShortfallState = cleanSolarPlannerState({
+  plan: {
+    available: false,
+    reason: "discounted windows cannot safely reach their planned SOC targets",
+    plannedChargeKwh: 7.35,
+    requiredGridChargeKwh: 8.67,
+    unmetChargeKwh: 1.32,
+    slots: [{ targetWh: 1050 }],
+  },
+});
+assert.equal(migratedShortfallState.plan.available, true);
+assert.equal(migratedShortfallState.plan.reason, null);
+assert.match(migratedShortfallState.plan.warning, /7\.35 kWh of 8\.67 kWh requested/);
 
 const moreExpensiveLaterTimeline = [
   chronologicalSlot(1, { start: "01:00", end: "02:00", yenPerKwh: 10, label: "Cheapest" }),
