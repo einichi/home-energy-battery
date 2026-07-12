@@ -17,6 +17,7 @@ import {
   parseJsonWithContext,
   parseOpenMeteoForecast,
   planChronologicalDiscountedCharging,
+  plannerLiveChargeHeadroom,
   plannerTimezoneError,
   rateForTimestamp,
   recoverConcatenatedJsonValue,
@@ -148,6 +149,27 @@ const standardOnly = optimizeDiscountedChargeSlots({
 });
 assert.equal(standardOnly.slots.length, 0);
 assert.equal(standardOnly.unmetChargeKwh, 2);
+const forecastDemandDoesNotRemoveSlots = optimizeDiscountedChargeSlots({
+  config: plannerConfig,
+  start: new Date(2026, 6, 11, 23, 0),
+  end: new Date(2026, 6, 12, 1, 0),
+  requiredKwh: 1,
+  demandBySlot: new Map([[new Date(2026, 6, 11, 23, 0).getTime(), 99_000]]),
+});
+assert.equal(forecastDemandDoesNotRemoveSlots.plannedChargeKwh, 1);
+assert.equal(forecastDemandDoesNotRemoveSlots.unmetChargeKwh, 0);
+
+const livePlannerHeadroom = plannerLiveChargeHeadroom({
+  meter: { grid_import_power: { value: 3000 } },
+}, plannerConfig);
+assert.equal(livePlannerHeadroom.available, true);
+assert.equal(livePlannerHeadroom.gridImportW, 3000);
+assert.equal(plannerLiveChargeHeadroom({
+  meter: { grid_import_power: { value: 4000 } },
+}, plannerConfig).available, false);
+assert.equal(plannerLiveChargeHeadroom({
+  meter: { grid_import_power: { value: null } },
+}, plannerConfig).available, false);
 
 function chronologicalSlot(hour, band, netKwh = 0, highSolarNetKwh = netKwh) {
   const startMs = Date.parse("2026-07-12T00:00:00.000Z") + hour * 3_600_000;

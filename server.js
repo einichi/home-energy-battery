@@ -816,11 +816,6 @@ function optimizeDiscountedChargeSlots({
   slotMinutes = 30,
 } = {}) {
   const maximumChargeWatts = Number(config.batteryCapabilities?.maximumChargeWatts);
-  const breakerLimitWatts = Math.max(
-    0,
-    (Number(config.automation?.breakerAmps) - Number(config.automation?.reserveAmps))
-      * Number(config.automation?.breakerVoltage),
-  );
   const slots = [];
   const startMs = new Date(start).getTime();
   const endMs = new Date(end).getTime();
@@ -830,7 +825,6 @@ function optimizeDiscountedChargeSlots({
     const band = explicitDiscountedBand(config, date);
     if (!band) continue;
     const demandW = Number(demandBySlot.get(time) ?? 0);
-    if (Number.isFinite(breakerLimitWatts) && breakerLimitWatts > 0 && demandW + maximumChargeWatts > breakerLimitWatts) continue;
     slots.push({
       start: date.toISOString(),
       end: new Date(Math.min(time + stepMs, endMs)).toISOString(),
@@ -1266,13 +1260,7 @@ function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {
     predictedDemandKwh += demandKwh;
     predictedSurplusKwh += Math.max(0, solarKwh - demandKwh);
     const band = explicitDiscountedBand(config, date);
-    const breakerLimitWatts = Math.max(
-      0,
-      (Number(config.automation?.breakerAmps) - Number(config.automation?.reserveAmps))
-        * Number(config.automation?.breakerVoltage),
-    );
     const maximumChargeWatts = Number(config.batteryCapabilities.maximumChargeWatts);
-    const breakerAllowsCharge = breakerLimitWatts <= 0 || slotDemandW + maximumChargeWatts <= breakerLimitWatts;
     timeline.push({
       startMs: time,
       endMs: slotEndMs,
@@ -1282,7 +1270,7 @@ function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {
       netKwh: solarKwh - demandKwh,
       highSolarNetKwh: highSolarKwh - demandKwh,
       band,
-      chargeCapacityKwh: band && breakerAllowsCharge
+      chargeCapacityKwh: band
         ? maximumChargeWatts * durationHours / 1000
         : 0,
     });
@@ -2866,6 +2854,23 @@ function plannerSlotAt(plan, now = new Date()) {
   return (plan?.slots ?? []).find((slot) => new Date(slot.start).getTime() <= time && time < new Date(slot.end).getTime()) ?? null;
 }
 
+function plannerLiveChargeHeadroom(status, config) {
+  const rawGridImportW = status.meter?.grid_import_power?.value;
+  const gridImportW = rawGridImportW === null || rawGridImportW === undefined || rawGridImportW === ""
+    ? Number.NaN
+    : Number(rawGridImportW);
+  const maximumChargeWatts = Number(config.batteryCapabilities?.maximumChargeWatts);
+  const breakerLimitW = Math.max(
+    0,
+    (Number(config.automation?.breakerAmps) - Number(config.automation?.reserveAmps))
+      * Number(config.automation?.breakerVoltage),
+  );
+  const available = Number.isFinite(gridImportW)
+    && Number.isFinite(maximumChargeWatts)
+    && (breakerLimitW <= 0 || gridImportW + maximumChargeWatts <= breakerLimitW);
+  return { available, gridImportW, maximumChargeWatts, breakerLimitW };
+}
+
 async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
   let state = await solarPlannerContext();
   const paused = state.pausedUntil && new Date(state.pausedUntil).getTime() > now.getTime();
@@ -2967,11 +2972,14 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     && Number.isFinite(soc)
     && soc >= Number(slot.targetSocPercent ?? config.solarPlanner.targetSocPercent);
   if (slot && state.owner !== "planner" && !solarHeadroomHoldActive && !slotTargetReached) {
-    const demandW = Number(status.meter?.house_demand_power?.value);
-    const maximumChargeWatts = Number(config.batteryCapabilities.maximumChargeWatts);
-    const breakerLimitW = Math.max(0, (config.automation.breakerAmps - config.automation.reserveAmps) * config.automation.breakerVoltage);
-    if (!Number.isFinite(demandW) || demandW + maximumChargeWatts > breakerLimitW) {
-      state.lastResult = { ok: true, at: now.toISOString(), skipped: "live breaker headroom is insufficient", demandW, maximumChargeWatts, breakerLimitW };
+    const headroom = plannerLiveChargeHeadroom(status, config);
+    if (!headroom.available) {
+      state.lastResult = {
+        ok: true,
+        at: now.toISOString(),
+        skipped: "live grid import leaves insufficient breaker headroom",
+        ...headroom,
+      };
       return writeSolarPlannerState(state);
     }
     const result = await executeAction("charge", { targetWh: slot.targetWh });
@@ -3874,6 +3882,7 @@ export {
   parseJsonWithContext,
   parseOpenMeteoForecast,
   planChronologicalDiscountedCharging,
+  plannerLiveChargeHeadroom,
   plannerTimezoneError,
   rateForTimestamp,
   recoverConcatenatedJsonValue,
