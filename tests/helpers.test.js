@@ -227,6 +227,23 @@ const solarHeadroomPlan = planChronologicalDiscountedCharging({
 assert.ok(Math.abs(solarHeadroomPlan.windows[1].solarHeadroomKwh - 1) < 0.0001);
 assert.equal(solarHeadroomPlan.windows[1].targetSocPercent, 80);
 
+const floorClippedWindowPlan = planChronologicalDiscountedCharging({
+  timeline: [0, 0.5, 1, 1.5].map((hour) => chronologicalSlot(
+    hour,
+    { start: "00:00", end: "02:00", yenPerKwh: 10, label: "Discounted" },
+    -0.5,
+  )),
+  currentStoredKwh: 2,
+  capacityKwh: 5,
+  dischargeFloorKwh: 1,
+  maximumTargetPercent: 80,
+  maximumChargeWatts: 2000,
+});
+assert.equal(floorClippedWindowPlan.slots.length, 4);
+assert.ok(Math.abs(floorClippedWindowPlan.plannedChargeKwh - 4) < 0.0001);
+assert.ok(floorClippedWindowPlan.unmetChargeKwh < 0.0001);
+assert.ok(Math.abs(floorClippedWindowPlan.expectedEndStoredKwh - 4) < 0.0001);
+
 const moreExpensiveLaterTimeline = [
   chronologicalSlot(1, { start: "01:00", end: "02:00", yenPerKwh: 10, label: "Cheapest" }),
   chronologicalSlot(1.5, { start: "01:00", end: "02:00", yenPerKwh: 10, label: "Cheapest" }),

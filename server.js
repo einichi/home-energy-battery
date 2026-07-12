@@ -932,15 +932,23 @@ function planChronologicalDiscountedCharging({
     const window = windows[windowIndex];
     simulate(cursor, window.startIndex);
     const storedAtStartKwh = storedKwh;
-    let noGridStoredKwh = storedKwh;
-    for (let index = window.startIndex; index < window.endIndex; index += 1) {
-      noGridStoredKwh = applyPredictedBatteryFlow(
-        noGridStoredKwh,
-        timeline[index]?.netKwh,
-        dischargeFloorKwh,
-        capacityKwh,
-      );
-    }
+    const simulateWindow = (chargeByIndex = new Map()) => {
+      let projectedStoredKwh = storedKwh;
+      for (let index = window.startIndex; index < window.endIndex; index += 1) {
+        projectedStoredKwh = applyPredictedBatteryFlow(
+          projectedStoredKwh,
+          timeline[index]?.netKwh,
+          dischargeFloorKwh,
+          capacityKwh,
+        );
+        projectedStoredKwh = Math.min(
+          capacityKwh,
+          projectedStoredKwh + Number(chargeByIndex.get(index) ?? 0),
+        );
+      }
+      return projectedStoredKwh;
+    };
+    const noGridStoredKwh = simulateWindow();
 
     const nextWindow = windows[windowIndex + 1] ?? null;
     const boundaryIndex = nextWindow?.startIndex ?? timeline.length;
@@ -956,15 +964,36 @@ function planChronologicalDiscountedCharging({
       dischargeFloorKwh + rangeNeeds.maximumDeficitKwh,
     );
     const targetStoredKwh = cheaperWindowAhead ? bridgeTargetKwh : headroomTargetKwh;
-    let remainingKwh = Math.max(0, targetStoredKwh - noGridStoredKwh);
-    const requestedKwh = remainingKwh;
     const chargeByIndex = new Map();
-
-    for (let index = window.endIndex - 1; index >= window.startIndex && remainingKwh > 0.0001; index -= 1) {
+    let projectedEndKwh = noGridStoredKwh;
+    for (let index = window.endIndex - 1; index >= window.startIndex && projectedEndKwh < targetStoredKwh - 0.0001; index -= 1) {
       const slot = timeline[index];
       const slotCapacityKwh = Math.max(0, Number(slot.chargeCapacityKwh ?? 0));
       if (!slotCapacityKwh) continue;
-      const allocatedKwh = Math.min(slotCapacityKwh, remainingKwh);
+      chargeByIndex.set(index, slotCapacityKwh);
+      const fullSlotEndKwh = simulateWindow(chargeByIndex);
+      if (fullSlotEndKwh <= projectedEndKwh + 0.0001) {
+        chargeByIndex.delete(index);
+        continue;
+      }
+      let allocatedKwh = slotCapacityKwh;
+      if (fullSlotEndKwh > targetStoredKwh + 0.0001) {
+        let low = 0;
+        let high = slotCapacityKwh;
+        for (let iteration = 0; iteration < 24; iteration += 1) {
+          const candidate = (low + high) / 2;
+          chargeByIndex.set(index, candidate);
+          if (simulateWindow(chargeByIndex) >= targetStoredKwh) high = candidate;
+          else low = candidate;
+        }
+        allocatedKwh = high;
+        chargeByIndex.set(index, allocatedKwh);
+      }
+      projectedEndKwh = simulateWindow(chargeByIndex);
+    }
+
+    for (const [index, allocatedKwh] of chargeByIndex) {
+      const slot = timeline[index];
       const durationMs = allocatedKwh * 1000 / maximumChargeWatts * 3_600_000;
       const selected = {
         start: new Date(slot.endMs - durationMs).toISOString(),
@@ -977,12 +1006,12 @@ function planChronologicalDiscountedCharging({
         windowEnd: new Date(window.endMs).toISOString(),
       };
       selectedSlots.push(selected);
-      chargeByIndex.set(index, allocatedKwh);
-      remainingKwh -= allocatedKwh;
     }
 
     simulate(window.startIndex, window.endIndex, chargeByIndex);
     const windowUnmetKwh = Math.max(0, targetStoredKwh - storedKwh);
+    const plannedWindowChargeKwh = [...chargeByIndex.values()].reduce((sum, value) => sum + value, 0);
+    const requestedKwh = plannedWindowChargeKwh + windowUnmetKwh;
     unmetChargeKwh += windowUnmetKwh;
     windowPlans.push({
       start: new Date(window.startMs).toISOString(),
@@ -995,7 +1024,7 @@ function planChronologicalDiscountedCharging({
       solarHeadroomKwh,
       bridgeToCheaperWindow: cheaperWindowAhead,
       requestedChargeKwh: requestedKwh,
-      plannedChargeKwh: requestedKwh - Math.max(0, remainingKwh),
+      plannedChargeKwh: plannedWindowChargeKwh,
       unmetChargeKwh: windowUnmetKwh,
     });
     cursor = window.endIndex;
