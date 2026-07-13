@@ -31,6 +31,8 @@ const SOLAR_FORECAST_MAX_AGE_MS = 6 * 60 * 60_000;
 const SOLAR_PLAN_REFRESH_MS = 30 * 60_000;
 const SOLAR_ACTIVE_PLAN_REFRESH_MS = 5 * 60_000;
 const SOLAR_HISTORY_CACHE_MS = 30 * 60_000;
+const SOLAR_SLOT_END_RETRY_MS = 5_000;
+const MAX_TIMER_DELAY_MS = 2_147_000_000;
 
 const DEFAULT_DASHBOARD_WIDGETS = [
   { id: "solarPower", group: "trends", visible: true, priority: 10 },
@@ -108,6 +110,8 @@ let cliQueue = Promise.resolve();
 let scheduleTimer = null;
 let automationTimer = null;
 let recorderTimer = null;
+let solarPlannerSlotEndTimer = null;
+let solarPlannerSlotEndTimerKey = null;
 let automationRunInProgress = false;
 let automationRunContext = null;
 let discoveryRunContext = null;
@@ -627,6 +631,7 @@ async function writeSolarPlannerState(state) {
   const cleaned = cleanSolarPlannerState({ ...state, updatedAt: new Date().toISOString() });
   await ensureDataDir();
   await writeJsonFileAtomic(SOLAR_PLANNER_STATE_FILE, cleaned);
+  syncSolarPlannerSlotEndTimer(cleaned);
   return cleaned;
 }
 
@@ -3066,6 +3071,82 @@ async function releasePlannerCharge(state, reason, now = new Date(), batteryHost
   return true;
 }
 
+function plannerSlotEndKey(state) {
+  if (state?.owner !== "planner" || !state.activeSlot) return null;
+  const endMs = new Date(state.activeSlot.end).getTime();
+  if (!Number.isFinite(endMs)) return null;
+  return JSON.stringify([
+    state.activeSlot.start ?? null,
+    state.activeSlot.end,
+    state.activePlanCreatedAt ?? null,
+  ]);
+}
+
+function plannerSlotEndDelayMs(state, now = new Date()) {
+  if (!plannerSlotEndKey(state)) return null;
+  return Math.max(0, new Date(state.activeSlot.end).getTime() - now.getTime());
+}
+
+async function enforcePlannerSlotEndDeadline(expectedKey, {
+  now = new Date(),
+  readState = readSolarPlannerState,
+  release = releasePlannerCharge,
+  writeState = writeSolarPlannerState,
+} = {}) {
+  const state = await readState();
+  if (plannerSlotEndKey(state) !== expectedKey) {
+    return { stopped: false, reason: "active planner slot changed" };
+  }
+  const remainingMs = plannerSlotEndDelayMs(state, now);
+  if (remainingMs > 0) return { stopped: false, remainingMs };
+  await release(state, "Planned discounted window ended", now);
+  state.lastResult = {
+    ok: true,
+    at: now.toISOString(),
+    kind: "stop",
+    reason: "planned discounted window ended",
+  };
+  await writeState(state);
+  return { stopped: true };
+}
+
+function clearSolarPlannerSlotEndTimer() {
+  if (solarPlannerSlotEndTimer) clearTimeout(solarPlannerSlotEndTimer);
+  solarPlannerSlotEndTimer = null;
+  solarPlannerSlotEndTimerKey = null;
+}
+
+function armSolarPlannerSlotEndTimer(key, delayMs) {
+  solarPlannerSlotEndTimerKey = key;
+  solarPlannerSlotEndTimer = setTimeout(() => {
+    solarPlannerSlotEndTimer = null;
+    solarPlannerSlotEndTimerKey = null;
+    enforcePlannerSlotEndDeadline(key)
+      .then((result) => {
+        if (Number.isFinite(result.remainingMs) && result.remainingMs > 0) {
+          armSolarPlannerSlotEndTimer(key, Math.min(result.remainingMs, MAX_TIMER_DELAY_MS));
+        }
+      })
+      .catch((err) => {
+        logDetailedError("solar-planner-slot-end", err);
+        armSolarPlannerSlotEndTimer(key, SOLAR_SLOT_END_RETRY_MS);
+      });
+  }, Math.max(0, Math.min(delayMs, MAX_TIMER_DELAY_MS)));
+  if (typeof solarPlannerSlotEndTimer.unref === "function") solarPlannerSlotEndTimer.unref();
+}
+
+function syncSolarPlannerSlotEndTimer(state, now = new Date()) {
+  const key = plannerSlotEndKey(state);
+  if (!key) {
+    clearSolarPlannerSlotEndTimer();
+    return false;
+  }
+  if (solarPlannerSlotEndTimer && solarPlannerSlotEndTimerKey === key) return true;
+  clearSolarPlannerSlotEndTimer();
+  armSolarPlannerSlotEndTimer(key, plannerSlotEndDelayMs(state, now));
+  return true;
+}
+
 function plannerSlotAt(plan, now = new Date()) {
   const time = now.getTime();
   return (plan?.slots ?? []).find((slot) => new Date(slot.start).getTime() <= time && time < new Date(slot.end).getTime()) ?? null;
@@ -4315,8 +4396,11 @@ export {
   parseJsonWithContext,
   parseOpenMeteoForecast,
   planChronologicalDiscountedCharging,
+  enforcePlannerSlotEndDeadline,
   plannerLiveChargeHeadroom,
   plannerLiveImportSafety,
+  plannerSlotEndDelayMs,
+  plannerSlotEndKey,
   plannerTimezoneError,
   rateForTimestamp,
   readRecentHistorySamples,
@@ -4334,6 +4418,7 @@ export {
 async function main() {
   await ensureDataDir();
   await migrateBatteryCapabilitiesFromGuard();
+  syncSolarPlannerSlotEndTimer(await readSolarPlannerState());
   startScheduler();
   startBackgroundRecorder();
   server.listen(PORT, "0.0.0.0", () => {
@@ -4349,5 +4434,6 @@ process.on("SIGTERM", () => {
   if (scheduleTimer) clearInterval(scheduleTimer);
   if (automationTimer) clearInterval(automationTimer);
   if (recorderTimer) clearTimeout(recorderTimer);
+  clearSolarPlannerSlotEndTimer();
   server.close(() => process.exit(0));
 });

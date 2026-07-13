@@ -13,6 +13,7 @@ import {
   cleanSolarPlannerState,
   countGuardTriggersForRange,
   discountedPlanStatus,
+  enforcePlannerSlotEndDeadline,
   evaluateAutomationRule,
   estimateEffectiveBatteryCapacity,
   forecastHourForInterval,
@@ -29,6 +30,8 @@ import {
   planChronologicalDiscountedCharging,
   plannerLiveChargeHeadroom,
   plannerLiveImportSafety,
+  plannerSlotEndDelayMs,
+  plannerSlotEndKey,
   preserveInterruptedPlannerCharge,
   plannerTimezoneError,
   rateForTimestamp,
@@ -300,6 +303,63 @@ const cappedSmallerReplan = applyInterruptedChargeCap({
 }, firstInterruption, 2100, new Date("2026-07-11T12:15:00.000Z"));
 assert.equal(cappedSmallerReplan.plan.slots[0].targetWh, 600);
 assert.equal(applyInterruptedChargeCap({ slots: [] }, firstInterruption, 2100).interruption, null);
+
+const deadlineState = {
+  owner: "planner",
+  activePlanCreatedAt: "deadline-plan",
+  activeSlot: {
+    start: "2026-07-11T12:00:00.000Z",
+    end: "2026-07-11T12:30:00.000Z",
+    targetWh: 1050,
+  },
+};
+const deadlineKey = plannerSlotEndKey(deadlineState);
+assert.equal(
+  plannerSlotEndDelayMs(deadlineState, new Date("2026-07-11T12:20:00.000Z")),
+  10 * 60_000,
+);
+assert.equal(plannerSlotEndKey({ ...deadlineState, owner: null }), null);
+
+let deadlineReleaseCount = 0;
+let deadlineWriteCount = 0;
+const deadlineDependencies = {
+  readState: async () => deadlineState,
+  release: async (state) => {
+    deadlineReleaseCount += 1;
+    state.owner = null;
+    state.activeSlot = null;
+    return true;
+  },
+  writeState: async () => {
+    deadlineWriteCount += 1;
+  },
+};
+const earlyDeadline = await enforcePlannerSlotEndDeadline(deadlineKey, {
+  ...deadlineDependencies,
+  now: new Date("2026-07-11T12:29:55.000Z"),
+});
+assert.equal(earlyDeadline.stopped, false);
+assert.equal(earlyDeadline.remainingMs, 5000);
+assert.equal(deadlineReleaseCount, 0);
+assert.equal(deadlineWriteCount, 0);
+
+const expiredDeadline = await enforcePlannerSlotEndDeadline(deadlineKey, {
+  ...deadlineDependencies,
+  now: new Date("2026-07-11T12:30:00.000Z"),
+});
+assert.equal(expiredDeadline.stopped, true);
+assert.equal(deadlineReleaseCount, 1);
+assert.equal(deadlineWriteCount, 1);
+assert.equal(deadlineState.owner, null);
+assert.equal(deadlineState.activeSlot, null);
+
+const staleDeadline = await enforcePlannerSlotEndDeadline(deadlineKey, {
+  ...deadlineDependencies,
+  now: new Date("2026-07-11T12:31:00.000Z"),
+});
+assert.equal(staleDeadline.stopped, false);
+assert.equal(staleDeadline.reason, "active planner slot changed");
+assert.equal(deadlineReleaseCount, 1);
 
 function chronologicalSlot(hour, band, netKwh = 0, highSolarNetKwh = netKwh) {
   const startMs = Date.parse("2026-07-12T00:00:00.000Z") + hour * 3_600_000;
