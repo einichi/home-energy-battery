@@ -578,6 +578,18 @@ function cleanSolarPlannerState(value = {}) {
     activePlanCreatedAt: value.activePlanCreatedAt ?? null,
     activeChargedKwh: Math.max(0, Number(value.activeChargedKwh) || 0),
     activeLastCheckedAt: value.activeLastCheckedAt ?? null,
+    interruptedCharge: value.interruptedCharge
+      && Number.isFinite(Number(value.interruptedCharge.remainingWh))
+      && Number(value.interruptedCharge.remainingWh) > 0
+      ? {
+        slotStart: value.interruptedCharge.slotStart ?? null,
+        slotEnd: value.interruptedCharge.slotEnd ?? null,
+        windowEnd: value.interruptedCharge.windowEnd ?? null,
+        remainingWh: Math.max(1, Math.round(Number(value.interruptedCharge.remainingWh))),
+        deliveredWh: Math.max(0, Math.round(Number(value.interruptedCharge.deliveredWh) || 0)),
+        interruptedAt: value.interruptedCharge.interruptedAt ?? null,
+      }
+      : null,
     pausedUntil: value.pausedUntil ?? null,
     solarHeadroomHoldUntil: value.solarHeadroomHoldUntil ?? null,
     lastResult: value.lastResult ?? null,
@@ -745,6 +757,7 @@ function solarPlannerView(config, state, now = new Date()) {
     plan: state.plan,
     owner: state.owner,
     activeSlot: state.activeSlot,
+    interruptedCharge: state.interruptedCharge,
     learnedCapacityKwh: state.plan?.batteryCapacity?.learnedCapacityKwh ?? null,
     lastResult: state.lastResult,
     lastForecastError: state.lastForecastError,
@@ -2379,6 +2392,7 @@ async function writeConfig(config) {
   if (plannerInputsChanged) {
     const state = await readSolarPlannerState();
     state.plan = null;
+    state.interruptedCharge = null;
     const forecastInputsChanged = JSON.stringify({
       latitude: previous.solarPlanner.latitude,
       longitude: previous.solarPlanner.longitude,
@@ -3024,6 +3038,7 @@ async function pauseSolarPlannerForManualAction(action, now = new Date()) {
   if (!plannerConfiguredActive(config)) return null;
   const state = await readSolarPlannerState();
   if (state.owner === "planner") await releasePlannerCharge(state, "Manual battery action received", now);
+  state.interruptedCharge = null;
   state.pausedUntil = nextLocalMidnight(now);
   appendSolarPlannerLog(state, `Manual ${action} action paused the planner until ${state.pausedUntil}`, "pause", now);
   return writeSolarPlannerState(state);
@@ -3033,6 +3048,7 @@ async function resumeSolarPlanner(now = new Date()) {
   const state = await readSolarPlannerState();
   state.pausedUntil = null;
   state.plan = null;
+  state.interruptedCharge = null;
   state.solarHeadroomHoldUntil = null;
   appendSolarPlannerLog(state, "Planner resumed manually", "resume", now);
   return writeSolarPlannerState(state);
@@ -3053,6 +3069,71 @@ async function releasePlannerCharge(state, reason, now = new Date(), batteryHost
 function plannerSlotAt(plan, now = new Date()) {
   const time = now.getTime();
   return (plan?.slots ?? []).find((slot) => new Date(slot.start).getTime() <= time && time < new Date(slot.end).getTime()) ?? null;
+}
+
+function plannerSlotsMatch(left, right) {
+  return new Date(left?.start).getTime() === new Date(right?.start).getTime()
+    && new Date(left?.end).getTime() === new Date(right?.end).getTime();
+}
+
+function preserveInterruptedPlannerCharge(state, now = new Date()) {
+  const activeSlot = state.activeSlot;
+  const targetWh = Math.max(0, Math.round(Number(activeSlot?.targetWh) || 0));
+  if (!activeSlot || !targetWh) return null;
+  const deliveredWh = Math.max(
+    0,
+    Math.min(targetWh, Math.round(Number(state.activeChargedKwh || 0) * 1000)),
+  );
+  const remainingWh = Math.max(0, targetWh - deliveredWh);
+  if (state.plan) {
+    state.plan = {
+      ...state.plan,
+      slots: (state.plan.slots ?? []).flatMap((slot) => {
+        if (!plannerSlotsMatch(slot, activeSlot)) return [slot];
+        return remainingWh > 0 ? [{ ...slot, targetWh: remainingWh }] : [];
+      }),
+    };
+  }
+  const interruption = remainingWh > 0 ? {
+    slotStart: activeSlot.start,
+    slotEnd: activeSlot.end,
+    windowEnd: activeSlot.windowEnd ?? activeSlot.end,
+    remainingWh,
+    deliveredWh,
+    interruptedAt: now.toISOString(),
+  } : null;
+  state.interruptedCharge = interruption;
+  return interruption;
+}
+
+function applyInterruptedChargeCap(plan, interruption, maximumChargeWatts, now = new Date()) {
+  if (!plan || !interruption) return { plan, interruption: null };
+  const interruptedEnd = new Date(interruption.slotEnd).getTime();
+  if (!Number.isFinite(interruptedEnd) || interruptedEnd <= now.getTime()) {
+    return { plan, interruption: null };
+  }
+  const remainingWh = Math.max(0, Math.round(Number(interruption.remainingWh) || 0));
+  const maximumWatts = Number(maximumChargeWatts);
+  let matched = false;
+  const slots = (plan.slots ?? []).map((slot) => {
+    if (new Date(slot.end).getTime() !== interruptedEnd) return slot;
+    matched = true;
+    const targetWh = Math.min(Math.max(0, Math.round(Number(slot.targetWh) || 0)), remainingWh);
+    if (!targetWh) return null;
+    const endMs = new Date(slot.end).getTime();
+    const durationMs = Number.isFinite(maximumWatts) && maximumWatts > 0
+      ? targetWh / maximumWatts * 3_600_000
+      : endMs - new Date(slot.start).getTime();
+    return {
+      ...slot,
+      start: new Date(Math.max(new Date(slot.start).getTime(), endMs - durationMs)).toISOString(),
+      targetWh,
+    };
+  }).filter(Boolean);
+  return {
+    plan: matched ? { ...plan, slots } : plan,
+    interruption: matched ? { ...interruption, remainingWh } : null,
+  };
 }
 
 function plannerLiveChargeHeadroom(status, config) {
@@ -3120,6 +3201,19 @@ function activePlannerSlotStopReason(state, config, plan, now = new Date()) {
 
 async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
   let state = await readSolarPlannerState();
+  const measuredChargingWatts = batteryChargingWatts(status) ?? 0;
+  if (state.owner === "planner" && state.activeLastCheckedAt) {
+    const elapsedHours = Math.max(
+      0,
+      Math.min(0.1, (now.getTime() - new Date(state.activeLastCheckedAt).getTime()) / 3_600_000),
+    );
+    state.activeChargedKwh += measuredChargingWatts * elapsedHours / 1000;
+  }
+  if (state.owner === "planner") state.activeLastCheckedAt = now.toISOString();
+  if (state.interruptedCharge
+    && new Date(state.interruptedCharge.slotEnd).getTime() <= now.getTime()) {
+    state.interruptedCharge = null;
+  }
   const paused = state.pausedUntil && new Date(state.pausedUntil).getTime() > now.getTime();
   const guardActive = rules.some((rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore);
   const base = solarPlannerBaseAvailability(config);
@@ -3134,13 +3228,21 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
   }
   if (guardActive) {
     if (state.owner === "planner") {
+      const interruption = preserveInterruptedPlannerCharge(state, now);
       state.owner = null;
       state.activeSlot = null;
       state.activePlanCreatedAt = null;
       state.activeChargedKwh = 0;
       state.activeLastCheckedAt = null;
-      state.plan = null;
-      appendSolarPlannerLog(state, "Charging Demand Guard owns battery control; planner is waiting", "guard", now);
+      if (!interruption) state.plan = null;
+      appendSolarPlannerLog(
+        state,
+        interruption
+          ? `Charging Demand Guard interrupted planner charging after ${interruption.deliveredWh} Wh; ${interruption.remainingWh} Wh remains`
+          : "Charging Demand Guard owns battery control; planner is waiting",
+        "guard",
+        now,
+      );
     }
     state.lastResult = { ok: true, at: now.toISOString(), skipped: "Charging Demand Guard active" };
     return writeSolarPlannerState(state);
@@ -3156,7 +3258,16 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
   ].filter(([value]) => !Number.isFinite(value)).map(([, label]) => label);
   if (missingTelemetry.length) {
     const reason = `${missingTelemetry.join(", ")} unavailable`;
-    if (state.owner === "planner") await releasePlannerCharge(state, reason, now);
+    if (state.owner === "planner") {
+      const interruption = preserveInterruptedPlannerCharge(state, now);
+      await releasePlannerCharge(
+        state,
+        interruption
+          ? `${reason} after ${interruption.deliveredWh} Wh; ${interruption.remainingWh} Wh remains in this charge`
+          : reason,
+        now,
+      );
+    }
     state.lastResult = { ok: true, at: now.toISOString(), skipped: reason };
     return writeSolarPlannerState(state);
   }
@@ -3178,6 +3289,16 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     });
     state = { ...state, historicalWeather: await readJsonLinesFile(SOLAR_WEATHER_HISTORY_FILE) };
     state.plan = buildSolarChargingPlan({ config, state, samples, now });
+    if (state.interruptedCharge) {
+      const capped = applyInterruptedChargeCap(
+        state.plan,
+        state.interruptedCharge,
+        config.batteryCapabilities.maximumChargeWatts,
+        now,
+      );
+      state.plan = capped.plan;
+      state.interruptedCharge = capped.interruption;
+    }
     appendSolarPlannerLog(
       state,
       state.plan.available
@@ -3193,12 +3314,6 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     return writeSolarPlannerState(state);
   }
 
-  const chargingWatts = batteryChargingWatts(status) ?? 0;
-  if (state.owner === "planner" && state.activeLastCheckedAt) {
-    const elapsedHours = Math.max(0, Math.min(0.1, (now.getTime() - new Date(state.activeLastCheckedAt).getTime()) / 3_600_000));
-    state.activeChargedKwh += chargingWatts * elapsedHours / 1000;
-  }
-  if (state.owner === "planner") state.activeLastCheckedAt = now.toISOString();
   const soc = liveSoc;
   const gridExportW = numericMetric(status.meter?.grid_export_power);
   const liveExportNeedsHeadroom = Number.isFinite(gridExportW) && gridExportW > 50;
@@ -3212,6 +3327,13 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
   const liveImportSafety = plannerLiveImportSafety(status, config);
   const activeEnergyTargetReached = state.owner === "planner" && state.activeChargedKwh >= activeTargetKwh;
   const activeSocTargetReached = state.owner === "planner" && soc >= activeTargetSocPercent;
+  const breakerReserveInterrupted = state.owner === "planner"
+    && !activeExpired
+    && !activePlanStopReason
+    && !liveImportSafety.available
+    && !activeEnergyTargetReached
+    && !activeSocTargetReached
+    && !liveExportNeedsHeadroom;
   if (state.owner === "planner" && (
     activeExpired
     || activePlanStopReason
@@ -3223,13 +3345,23 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     let stopReason = "Planned charge target reached";
     if (activeExpired) stopReason = "Planned discounted window ended";
     else if (activePlanStopReason) stopReason = activePlanStopReason;
-    else if (!liveImportSafety.available) stopReason = "Live grid import reached the breaker reserve limit";
+    else if (!liveImportSafety.available) {
+      const interruption = breakerReserveInterrupted
+        ? preserveInterruptedPlannerCharge(state, now)
+        : null;
+      stopReason = interruption
+        ? `Live grid import reached the breaker reserve limit after ${interruption.deliveredWh} Wh; ${interruption.remainingWh} Wh remains in this charge`
+        : "Live grid import reached the breaker reserve limit";
+    }
     else if (liveExportNeedsHeadroom) stopReason = "Live grid export indicates solar needs battery headroom";
     if (liveExportNeedsHeadroom && state.activeSlot?.windowEnd) {
       state.solarHeadroomHoldUntil = state.activeSlot.windowEnd;
     }
     await releasePlannerCharge(state, stopReason, now);
-    if (activeEnergyTargetReached || activeSocTargetReached) state.plan = null;
+    if (activeEnergyTargetReached || activeSocTargetReached) {
+      state.plan = null;
+      state.interruptedCharge = null;
+    }
   } else if (state.owner === "planner" && state.activePlanCreatedAt !== state.plan.createdAt) {
     const replacement = plannerSlotAt(state.plan, now);
     state.activeSlot = {
@@ -3265,6 +3397,7 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     state.activePlanCreatedAt = state.plan.createdAt;
     state.activeChargedKwh = 0;
     state.activeLastCheckedAt = now.toISOString();
+    state.interruptedCharge = null;
     state.lastResult = { ok: true, at: now.toISOString(), kind: "charge", slot, result };
     appendSolarPlannerLog(state, `Starting ${slot.targetWh} Wh charge in ${slot.label} band at ${slot.yenPerKwh} yen/kWh`, "charge", now);
   } else if (slot && state.owner !== "planner" && (solarHeadroomHoldActive || slotTargetReached)) {
@@ -4003,6 +4136,16 @@ async function api(req, res, url) {
     const samples = await readSolarPlannerHistory(now);
     state = { ...state, historicalWeather: await readJsonLinesFile(SOLAR_WEATHER_HISTORY_FILE) };
     state.plan = buildSolarChargingPlan({ config, state, samples, now });
+    if (state.interruptedCharge) {
+      const capped = applyInterruptedChargeCap(
+        state.plan,
+        state.interruptedCharge,
+        config.batteryCapabilities.maximumChargeWatts,
+        now,
+      );
+      state.plan = capped.plan;
+      state.interruptedCharge = capped.interruption;
+    }
     appendSolarPlannerLog(
       state,
       `Plan recalculated manually${state.plan.warning ? `; ${state.plan.warning}` : ""}`,
@@ -4148,6 +4291,7 @@ export const server = http.createServer(async (req, res) => {
 
 export {
   activePlannerSlotStopReason,
+  applyInterruptedChargeCap,
   aggregateEnergyReportSamples,
   buildSolarChargingPlan,
   clearStaleScheduleRuns,
@@ -4179,6 +4323,7 @@ export {
   recoverConcatenatedJsonValue,
   sampleFromStatus,
   shouldTriggerDemandGuard,
+  preserveInterruptedPlannerCharge,
   solarPlannerBaseAvailability,
   solarPowerFromIrradiance,
   summarizeSamples,

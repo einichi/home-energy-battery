@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   activePlannerSlotStopReason,
+  applyInterruptedChargeCap,
   aggregateEnergyReportSamples,
   clearStaleScheduleRuns,
   cleanAutomationRule,
@@ -28,6 +29,7 @@ import {
   planChronologicalDiscountedCharging,
   plannerLiveChargeHeadroom,
   plannerLiveImportSafety,
+  preserveInterruptedPlannerCharge,
   plannerTimezoneError,
   rateForTimestamp,
   readRecentHistorySamples,
@@ -258,6 +260,46 @@ assert.match(activePlannerSlotStopReason({
   createdAt: "new-plan",
   slots: [],
 }, activePlannerNow), /no longer includes/);
+
+const interruptedSlot = {
+  start: "2026-07-11T12:00:00.000Z",
+  end: "2026-07-11T12:30:00.000Z",
+  windowEnd: "2026-07-11T13:00:00.000Z",
+  targetWh: 1050,
+};
+const interruptedState = {
+  activeSlot: interruptedSlot,
+  activeChargedKwh: 0.3,
+  plan: { slots: [interruptedSlot] },
+};
+const firstInterruption = preserveInterruptedPlannerCharge(
+  interruptedState,
+  new Date("2026-07-11T12:10:00.000Z"),
+);
+assert.equal(firstInterruption.deliveredWh, 300);
+assert.equal(firstInterruption.remainingWh, 750);
+assert.equal(interruptedState.plan.slots[0].targetWh, 750);
+
+interruptedState.activeSlot = interruptedState.plan.slots[0];
+interruptedState.activeChargedKwh = 0.2;
+const repeatedInterruption = preserveInterruptedPlannerCharge(
+  interruptedState,
+  new Date("2026-07-11T12:20:00.000Z"),
+);
+assert.equal(repeatedInterruption.deliveredWh, 200);
+assert.equal(repeatedInterruption.remainingWh, 550);
+assert.equal(interruptedState.plan.slots[0].targetWh, 550);
+
+const cappedLargerReplan = applyInterruptedChargeCap({
+  slots: [{ ...interruptedSlot, targetWh: 900 }],
+}, firstInterruption, 2100, new Date("2026-07-11T12:15:00.000Z"));
+assert.equal(cappedLargerReplan.plan.slots[0].targetWh, 750);
+assert.equal(cappedLargerReplan.interruption.remainingWh, 750);
+const cappedSmallerReplan = applyInterruptedChargeCap({
+  slots: [{ ...interruptedSlot, targetWh: 600 }],
+}, firstInterruption, 2100, new Date("2026-07-11T12:15:00.000Z"));
+assert.equal(cappedSmallerReplan.plan.slots[0].targetWh, 600);
+assert.equal(applyInterruptedChargeCap({ slots: [] }, firstInterruption, 2100).interruption, null);
 
 function chronologicalSlot(hour, band, netKwh = 0, highSolarNetKwh = netKwh) {
   const startMs = Date.parse("2026-07-12T00:00:00.000Z") + hour * 3_600_000;
