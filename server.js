@@ -33,6 +33,8 @@ const SOLAR_ACTIVE_PLAN_REFRESH_MS = 5 * 60_000;
 const SOLAR_HISTORY_CACHE_MS = 30 * 60_000;
 const SOLAR_SLOT_END_RETRY_MS = 5_000;
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
+const SOLAR_CHARGE_SESSION_LIMIT = 30;
+const SOLAR_CHARGE_SAMPLE_LIMIT = 500;
 
 const DEFAULT_DASHBOARD_WIDGETS = [
   { id: "solarPower", group: "trends", visible: true, priority: 10 },
@@ -582,6 +584,18 @@ function cleanSolarPlannerState(value = {}) {
     activePlanCreatedAt: value.activePlanCreatedAt ?? null,
     activeChargedKwh: Math.max(0, Number(value.activeChargedKwh) || 0),
     activeLastCheckedAt: value.activeLastCheckedAt ?? null,
+    activeChargeSession: value.activeChargeSession ? {
+      startedAt: value.activeChargeSession.startedAt ?? null,
+      requestedWh: Math.max(0, Math.round(Number(value.activeChargeSession.requestedWh) || 0)),
+      startSocPercent: finiteNumberOrNull(value.activeChargeSession.startSocPercent),
+      latestSocPercent: finiteNumberOrNull(value.activeChargeSession.latestSocPercent),
+      capacityKwh: finiteNumberOrNull(value.activeChargeSession.capacityKwh),
+      slotStart: value.activeChargeSession.slotStart ?? null,
+      slotEnd: value.activeChargeSession.slotEnd ?? null,
+      label: value.activeChargeSession.label ?? null,
+    } : null,
+    chargingPerformance: cleanPlannerChargingPerformance(value.chargingPerformance),
+    lastRebasedWindowKey: value.lastRebasedWindowKey ?? null,
     interruptedCharge: value.interruptedCharge
       && Number.isFinite(Number(value.interruptedCharge.remainingWh))
       && Number(value.interruptedCharge.remainingWh) > 0
@@ -601,6 +615,90 @@ function cleanSolarPlannerState(value = {}) {
     historicalWeatherFetchedAt: value.historicalWeatherFetchedAt ?? null,
     log: Array.isArray(value.log) ? value.log.slice(-200) : [],
     updatedAt: value.updatedAt ?? new Date().toISOString(),
+  };
+}
+
+function finiteNumberOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function cleanPlannerChargingPerformance(value = {}) {
+  const samples = (Array.isArray(value.samples) ? value.samples : [])
+    .map((sample) => ({
+      at: sample.at ?? null,
+      batteryChargingW: Number(sample.batteryChargingW),
+      houseDemandW: sample.houseDemandW === null || sample.houseDemandW === undefined
+        ? null
+        : Number(sample.houseDemandW),
+      gridImportW: sample.gridImportW === null || sample.gridImportW === undefined
+        ? null
+        : Number(sample.gridImportW),
+    }))
+    .filter((sample) => sample.at
+      && Number.isFinite(sample.batteryChargingW)
+      && sample.batteryChargingW > 0)
+    .slice(-SOLAR_CHARGE_SAMPLE_LIMIT);
+  const sessions = (Array.isArray(value.sessions) ? value.sessions : [])
+    .map((session) => ({
+      startedAt: session.startedAt ?? null,
+      endedAt: session.endedAt ?? null,
+      reason: session.reason ?? null,
+      requestedWh: Math.max(0, Math.round(Number(session.requestedWh) || 0)),
+      deliveredWh: Math.max(0, Math.round(Number(session.deliveredWh) || 0)),
+      startSocPercent: finiteNumberOrNull(session.startSocPercent),
+      endSocPercent: finiteNumberOrNull(session.endSocPercent),
+      socDeltaPercent: finiteNumberOrNull(session.socDeltaPercent),
+      averageChargeWatts: finiteNumberOrNull(session.averageChargeWatts),
+      estimatedStorageEfficiencyPercent: finiteNumberOrNull(session.estimatedStorageEfficiencyPercent),
+    }))
+    .filter((session) => session.startedAt && session.endedAt)
+    .slice(-SOLAR_CHARGE_SESSION_LIMIT);
+  const chargingPowers = samples.map((sample) => sample.batteryChargingW).sort((a, b) => a - b);
+  const upperQuartile = chargingPowers.slice(Math.floor(chargingPowers.length * 0.75));
+  const learnedChargeWatts = chargingPowers.length >= 10 ? median(upperQuartile) : null;
+  const efficiencies = sessions
+    .map((session) => session.estimatedStorageEfficiencyPercent)
+    .filter((value) => Number.isFinite(value) && value >= 50 && value <= 120);
+  const demandPairs = samples.filter((sample) => Number.isFinite(sample.houseDemandW));
+  let demandImpactWattsPerKw = null;
+  if (demandPairs.length >= 10) {
+    const meanDemand = demandPairs.reduce((sum, sample) => sum + sample.houseDemandW, 0) / demandPairs.length;
+    const meanCharge = demandPairs.reduce((sum, sample) => sum + sample.batteryChargingW, 0) / demandPairs.length;
+    const variance = demandPairs.reduce((sum, sample) => sum + (sample.houseDemandW - meanDemand) ** 2, 0);
+    if (variance > 0) {
+      const covariance = demandPairs.reduce(
+        (sum, sample) => sum + (sample.houseDemandW - meanDemand) * (sample.batteryChargingW - meanCharge),
+        0,
+      );
+      demandImpactWattsPerKw = covariance / variance * 1000;
+    }
+  }
+  return {
+    samples,
+    sessions,
+    sampleCount: samples.length,
+    sessionCount: sessions.length,
+    learnedChargeWatts,
+    medianStorageEfficiencyPercent: efficiencies.length ? median(efficiencies) : null,
+    demandImpactWattsPerKw,
+  };
+}
+
+function effectivePlannerChargeWatts(config, state = {}) {
+  const configuredWatts = Number(config.batteryCapabilities?.maximumChargeWatts);
+  const learnedWatts = Number(state.chargingPerformance?.learnedChargeWatts);
+  const learned = Number(state.chargingPerformance?.sampleCount) >= 10
+    && Number.isFinite(learnedWatts)
+    && learnedWatts > 0;
+  return {
+    configuredWatts,
+    learnedWatts: learned ? learnedWatts : null,
+    effectiveWatts: learned
+      ? Math.min(configuredWatts, Math.max(configuredWatts * 0.5, learnedWatts))
+      : configuredWatts,
+    learned,
   };
 }
 
@@ -763,6 +861,7 @@ function solarPlannerView(config, state, now = new Date()) {
     owner: state.owner,
     activeSlot: state.activeSlot,
     interruptedCharge: state.interruptedCharge,
+    chargingPerformance: state.chargingPerformance,
     learnedCapacityKwh: state.plan?.batteryCapacity?.learnedCapacityKwh ?? null,
     lastResult: state.lastResult,
     lastForecastError: state.lastForecastError,
@@ -836,6 +935,32 @@ function explicitDiscountedBand(config, date) {
   return (config.rateBands ?? [])
     .filter((band) => Number(band.yenPerKwh) < Number(config.standardRateYenPerKwh))
     .find((band) => matchesDailyBand(date, band)) ?? null;
+}
+
+function discountedBandOccurrence(config, now = new Date()) {
+  const band = explicitDiscountedBand(config, now);
+  if (!band) return null;
+  const startMinute = minutesOfDay(band.start);
+  const endMinute = minutesOfDay(band.end);
+  if (startMinute === null || endMinute === null) return null;
+  const currentMinute = now.getHours() * 60 + now.getMinutes();
+  const start = new Date(now);
+  start.setHours(Math.floor(startMinute / 60), startMinute % 60, 0, 0);
+  const end = new Date(now);
+  end.setHours(Math.floor(endMinute / 60), endMinute % 60, 0, 0);
+  if (startMinute === endMinute) {
+    end.setDate(end.getDate() + 1);
+  } else if (currentMinute >= startMinute) {
+    if (startMinute > endMinute) end.setDate(end.getDate() + 1);
+  } else if (startMinute > endMinute) {
+    start.setDate(start.getDate() - 1);
+  }
+  return {
+    band,
+    start: start.toISOString(),
+    end: end.toISOString(),
+    key: JSON.stringify([start.toISOString(), end.toISOString(), band.yenPerKwh, band.label ?? null]),
+  };
 }
 
 function solarPowerFromIrradiance(irradianceWm2, config, learnedFactor = null) {
@@ -1022,6 +1147,17 @@ function applyPredictedBatteryFlow(storedKwh, netKwh, floorKwh, capacityKwh) {
   return Math.max(floorKwh, Math.min(capacityKwh, storedKwh + Number(netKwh || 0)));
 }
 
+function applyPlannerTimelineSlot(storedKwh, slot, chargeKwh, floorKwh, capacityKwh) {
+  const allocatedChargeKwh = Math.max(0, Number(chargeKwh) || 0);
+  const slotChargeCapacityKwh = Math.max(0, Number(slot?.chargeCapacityKwh) || 0);
+  const forcedChargeFraction = slotChargeCapacityKwh > 0
+    ? Math.min(1, allocatedChargeKwh / slotChargeCapacityKwh)
+    : 0;
+  const autoNetKwh = Number(slot?.netKwh || 0) * (1 - forcedChargeFraction);
+  const afterAuto = applyPredictedBatteryFlow(storedKwh, autoNetKwh, floorKwh, capacityKwh);
+  return Math.min(capacityKwh, afterAuto + allocatedChargeKwh);
+}
+
 function planChronologicalDiscountedCharging({
   timeline = [],
   currentStoredKwh,
@@ -1032,136 +1168,182 @@ function planChronologicalDiscountedCharging({
 } = {}) {
   const windows = discountedTimelineWindows(timeline);
   const maximumTargetKwh = capacityKwh * Number(maximumTargetPercent) / 100;
-  let storedKwh = Math.max(dischargeFloorKwh, Math.min(capacityKwh, Number(currentStoredKwh)));
-  let cursor = 0;
-  let unmetChargeKwh = 0;
-  const selectedSlots = [];
-  const windowPlans = [];
+  const initialStoredKwh = Math.max(dischargeFloorKwh, Math.min(capacityKwh, Number(currentStoredKwh)));
 
-  const simulate = (startIndex, endIndex, chargeByIndex = new Map()) => {
-    for (let index = startIndex; index < endIndex; index += 1) {
-      storedKwh = applyPredictedBatteryFlow(
-        storedKwh,
-        timeline[index]?.netKwh,
-        dischargeFloorKwh,
-        capacityKwh,
-      );
-      storedKwh = Math.min(capacityKwh, storedKwh + Number(chargeByIndex.get(index) ?? 0));
-    }
-  };
+  const buildPlan = (targetBoosts = []) => {
+    let storedKwh = initialStoredKwh;
+    let cursor = 0;
+    const selectedSlots = [];
+    const windowPlans = [];
 
-  for (let windowIndex = 0; windowIndex < windows.length; windowIndex += 1) {
-    const window = windows[windowIndex];
-    simulate(cursor, window.startIndex);
-    const storedAtStartKwh = storedKwh;
-    const simulateWindow = (chargeByIndex = new Map()) => {
-      let projectedStoredKwh = storedKwh;
-      for (let index = window.startIndex; index < window.endIndex; index += 1) {
-        projectedStoredKwh = applyPredictedBatteryFlow(
-          projectedStoredKwh,
-          timeline[index]?.netKwh,
+    const simulate = (startIndex, endIndex, chargeByIndex = new Map()) => {
+      for (let index = startIndex; index < endIndex; index += 1) {
+        storedKwh = applyPlannerTimelineSlot(
+          storedKwh,
+          timeline[index],
+          chargeByIndex.get(index),
           dischargeFloorKwh,
           capacityKwh,
         );
-        projectedStoredKwh = Math.min(
-          capacityKwh,
-          projectedStoredKwh + Number(chargeByIndex.get(index) ?? 0),
-        );
       }
-      return projectedStoredKwh;
     };
-    const noGridStoredKwh = simulateWindow();
 
-    const nextWindow = windows[windowIndex + 1] ?? null;
-    const boundaryIndex = nextWindow?.startIndex ?? timeline.length;
-    const rangeNeeds = cumulativeRangeNeeds(timeline, window.endIndex, boundaryIndex);
-    const solarHeadroomKwh = Math.min(
-      Math.max(0, maximumTargetKwh - dischargeFloorKwh),
-      rangeNeeds.maximumSurplusKwh,
-    );
-    const headroomTargetKwh = Math.max(dischargeFloorKwh, maximumTargetKwh - solarHeadroomKwh);
-    const cheaperWindowAhead = Boolean(nextWindow && nextWindow.yenPerKwh < window.yenPerKwh);
-    const bridgeTargetKwh = Math.min(
-      headroomTargetKwh,
-      dischargeFloorKwh + rangeNeeds.maximumDeficitKwh,
-    );
-    const targetStoredKwh = cheaperWindowAhead ? bridgeTargetKwh : headroomTargetKwh;
-    const chargeByIndex = new Map();
-    let projectedEndKwh = noGridStoredKwh;
-    for (let index = window.endIndex - 1; index >= window.startIndex && projectedEndKwh < targetStoredKwh - 0.0001; index -= 1) {
-      const slot = timeline[index];
-      const slotCapacityKwh = Math.max(0, Number(slot.chargeCapacityKwh ?? 0));
-      if (!slotCapacityKwh) continue;
-      chargeByIndex.set(index, slotCapacityKwh);
-      const fullSlotEndKwh = simulateWindow(chargeByIndex);
-      if (fullSlotEndKwh <= projectedEndKwh + 0.0001) {
-        chargeByIndex.delete(index);
-        continue;
-      }
-      let allocatedKwh = slotCapacityKwh;
-      if (fullSlotEndKwh > targetStoredKwh + 0.0001) {
-        let low = 0;
-        let high = slotCapacityKwh;
-        for (let iteration = 0; iteration < 24; iteration += 1) {
-          const candidate = (low + high) / 2;
-          chargeByIndex.set(index, candidate);
-          if (simulateWindow(chargeByIndex) >= targetStoredKwh) high = candidate;
-          else low = candidate;
+    for (let windowIndex = 0; windowIndex < windows.length; windowIndex += 1) {
+      const window = windows[windowIndex];
+      simulate(cursor, window.startIndex);
+      const storedAtStartKwh = storedKwh;
+      const simulateWindow = (chargeByIndex = new Map()) => {
+        let projectedStoredKwh = storedKwh;
+        for (let index = window.startIndex; index < window.endIndex; index += 1) {
+          projectedStoredKwh = applyPlannerTimelineSlot(
+            projectedStoredKwh,
+            timeline[index],
+            chargeByIndex.get(index),
+            dischargeFloorKwh,
+            capacityKwh,
+          );
         }
-        allocatedKwh = high;
-        chargeByIndex.set(index, allocatedKwh);
-      }
-      projectedEndKwh = simulateWindow(chargeByIndex);
-    }
-
-    for (const [index, allocatedKwh] of chargeByIndex) {
-      const slot = timeline[index];
-      const durationMs = allocatedKwh * 1000 / maximumChargeWatts * 3_600_000;
-      const selected = {
-        start: new Date(slot.endMs - durationMs).toISOString(),
-        end: new Date(slot.endMs).toISOString(),
-        yenPerKwh: window.yenPerKwh,
-        label: window.label,
-        demandW: slot.demandW,
-        targetWh: Math.max(1, Math.round(allocatedKwh * 1000)),
-        targetSocPercent: capacityKwh ? targetStoredKwh / capacityKwh * 100 : maximumTargetPercent,
-        windowEnd: new Date(window.endMs).toISOString(),
+        return projectedStoredKwh;
       };
-      selectedSlots.push(selected);
+      const noGridStoredKwh = simulateWindow();
+      const nextWindow = windows[windowIndex + 1] ?? null;
+      const boundaryIndex = nextWindow?.startIndex ?? timeline.length;
+      const rangeNeeds = cumulativeRangeNeeds(timeline, window.endIndex, boundaryIndex);
+      const solarHeadroomKwh = Math.min(
+        Math.max(0, maximumTargetKwh - dischargeFloorKwh),
+        rangeNeeds.maximumSurplusKwh,
+      );
+      const headroomTargetKwh = Math.max(dischargeFloorKwh, maximumTargetKwh - solarHeadroomKwh);
+      const cheaperWindowAhead = Boolean(nextWindow && nextWindow.yenPerKwh < window.yenPerKwh);
+      const bridgeTargetKwh = Math.min(
+        headroomTargetKwh,
+        dischargeFloorKwh + rangeNeeds.maximumDeficitKwh,
+      );
+      const baseTargetStoredKwh = cheaperWindowAhead ? bridgeTargetKwh : headroomTargetKwh;
+      const targetStoredKwh = Math.min(
+        headroomTargetKwh,
+        baseTargetStoredKwh + Math.max(0, Number(targetBoosts[windowIndex]) || 0),
+      );
+      const chargeByIndex = new Map();
+      let projectedEndKwh = noGridStoredKwh;
+      for (let index = window.endIndex - 1; index >= window.startIndex && projectedEndKwh < targetStoredKwh - 0.0001; index -= 1) {
+        const slot = timeline[index];
+        const slotCapacityKwh = Math.max(0, Number(slot.chargeCapacityKwh ?? 0));
+        if (!slotCapacityKwh) continue;
+        chargeByIndex.set(index, slotCapacityKwh);
+        const fullSlotEndKwh = simulateWindow(chargeByIndex);
+        if (fullSlotEndKwh <= projectedEndKwh + 0.0001) {
+          chargeByIndex.delete(index);
+          continue;
+        }
+        let allocatedKwh = slotCapacityKwh;
+        if (fullSlotEndKwh >= targetStoredKwh - 0.0001) {
+          let low = 0;
+          let high = slotCapacityKwh;
+          for (let iteration = 0; iteration < 24; iteration += 1) {
+            const candidate = (low + high) / 2;
+            chargeByIndex.set(index, candidate);
+            if (simulateWindow(chargeByIndex) >= targetStoredKwh) high = candidate;
+            else low = candidate;
+          }
+          allocatedKwh = high;
+          chargeByIndex.set(index, allocatedKwh);
+        }
+        projectedEndKwh = simulateWindow(chargeByIndex);
+      }
+
+      for (const [index, allocatedKwh] of chargeByIndex) {
+        const slot = timeline[index];
+        const durationMs = allocatedKwh * 1000 / maximumChargeWatts * 3_600_000;
+        selectedSlots.push({
+          start: new Date(slot.endMs - durationMs).toISOString(),
+          end: new Date(slot.endMs).toISOString(),
+          yenPerKwh: window.yenPerKwh,
+          label: window.label,
+          demandW: slot.demandW,
+          targetWh: Math.max(1, Math.round(allocatedKwh * 1000)),
+          targetSocPercent: capacityKwh ? targetStoredKwh / capacityKwh * 100 : maximumTargetPercent,
+          windowEnd: new Date(window.endMs).toISOString(),
+        });
+      }
+
+      simulate(window.startIndex, window.endIndex, chargeByIndex);
+      const predictedEndStoredKwh = storedKwh;
+      const windowUnmetKwh = Math.max(0, targetStoredKwh - predictedEndStoredKwh);
+      const plannedWindowChargeKwh = [...chargeByIndex.values()].reduce((sum, value) => sum + value, 0);
+      const requestedKwh = plannedWindowChargeKwh + windowUnmetKwh;
+      const availableChargeKwh = window.slots.reduce(
+        (sum, slot) => sum + Math.max(0, Number(slot.chargeCapacityKwh) || 0),
+        0,
+      );
+      windowPlans.push({
+        start: new Date(window.startMs).toISOString(),
+        end: new Date(window.endMs).toISOString(),
+        label: window.label,
+        yenPerKwh: window.yenPerKwh,
+        storedAtStartKwh,
+        predictedStartSocPercent: capacityKwh ? storedAtStartKwh / capacityKwh * 100 : null,
+        predictedEndStoredKwh,
+        predictedEndSocPercent: capacityKwh ? predictedEndStoredKwh / capacityKwh * 100 : null,
+        baseTargetStoredKwh,
+        maximumTargetStoredKwh: headroomTargetKwh,
+        targetStoredKwh,
+        targetSocPercent: capacityKwh ? targetStoredKwh / capacityKwh * 100 : null,
+        solarHeadroomKwh,
+        bridgeToCheaperWindow: cheaperWindowAhead,
+        backfillForLaterKwh: Math.max(0, Number(targetBoosts[windowIndex]) || 0),
+        requestedChargeKwh: requestedKwh,
+        availableChargeKwh,
+        plannedChargeKwh: plannedWindowChargeKwh,
+        unmetChargeKwh: windowUnmetKwh,
+      });
+      cursor = window.endIndex;
     }
-
-    simulate(window.startIndex, window.endIndex, chargeByIndex);
-    const windowUnmetKwh = Math.max(0, targetStoredKwh - storedKwh);
-    const plannedWindowChargeKwh = [...chargeByIndex.values()].reduce((sum, value) => sum + value, 0);
-    const requestedKwh = plannedWindowChargeKwh + windowUnmetKwh;
-    unmetChargeKwh += windowUnmetKwh;
-    windowPlans.push({
-      start: new Date(window.startMs).toISOString(),
-      end: new Date(window.endMs).toISOString(),
-      label: window.label,
-      yenPerKwh: window.yenPerKwh,
-      storedAtStartKwh,
-      targetStoredKwh,
-      targetSocPercent: capacityKwh ? targetStoredKwh / capacityKwh * 100 : null,
-      solarHeadroomKwh,
-      bridgeToCheaperWindow: cheaperWindowAhead,
-      requestedChargeKwh: requestedKwh,
-      plannedChargeKwh: plannedWindowChargeKwh,
-      unmetChargeKwh: windowUnmetKwh,
-    });
-    cursor = window.endIndex;
-  }
-  simulate(cursor, timeline.length);
-
-  const plannedChargeKwh = selectedSlots.reduce((sum, slot) => sum + slot.targetWh / 1000, 0);
-  return {
-    slots: selectedSlots.sort((a, b) => new Date(a.start) - new Date(b.start)),
-    windows: windowPlans,
-    plannedChargeKwh,
-    requiredGridChargeKwh: windowPlans.reduce((sum, window) => sum + window.requestedChargeKwh, 0),
-    unmetChargeKwh,
-    expectedEndStoredKwh: storedKwh,
+    simulate(cursor, timeline.length);
+    const plannedChargeKwh = selectedSlots.reduce((sum, slot) => sum + slot.targetWh / 1000, 0);
+    const unmetChargeKwh = windowPlans.reduce((sum, window) => sum + window.unmetChargeKwh, 0);
+    return {
+      slots: selectedSlots.sort((a, b) => new Date(a.start) - new Date(b.start)),
+      windows: windowPlans,
+      plannedChargeKwh,
+      requiredGridChargeKwh: plannedChargeKwh + unmetChargeKwh,
+      unmetChargeKwh,
+      expectedEndStoredKwh: storedKwh,
+    };
   };
+
+  const targetBoosts = windows.map(() => 0);
+  let plan = buildPlan(targetBoosts);
+  const maxBackfillIterations = Math.max(1, windows.length * windows.length * 4);
+  for (let iteration = 0; iteration < maxBackfillIterations; iteration += 1) {
+    const constrainedIndex = plan.windows.findIndex(
+      (window, index) => index > 0 && window.unmetChargeKwh > 0.0001,
+    );
+    if (constrainedIndex < 0) break;
+    const constrained = plan.windows[constrainedIndex];
+    const candidates = plan.windows
+      .map((window, index) => ({ window, index }))
+      .filter(({ window, index }) => index < constrainedIndex
+        && window.maximumTargetStoredKwh - window.targetStoredKwh > 0.0001)
+      .sort((left, right) => left.window.yenPerKwh - right.window.yenPerKwh || right.index - left.index);
+    let improved = false;
+    for (const candidate of candidates) {
+      const roomKwh = candidate.window.maximumTargetStoredKwh - candidate.window.targetStoredKwh;
+      const addedKwh = Math.min(constrained.unmetChargeKwh, roomKwh);
+      if (addedKwh <= 0.0001) continue;
+      const previousBoost = targetBoosts[candidate.index];
+      targetBoosts[candidate.index] += addedKwh;
+      const trial = buildPlan(targetBoosts);
+      if (trial.unmetChargeKwh < plan.unmetChargeKwh - 0.0001) {
+        plan = trial;
+        improved = true;
+        break;
+      }
+      targetBoosts[candidate.index] = previousBoost;
+    }
+    if (!improved) break;
+  }
+  return plan;
 }
 
 function discountedPlanStatus(plan = {}) {
@@ -1181,7 +1363,7 @@ function discountedPlanStatus(plan = {}) {
   return {
     available: true,
     reason: null,
-    warning: `Discounted windows can provide ${plannedChargeKwh.toFixed(2)} kWh of ${requestedChargeKwh.toFixed(2)} kWh requested; charging all available slots with a ${unmetChargeKwh.toFixed(2)} kWh shortfall`,
+    warning: `Plan schedules ${plannedChargeKwh.toFixed(2)} kWh of ${requestedChargeKwh.toFixed(2)} kWh requested; a ${unmetChargeKwh.toFixed(2)} kWh shortfall remains after using feasible discounted capacity`,
   };
 }
 
@@ -1417,6 +1599,8 @@ function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {
   const capacityKwh = Number(capacityEstimate.capacityKwh);
   const dischargeLimit = Number(config.settingCache?.discharge_limit?.lastKnown?.decoded?.percent ?? 20);
   const calibration = learnedSolarFactor(samples, state.historicalWeather, config);
+  const chargePerformance = effectivePlannerChargeWatts(config, state);
+  const maximumChargeWatts = chargePerformance.effectiveWatts;
   const startMs = now.getTime();
   const demandByDay = new Map();
   const timeline = [];
@@ -1448,7 +1632,6 @@ function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {
     predictedDemandKwh += demandKwh;
     predictedSurplusKwh += Math.max(0, solarKwh - demandKwh);
     const band = explicitDiscountedBand(config, date);
-    const maximumChargeWatts = Number(config.batteryCapabilities.maximumChargeWatts);
     timeline.push({
       startMs: time,
       endMs: slotEndMs,
@@ -1471,7 +1654,7 @@ function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {
     capacityKwh,
     dischargeFloorKwh: capacityKwh * Math.max(0, dischargeLimit) / 100,
     maximumTargetPercent: Number(config.solarPlanner.targetSocPercent),
-    maximumChargeWatts: Number(config.batteryCapabilities.maximumChargeWatts),
+    maximumChargeWatts,
   });
   const planStatus = discountedPlanStatus(optimized);
   return {
@@ -1485,6 +1668,7 @@ function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {
     predictedSolarKwh,
     predictedDemandKwh,
     predictedSurplusKwh,
+    chargePerformance,
     ...optimized,
     comparableDemandDays: [...new Set(demandPredictions.flatMap((prediction) => prediction.comparableDays))],
     demandHistory: {
@@ -3059,9 +3243,89 @@ async function resumeSolarPlanner(now = new Date()) {
   return writeSolarPlannerState(state);
 }
 
+function startPlannerChargeSession(state, slot, soc, now = new Date()) {
+  state.activeChargeSession = {
+    startedAt: now.toISOString(),
+    requestedWh: Math.max(0, Math.round(Number(slot?.targetWh) || 0)),
+    startSocPercent: finiteNumberOrNull(soc),
+    latestSocPercent: finiteNumberOrNull(soc),
+    capacityKwh: finiteNumberOrNull(state.plan?.batteryCapacity?.capacityKwh),
+    slotStart: slot?.start ?? null,
+    slotEnd: slot?.end ?? null,
+    label: slot?.label ?? null,
+  };
+}
+
+function recordPlannerChargeSample(state, status, now = new Date()) {
+  if (state.owner !== "planner") return false;
+  const batteryChargingW = batteryChargingWatts(status) ?? 0;
+  if (state.activeLastCheckedAt) {
+    const elapsedHours = Math.max(
+      0,
+      Math.min(0.1, (now.getTime() - new Date(state.activeLastCheckedAt).getTime()) / 3_600_000),
+    );
+    state.activeChargedKwh += batteryChargingW * elapsedHours / 1000;
+  }
+  state.activeLastCheckedAt = now.toISOString();
+  const soc = numericMetric(status.energy?.battery?.remaining_percent);
+  if (!state.activeChargeSession) startPlannerChargeSession(state, state.activeSlot, soc, now);
+  if (Number.isFinite(soc)) state.activeChargeSession.latestSocPercent = soc;
+  if (batteryChargingW > 0) {
+    const houseDemandW = numericMetric(status.meter?.house_demand_power);
+    const gridImportW = numericMetric(status.meter?.grid_import_power);
+    state.chargingPerformance = cleanPlannerChargingPerformance({
+      ...state.chargingPerformance,
+      samples: [
+        ...(state.chargingPerformance?.samples ?? []),
+        { at: now.toISOString(), batteryChargingW, houseDemandW, gridImportW },
+      ],
+    });
+  }
+  return true;
+}
+
+function finalizePlannerChargeSession(state, reason, now = new Date()) {
+  const active = state.activeChargeSession;
+  if (!active) return null;
+  const deliveredWh = Math.max(0, Math.round(Number(state.activeChargedKwh) * 1000));
+  const startSocPercent = finiteNumberOrNull(active.startSocPercent);
+  const endSocPercent = finiteNumberOrNull(active.latestSocPercent);
+  const socDeltaPercent = Number.isFinite(startSocPercent) && Number.isFinite(endSocPercent)
+    ? Math.max(0, endSocPercent - startSocPercent)
+    : null;
+  const durationHours = Math.max(0, (now.getTime() - new Date(active.startedAt).getTime()) / 3_600_000);
+  const averageChargeWatts = durationHours > 0 ? deliveredWh / durationHours : null;
+  const capacityKwh = finiteNumberOrNull(active.capacityKwh);
+  const estimatedStoredWh = Number.isFinite(capacityKwh) && Number.isFinite(socDeltaPercent)
+    ? capacityKwh * 1000 * socDeltaPercent / 100
+    : null;
+  const estimatedStorageEfficiencyPercent = deliveredWh >= 100 && Number.isFinite(estimatedStoredWh)
+    ? estimatedStoredWh / deliveredWh * 100
+    : null;
+  const session = {
+    startedAt: active.startedAt,
+    endedAt: now.toISOString(),
+    reason,
+    requestedWh: active.requestedWh,
+    deliveredWh,
+    startSocPercent: Number.isFinite(startSocPercent) ? startSocPercent : null,
+    endSocPercent: Number.isFinite(endSocPercent) ? endSocPercent : null,
+    socDeltaPercent,
+    averageChargeWatts,
+    estimatedStorageEfficiencyPercent,
+  };
+  state.chargingPerformance = cleanPlannerChargingPerformance({
+    ...state.chargingPerformance,
+    sessions: [...(state.chargingPerformance?.sessions ?? []), session],
+  });
+  state.activeChargeSession = null;
+  return session;
+}
+
 async function releasePlannerCharge(state, reason, now = new Date(), batteryHost = null) {
   if (state.owner !== "planner") return false;
   await executeAction("set-mode", { mode: "auto", ...(batteryHost ? { host: batteryHost } : {}) });
+  finalizePlannerChargeSession(state, reason, now);
   appendSolarPlannerLog(state, `${reason}; setting operation mode to Auto`, "stop", now);
   state.owner = null;
   state.activeSlot = null;
@@ -3150,6 +3414,27 @@ function syncSolarPlannerSlotEndTimer(state, now = new Date()) {
 function plannerSlotAt(plan, now = new Date()) {
   const time = now.getTime();
   return (plan?.slots ?? []).find((slot) => new Date(slot.start).getTime() <= time && time < new Date(slot.end).getTime()) ?? null;
+}
+
+function capPlannerSlotToRemainingTime(slot, maximumChargeWatts, now = new Date()) {
+  const endMs = new Date(slot?.end).getTime();
+  const nowMs = now.getTime();
+  const maximumWatts = Number(maximumChargeWatts);
+  if (!Number.isFinite(endMs) || endMs <= nowMs || !Number.isFinite(maximumWatts) || maximumWatts <= 0) {
+    return null;
+  }
+  const maximumRemainingWh = Math.floor(maximumWatts * (endMs - nowMs) / 3_600_000);
+  const targetWh = Math.min(
+    Math.max(0, Math.round(Number(slot?.targetWh) || 0)),
+    Math.max(0, maximumRemainingWh),
+  );
+  if (!targetWh) return null;
+  const durationMs = targetWh / maximumWatts * 3_600_000;
+  return {
+    ...slot,
+    start: new Date(Math.max(nowMs, endMs - durationMs)).toISOString(),
+    targetWh,
+  };
 }
 
 function plannerSlotsMatch(left, right) {
@@ -3280,17 +3565,33 @@ function activePlannerSlotStopReason(state, config, plan, now = new Date()) {
   return null;
 }
 
+function solarPlanRefreshDecision(state, liveSoc, activeDiscountedWindow, now = new Date()) {
+  const planAge = now.getTime() - new Date(state.plan?.createdAt ?? 0).getTime();
+  const planRefreshMs = activeDiscountedWindow && state.owner !== "planner"
+    ? SOLAR_ACTIVE_PLAN_REFRESH_MS
+    : SOLAR_PLAN_REFRESH_MS;
+  const enteredDiscountedWindow = Boolean(
+    activeDiscountedWindow && state.lastRebasedWindowKey !== activeDiscountedWindow.key,
+  );
+  const socChangedMaterially = state.owner !== "planner"
+    && Number.isFinite(liveSoc)
+    && Number.isFinite(Number(state.plan?.currentSocPercent))
+    && Math.abs(liveSoc - Number(state.plan.currentSocPercent)) >= 1;
+  return {
+    refresh: !state.plan
+      || !Number.isFinite(planAge)
+      || planAge >= planRefreshMs
+      || socChangedMaterially
+      || enteredDiscountedWindow,
+    enteredDiscountedWindow,
+    socChangedMaterially,
+    planAge,
+  };
+}
+
 async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
   let state = await readSolarPlannerState();
-  const measuredChargingWatts = batteryChargingWatts(status) ?? 0;
-  if (state.owner === "planner" && state.activeLastCheckedAt) {
-    const elapsedHours = Math.max(
-      0,
-      Math.min(0.1, (now.getTime() - new Date(state.activeLastCheckedAt).getTime()) / 3_600_000),
-    );
-    state.activeChargedKwh += measuredChargingWatts * elapsedHours / 1000;
-  }
-  if (state.owner === "planner") state.activeLastCheckedAt = now.toISOString();
+  recordPlannerChargeSample(state, status, now);
   if (state.interruptedCharge
     && new Date(state.interruptedCharge.slotEnd).getTime() <= now.getTime()) {
     state.interruptedCharge = null;
@@ -3310,6 +3611,7 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
   if (guardActive) {
     if (state.owner === "planner") {
       const interruption = preserveInterruptedPlannerCharge(state, now);
+      finalizePlannerChargeSession(state, "Charging Demand Guard interrupted planner charging", now);
       state.owner = null;
       state.activeSlot = null;
       state.activePlanCreatedAt = null;
@@ -3353,13 +3655,10 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     return writeSolarPlannerState(state);
   }
 
-  const planAge = now.getTime() - new Date(state.plan?.createdAt ?? 0).getTime();
-  const activeDiscountedBand = explicitDiscountedBand(config, now);
-  const planRefreshMs = activeDiscountedBand ? SOLAR_ACTIVE_PLAN_REFRESH_MS : SOLAR_PLAN_REFRESH_MS;
-  const socChangedMaterially = Number.isFinite(liveSoc)
-    && Number.isFinite(Number(state.plan?.currentSocPercent))
-    && Math.abs(liveSoc - Number(state.plan.currentSocPercent)) >= 2;
-  if (!state.plan || !Number.isFinite(planAge) || planAge >= planRefreshMs || socChangedMaterially) {
+  const activeDiscountedWindow = discountedBandOccurrence(config, now);
+  const refreshDecision = solarPlanRefreshDecision(state, liveSoc, activeDiscountedWindow, now);
+  const { enteredDiscountedWindow } = refreshDecision;
+  if (refreshDecision.refresh) {
     const samples = await readSolarPlannerHistory(now);
     samples.push({
       timestamp: now.toISOString(),
@@ -3370,6 +3669,7 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     });
     state = { ...state, historicalWeather: await readJsonLinesFile(SOLAR_WEATHER_HISTORY_FILE) };
     state.plan = buildSolarChargingPlan({ config, state, samples, now });
+    if (activeDiscountedWindow) state.lastRebasedWindowKey = activeDiscountedWindow.key;
     if (state.interruptedCharge) {
       const capped = applyInterruptedChargeCap(
         state.plan,
@@ -3383,7 +3683,7 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     appendSolarPlannerLog(
       state,
       state.plan.available
-        ? `Plan recalculated: ${state.plan.predictedSolarKwh.toFixed(2)} kWh solar, ${state.plan.predictedDemandKwh.toFixed(2)} kWh demand, ${state.plan.plannedChargeKwh.toFixed(2)} kWh discounted charging${state.plan.warning ? `; ${state.plan.warning}` : ""}`
+        ? `${enteredDiscountedWindow ? `Plan rebased from live SOC ${liveSoc}% on entering ${activeDiscountedWindow.band.label || "discounted window"}` : "Plan recalculated"}: ${state.plan.predictedSolarKwh.toFixed(2)} kWh solar, ${state.plan.predictedDemandKwh.toFixed(2)} kWh demand, ${state.plan.plannedChargeKwh.toFixed(2)} kWh discounted charging${state.plan.warning ? `; ${state.plan.warning}` : ""}`
         : `Planner unavailable: ${state.plan.reason}`,
       state.plan.warning ? "warning" : "plan",
       now,
@@ -3453,7 +3753,12 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     state.activePlanCreatedAt = state.plan.createdAt;
   }
 
-  const slot = explicitDiscountedBand(config, now) ? plannerSlotAt(state.plan, now) : null;
+  const plannedSlot = explicitDiscountedBand(config, now) ? plannerSlotAt(state.plan, now) : null;
+  const slot = plannedSlot ? capPlannerSlotToRemainingTime(
+    plannedSlot,
+    state.plan.chargePerformance?.effectiveWatts ?? config.batteryCapabilities.maximumChargeWatts,
+    now,
+  ) : null;
   if (liveExportNeedsHeadroom && slot?.windowEnd) state.solarHeadroomHoldUntil = slot.windowEnd;
   const solarHeadroomHoldActive = Boolean(
     state.solarHeadroomHoldUntil && new Date(state.solarHeadroomHoldUntil).getTime() > now.getTime(),
@@ -3478,6 +3783,7 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     state.activePlanCreatedAt = state.plan.createdAt;
     state.activeChargedKwh = 0;
     state.activeLastCheckedAt = now.toISOString();
+    startPlannerChargeSession(state, slot, soc, now);
     state.interruptedCharge = null;
     state.lastResult = { ok: true, at: now.toISOString(), kind: "charge", slot, result };
     appendSolarPlannerLog(state, `Starting ${slot.targetWh} Wh charge in ${slot.label} band at ${slot.yenPerKwh} yen/kWh`, "charge", now);
@@ -4375,15 +4681,20 @@ export {
   applyInterruptedChargeCap,
   aggregateEnergyReportSamples,
   buildSolarChargingPlan,
+  capPlannerSlotToRemainingTime,
   clearStaleScheduleRuns,
   cleanAutomationRule,
   cleanAutomationRuleConfig,
   cleanConfig,
+  cleanPlannerChargingPerformance,
   cleanSolarPlannerState,
   countGuardTriggersForRange,
+  discountedBandOccurrence,
   discountedPlanStatus,
+  effectivePlannerChargeWatts,
   evaluateAutomationRule,
   estimateEffectiveBatteryCapacity,
+  finalizePlannerChargeSession,
   forecastHourForInterval,
   forecastIsFresh,
   learnedSolarFactor,
@@ -4407,6 +4718,7 @@ export {
   recoverConcatenatedJsonValue,
   sampleFromStatus,
   shouldTriggerDemandGuard,
+  solarPlanRefreshDecision,
   preserveInterruptedPlannerCharge,
   solarPlannerBaseAvailability,
   solarPowerFromIrradiance,

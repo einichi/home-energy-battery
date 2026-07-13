@@ -6,18 +6,23 @@ import {
   activePlannerSlotStopReason,
   applyInterruptedChargeCap,
   aggregateEnergyReportSamples,
+  capPlannerSlotToRemainingTime,
   clearStaleScheduleRuns,
   cleanAutomationRule,
   cleanAutomationRuleConfig,
   cleanConfig,
+  cleanPlannerChargingPerformance,
   cleanSolarPlannerState,
   countGuardTriggersForRange,
+  discountedBandOccurrence,
   discountedPlanStatus,
+  effectivePlannerChargeWatts,
   enforcePlannerSlotEndDeadline,
   evaluateAutomationRule,
   estimateEffectiveBatteryCapacity,
   forecastHourForInterval,
   forecastIsFresh,
+  finalizePlannerChargeSession,
   learnedSolarFactor,
   normalizeCircuitLabels,
   normalizeDashboardWidgets,
@@ -39,6 +44,7 @@ import {
   recoverConcatenatedJsonValue,
   sampleFromStatus,
   shouldTriggerDemandGuard,
+  solarPlanRefreshDecision,
   solarPlannerBaseAvailability,
   solarPowerFromIrradiance,
   predictHouseDemand,
@@ -158,6 +164,71 @@ const plannerConfig = cleanConfig({
 });
 assert.equal(solarPlannerBaseAvailability(plannerConfig).available, true);
 assert.equal(solarPlannerBaseAvailability(cleanConfig({ ...plannerConfig, rateMode: "simple" })).available, false);
+const overnightOccurrence = discountedBandOccurrence(plannerConfig, new Date(2026, 6, 11, 23, 30));
+assert.equal(new Date(overnightOccurrence.start).getHours(), 23);
+assert.equal(new Date(overnightOccurrence.end).getDate(), new Date(2026, 6, 12).getDate());
+assert.equal(new Date(overnightOccurrence.end).getHours(), 1);
+const rebaseNow = new Date(2026, 6, 11, 23, 30);
+const waitingPlannerState = {
+  owner: null,
+  plan: { createdAt: rebaseNow.toISOString(), currentSocPercent: 30 },
+  lastRebasedWindowKey: null,
+};
+const entryRefresh = solarPlanRefreshDecision(waitingPlannerState, 30, overnightOccurrence, rebaseNow);
+assert.equal(entryRefresh.refresh, true);
+assert.equal(entryRefresh.enteredDiscountedWindow, true);
+const rebasedPlannerState = { ...waitingPlannerState, lastRebasedWindowKey: overnightOccurrence.key };
+assert.equal(solarPlanRefreshDecision(rebasedPlannerState, 30, overnightOccurrence, rebaseNow).refresh, false);
+assert.equal(solarPlanRefreshDecision(rebasedPlannerState, 31, overnightOccurrence, rebaseNow).refresh, true);
+assert.equal(solarPlanRefreshDecision({ ...rebasedPlannerState, owner: "planner" }, 31, overnightOccurrence, rebaseNow).refresh, false);
+
+const learnedChargingPerformance = cleanPlannerChargingPerformance({
+  samples: Array.from({ length: 10 }, (_, index) => ({
+    at: new Date(2026, 6, 11, 1, index).toISOString(),
+    batteryChargingW: 2000 - index * 50,
+    houseDemandW: index * 500,
+    gridImportW: 2500 + index * 450,
+  })),
+  sessions: [{
+    startedAt: new Date(2026, 6, 10, 1, 0).toISOString(),
+    endedAt: new Date(2026, 6, 10, 2, 0).toISOString(),
+    requestedWh: 2000,
+    deliveredWh: 1900,
+    startSocPercent: 20,
+    endSocPercent: 39,
+    socDeltaPercent: 19,
+    averageChargeWatts: 1900,
+    estimatedStorageEfficiencyPercent: 100,
+  }],
+});
+assert.equal(learnedChargingPerformance.sampleCount, 10);
+assert.equal(learnedChargingPerformance.learnedChargeWatts, 1950);
+assert.ok(Math.abs(learnedChargingPerformance.demandImpactWattsPerKw + 100) < 0.001);
+assert.equal(effectivePlannerChargeWatts(plannerConfig, {
+  chargingPerformance: learnedChargingPerformance,
+}).effectiveWatts, 1950);
+
+const completedChargeState = {
+  activeChargedKwh: 1,
+  activeChargeSession: {
+    startedAt: "2026-07-11T00:00:00.000Z",
+    requestedWh: 1000,
+    startSocPercent: 20,
+    latestSocPercent: 30,
+    capacityKwh: 10,
+  },
+  chargingPerformance: cleanPlannerChargingPerformance(),
+};
+const completedChargeSession = finalizePlannerChargeSession(
+  completedChargeState,
+  "Planned charge target reached",
+  new Date("2026-07-11T01:00:00.000Z"),
+);
+assert.equal(completedChargeSession.deliveredWh, 1000);
+assert.equal(completedChargeSession.averageChargeWatts, 1000);
+assert.equal(completedChargeSession.estimatedStorageEfficiencyPercent, 100);
+assert.equal(completedChargeState.chargingPerformance.sessionCount, 1);
+assert.equal(completedChargeState.activeChargeSession, null);
 const optimizedSlots = optimizeDiscountedChargeSlots({
   config: plannerConfig,
   start: new Date(2026, 6, 11, 23, 0),
@@ -303,6 +374,18 @@ const cappedSmallerReplan = applyInterruptedChargeCap({
 }, firstInterruption, 2100, new Date("2026-07-11T12:15:00.000Z"));
 assert.equal(cappedSmallerReplan.plan.slots[0].targetWh, 600);
 assert.equal(applyInterruptedChargeCap({ slots: [] }, firstInterruption, 2100).interruption, null);
+const latePlannerSlot = capPlannerSlotToRemainingTime(
+  { ...interruptedSlot, targetWh: 750 },
+  2100,
+  new Date("2026-07-11T12:20:00.000Z"),
+);
+assert.equal(latePlannerSlot.targetWh, 350);
+assert.equal(latePlannerSlot.start, "2026-07-11T12:20:00.000Z");
+assert.equal(capPlannerSlotToRemainingTime(
+  { ...interruptedSlot, targetWh: 750 },
+  2100,
+  new Date("2026-07-11T12:30:00.000Z"),
+), null);
 
 const deadlineState = {
   owner: "planner",
@@ -429,10 +512,56 @@ const floorClippedWindowPlan = planChronologicalDiscountedCharging({
   maximumTargetPercent: 80,
   maximumChargeWatts: 2000,
 });
-assert.equal(floorClippedWindowPlan.slots.length, 4);
-assert.ok(Math.abs(floorClippedWindowPlan.plannedChargeKwh - 4) < 0.0001);
+assert.equal(floorClippedWindowPlan.slots.length, 3);
+assert.ok(Math.abs(floorClippedWindowPlan.plannedChargeKwh - 8 / 3) < 0.001);
 assert.ok(floorClippedWindowPlan.unmetChargeKwh < 0.0001);
 assert.ok(Math.abs(floorClippedWindowPlan.expectedEndStoredKwh - 4) < 0.0001);
+
+const forcedChargeDemandTimeline = [0, 0.5, 1, 1.5].map((hour) => ({
+  ...chronologicalSlot(
+    hour,
+    { start: "00:00", end: "02:00", yenPerKwh: 10, label: "Day discount" },
+    -0.4,
+  ),
+  chargeCapacityKwh: 1.05,
+}));
+const forcedChargeDemandPlan = planChronologicalDiscountedCharging({
+  timeline: forcedChargeDemandTimeline,
+  currentStoredKwh: 0.465,
+  capacityKwh: 4.65,
+  dischargeFloorKwh: 0.465,
+  maximumTargetPercent: 100,
+  maximumChargeWatts: 2100,
+});
+assert.ok(Math.abs(forcedChargeDemandPlan.plannedChargeKwh - 4.185) < 0.001);
+assert.ok(forcedChargeDemandPlan.unmetChargeKwh < 0.0001);
+assert.ok(Math.abs(forcedChargeDemandPlan.windows[0].predictedEndSocPercent - 100) < 0.001);
+
+const backwardFeasibilityTimeline = [
+  ...[0, 0.5, 1, 1.5].map((hour) => chronologicalSlot(
+    hour,
+    { start: "00:00", end: "02:00", yenPerKwh: 20, label: "Earlier discount" },
+  )),
+  chronologicalSlot(2, null),
+  chronologicalSlot(2.5, null),
+  ...[3, 3.5].map((hour) => chronologicalSlot(
+    hour,
+    { start: "03:00", end: "04:00", yenPerKwh: 10, label: "Cheapest discount" },
+  )),
+];
+const backwardFeasibilityPlan = planChronologicalDiscountedCharging({
+  timeline: backwardFeasibilityTimeline,
+  currentStoredKwh: 0.5,
+  capacityKwh: 5,
+  dischargeFloorKwh: 0.5,
+  maximumTargetPercent: 100,
+  maximumChargeWatts: 2000,
+});
+assert.ok(backwardFeasibilityPlan.unmetChargeKwh < 0.0001);
+assert.ok(Math.abs(backwardFeasibilityPlan.windows[0].backfillForLaterKwh - 2.5) < 0.001);
+assert.ok(Math.abs(backwardFeasibilityPlan.windows[0].plannedChargeKwh - 2.5) < 0.001);
+assert.ok(Math.abs(backwardFeasibilityPlan.windows[1].plannedChargeKwh - 2) < 0.001);
+assert.ok(Math.abs(backwardFeasibilityPlan.windows[1].predictedEndSocPercent - 100) < 0.001);
 
 const constrainedWindowPlan = planChronologicalDiscountedCharging({
   timeline: [0, 0.5].map((hour) => chronologicalSlot(
@@ -450,7 +579,7 @@ assert.equal(constrainedWindowPlan.plannedChargeKwh, 2);
 assert.equal(constrainedWindowPlan.unmetChargeKwh, 2.5);
 assert.equal(constrainedPlanStatus.available, true);
 assert.equal(constrainedPlanStatus.reason, null);
-assert.match(constrainedPlanStatus.warning, /charging all available slots.*2\.50 kWh shortfall/);
+assert.match(constrainedPlanStatus.warning, /2\.50 kWh shortfall remains.*feasible discounted capacity/);
 assert.equal(discountedPlanStatus({ plannedChargeKwh: 0, unmetChargeKwh: 2 }).available, false);
 const migratedShortfallState = cleanSolarPlannerState({
   plan: {

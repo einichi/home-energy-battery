@@ -316,6 +316,7 @@ const I18N = {
     plannedGridCharge: "Planned grid charge",
     expectedSunsetSoc: "Expected sunset SOC",
     learnedCapacity: "Learned usable capacity",
+    learnedChargePerformance: "Learned charging performance",
     plannerState: "Planner state",
     plannerConfidence: "Forecast confidence",
     calibratedForecast: "calibrated",
@@ -324,6 +325,16 @@ const I18N = {
     windowTarget: "target",
     solarHeadroom: "solar headroom",
     bridgeCharge: "bridge to cheaper period",
+    laterWindowBackfill: "extra charge carried into a later window",
+    predictedStartSoc: "Predicted start SOC",
+    predictedEndSoc: "Predicted end SOC",
+    requiredCharge: "Required charge",
+    availableCharge: "Available charge",
+    plannedCharge: "Planned charge",
+    remainingShortfall: "Remaining shortfall",
+    chargeSamples: "{count} samples",
+    estimatedEfficiency: "estimated storage {value}%",
+    demandImpact: "demand effect {value} W/kW",
     decisionLog: "Decision log",
     forecastDataAttribution: "Weather forecasts:",
     schedulesDisabledByPlanner: "Schedules are preserved but disabled while adaptive solar charging is enabled.",
@@ -646,6 +657,7 @@ const I18N = {
     plannedGridCharge: "予定買電充電量",
     expectedSunsetSoc: "予測日没時充電率",
     learnedCapacity: "学習済み使用可能容量",
+    learnedChargePerformance: "学習済み充電性能",
     plannerState: "プランナー状態",
     plannerConfidence: "予測信頼度",
     calibratedForecast: "学習済み",
@@ -654,6 +666,16 @@ const I18N = {
     windowTarget: "目標",
     solarHeadroom: "太陽光用空き容量",
     bridgeCharge: "より安い時間帯までのつなぎ充電",
+    laterWindowBackfill: "後続時間帯の不足を補う追加充電",
+    predictedStartSoc: "予測開始時充電率",
+    predictedEndSoc: "予測終了時充電率",
+    requiredCharge: "必要充電量",
+    availableCharge: "充電可能量",
+    plannedCharge: "予定充電量",
+    remainingShortfall: "残り不足量",
+    chargeSamples: "{count}件の測定",
+    estimatedEfficiency: "推定蓄電効率 {value}%",
+    demandImpact: "需要影響 {value} W/kW",
     decisionLog: "判断ログ",
     forecastDataAttribution: "天気予報:",
     schedulesDisabledByPlanner: "太陽光適応充電が有効な間、スケジュールは保存されたまま実行されません。",
@@ -1957,6 +1979,12 @@ function formatPlannerKwh(value) {
     : "--";
 }
 
+function formatPlannerPercent(value) {
+  return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
+    ? `${Number(value).toFixed(0)}%`
+    : "--";
+}
+
 function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
   if (!status) return;
   state.solarPlannerStatus = status;
@@ -1972,6 +2000,29 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
     ? `${Number(plan.expectedSunsetSocPercent).toFixed(0)}%`
     : "--";
   $("#solarPlannerLearnedCapacity").textContent = formatPlannerKwh(status.learnedCapacityKwh);
+  const chargingPerformance = status.chargingPerformance ?? {};
+  const chargePerformanceParts = [];
+  if (chargingPerformance.learnedChargeWatts !== null
+    && chargingPerformance.learnedChargeWatts !== undefined
+    && Number.isFinite(Number(chargingPerformance.learnedChargeWatts))) {
+    chargePerformanceParts.push(`${Math.round(Number(chargingPerformance.learnedChargeWatts))} W`);
+    chargePerformanceParts.push(template("chargeSamples", { count: chargingPerformance.sampleCount ?? 0 }));
+  }
+  if (chargingPerformance.medianStorageEfficiencyPercent !== null
+    && chargingPerformance.medianStorageEfficiencyPercent !== undefined
+    && Number.isFinite(Number(chargingPerformance.medianStorageEfficiencyPercent))) {
+    chargePerformanceParts.push(template("estimatedEfficiency", {
+      value: Math.round(Number(chargingPerformance.medianStorageEfficiencyPercent)),
+    }));
+  }
+  if (chargingPerformance.demandImpactWattsPerKw !== null
+    && chargingPerformance.demandImpactWattsPerKw !== undefined
+    && Number.isFinite(Number(chargingPerformance.demandImpactWattsPerKw))) {
+    chargePerformanceParts.push(template("demandImpact", {
+      value: Math.round(Number(chargingPerformance.demandImpactWattsPerKw)),
+    }));
+  }
+  $("#solarPlannerChargePerformance").textContent = chargePerformanceParts.join(" · ") || "--";
   $("#solarPlannerConfidence").textContent = `${state.config?.solarPlanner?.forecastMarginPercent ?? 10}% · ${plan.solarCalibration?.learned ? t("calibratedForecast") : t("initialForecastModel")}`;
   $("#solarPlannerState").textContent = status.owner === "planner"
     ? t("plannerCharging")
@@ -1983,17 +2034,63 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
   const windows = $("#solarPlannerWindows");
   windows.innerHTML = "";
   for (const windowPlan of plan.windows ?? []) {
-    const row = document.createElement("div");
-    const bridge = windowPlan.bridgeToCheaperWindow ? ` · ${t("bridgeCharge")}` : "";
-    row.className = "planner-window-summary";
-    row.textContent = `${windowPlan.label} · ${new Date(windowPlan.start).toLocaleTimeString()}–${new Date(windowPlan.end).toLocaleTimeString()} · ${t("windowTarget")} ${Number(windowPlan.targetSocPercent).toFixed(0)}% · ${t("solarHeadroom")} ${formatPlannerKwh(windowPlan.solarHeadroomKwh)} · ${formatPlannerKwh(windowPlan.plannedChargeKwh)}${bridge}`;
-    windows.append(row);
-  }
-  for (const slot of plan.slots ?? []) {
-    const row = document.createElement("div");
-    row.className = "planner-slot-summary";
-    row.textContent = `${new Date(slot.start).toLocaleString()} - ${new Date(slot.end).toLocaleTimeString()} · ${slot.targetWh} Wh · ${slot.yenPerKwh} yen/kWh`;
-    windows.append(row);
+    const card = document.createElement("article");
+    card.className = "planner-window-summary";
+    const heading = document.createElement("div");
+    heading.className = "planner-window-heading";
+    const title = document.createElement("h3");
+    title.textContent = `${windowPlan.label} · ${new Date(windowPlan.start).toLocaleTimeString()}–${new Date(windowPlan.end).toLocaleTimeString()}`;
+    const rate = document.createElement("span");
+    rate.textContent = `${windowPlan.yenPerKwh} yen/kWh`;
+    heading.append(title, rate);
+    card.append(heading);
+
+    const metrics = document.createElement("dl");
+    metrics.className = "planner-window-metrics";
+    const addMetric = (label, value, warning = false) => {
+      const metric = document.createElement("div");
+      if (warning) metric.className = "planner-window-warning";
+      const term = document.createElement("dt");
+      term.textContent = label;
+      const description = document.createElement("dd");
+      description.textContent = value;
+      metric.append(term, description);
+      metrics.append(metric);
+    };
+    addMetric(t("predictedStartSoc"), formatPlannerPercent(windowPlan.predictedStartSocPercent));
+    addMetric(t("windowTarget"), formatPlannerPercent(windowPlan.targetSocPercent));
+    addMetric(t("predictedEndSoc"), formatPlannerPercent(windowPlan.predictedEndSocPercent));
+    addMetric(t("requiredCharge"), formatPlannerKwh(windowPlan.requestedChargeKwh));
+    addMetric(t("availableCharge"), formatPlannerKwh(windowPlan.availableChargeKwh));
+    addMetric(t("plannedCharge"), formatPlannerKwh(windowPlan.plannedChargeKwh));
+    addMetric(t("solarHeadroom"), formatPlannerKwh(windowPlan.solarHeadroomKwh));
+    if (Number(windowPlan.unmetChargeKwh) > 0.0001) {
+      addMetric(t("remainingShortfall"), formatPlannerKwh(windowPlan.unmetChargeKwh), true);
+    }
+    card.append(metrics);
+
+    const notes = [];
+    if (windowPlan.bridgeToCheaperWindow) notes.push(t("bridgeCharge"));
+    if (Number(windowPlan.backfillForLaterKwh) > 0.0001) {
+      notes.push(`${t("laterWindowBackfill")} · ${formatPlannerKwh(windowPlan.backfillForLaterKwh)}`);
+    }
+    if (notes.length) {
+      const note = document.createElement("p");
+      note.className = "planner-window-note";
+      note.textContent = notes.join(" · ");
+      card.append(note);
+    }
+
+    const slotRows = (plan.slots ?? []).filter(
+      (slot) => new Date(slot.windowEnd).getTime() === new Date(windowPlan.end).getTime(),
+    );
+    for (const slot of slotRows) {
+      const row = document.createElement("div");
+      row.className = "planner-slot-summary";
+      row.textContent = `${new Date(slot.start).toLocaleString()} - ${new Date(slot.end).toLocaleTimeString()} · ${slot.targetWh} Wh`;
+      card.append(row);
+    }
+    windows.append(card);
   }
   if (!windows.children.length) windows.textContent = t("noPlannedWindows");
   const log = $("#solarPlannerLog");
