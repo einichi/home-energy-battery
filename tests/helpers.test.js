@@ -713,7 +713,9 @@ assert.equal(cleanConfig({ smartCosmoEnabled: false }).smartCosmoEnabled, false)
 assert.equal(cleanConfig({ co2TonnesPerKwh: 0.0005 }).co2TonnesPerKwh, 0.0005);
 assert.deepEqual(normalizeCircuitLabels({ 1: "Kitchen", 2: "", bad: "Nope", 253: "Too high" }), { 1: "Kitchen" });
 assert.deepEqual(cleanConfig({ circuitLabels: [{ channel: 6, label: "EV charger" }] }).circuitLabels, { 6: "EV charger" });
-assert.equal(cleanConfig({ circuitSortMode: "energy" }).circuitSortMode, "energy");
+assert.equal(cleanConfig({ circuitSortMode: "energy" }).circuitSortMode, "current");
+assert.equal(cleanConfig({ circuitSortMode: "current" }).circuitSortMode, "current");
+assert.equal(cleanConfig({ circuitSortMode: "accumulated" }).circuitSortMode, "accumulated");
 assert.equal(cleanConfig({ circuitSortMode: "bad" }).circuitSortMode, "number");
 
 const normalizedWidgets = normalizeDashboardWidgets([

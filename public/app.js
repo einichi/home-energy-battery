@@ -38,6 +38,8 @@ const state = {
   solarPlannerStatus: null,
   isComposing: false,
   discoveryInProgress: false,
+  staticCircuitOrderKey: null,
+  staticCircuitOrder: [],
 };
 
 const TREND_LABEL_KEYS = {
@@ -222,10 +224,11 @@ const I18N = {
     circuitPower: "Circuits",
     circuit: "Circuit",
     circuitSettings: "Smart Cosmo Circuits",
-    circuitSettingsHelp: "Name channels and choose how dashboard circuits are ordered.",
-    circuitSort: "Circuit order",
+    circuitSettingsHelp: "Sort by current demand in watts or accumulated energy in kWh.",
+    circuitSort: "Circuit sorting",
     circuitSortByNumber: "Circuit number",
-    circuitSortByEnergy: "Selected-period kWh",
+    circuitSortByCurrent: "Current demand (highest first)",
+    circuitSortByAccumulated: "Accumulated energy (highest first)",
     saveCircuitSettings: "Save Circuit Settings",
     circuitSettingsSaved: "Circuit settings saved",
     noCircuitData: "No circuit data available yet.",
@@ -565,10 +568,11 @@ const I18N = {
     circuitPower: "回路",
     circuit: "回路",
     circuitSettings: "スマートコスモ回路",
-    circuitSettingsHelp: "チャンネル名と回路の表示順を設定します。",
-    circuitSort: "回路の並び順",
+    circuitSettingsHelp: "現在の需要（W）または累積使用電力量（kWh）で並べ替えます。",
+    circuitSort: "回路の並び替え",
     circuitSortByNumber: "回路番号",
-    circuitSortByEnergy: "選択期間のkWh",
+    circuitSortByCurrent: "現在の需要（多い順）",
+    circuitSortByAccumulated: "累積使用電力量（多い順）",
     saveCircuitSettings: "回路設定を保存",
     circuitSettingsSaved: "回路設定を保存しました",
     noCircuitData: "回路データはまだありません。",
@@ -1058,18 +1062,73 @@ function circuitIdsFromStatus(data = state.status) {
 }
 
 function circuitSortMode(config = state.config ?? {}) {
-  return config.circuitSortMode === "energy" ? "energy" : "number";
+  if (config.circuitSortMode === "energy") return "current";
+  return ["current", "accumulated"].includes(config.circuitSortMode)
+    ? config.circuitSortMode
+    : "number";
 }
 
 function sortCircuitIds(ids, summaries = {}, config = state.config ?? {}) {
   const sorted = [...ids].filter((id) => Number.isInteger(Number(id)));
-  if (circuitSortMode(config) !== "energy") {
+  if (circuitSortMode(config) !== "accumulated") {
     return sorted.sort((a, b) => Number(a) - Number(b));
   }
   return sorted.sort((a, b) => {
     const energyDiff = Number(summaries[b]?.totalKwh ?? 0) - Number(summaries[a]?.totalKwh ?? 0);
     return energyDiff || Number(a) - Number(b);
   });
+}
+
+function sortCircuitIdsByCurrentPower(ids, wattsByChannel = {}) {
+  return [...ids]
+    .filter((id) => Number.isInteger(Number(id)))
+    .sort((left, right) => {
+      const leftRaw = wattsByChannel[left];
+      const rightRaw = wattsByChannel[right];
+      const leftWatts = Number(leftRaw);
+      const rightWatts = Number(rightRaw);
+      const leftAvailable = leftRaw !== null && leftRaw !== undefined && leftRaw !== "" && Number.isFinite(leftWatts);
+      const rightAvailable = rightRaw !== null && rightRaw !== undefined && rightRaw !== "" && Number.isFinite(rightWatts);
+      if (leftAvailable !== rightAvailable) return rightAvailable - leftAvailable;
+      if (leftAvailable && leftWatts !== rightWatts) return rightWatts - leftWatts;
+      return Number(left) - Number(right);
+    });
+}
+
+function staticCircuitDatasetKey(data = state.status) {
+  const summary = data?.savings ?? {};
+  const totals = (summary.circuits ?? [])
+    .map((circuit) => [String(circuit.channel), Number(circuit.totalKwh ?? 0)])
+    .sort(([left], [right]) => Number(left) - Number(right));
+  return JSON.stringify({
+    start: summary.start ?? null,
+    end: summary.end ?? null,
+    sampleCount: Number(summary.sampleCount ?? 0),
+    totals,
+    watts: Object.entries(circuitWattsFromStatus(data))
+      .sort(([left], [right]) => Number(left) - Number(right)),
+  });
+}
+
+function circuitOrderForData(data = state.status, ids = circuitIdsFromStatus(data)) {
+  const summaries = circuitSummaryMap(data?.savings ?? {});
+  const sortMode = circuitSortMode();
+  const sortedForMode = () => sortMode === "current"
+    ? sortCircuitIdsByCurrentPower(ids, circuitWattsFromStatus(data))
+    : sortCircuitIds(ids, summaries);
+  if (!state.historyMode) {
+    // Both current demand and today's accumulated totals can change with every
+    // live payload, so always derive the order again.
+    return sortedForMode();
+  }
+
+  const datasetIds = [...ids].sort((left, right) => Number(left) - Number(right));
+  const key = `${sortMode}|${JSON.stringify(datasetIds)}|${staticCircuitDatasetKey(data)}`;
+  if (state.staticCircuitOrderKey !== key) {
+    state.staticCircuitOrderKey = key;
+    state.staticCircuitOrder = sortedForMode();
+  }
+  return [...state.staticCircuitOrder];
 }
 
 function circuitWattsFromStatus(data = state.status) {
@@ -2530,13 +2589,29 @@ function renderCircuitWidgets(data) {
   const smartCosmoEnabled = data.features?.smartCosmoEnabled !== false && state.config?.smartCosmoEnabled !== false;
   if (!smartCosmoEnabled) {
     grid.innerHTML = "";
+    delete grid.dataset.staticRenderKey;
     section.classList.add("hidden");
-    updateCircuitGraphPicker([]);
+    updateCircuitGraphPicker([], { ordered: true });
     return;
   }
   const wattsByChannel = circuitWattsFromStatus(data);
   const summaries = circuitSummaryMap(data.savings ?? {});
-  const ids = sortCircuitIds(circuitIdsFromStatus(data), summaries);
+  const ids = circuitOrderForData(data);
+  const staticRenderKey = state.historyMode
+    ? JSON.stringify({
+        dataset: state.staticCircuitOrderKey,
+        language: state.language,
+        labels: ids.map((id) => [id, circuitLabel(id)]),
+      })
+    : null;
+
+  if (staticRenderKey && grid.dataset.staticRenderKey === staticRenderKey) {
+    updateCircuitGraphPicker(ids, { ordered: true });
+    return;
+  }
+
+  if (staticRenderKey) grid.dataset.staticRenderKey = staticRenderKey;
+  else delete grid.dataset.staticRenderKey;
   section.classList.toggle("hidden", ids.length === 0);
   grid.innerHTML = ids.length
     ? ""
@@ -2572,16 +2647,18 @@ function renderCircuitWidgets(data) {
     canvas.addEventListener("pointermove", (event) => handleTrendPointer(graphName, event));
     canvas.addEventListener("pointerleave", () => clearTrendPointer(graphName));
   }
-  updateCircuitGraphPicker(ids);
+  updateCircuitGraphPicker(ids, { ordered: true });
   drawAllTrends();
 }
 
-function updateCircuitGraphPicker(ids = circuitIdsFromStatus()) {
+function updateCircuitGraphPicker(ids = circuitIdsFromStatus(), options = {}) {
   const label = $("#graphCircuitPickerLabel");
   const picker = $("#graphCircuitPicker");
   if (!label || !picker) return;
   label.classList.toggle("hidden", !isCircuitGraph(state.activeGraph));
-  const sortedIds = sortCircuitIds(ids, circuitSummaryMap(state.status?.savings ?? {}));
+  const sortedIds = options.ordered
+    ? [...ids]
+    : circuitOrderForData(state.status, ids);
   if (!sortedIds.length) {
     picker.innerHTML = "";
     return;

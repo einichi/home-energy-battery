@@ -920,15 +920,16 @@
           <div class="panel circuit-label-panel" data-feature="smart-cosmo">
             <div class="panel-title">
               <h1 data-i18n="circuitSettings">Smart Cosmo Circuits</h1>
-              <p data-i18n="circuitSettingsHelp">Name channels and choose how dashboard circuits are ordered.</p>
+              <p data-i18n="circuitSettingsHelp">Sort by current demand in watts or accumulated energy in kWh.</p>
             </div>
 
             <form id="circuitLabelsForm" class="config-form circuit-label-form">
               <label>
-                <span data-i18n="circuitSort">Circuit order</span>
+                <span data-i18n="circuitSort">Circuit sorting</span>
                 <select id="circuitSortMode">
                   <option value="number" data-i18n="circuitSortByNumber">Circuit number</option>
-                  <option value="energy" data-i18n="circuitSortByEnergy">Selected-period kWh</option>
+                  <option value="current" data-i18n="circuitSortByCurrent">Current demand (highest first)</option>
+                  <option value="accumulated" data-i18n="circuitSortByAccumulated">Accumulated energy (highest first)</option>
                 </select>
               </label>
               <div id="circuitLabelControls" class="circuit-label-controls"></div>

@@ -2480,7 +2480,10 @@ function normalizeDashboardWidgets(value = []) {
 }
 
 function normalizeCircuitSortMode(value) {
-  return ["number", "energy"].includes(value) ? value : DEFAULT_CONFIG.circuitSortMode;
+  if (value === "energy") return "current";
+  return ["number", "current", "accumulated"].includes(value)
+    ? value
+    : DEFAULT_CONFIG.circuitSortMode;
 }
 
 function normalizeSettingCache(value = {}) {
