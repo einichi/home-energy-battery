@@ -786,6 +786,60 @@
             </form>
           </div>
 
+          <div class="panel notifications-panel">
+            <div class="panel-title">
+              <h1 data-i18n="notifications">Notifications</h1>
+              <p data-i18n="notificationsHelp">Send important system and automation events by email.</p>
+            </div>
+
+            <form id="notificationsForm" class="config-form">
+              <label class="check-row">
+                <input id="notificationsEnabled" type="checkbox" />
+                <span data-i18n="enableNotifications">Enable notifications</span>
+              </label>
+              <fieldset class="feature-options">
+                <legend data-i18n="smtpEmail">Email (SMTP)</legend>
+                <div class="compact-field-grid">
+                  <label><span data-i18n="smtpHost">SMTP server</span><input id="smtpHost" autocomplete="off" /></label>
+                  <label><span data-i18n="smtpPort">Port</span><input id="smtpPort" type="number" min="1" max="65535" step="1" inputmode="numeric" /></label>
+                  <label>
+                    <span data-i18n="smtpSecurity">Security</span>
+                    <select id="smtpSecurity">
+                      <option value="starttls" data-i18n="smtpStarttls">STARTTLS</option>
+                      <option value="tls" data-i18n="smtpTls">TLS</option>
+                      <option value="none" data-i18n="smtpNone">None (trusted local server)</option>
+                    </select>
+                  </label>
+                  <label><span data-i18n="smtpUsername">Username</span><input id="smtpUsername" autocomplete="username" /></label>
+                  <label>
+                    <span data-i18n="smtpPassword">Password</span>
+                    <input id="smtpPassword" type="password" autocomplete="new-password" data-i18n-placeholder="smtpPasswordPlaceholder" />
+                  </label>
+                  <label><span data-i18n="smtpFrom">From address</span><input id="smtpFrom" type="email" autocomplete="email" /></label>
+                </div>
+                <label>
+                  <span data-i18n="smtpRecipients">Recipients (comma separated)</span>
+                  <input id="smtpRecipients" inputmode="email" autocomplete="off" />
+                </label>
+                <label id="smtpClearPasswordRow" class="check-row hidden">
+                  <input id="smtpClearPassword" type="checkbox" />
+                  <span data-i18n="smtpClearPassword">Remove saved password</span>
+                </label>
+              </fieldset>
+              <fieldset class="feature-options notification-trigger-options">
+                <legend data-i18n="notificationTriggers">Notification Triggers</legend>
+                <div id="notificationTriggerControls"></div>
+              </fieldset>
+              <div class="notification-actions">
+                <button data-i18n="saveNotifications">Save Notifications</button>
+                <button id="sendTestNotification" class="ghost" type="button" data-i18n="sendTestNotification">Send Test Email</button>
+              </div>
+            </form>
+            <p id="notificationStatus" class="planner-notice" aria-live="polite"></p>
+            <h2 class="guard-log-title" data-i18n="notificationDeliveryLog">Recent deliveries</h2>
+            <div id="notificationLog" class="automation-log" aria-live="polite"></div>
+          </div>
+
           <div class="panel dashboard-layout-panel">
             <div class="panel-title">
               <h1 data-i18n="dashboardLayout">Dashboard Layout</h1>

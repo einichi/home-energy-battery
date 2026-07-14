@@ -36,6 +36,7 @@ const state = {
   reportBucket: "day",
   automationRules: [],
   solarPlannerStatus: null,
+  notifications: null,
   isComposing: false,
   discoveryInProgress: false,
   staticCircuitOrderKey: null,
@@ -67,6 +68,18 @@ const REPORT_PRESETS = {
     { key: "last12Months", amount: 12, unit: "month" },
   ],
 };
+
+const NOTIFICATION_TRIGGER_DEFINITIONS = [
+  { id: "guardActivated", labelKey: "triggerGuardActivated" },
+  { id: "guardRestored", labelKey: "triggerGuardRestored" },
+  { id: "scheduleFailed", labelKey: "triggerScheduleFailed" },
+  { id: "deviceOffline", labelKey: "triggerDeviceOffline" },
+  { id: "deviceRecovered", labelKey: "triggerDeviceRecovered" },
+  { id: "plannerUnavailable", labelKey: "triggerPlannerUnavailable" },
+  { id: "plannerRecovered", labelKey: "triggerPlannerRecovered" },
+  { id: "plannerWindowShortfall", labelKey: "triggerPlannerWindowShortfall" },
+  { id: "lowBattery", labelKey: "triggerLowBattery", threshold: true },
+];
 
 const DASHBOARD_WIDGET_DEFAULTS = [
   { id: "solarPower", group: "trends", labelKey: "solarGeneration", visible: true, priority: 10 },
@@ -291,6 +304,44 @@ const I18N = {
     updateInterval: "Update interval (seconds)",
     savePreferences: "Save Preferences",
     preferencesSaved: "Preferences saved",
+    notifications: "Notifications",
+    notificationsHelp: "Send important system and automation events by email.",
+    enableNotifications: "Enable notifications",
+    smtpEmail: "Email (SMTP)",
+    smtpHost: "SMTP server",
+    smtpPort: "Port",
+    smtpSecurity: "Security",
+    smtpStarttls: "STARTTLS",
+    smtpTls: "TLS",
+    smtpNone: "None (trusted local server)",
+    smtpUsername: "Username",
+    smtpPassword: "Password",
+    smtpPasswordPlaceholder: "Unchanged if blank",
+    smtpFrom: "From address",
+    smtpRecipients: "Recipients (comma separated)",
+    smtpClearPassword: "Remove saved password",
+    notificationTriggers: "Notification Triggers",
+    notificationCooldown: "Cooldown (minutes)",
+    triggerGuardActivated: "Demand Guard activated",
+    triggerGuardRestored: "Demand Guard restored",
+    triggerScheduleFailed: "Schedule failed",
+    triggerDeviceOffline: "Device unavailable",
+    triggerDeviceRecovered: "Device recovered",
+    triggerPlannerUnavailable: "Solar planner unavailable",
+    triggerPlannerRecovered: "Solar planner recovered",
+    triggerPlannerWindowShortfall: "Charging-window shortfall",
+    triggerLowBattery: "Low battery SOC",
+    notificationSocThreshold: "SOC threshold (%)",
+    saveNotifications: "Save Notifications",
+    notificationsSaved: "Notification settings saved",
+    sendTestNotification: "Send Test Email",
+    testNotificationSent: "Test email sent",
+    notificationDeliveryLog: "Recent deliveries",
+    noNotificationDeliveries: "No notification deliveries yet.",
+    notificationSuccess: "Sent",
+    notificationFailure: "Failed",
+    passwordConfigured: "A password is saved.",
+    passwordNotConfigured: "No password is saved.",
     electricityRates: "Electricity Rates",
     batteryCapabilities: "Battery Capabilities",
     usableBatteryCapacity: "Usable battery capacity (kWh)",
@@ -642,6 +693,44 @@ const I18N = {
     updateInterval: "更新間隔（秒）",
     savePreferences: "表示設定を保存",
     preferencesSaved: "表示設定を保存しました",
+    notifications: "通知",
+    notificationsHelp: "重要なシステム・自動化イベントをメールで送信します。",
+    enableNotifications: "通知を有効にする",
+    smtpEmail: "メール (SMTP)",
+    smtpHost: "SMTPサーバー",
+    smtpPort: "ポート",
+    smtpSecurity: "セキュリティ",
+    smtpStarttls: "STARTTLS",
+    smtpTls: "TLS",
+    smtpNone: "なし（信頼できるローカルサーバー）",
+    smtpUsername: "ユーザー名",
+    smtpPassword: "パスワード",
+    smtpPasswordPlaceholder: "空欄なら変更なし",
+    smtpFrom: "送信元アドレス",
+    smtpRecipients: "宛先（カンマ区切り）",
+    smtpClearPassword: "保存済みパスワードを削除",
+    notificationTriggers: "通知条件",
+    notificationCooldown: "再通知間隔（分）",
+    triggerGuardActivated: "デマンドガード作動",
+    triggerGuardRestored: "デマンドガード復旧",
+    triggerScheduleFailed: "スケジュール失敗",
+    triggerDeviceOffline: "機器応答なし",
+    triggerDeviceRecovered: "機器復旧",
+    triggerPlannerUnavailable: "太陽光プランナー利用不可",
+    triggerPlannerRecovered: "太陽光プランナー復旧",
+    triggerPlannerWindowShortfall: "充電時間帯の不足",
+    triggerLowBattery: "蓄電池残量低下",
+    notificationSocThreshold: "充電率しきい値 (%)",
+    saveNotifications: "通知設定を保存",
+    notificationsSaved: "通知設定を保存しました",
+    sendTestNotification: "テストメールを送信",
+    testNotificationSent: "テストメールを送信しました",
+    notificationDeliveryLog: "最近の送信履歴",
+    noNotificationDeliveries: "通知送信履歴はまだありません。",
+    notificationSuccess: "送信済み",
+    notificationFailure: "失敗",
+    passwordConfigured: "パスワードは保存済みです。",
+    passwordNotConfigured: "パスワードは保存されていません。",
     electricityRates: "電気料金",
     batteryCapabilities: "蓄電池性能",
     usableBatteryCapacity: "使用可能な蓄電容量 (kWh)",
@@ -924,6 +1013,7 @@ function setLanguage(language) {
   drawAllTrends();
   drawGraphAnalysis();
   renderDashboardWidgetControls(state.config ?? {});
+  if (state.notifications) renderNotificationView(state.notifications);
   setPage(state.currentPage);
 }
 
@@ -2035,6 +2125,141 @@ async function refreshAutomationLog() {
     defaultAutomationRule(state.config ?? {});
   renderAutomationLog(rule);
   return state.automationRules;
+}
+
+function renderNotificationTriggerControls(config = {}) {
+  const root = $("#notificationTriggerControls");
+  if (!root) return;
+  root.innerHTML = "";
+  for (const definition of NOTIFICATION_TRIGGER_DEFINITIONS) {
+    const trigger = config.triggers?.[definition.id] ?? {};
+    const row = document.createElement("div");
+    row.className = "notification-trigger-row";
+
+    const enabledLabel = document.createElement("label");
+    enabledLabel.className = "check-row";
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox";
+    enabled.dataset.notificationTrigger = definition.id;
+    enabled.checked = trigger.enabled !== false;
+    const name = document.createElement("span");
+    name.textContent = t(definition.labelKey);
+    enabledLabel.append(enabled, name);
+
+    const cooldownLabel = document.createElement("label");
+    cooldownLabel.className = "notification-cooldown-field";
+    const cooldownName = document.createElement("span");
+    cooldownName.textContent = t("notificationCooldown");
+    const cooldown = document.createElement("input");
+    cooldown.type = "number";
+    cooldown.min = "1";
+    cooldown.max = "10080";
+    cooldown.step = "1";
+    cooldown.inputMode = "numeric";
+    cooldown.dataset.notificationCooldown = definition.id;
+    cooldown.value = trigger.cooldownMinutes ?? 30;
+    cooldownLabel.append(cooldownName, cooldown);
+
+    const triggerSettings = document.createElement("div");
+    triggerSettings.className = "notification-trigger-settings";
+    triggerSettings.append(cooldownLabel);
+    if (definition.threshold) {
+      const thresholdLabel = document.createElement("label");
+      const thresholdName = document.createElement("span");
+      thresholdName.textContent = t("notificationSocThreshold");
+      const threshold = document.createElement("input");
+      threshold.type = "number";
+      threshold.min = "1";
+      threshold.max = "95";
+      threshold.step = "1";
+      threshold.inputMode = "numeric";
+      threshold.dataset.notificationThreshold = definition.id;
+      threshold.value = trigger.thresholdPercent ?? 20;
+      thresholdLabel.append(thresholdName, threshold);
+      triggerSettings.append(thresholdLabel);
+    }
+
+    row.append(enabledLabel, triggerSettings);
+    root.append(row);
+  }
+}
+
+function renderNotificationLog(deliveries = []) {
+  const root = $("#notificationLog");
+  if (!root) return;
+  root.innerHTML = "";
+  if (!deliveries.length) {
+    root.textContent = t("noNotificationDeliveries");
+    return;
+  }
+  for (const delivery of deliveries) {
+    const row = document.createElement("div");
+    const time = document.createElement("time");
+    time.textContent = new Date(delivery.at).toLocaleString();
+    const message = document.createElement("span");
+    const errors = (delivery.attempts ?? []).map((attempt) => attempt.error).filter(Boolean);
+    message.textContent = `${delivery.ok ? t("notificationSuccess") : t("notificationFailure")}: ${delivery.event?.title ?? ""}${errors.length ? ` - ${errors.join("; ")}` : ""}`;
+    row.append(time, message);
+    root.append(row);
+  }
+}
+
+function renderNotificationView(view) {
+  state.notifications = view;
+  const config = view.config ?? {};
+  const channel = config.channels?.find((item) => item.type === "smtp") ?? { settings: {} };
+  const settings = channel.settings ?? {};
+  $("#notificationsEnabled").checked = config.enabled === true;
+  $("#smtpHost").value = settings.host ?? "";
+  $("#smtpPort").value = settings.port ?? 587;
+  $("#smtpSecurity").value = settings.security ?? "starttls";
+  $("#smtpUsername").value = settings.username ?? "";
+  $("#smtpPassword").value = "";
+  $("#smtpFrom").value = settings.from ?? "";
+  $("#smtpRecipients").value = (settings.recipients ?? []).join(", ");
+  $("#smtpClearPasswordRow").classList.toggle("hidden", !view.passwordConfigured);
+  $("#smtpClearPassword").checked = false;
+  $("#notificationStatus").textContent = view.passwordConfigured
+    ? t("passwordConfigured")
+    : t("passwordNotConfigured");
+  renderNotificationTriggerControls(config);
+  renderNotificationLog(view.deliveries ?? []);
+}
+
+function collectNotificationConfig() {
+  const triggers = {};
+  for (const definition of NOTIFICATION_TRIGGER_DEFINITIONS) {
+    const threshold = $(`[data-notification-threshold="${definition.id}"]`);
+    triggers[definition.id] = {
+      enabled: $(`[data-notification-trigger="${definition.id}"]`).checked,
+      cooldownMinutes: $(`[data-notification-cooldown="${definition.id}"]`).value,
+      ...(threshold ? { thresholdPercent: threshold.value } : {}),
+    };
+  }
+  return {
+    enabled: $("#notificationsEnabled").checked,
+    channels: [{
+      id: "primary-email",
+      type: "smtp",
+      enabled: true,
+      settings: {
+        host: $("#smtpHost").value,
+        port: $("#smtpPort").value,
+        security: $("#smtpSecurity").value,
+        username: $("#smtpUsername").value,
+        from: $("#smtpFrom").value,
+        recipients: $("#smtpRecipients").value,
+      },
+    }],
+    triggers,
+  };
+}
+
+async function refreshNotifications() {
+  if (settingsInputIsActive()) return state.notifications;
+  const view = await api("/api/notifications");
+  renderNotificationView(view);
+  return view;
 }
 
 function plannerConfiguredInUi(config = state.config ?? {}) {
@@ -3585,6 +3810,7 @@ async function refreshAll() {
   if (state.currentPage === "settings") {
     tasks.push(refreshAutomationLog());
     tasks.push(refreshSolarPlanner());
+    tasks.push(refreshNotifications());
   }
   if (tasks.length) await Promise.allSettled(tasks);
   scheduleNextRefresh();
@@ -3631,6 +3857,7 @@ async function hydrateSettingsView() {
     refreshAutomationRules(),
     refreshSolarPlanner(),
     refreshHistoryStats(),
+    refreshNotifications(),
   ]);
   for (const result of results) {
     if (result.status === "rejected") toast(result.reason.message);
@@ -4022,6 +4249,43 @@ function initForms() {
       toast(`${t("historyTrimmed")}: ${result.deleted}`);
       await refreshHistoryStats();
     } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  async function saveNotificationSettings(showToast = true) {
+    const config = collectNotificationConfig();
+    const view = await api("/api/notifications", {
+      method: "PUT",
+      body: {
+        config,
+        password: $("#smtpPassword").value,
+        clearPassword: $("#smtpClearPassword").checked,
+      },
+    });
+    state.config = { ...(state.config ?? {}), notifications: view.config };
+    renderNotificationView(view);
+    if (showToast) toast(t("notificationsSaved"));
+    return view;
+  }
+
+  $("#notificationsForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await saveNotificationSettings();
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  $("#sendTestNotification").addEventListener("click", async () => {
+    try {
+      await saveNotificationSettings(false);
+      await api("/api/notifications/test", { method: "POST", body: {} });
+      await refreshNotifications();
+      toast(t("testNotificationSent"));
+    } catch (err) {
+      await refreshNotifications().catch(() => {});
       toast(err.message);
     }
   });

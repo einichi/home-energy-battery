@@ -987,6 +987,53 @@ output {
   min-width: 0;
 }
 
+.notification-trigger-options {
+  gap: 0;
+}
+
+#notificationTriggerControls {
+  display: grid;
+  gap: 0;
+}
+
+.notification-trigger-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: 12px;
+  align-items: end;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.notification-trigger-row:last-child {
+  border-bottom: 0;
+}
+
+.notification-trigger-row .check-row {
+  min-height: 44px;
+}
+
+.notification-cooldown-field {
+  min-width: 0;
+}
+
+.notification-trigger-settings {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.notification-actions {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, auto);
+  gap: 10px;
+}
+
+.notification-actions button {
+  grid-column: auto;
+}
+
 .language-row {
   display: grid;
   grid-template-columns: 1fr;
@@ -1534,6 +1581,14 @@ td code {
     order: 4;
   }
 
+  .notifications-panel {
+    order: 5;
+  }
+
+  .dashboard-layout-panel {
+    order: 6;
+  }
+
   .settings-panel {
     order: 1;
   }
@@ -1547,23 +1602,23 @@ td code {
   }
 
   .device-panel {
-    order: 5;
-  }
-
-  .circuit-label-panel {
-    order: 6;
-  }
-
-  .rates-panel {
     order: 7;
   }
 
-  .solar-planner-panel {
+  .circuit-label-panel {
     order: 8;
   }
 
-  .data-panel {
+  .rates-panel {
     order: 9;
+  }
+
+  .solar-planner-panel {
+    order: 10;
+  }
+
+  .data-panel {
+    order: 11;
   }
 }
 
@@ -1789,6 +1844,8 @@ td code {
   .day-picker,
   .language-row,
   .dashboard-widget-row,
+  .notification-trigger-row,
+  .notification-actions,
   .rate-band-row {
     grid-column: auto;
     grid-template-columns: 1fr;

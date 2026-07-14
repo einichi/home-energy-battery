@@ -3,6 +3,12 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  createNotificationService,
+  normalizeNotificationConfig,
+  smtpTransportOptions,
+  validateSmtpSettings,
+} from "../lib/notifications.js";
+import {
   activePlannerSlotStopReason,
   advancePlannerBreakerRecovery,
   applyInterruptedChargeCap,
@@ -1385,5 +1391,135 @@ await evaluateAutomationRule(repeatedRestoreLogRule, {
 assert.equal(repeatedRestoreLogRule.log.length, 2);
 assert.match(repeatedRestoreLogRule.log[0].message, /Grid Import \(3200 W\) still exceeds/);
 assert.match(repeatedRestoreLogRule.log[1].message, /Grid Import \(3100 W\) still exceeds/);
+
+const normalizedNotifications = normalizeNotificationConfig({
+  enabled: "true",
+  channels: [{
+    id: "mail",
+    type: "smtp",
+    settings: {
+      host: " smtp.example.test ",
+      port: 70000,
+      security: "bad",
+      from: "energy@example.test",
+      recipients: "one@example.test, two@example.test, one@example.test",
+    },
+  }],
+  triggers: { scheduleFailed: { enabled: false, cooldownMinutes: 0 } },
+});
+assert.equal(normalizedNotifications.enabled, true);
+assert.equal(normalizedNotifications.channels[0].settings.host, "smtp.example.test");
+assert.equal(normalizedNotifications.channels[0].settings.port, 65535);
+assert.equal(normalizedNotifications.channels[0].settings.security, "starttls");
+assert.deepEqual(normalizedNotifications.channels[0].settings.recipients, ["one@example.test", "two@example.test"]);
+assert.equal(normalizedNotifications.triggers.scheduleFailed.enabled, false);
+assert.equal(normalizedNotifications.triggers.scheduleFailed.cooldownMinutes, 1);
+assert.equal(normalizedNotifications.triggers.lowBattery.enabled, false);
+assert.equal(normalizedNotifications.triggers.lowBattery.thresholdPercent, 20);
+assert.equal(cleanConfig({ notifications: normalizedNotifications }).notifications.channels[0].id, "mail");
+
+assert.deepEqual(validateSmtpSettings({
+  host: "smtp.example.test",
+  port: 587,
+  security: "starttls",
+  from: "energy@example.test",
+  recipients: ["owner@example.test"],
+}), []);
+assert.match(validateSmtpSettings({ security: "none", recipients: [] }).join("; "), /SMTP host is required/);
+assert.deepEqual(smtpTransportOptions({
+  host: "smtp.example.test",
+  port: 465,
+  security: "tls",
+  username: "energy",
+}, { password: "secret" }).auth, { user: "energy", pass: "secret" });
+
+const notificationDir = await mkdtemp(path.join(os.tmpdir(), "home-energy-notifications-"));
+const sentMessages = [];
+const notificationConfig = normalizeNotificationConfig({
+  enabled: true,
+  channels: [{
+    id: "primary-email",
+    type: "smtp",
+    enabled: true,
+    settings: {
+      host: "smtp.example.test",
+      port: 587,
+      security: "starttls",
+      username: "energy",
+      from: "energy@example.test",
+      recipients: ["owner@example.test"],
+    },
+  }],
+});
+const notificationService = createNotificationService({
+  dataDir: notificationDir,
+  getConfig: async () => ({ notifications: notificationConfig }),
+  createTransport: (options) => ({
+    async sendMail(message) {
+      sentMessages.push({ options, message });
+      return { messageId: `message-${sentMessages.length}` };
+    },
+    close() {},
+  }),
+});
+await notificationService.updateSecret({ channelId: "primary-email", password: "secret" });
+assert.equal((await notificationService.view()).passwordConfigured, true);
+await notificationService.deliver({
+  type: "scheduleFailed",
+  title: "Schedule failed",
+  message: "Test failure",
+  dedupeKey: "schedule:test",
+});
+assert.equal((await notificationService.deliver({
+  type: "scheduleFailed",
+  title: "Schedule failed",
+  message: "Test failure",
+  dedupeKey: "schedule:test",
+})).skipped, "cooldown");
+assert.equal(sentMessages.length, 1);
+
+for (let index = 0; index < 3; index += 1) {
+  await notificationService.observeCondition({
+    key: "device-health-test",
+    active: true,
+    activateAfter: 3,
+    recoverAfter: 2,
+    activeEvent: {
+      type: "deviceOffline",
+      title: "Offline",
+      message: "Device is offline",
+      dedupeKey: "device:test:offline",
+    },
+    recoveryEvent: {
+      type: "deviceRecovered",
+      title: "Recovered",
+      message: "Device recovered",
+      dedupeKey: "device:test:recovered",
+    },
+  });
+}
+assert.equal(sentMessages.length, 2);
+for (let index = 0; index < 2; index += 1) {
+  await notificationService.observeCondition({
+    key: "device-health-test",
+    active: false,
+    activateAfter: 3,
+    recoverAfter: 2,
+    recoveryEvent: {
+      type: "deviceRecovered",
+      title: "Recovered",
+      message: "Device recovered",
+      dedupeKey: "device:test:recovered",
+    },
+  });
+}
+assert.equal(sentMessages.length, 3);
+await notificationService.sendTest();
+assert.equal(sentMessages.length, 4);
+assert.match(sentMessages.at(-1).message.subject, /Test notification/);
+assert.equal((await notificationService.view()).deliveries.length, 4);
+await notificationService.updateSecret({ channelId: "primary-email", clearPassword: true });
+assert.equal((await notificationService.view()).passwordConfigured, false);
+await rm(notificationDir, { recursive: true, force: true });
 
 console.log("helper tests passed");

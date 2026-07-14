@@ -9,6 +9,11 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
+import {
+  DEFAULT_NOTIFICATION_CONFIG,
+  createNotificationService,
+  normalizeNotificationConfig,
+} from "./lib/notifications.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 8787);
@@ -108,6 +113,7 @@ const DEFAULT_CONFIG = {
     targetSocPercent: 100,
     forecastMarginPercent: 10,
   },
+  notifications: DEFAULT_NOTIFICATION_CONFIG,
   dashboardWidgets: DEFAULT_DASHBOARD_WIDGETS,
   settingCache: {},
   language: "en",
@@ -123,6 +129,11 @@ let automationRunInProgress = false;
 let automationRunContext = null;
 let discoveryRunContext = null;
 let activeCliContext = null;
+
+const notificationService = createNotificationService({
+  dataDir: DATA_DIR,
+  getConfig: () => readConfig(),
+});
 let cliTimingSequence = 0;
 const recentCliTimings = [];
 let lastRecordedSample = null;
@@ -2627,6 +2638,7 @@ function cleanConfig(input = {}) {
     automation: normalizeAutomationConfig(input.automation ?? {}),
     batteryCapabilities: normalizeBatteryCapabilities(input.batteryCapabilities ?? {}),
     solarPlanner: normalizeSolarPlanner(input.solarPlanner ?? {}),
+    notifications: normalizeNotificationConfig(input.notifications ?? {}),
     dashboardWidgets: normalizeDashboardWidgets(input.dashboardWidgets),
     settingCache: normalizeSettingCache(input.settingCache ?? {}),
     language: ["en", "ja"].includes(input.language) ? input.language : DEFAULT_CONFIG.language,
@@ -3018,6 +3030,79 @@ async function readAllStatus(onProbeComplete = () => {}) {
   return status;
 }
 
+function deviceStatusFailures(status, config) {
+  const failures = [];
+  const energyError = status.energy?.error;
+  if (config.batteryHost && !isDocumentationHost(config.batteryHost)) {
+    const error = energyError ?? status.energy?.battery?.error;
+    if (error) failures.push(`Battery: ${error}`);
+  }
+  if (config.smartCosmoEnabled && config.meterHost && !isDocumentationHost(config.meterHost)) {
+    if (status.meter?.error) failures.push(`Smart Cosmo: ${status.meter.error}`);
+  }
+  if (config.solarEnabled && config.solarHost && !isDocumentationHost(config.solarHost)) {
+    const error = energyError ?? status.energy?.solar?.error;
+    if (error) failures.push(`Solar: ${error}`);
+  }
+  if (config.fuelCellEnabled && config.fuelCellHosts.some((host) => !isDocumentationHost(host))) {
+    const fuelCellErrors = (status.energy?.fuel_cells ?? status.energy?.fuelCells ?? [])
+      .map((item) => item?.error)
+      .filter(Boolean);
+    if (energyError) failures.push(`Ene-Farm: ${energyError}`);
+    else if (fuelCellErrors.length) failures.push(`Ene-Farm: ${fuelCellErrors.join(", ")}`);
+  }
+  return [...new Set(failures)];
+}
+
+function observeDeviceNotifications(status, config) {
+  const failures = deviceStatusFailures(status, config);
+  notificationService.observeCondition({
+    key: "device-health",
+    active: failures.length > 0,
+    activateAfter: 3,
+    recoverAfter: 2,
+    activeEvent: {
+      type: "deviceOffline",
+      severity: "error",
+      title: "Energy device unavailable",
+      message: `Three consecutive background polls reported device errors:\n${failures.join("\n")}`,
+      dedupeKey: "device-health:offline",
+    },
+    recoveryEvent: {
+      type: "deviceRecovered",
+      severity: "info",
+      title: "Energy devices recovered",
+      message: "Configured energy devices responded successfully to two consecutive background polls.",
+      dedupeKey: "device-health:recovered",
+    },
+  });
+}
+
+function observeBatterySocNotifications(status, config) {
+  const trigger = config.notifications?.triggers?.lowBattery;
+  const stateOfCharge = numericMetric(status.energy?.battery?.remaining_percent);
+  const thresholdPercent = Number(trigger?.thresholdPercent ?? 20);
+  if (!config.notifications?.enabled) {
+    notificationService.observeCondition({ key: "low-battery-soc", active: false });
+    return;
+  }
+  if (!Number.isFinite(stateOfCharge)) return;
+  if (stateOfCharge > thresholdPercent && stateOfCharge < thresholdPercent + 5) return;
+  notificationService.observeCondition({
+    key: "low-battery-soc",
+    active: stateOfCharge <= thresholdPercent,
+    activateAfter: 2,
+    recoverAfter: 2,
+    activeEvent: {
+      type: "lowBattery",
+      severity: "warning",
+      title: "Battery state of charge is low",
+      message: `Battery state of charge remained at or below ${thresholdPercent}% for two background polls. Current SOC: ${stateOfCharge}%.`,
+      dedupeKey: "battery-soc:low",
+    },
+  });
+}
+
 async function executeAction(action, payload = {}) {
   // Settings and direct actions share this path so scheduled jobs exercise the
   // same validation and CLI writes as button clicks in the UI.
@@ -3125,6 +3210,13 @@ async function runDueSchedules() {
       }
     } catch (err) {
       schedule.lastResult = { ok: false, at: new Date().toISOString(), error: err.message };
+      notificationService.enqueue({
+        type: "scheduleFailed",
+        severity: "error",
+        title: "Scheduled battery action failed",
+        message: `${schedule.repeat === "daily" ? `Daily ${schedule.time}` : schedule.runAt} ${schedule.action} failed: ${err.message}`,
+        dedupeKey: `schedule-failed:${schedule.id}`,
+      });
     } finally {
       runningScheduleIds.delete(schedule.id);
       schedule.running = false;
@@ -3279,6 +3371,14 @@ async function evaluateAutomationRule(rule, status, now = new Date(), onPhase = 
       "guard",
     );
     await recordGuardTriggerSample(now);
+    notificationService.enqueue({
+      type: "guardActivated",
+      severity: "warning",
+      title: "Charging Demand Guard activated",
+      message: `${demandLabel} (${formatWatts(guardDemandW)}) exceeded the guard limit (${formatWatts(breakerLimitW)}). Operation mode was changed from ${operationMode} to Standby.`,
+      occurredAt: now.toISOString(),
+      dedupeKey: "charging-demand-guard:active",
+    });
     rule.state = {
       ...rule.state,
       awaitingRestore: true,
@@ -3305,6 +3405,14 @@ async function evaluateAutomationRule(rule, status, now = new Date(), onPhase = 
         now,
         "restore",
       );
+      notificationService.enqueue({
+        type: "guardRestored",
+        severity: "info",
+        title: "Charging Demand Guard restored",
+        message: `${demandLabel} (${formatWatts(demandW)}) remained below the restore limit (${formatWatts(restoreLimitW)}). Operation mode was returned to Auto.`,
+        occurredAt: now.toISOString(),
+        dedupeKey: "charging-demand-guard:restored",
+      });
       rule.state = { ...rule.state, awaitingRestore: false, restoreSince: null };
       rule.lastResult = { ok: true, at: now.toISOString(), kind: "restore", demandW, estimatedRestoredDemandW, breakerLimitW, restoreLimitW, result };
       return { changed: true, result: rule.lastResult };
@@ -4218,6 +4326,49 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
   return writeSolarPlannerState(state);
 }
 
+function observeSolarPlannerNotifications(config, plannerState) {
+  if (!plannerConfiguredActive(config)) return;
+  const paused = plannerState.pausedUntil && new Date(plannerState.pausedUntil).getTime() > Date.now();
+  if (!paused) {
+    const reason = plannerState.lastForecastError?.error
+      ?? (plannerState.plan?.available === false ? plannerState.plan.reason : null)
+      ?? (!plannerState.plan ? plannerState.lastResult?.skipped : null);
+    notificationService.observeCondition({
+      key: "solar-planner-availability",
+      active: Boolean(reason),
+      activateAfter: 2,
+      recoverAfter: 1,
+      activeEvent: {
+        type: "plannerUnavailable",
+        severity: "warning",
+        title: "Adaptive solar planner unavailable",
+        message: `The adaptive solar planner remained unavailable for two checks: ${reason || "unknown reason"}`,
+        dedupeKey: "solar-planner:unavailable",
+      },
+      recoveryEvent: {
+        type: "plannerRecovered",
+        severity: "info",
+        title: "Adaptive solar planner recovered",
+        message: "The adaptive solar planner is available again and can evaluate discounted charging windows.",
+        dedupeKey: "solar-planner:recovered",
+      },
+    });
+  }
+
+  const summary = plannerState.windowSummaries?.at(-1);
+  if (summary?.unmetWh >= 50) {
+    notificationService.enqueue({
+      type: "plannerWindowShortfall",
+      severity: "warning",
+      title: "Discounted charging window ended with a shortfall",
+      message: `${summary.label || "Discounted window"} planned ${summary.plannedWh} Wh and delivered ${summary.deliveredWh} Wh, leaving ${summary.unmetWh} Wh unmet. Breaker interruptions: ${summary.interruptionCount}. SOC: ${summary.startSocPercent ?? "--"}% to ${summary.endSocPercent ?? "--"}%.`,
+      occurredAt: summary.completedAt,
+      dedupeKey: `solar-planner-window:${summary.key}`,
+      once: true,
+    });
+  }
+}
+
 async function runAutomationRules(context = {}) {
   const startedAt = new Date();
   context.startedAt = startedAt.toISOString();
@@ -4234,7 +4385,10 @@ async function runAutomationRules(context = {}) {
     ...(plannerEnabled ? ["Adaptive solar charging"] : []),
   ];
   if (!enabledRules.length && !plannerEnabled) {
-    if (plannerRequested) await evaluateSolarPlanner(config, {}, rules, startedAt);
+    if (plannerRequested) {
+      const plannerState = await evaluateSolarPlanner(config, {}, rules, startedAt);
+      observeSolarPlannerNotifications(config, plannerState);
+    }
     context.phase = "complete; no enabled rules";
     return;
   }
@@ -4319,7 +4473,8 @@ async function runAutomationRules(context = {}) {
       context.phase = "refreshing Open-Meteo forecast";
       plannerState = await refreshSolarPlannerForecast(config, { now: startedAt });
     }
-    await evaluateSolarPlanner(config, status, rules, new Date());
+    plannerState = await evaluateSolarPlanner(config, status, rules, new Date());
+    observeSolarPlannerNotifications(config, plannerState);
   }
   context.phase = "complete";
   const totalDurationMs = Date.now() - startedAt.getTime();
@@ -4854,7 +5009,9 @@ function startBackgroundRecorder() {
       if (discoveryInProgress()) {
         console.warn(`recorder: discovery is running (${discoveryRunContext.label}); skipping this poll`);
       } else if (anyDeviceConfigured(config)) {
-        await readAllStatus();
+        const status = await readAllStatus();
+        observeDeviceNotifications(status, config);
+        observeBatterySocNotifications(status, config);
       }
     } catch (err) {
       logDetailedError("recorder", err);
@@ -4866,6 +5023,23 @@ function startBackgroundRecorder() {
 }
 
 async function api(req, res, url) {
+  if (req.method === "GET" && url.pathname === "/api/notifications") {
+    return json(res, 200, await notificationService.view());
+  }
+  if (req.method === "PUT" && url.pathname === "/api/notifications") {
+    const body = await readBody(req);
+    const notifications = normalizeNotificationConfig(body.config ?? body.notifications ?? body);
+    const config = await writeConfig({ notifications });
+    await notificationService.updateSecret({
+      channelId: notifications.channels[0].id,
+      password: body.password,
+      clearPassword: body.clearPassword === true,
+    });
+    return json(res, 200, await notificationService.view(config));
+  }
+  if (req.method === "POST" && url.pathname === "/api/notifications/test") {
+    return json(res, 200, await notificationService.sendTest());
+  }
   if (req.method === "GET" && url.pathname === "/api/config") {
     return json(res, 200, { ...(await readConfig()), port: PORT });
   }
@@ -5127,6 +5301,7 @@ export {
   logPlannerBreakerWait,
   normalizeCircuitLabels,
   normalizeDashboardWidgets,
+  normalizeNotificationConfig,
   normalizeRateBands,
   normalizeSubnets,
   nextPlanningBoundary,

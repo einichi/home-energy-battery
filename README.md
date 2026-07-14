@@ -93,6 +93,14 @@ The Web UI has live graphs, status widgets, battery profile settings,
 osaifu-mode charge/discharge windows, discharge limit, direct charge/discharge
 actions, schedules, device discovery, and simple historical recording.
 
+SMTP notifications are configured from the Notifications panel in Settings and
+are disabled by default. They can report Charging Demand Guard transitions,
+schedule failures, device outages and recoveries, adaptive planner availability,
+discounted charging-window shortfalls, and an optional low-SOC threshold.
+Non-secret settings are stored in `/data/config.json`; the SMTP password is stored separately in
+`/data/notification-secrets.json` and is never returned by the API. Delivery
+cooldowns and recent results are stored in `/data/notification-state.json`.
+
 ## DISCLAIMER
 
 This software is provided "as is" without warranty of any kind, express or implied.
