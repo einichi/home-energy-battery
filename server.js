@@ -28,13 +28,18 @@ const CLI_FILE = "home-energy-battery-node.js";
 const AUTOMATION_CHECK_INTERVAL_MS = 30_000;
 const SOLAR_FORECAST_REFRESH_MS = 3 * 60 * 60_000;
 const SOLAR_FORECAST_MAX_AGE_MS = 6 * 60 * 60_000;
-const SOLAR_PLAN_REFRESH_MS = 30 * 60_000;
-const SOLAR_ACTIVE_PLAN_REFRESH_MS = 5 * 60_000;
+const SOLAR_PLAN_PREWINDOW_MS = 30 * 60_000;
+const SOLAR_PLAN_SLOT_MS = 30 * 60_000;
 const SOLAR_HISTORY_CACHE_MS = 30 * 60_000;
 const SOLAR_SLOT_END_RETRY_MS = 5_000;
+const SOLAR_BREAKER_RETRY_COOLDOWN_MS = 3 * 60_000;
+const SOLAR_BREAKER_SAFE_CHECKS = 3;
+const SOLAR_BREAKER_SAFETY_MARGIN_W = 200;
+const SOLAR_BREAKER_WAIT_LOG_MS = 5 * 60_000;
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
 const SOLAR_CHARGE_SESSION_LIMIT = 30;
 const SOLAR_CHARGE_SAMPLE_LIMIT = 500;
+const SOLAR_WINDOW_SUMMARY_LIMIT = 30;
 
 const DEFAULT_DASHBOARD_WIDGETS = [
   { id: "solarPower", group: "trends", visible: true, priority: 10 },
@@ -596,18 +601,68 @@ function cleanSolarPlannerState(value = {}) {
     } : null,
     chargingPerformance: cleanPlannerChargingPerformance(value.chargingPerformance),
     lastRebasedWindowKey: value.lastRebasedWindowKey ?? null,
+    lastPlanEventKey: value.lastPlanEventKey ?? null,
+    pendingPlanReason: value.pendingPlanReason ?? null,
     interruptedCharge: value.interruptedCharge
       && Number.isFinite(Number(value.interruptedCharge.remainingWh))
       && Number(value.interruptedCharge.remainingWh) > 0
       ? {
         slotStart: value.interruptedCharge.slotStart ?? null,
         slotEnd: value.interruptedCharge.slotEnd ?? null,
+        windowStart: value.interruptedCharge.windowStart ?? null,
         windowEnd: value.interruptedCharge.windowEnd ?? null,
         remainingWh: Math.max(1, Math.round(Number(value.interruptedCharge.remainingWh))),
         deliveredWh: Math.max(0, Math.round(Number(value.interruptedCharge.deliveredWh) || 0)),
         interruptedAt: value.interruptedCharge.interruptedAt ?? null,
       }
       : null,
+    breakerRecovery: value.breakerRecovery?.interruptedAt
+      ? {
+        interruptedAt: value.breakerRecovery.interruptedAt,
+        cooldownUntil: value.breakerRecovery.cooldownUntil ?? null,
+        consecutiveSafeChecks: Math.max(0, Math.round(Number(value.breakerRecovery.consecutiveSafeChecks) || 0)),
+        lastCheckedAt: value.breakerRecovery.lastCheckedAt ?? null,
+        lastWaitLogAt: value.breakerRecovery.lastWaitLogAt ?? null,
+        currentImportW: finiteNumberOrNull(value.breakerRecovery.currentImportW),
+        thresholdW: finiteNumberOrNull(value.breakerRecovery.thresholdW),
+        chargeWatts: finiteNumberOrNull(value.breakerRecovery.chargeWatts),
+        safetyMarginW: finiteNumberOrNull(value.breakerRecovery.safetyMarginW),
+      }
+      : null,
+    activeWindowExecution: value.activeWindowExecution?.key
+      ? {
+        key: value.activeWindowExecution.key,
+        windowStart: value.activeWindowExecution.windowStart ?? null,
+        windowEnd: value.activeWindowExecution.windowEnd ?? null,
+        label: value.activeWindowExecution.label ?? null,
+        yenPerKwh: finiteNumberOrNull(value.activeWindowExecution.yenPerKwh),
+        plannedWh: Math.max(0, Math.round(Number(value.activeWindowExecution.plannedWh) || 0)),
+        deliveredWh: Math.max(0, Math.round(Number(value.activeWindowExecution.deliveredWh) || 0)),
+        interruptionCount: Math.max(0, Math.round(Number(value.activeWindowExecution.interruptionCount) || 0)),
+        startSocPercent: finiteNumberOrNull(value.activeWindowExecution.startSocPercent),
+        latestSocPercent: finiteNumberOrNull(value.activeWindowExecution.latestSocPercent),
+        startedTrackingAt: value.activeWindowExecution.startedTrackingAt ?? null,
+        updatedAt: value.activeWindowExecution.updatedAt ?? null,
+      }
+      : null,
+    windowSummaries: (Array.isArray(value.windowSummaries) ? value.windowSummaries : [])
+      .filter((summary) => summary?.key && summary.windowStart && summary.windowEnd)
+      .map((summary) => ({
+        key: summary.key,
+        windowStart: summary.windowStart,
+        windowEnd: summary.windowEnd,
+        label: summary.label ?? null,
+        yenPerKwh: finiteNumberOrNull(summary.yenPerKwh),
+        plannedWh: Math.max(0, Math.round(Number(summary.plannedWh) || 0)),
+        deliveredWh: Math.max(0, Math.round(Number(summary.deliveredWh) || 0)),
+        unmetWh: Math.max(0, Math.round(Number(summary.unmetWh) || 0)),
+        interruptionCount: Math.max(0, Math.round(Number(summary.interruptionCount) || 0)),
+        startSocPercent: finiteNumberOrNull(summary.startSocPercent),
+        endSocPercent: finiteNumberOrNull(summary.endSocPercent),
+        completedAt: summary.completedAt ?? null,
+        reason: summary.reason ?? null,
+      }))
+      .slice(-SOLAR_WINDOW_SUMMARY_LIMIT),
     pausedUntil: value.pausedUntil ?? null,
     solarHeadroomHoldUntil: value.solarHeadroomHoldUntil ?? null,
     lastResult: value.lastResult ?? null,
@@ -806,7 +861,6 @@ async function refreshSolarPlannerForecast(config, { fetchImpl = fetch, now = ne
     const timezoneError = plannerTimezoneError(forecast);
     if (timezoneError) throw new Error(timezoneError);
     state.forecast = forecast;
-    state.plan = null;
     state.lastForecastError = null;
     appendSolarPlannerLog(state, `Open-Meteo forecast refreshed for ${forecast.timezone || "local time"}`, "forecast", now);
     await appendFile(SOLAR_FORECAST_HISTORY_FILE, `${JSON.stringify(forecast)}\n`);
@@ -861,6 +915,9 @@ function solarPlannerView(config, state, now = new Date()) {
     owner: state.owner,
     activeSlot: state.activeSlot,
     interruptedCharge: state.interruptedCharge,
+    breakerRecovery: state.breakerRecovery,
+    activeWindowExecution: state.activeWindowExecution,
+    windowSummaries: state.windowSummaries ?? [],
     chargingPerformance: state.chargingPerformance,
     learnedCapacityKwh: state.plan?.batteryCapacity?.learnedCapacityKwh ?? null,
     lastResult: state.lastResult,
@@ -937,30 +994,43 @@ function explicitDiscountedBand(config, date) {
     .find((band) => matchesDailyBand(date, band)) ?? null;
 }
 
-function discountedBandOccurrence(config, now = new Date()) {
-  const band = explicitDiscountedBand(config, now);
-  if (!band) return null;
-  const startMinute = minutesOfDay(band.start);
-  const endMinute = minutesOfDay(band.end);
+function discountedBandOccurrenceForDay(band, day = new Date()) {
+  const startMinute = minutesOfDay(band?.start);
+  const endMinute = minutesOfDay(band?.end);
   if (startMinute === null || endMinute === null) return null;
-  const currentMinute = now.getHours() * 60 + now.getMinutes();
-  const start = new Date(now);
+  const start = new Date(day);
   start.setHours(Math.floor(startMinute / 60), startMinute % 60, 0, 0);
-  const end = new Date(now);
+  const end = new Date(day);
   end.setHours(Math.floor(endMinute / 60), endMinute % 60, 0, 0);
-  if (startMinute === endMinute) {
-    end.setDate(end.getDate() + 1);
-  } else if (currentMinute >= startMinute) {
-    if (startMinute > endMinute) end.setDate(end.getDate() + 1);
-  } else if (startMinute > endMinute) {
-    start.setDate(start.getDate() - 1);
+  if (startMinute === endMinute || endMinute < startMinute) end.setDate(end.getDate() + 1);
+  const key = JSON.stringify([start.toISOString(), end.toISOString(), Number(band.yenPerKwh), band.label ?? null]);
+  return { band, start: start.toISOString(), end: end.toISOString(), key };
+}
+
+function discountedBandOccurrences(config, now = new Date(), horizonMs = 48 * 60 * 60_000) {
+  const discountedBands = (config.rateBands ?? [])
+    .filter((band) => Number(band.yenPerKwh) < Number(config.standardRateYenPerKwh));
+  const horizonEnd = now.getTime() + horizonMs;
+  const occurrences = [];
+  for (let dayOffset = -1; dayOffset <= 3; dayOffset += 1) {
+    const day = new Date(now);
+    day.setDate(day.getDate() + dayOffset);
+    for (const band of discountedBands) {
+      const occurrence = discountedBandOccurrenceForDay(band, day);
+      if (!occurrence) continue;
+      const startMs = new Date(occurrence.start).getTime();
+      const endMs = new Date(occurrence.end).getTime();
+      if (endMs > now.getTime() && startMs <= horizonEnd) occurrences.push(occurrence);
+    }
   }
-  return {
-    band,
-    start: start.toISOString(),
-    end: end.toISOString(),
-    key: JSON.stringify([start.toISOString(), end.toISOString(), band.yenPerKwh, band.label ?? null]),
-  };
+  return occurrences.sort((a, b) => new Date(a.start) - new Date(b.start));
+}
+
+function discountedBandOccurrence(config, now = new Date()) {
+  const time = now.getTime();
+  return discountedBandOccurrences(config, now)
+    .find((occurrence) => new Date(occurrence.start).getTime() <= time
+      && time < new Date(occurrence.end).getTime()) ?? null;
 }
 
 function solarPowerFromIrradiance(irradianceWm2, config, learnedFactor = null) {
@@ -1108,10 +1178,21 @@ function discountedTimelineWindows(timeline = []) {
     const slot = timeline[index];
     if (!slot.band) continue;
     const previous = windows.at(-1);
-    const key = `${slot.band.start}-${slot.band.end}-${slot.band.yenPerKwh}-${slot.band.label ?? ""}`;
+    const hasConfiguredOccurrence = Number.isFinite(Number(slot.rateWindowStartMs))
+      && Number.isFinite(Number(slot.rateWindowEndMs));
+    const configuredStartMs = hasConfiguredOccurrence
+      ? Number(slot.rateWindowStartMs)
+      : slot.startMs;
+    const configuredEndMs = hasConfiguredOccurrence
+      ? Number(slot.rateWindowEndMs)
+      : slot.endMs;
+    const key = hasConfiguredOccurrence
+      ? `${configuredStartMs}-${configuredEndMs}-${slot.band.yenPerKwh}-${slot.band.label ?? ""}`
+      : `${slot.band.start}-${slot.band.end}-${slot.band.yenPerKwh}-${slot.band.label ?? ""}`;
     if (previous && previous.key === key && previous.endMs === slot.startMs) {
       previous.endIndex = index + 1;
       previous.endMs = slot.endMs;
+      if (!hasConfiguredOccurrence) previous.configuredEndMs = slot.endMs;
       previous.slots.push(slot);
     } else {
       windows.push({
@@ -1120,6 +1201,8 @@ function discountedTimelineWindows(timeline = []) {
         endIndex: index + 1,
         startMs: slot.startMs,
         endMs: slot.endMs,
+        configuredStartMs,
+        configuredEndMs,
         yenPerKwh: Number(slot.band.yenPerKwh),
         label: slot.band.label || "Discounted",
         slots: [slot],
@@ -1263,7 +1346,8 @@ function planChronologicalDiscountedCharging({
           demandW: slot.demandW,
           targetWh: Math.max(1, Math.round(allocatedKwh * 1000)),
           targetSocPercent: capacityKwh ? targetStoredKwh / capacityKwh * 100 : maximumTargetPercent,
-          windowEnd: new Date(window.endMs).toISOString(),
+          windowStart: new Date(window.configuredStartMs).toISOString(),
+          windowEnd: new Date(window.configuredEndMs).toISOString(),
         });
       }
 
@@ -1277,8 +1361,10 @@ function planChronologicalDiscountedCharging({
         0,
       );
       windowPlans.push({
-        start: new Date(window.startMs).toISOString(),
-        end: new Date(window.endMs).toISOString(),
+        start: new Date(window.configuredStartMs).toISOString(),
+        end: new Date(window.configuredEndMs).toISOString(),
+        planningStart: new Date(window.startMs).toISOString(),
+        planningEnd: new Date(window.endMs).toISOString(),
         label: window.label,
         yenPerKwh: window.yenPerKwh,
         storedAtStartKwh,
@@ -1586,15 +1672,22 @@ function planningSunsetWithDiscountedWindow(config, forecast, now = new Date()) 
 }
 
 function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {}) {
+  const unavailable = (reason) => ({
+    available: false,
+    reason,
+    createdAt: now.toISOString(),
+    forecastFetchedAt: state.forecast?.fetchedAt ?? null,
+    slots: [],
+  });
   const baseAvailability = solarPlannerBaseAvailability(config);
-  if (!baseAvailability.available) return { available: false, reason: baseAvailability.reason, createdAt: now.toISOString(), slots: [] };
-  if (!forecastIsFresh(state.forecast, now)) return { available: false, reason: "solar forecast is stale or unavailable", createdAt: now.toISOString(), slots: [] };
+  if (!baseAvailability.available) return unavailable(baseAvailability.reason);
+  if (!forecastIsFresh(state.forecast, now)) return unavailable("solar forecast is stale or unavailable");
   const sunset = planningSunsetWithDiscountedWindow(config, state.forecast, now);
-  if (!sunset) return { available: false, reason: "no discounted window is available before the forecast horizon ends", createdAt: now.toISOString(), slots: [] };
+  if (!sunset) return unavailable("no discounted window is available before the forecast horizon ends");
   const temperatures = temperatureByDayFromWeather([...(state.historicalWeather ?? []), ...(state.forecast.hours ?? [])]);
   const latestSocSample = samples.findLast((sample) => Number.isFinite(Number(sample.stateOfChargePercent)));
   const soc = Number(latestSocSample?.stateOfChargePercent);
-  if (!Number.isFinite(soc)) return { available: false, reason: "battery state of charge is unavailable", createdAt: now.toISOString(), slots: [] };
+  if (!Number.isFinite(soc)) return unavailable("battery state of charge is unavailable");
   const capacityEstimate = estimateEffectiveBatteryCapacity(samples, config.batteryCapabilities.usableCapacityKwh);
   const capacityKwh = Number(capacityEstimate.capacityKwh);
   const dischargeLimit = Number(config.settingCache?.discharge_limit?.lastKnown?.decoded?.percent ?? 20);
@@ -1612,7 +1705,7 @@ function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {
     const dayKey = localDayKey(date);
     if (!demandByDay.has(dayKey)) {
       const prediction = predictHouseDemand(samples, date, temperatures);
-      if (!prediction.available) return { available: false, reason: prediction.reason, createdAt: now.toISOString(), slots: [] };
+      if (!prediction.available) return unavailable(prediction.reason);
       demandByDay.set(dayKey, prediction);
     }
     const demand = demandByDay.get(dayKey);
@@ -1632,6 +1725,7 @@ function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {
     predictedDemandKwh += demandKwh;
     predictedSurplusKwh += Math.max(0, solarKwh - demandKwh);
     const band = explicitDiscountedBand(config, date);
+    const bandOccurrence = band ? discountedBandOccurrence(config, date) : null;
     timeline.push({
       startMs: time,
       endMs: slotEndMs,
@@ -1641,6 +1735,8 @@ function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {
       netKwh: solarKwh - demandKwh,
       highSolarNetKwh: highSolarKwh - demandKwh,
       band,
+      rateWindowStartMs: bandOccurrence ? new Date(bandOccurrence.start).getTime() : null,
+      rateWindowEndMs: bandOccurrence ? new Date(bandOccurrence.end).getTime() : null,
       chargeCapacityKwh: band
         ? maximumChargeWatts * durationHours / 1000
         : 0,
@@ -1662,6 +1758,7 @@ function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {
     createdAt: now.toISOString(),
     targetDate: sunset.date,
     targetSunset: new Date(sunset.timestamp).toISOString(),
+    forecastFetchedAt: state.forecast?.fetchedAt ?? null,
     currentSocPercent: soc,
     targetSocPercent: Number(config.solarPlanner.targetSocPercent),
     expectedSunsetSocPercent: capacityKwh ? Math.min(100, optimized.expectedEndStoredKwh / capacityKwh * 100) : null,
@@ -2583,8 +2680,12 @@ async function writeConfig(config) {
   });
   if (plannerInputsChanged) {
     const state = await readSolarPlannerState();
+    const changedAt = new Date();
     state.plan = null;
     state.interruptedCharge = null;
+    state.breakerRecovery = null;
+    state.lastPlanEventKey = null;
+    state.pendingPlanReason = "configuration changed";
     const forecastInputsChanged = JSON.stringify({
       latitude: previous.solarPlanner.latitude,
       longitude: previous.solarPlanner.longitude,
@@ -2604,7 +2705,15 @@ async function writeConfig(config) {
       const reason = plannerConfiguredActive(cleaned)
         ? "Adaptive solar charging configuration changed"
         : "Adaptive solar charging was disabled";
-      await releasePlannerCharge(state, reason, new Date(), previous.batteryHost);
+      await releasePlannerCharge(state, reason, changedAt, previous.batteryHost);
+    }
+    if (state.activeWindowExecution) {
+      finalizePlannerWindowExecution(
+        state,
+        state.activeWindowExecution.latestSocPercent,
+        changedAt,
+        "adaptive charging configuration changed",
+      );
     }
     await writeSolarPlannerState(state);
   }
@@ -3231,6 +3340,7 @@ async function pauseSolarPlannerForManualAction(action, now = new Date()) {
   const state = await readSolarPlannerState();
   if (state.owner === "planner") await releasePlannerCharge(state, "Manual battery action received", now);
   state.interruptedCharge = null;
+  state.breakerRecovery = null;
   state.pausedUntil = nextLocalMidnight(now);
   appendSolarPlannerLog(state, `Manual ${action} action paused the planner until ${state.pausedUntil}`, "pause", now);
   return writeSolarPlannerState(state);
@@ -3241,7 +3351,10 @@ async function resumeSolarPlanner(now = new Date()) {
   state.pausedUntil = null;
   state.plan = null;
   state.interruptedCharge = null;
+  state.breakerRecovery = null;
   state.solarHeadroomHoldUntil = null;
+  state.lastPlanEventKey = null;
+  state.pendingPlanReason = "manual resume";
   appendSolarPlannerLog(state, "Planner resumed manually", "resume", now);
   return writeSolarPlannerState(state);
 }
@@ -3257,6 +3370,106 @@ function startPlannerChargeSession(state, slot, soc, now = new Date()) {
     slotEnd: slot?.end ?? null,
     label: slot?.label ?? null,
   };
+}
+
+function plannerWindowKey(window) {
+  const start = window?.start ?? window?.windowStart;
+  const end = window?.end ?? window?.windowEnd;
+  if (!start || !end) return null;
+  return JSON.stringify([start, end, Number(window?.band?.yenPerKwh ?? window?.yenPerKwh), window?.band?.label ?? window?.label ?? null]);
+}
+
+function plannerWindowRemainingWh(plan, window) {
+  const endMs = new Date(window?.end ?? window?.windowEnd).getTime();
+  if (!Number.isFinite(endMs)) return 0;
+  return (plan?.slots ?? [])
+    .filter((slot) => new Date(slot.windowEnd ?? slot.end).getTime() === endMs)
+    .reduce((sum, slot) => sum + Math.max(0, Math.round(Number(slot.targetWh) || 0)), 0);
+}
+
+function finalizePlannerWindowExecution(state, endSocPercent = null, now = new Date(), reason = "discounted window ended") {
+  const active = state.activeWindowExecution;
+  if (!active) return null;
+  const endSoc = Number.isFinite(Number(endSocPercent))
+    ? Number(endSocPercent)
+    : finiteNumberOrNull(active.latestSocPercent);
+  const summary = {
+    key: active.key,
+    windowStart: active.windowStart,
+    windowEnd: active.windowEnd,
+    label: active.label,
+    yenPerKwh: active.yenPerKwh,
+    plannedWh: active.plannedWh,
+    deliveredWh: active.deliveredWh,
+    unmetWh: Math.max(0, active.plannedWh - active.deliveredWh),
+    interruptionCount: active.interruptionCount,
+    startSocPercent: active.startSocPercent,
+    endSocPercent: endSoc,
+    completedAt: now.toISOString(),
+    reason,
+  };
+  state.windowSummaries = [
+    ...(state.windowSummaries ?? []).filter((item) => item.key !== summary.key),
+    summary,
+  ].slice(-SOLAR_WINDOW_SUMMARY_LIMIT);
+  state.activeWindowExecution = null;
+  appendSolarPlannerLog(
+    state,
+    `${active.label || "Discounted window"} summary: ${summary.plannedWh} Wh planned, ${summary.deliveredWh} Wh delivered, ${summary.unmetWh} Wh unmet, ${summary.interruptionCount} breaker interruptions, SOC ${summary.startSocPercent ?? "--"}% to ${summary.endSocPercent ?? "--"}%`,
+    summary.unmetWh > 0 ? "warning" : "summary",
+    now,
+  );
+  return summary;
+}
+
+function syncPlannerWindowExecution(state, occurrence, plan, soc, now = new Date(), planRecalculated = false) {
+  if (!occurrence) return null;
+  const key = plannerWindowKey(occurrence);
+  if (!key) return null;
+  if (state.activeWindowExecution && state.activeWindowExecution.key !== key) {
+    finalizePlannerWindowExecution(state, soc, now, "next discounted window started");
+  }
+  const remainingWh = plannerWindowRemainingWh(plan, occurrence);
+  const activeDeliveredWh = planRecalculated && state.owner === "planner"
+    ? Math.max(0, Math.round(Number(state.activeChargedKwh) * 1000))
+    : 0;
+  if (!state.activeWindowExecution) {
+    state.activeWindowExecution = {
+      key,
+      windowStart: occurrence.start,
+      windowEnd: occurrence.end,
+      label: occurrence.band?.label || "Discounted",
+      yenPerKwh: Number(occurrence.band?.yenPerKwh),
+      plannedWh: remainingWh,
+      deliveredWh: 0,
+      interruptionCount: 0,
+      startSocPercent: finiteNumberOrNull(soc),
+      latestSocPercent: finiteNumberOrNull(soc),
+      startedTrackingAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+  } else {
+    state.activeWindowExecution.latestSocPercent = finiteNumberOrNull(soc);
+    if (planRecalculated) {
+      state.activeWindowExecution.plannedWh = state.activeWindowExecution.deliveredWh + activeDeliveredWh + remainingWh;
+    }
+    state.activeWindowExecution.updatedAt = now.toISOString();
+  }
+  return state.activeWindowExecution;
+}
+
+function finalizeExpiredPlannerWindow(state, soc, now = new Date()) {
+  const active = state.activeWindowExecution;
+  if (!active || state.owner === "planner") return null;
+  const endMs = new Date(active.windowEnd).getTime();
+  if (!Number.isFinite(endMs) || now.getTime() < endMs) return null;
+  return finalizePlannerWindowExecution(state, soc, now);
+}
+
+function recordPlannerWindowInterruption(state) {
+  if (!state.activeWindowExecution) return 0;
+  state.activeWindowExecution.interruptionCount += 1;
+  return state.activeWindowExecution.interruptionCount;
 }
 
 function recordPlannerChargeSample(state, status, now = new Date()) {
@@ -3321,6 +3534,11 @@ function finalizePlannerChargeSession(state, reason, now = new Date()) {
     ...state.chargingPerformance,
     sessions: [...(state.chargingPerformance?.sessions ?? []), session],
   });
+  if (state.activeWindowExecution) {
+    state.activeWindowExecution.deliveredWh += deliveredWh;
+    state.activeWindowExecution.latestSocPercent = endSocPercent;
+    state.activeWindowExecution.updatedAt = now.toISOString();
+  }
   state.activeChargeSession = null;
   return session;
 }
@@ -3366,12 +3584,17 @@ async function enforcePlannerSlotEndDeadline(expectedKey, {
   }
   const remainingMs = plannerSlotEndDelayMs(state, now);
   if (remainingMs > 0) return { stopped: false, remainingMs };
-  await release(state, "Planned discounted window ended", now);
+  const windowEndMs = new Date(state.activeSlot?.windowEnd).getTime();
+  const slotEndMs = new Date(state.activeSlot?.end).getTime();
+  const windowEnded = Number.isFinite(windowEndMs) && Number.isFinite(slotEndMs) && slotEndMs >= windowEndMs;
+  const reason = windowEnded ? "Planned discounted window ended" : "Planned charging slot ended";
+  await release(state, reason, now);
+  finalizeExpiredPlannerWindow(state, state.activeWindowExecution?.latestSocPercent, now);
   state.lastResult = {
     ok: true,
     at: now.toISOString(),
     kind: "stop",
-    reason: "planned discounted window ended",
+    reason: reason.toLowerCase(),
   };
   await writeState(state);
   return { stopped: true };
@@ -3445,6 +3668,32 @@ function plannerSlotsMatch(left, right) {
     && new Date(left?.end).getTime() === new Date(right?.end).getTime();
 }
 
+function consumeCompletedPlannerSlot(plan, completedSlot) {
+  if (!plan || !completedSlot) return plan;
+  let removedWh = 0;
+  const slots = (plan.slots ?? []).filter((slot) => {
+    if (!plannerSlotsMatch(slot, completedSlot)) return true;
+    removedWh += Math.max(0, Math.round(Number(slot.targetWh) || 0));
+    return false;
+  });
+  if (!removedWh) return plan;
+  const completedWindowEnd = new Date(completedSlot.windowEnd ?? completedSlot.end).getTime();
+  return {
+    ...plan,
+    slots,
+    plannedChargeKwh: Math.max(0, Number(plan.plannedChargeKwh || 0) - removedWh / 1000),
+    windows: (plan.windows ?? []).map((window) => (
+      new Date(window.end).getTime() === completedWindowEnd
+        ? {
+          ...window,
+          plannedChargeKwh: Math.max(0, Number(window.plannedChargeKwh || 0) - removedWh / 1000),
+          requestedChargeKwh: Math.max(0, Number(window.requestedChargeKwh || 0) - removedWh / 1000),
+        }
+        : window
+    )),
+  };
+}
+
 function preserveInterruptedPlannerCharge(state, now = new Date()) {
   const activeSlot = state.activeSlot;
   const targetWh = Math.max(0, Math.round(Number(activeSlot?.targetWh) || 0));
@@ -3466,6 +3715,7 @@ function preserveInterruptedPlannerCharge(state, now = new Date()) {
   const interruption = remainingWh > 0 ? {
     slotStart: activeSlot.start,
     slotEnd: activeSlot.end,
+    windowStart: activeSlot.windowStart ?? activeSlot.start,
     windowEnd: activeSlot.windowEnd ?? activeSlot.end,
     remainingWh,
     deliveredWh,
@@ -3505,21 +3755,97 @@ function applyInterruptedChargeCap(plan, interruption, maximumChargeWatts, now =
   };
 }
 
-function plannerLiveChargeHeadroom(status, config) {
+function plannerLiveChargeHeadroom(status, config, state = {}) {
   const rawGridImportW = status.meter?.grid_import_power?.value;
   const gridImportW = rawGridImportW === null || rawGridImportW === undefined || rawGridImportW === ""
     ? Number.NaN
     : Number(rawGridImportW);
   const maximumChargeWatts = Number(config.batteryCapabilities?.maximumChargeWatts);
+  const chargePerformance = effectivePlannerChargeWatts(config, state);
+  const chargeWatts = Number(chargePerformance.effectiveWatts);
   const breakerLimitW = Math.max(
     0,
     (Number(config.automation?.breakerAmps) - Number(config.automation?.reserveAmps))
       * Number(config.automation?.breakerVoltage),
   );
+  const safetyMarginW = SOLAR_BREAKER_SAFETY_MARGIN_W;
+  const thresholdW = breakerLimitW > 0
+    ? breakerLimitW - chargeWatts - safetyMarginW
+    : Number.POSITIVE_INFINITY;
   const available = Number.isFinite(gridImportW)
-    && Number.isFinite(maximumChargeWatts)
-    && (breakerLimitW <= 0 || gridImportW + maximumChargeWatts <= breakerLimitW);
-  return { available, gridImportW, maximumChargeWatts, breakerLimitW };
+    && Number.isFinite(chargeWatts)
+    && (breakerLimitW <= 0 || gridImportW <= thresholdW);
+  return {
+    available,
+    gridImportW,
+    maximumChargeWatts,
+    chargeWatts,
+    learnedChargeWatts: chargePerformance.learnedWatts,
+    breakerLimitW,
+    safetyMarginW,
+    thresholdW,
+  };
+}
+
+function beginPlannerBreakerRecovery(state, headroom, now = new Date()) {
+  state.breakerRecovery = {
+    interruptedAt: now.toISOString(),
+    cooldownUntil: new Date(now.getTime() + SOLAR_BREAKER_RETRY_COOLDOWN_MS).toISOString(),
+    consecutiveSafeChecks: 0,
+    lastCheckedAt: null,
+    lastWaitLogAt: null,
+    currentImportW: finiteNumberOrNull(headroom?.gridImportW),
+    thresholdW: finiteNumberOrNull(headroom?.thresholdW),
+    chargeWatts: finiteNumberOrNull(headroom?.chargeWatts),
+    safetyMarginW: finiteNumberOrNull(headroom?.safetyMarginW),
+  };
+  return state.breakerRecovery;
+}
+
+function advancePlannerBreakerRecovery(state, headroom, now = new Date()) {
+  const recovery = state.breakerRecovery;
+  if (!recovery) return { ready: true, waiting: false };
+  const checkedAt = now.toISOString();
+  if (recovery.lastCheckedAt !== checkedAt) {
+    recovery.consecutiveSafeChecks = headroom.available
+      ? recovery.consecutiveSafeChecks + 1
+      : 0;
+    recovery.lastCheckedAt = checkedAt;
+  }
+  recovery.currentImportW = finiteNumberOrNull(headroom.gridImportW);
+  recovery.thresholdW = finiteNumberOrNull(headroom.thresholdW);
+  recovery.chargeWatts = finiteNumberOrNull(headroom.chargeWatts);
+  recovery.safetyMarginW = finiteNumberOrNull(headroom.safetyMarginW);
+  const cooldownReady = now.getTime() >= new Date(recovery.cooldownUntil).getTime();
+  const checksReady = recovery.consecutiveSafeChecks >= SOLAR_BREAKER_SAFE_CHECKS;
+  const lastWaitLogMs = new Date(recovery.lastWaitLogAt ?? 0).getTime();
+  const shouldLog = !Number.isFinite(lastWaitLogMs)
+    || lastWaitLogMs <= 0
+    || now.getTime() - lastWaitLogMs >= SOLAR_BREAKER_WAIT_LOG_MS;
+  return {
+    ready: Boolean(headroom.available && cooldownReady && checksReady),
+    waiting: true,
+    cooldownReady,
+    checksReady,
+    shouldLog,
+    consecutiveSafeChecks: recovery.consecutiveSafeChecks,
+    requiredSafeChecks: SOLAR_BREAKER_SAFE_CHECKS,
+    cooldownUntil: recovery.cooldownUntil,
+  };
+}
+
+function logPlannerBreakerWait(state, headroom, recoveryStatus, now = new Date()) {
+  if (!state.breakerRecovery || !recoveryStatus.shouldLog) return false;
+  const importText = Number.isFinite(headroom.gridImportW) ? `(${Math.round(headroom.gridImportW)} W)` : "unavailable";
+  const thresholdText = Number.isFinite(headroom.thresholdW) ? `(${Math.round(headroom.thresholdW)} W)` : "unrestricted";
+  appendSolarPlannerLog(
+    state,
+    `Waiting for breaker headroom: Grid Import ${importText}, required at or below ${thresholdText}, safe checks (${recoveryStatus.consecutiveSafeChecks}/${recoveryStatus.requiredSafeChecks}), retry after ${state.breakerRecovery.cooldownUntil}`,
+    "guard",
+    now,
+  );
+  state.breakerRecovery.lastWaitLogAt = now.toISOString();
+  return true;
 }
 
 function plannerLiveImportSafety(status, config) {
@@ -3568,28 +3894,75 @@ function activePlannerSlotStopReason(state, config, plan, now = new Date()) {
   return null;
 }
 
-function solarPlanRefreshDecision(state, liveSoc, activeDiscountedWindow, now = new Date()) {
-  const planAge = now.getTime() - new Date(state.plan?.createdAt ?? 0).getTime();
-  const planRefreshMs = activeDiscountedWindow && state.owner !== "planner"
-    ? SOLAR_ACTIVE_PLAN_REFRESH_MS
-    : SOLAR_PLAN_REFRESH_MS;
-  const enteredDiscountedWindow = Boolean(
-    activeDiscountedWindow && state.lastRebasedWindowKey !== activeDiscountedWindow.key,
-  );
-  const socChangedMaterially = state.owner !== "planner"
-    && Number.isFinite(liveSoc)
-    && Number.isFinite(Number(state.plan?.currentSocPercent))
-    && Math.abs(liveSoc - Number(state.plan.currentSocPercent)) >= 1;
+function solarPlanScheduledEvent(config, now = new Date()) {
+  const activeWindow = discountedBandOccurrence(config, now);
+  if (activeWindow) {
+    const elapsedMs = Math.max(0, now.getTime() - new Date(activeWindow.start).getTime());
+    const slotIndex = Math.floor(elapsedMs / SOLAR_PLAN_SLOT_MS);
+    return {
+      eventKey: `window:${activeWindow.key}:slot:${slotIndex}`,
+      trigger: slotIndex === 0
+        ? `entering ${activeWindow.band.label || "discounted window"}`
+        : `30-minute slot boundary in ${activeWindow.band.label || "discounted window"}`,
+      activeWindow,
+    };
+  }
+  const upcomingWindow = discountedBandOccurrences(config, now)
+    .find((occurrence) => new Date(occurrence.start).getTime() > now.getTime());
+  if (!upcomingWindow) return { upcomingWindow: null };
+  const timeUntilStartMs = new Date(upcomingWindow.start).getTime() - now.getTime();
+  if (timeUntilStartMs > SOLAR_PLAN_PREWINDOW_MS) return { upcomingWindow };
   return {
-    refresh: !state.plan
-      || !Number.isFinite(planAge)
-      || planAge >= planRefreshMs
-      || socChangedMaterially
-      || enteredDiscountedWindow,
-    enteredDiscountedWindow,
-    socChangedMaterially,
-    planAge,
+    eventKey: `prewindow:${upcomingWindow.key}`,
+    trigger: `30 minutes before ${upcomingWindow.band.label || "discounted window"}`,
+    upcomingWindow,
   };
+}
+
+function solarPlanRefreshDecision(state, config, now = new Date()) {
+  const forecastFetchedAt = state.forecast?.fetchedAt ?? null;
+  const scheduledEvent = solarPlanScheduledEvent(config, now);
+  if (!state.plan) {
+    const trigger = state.pendingPlanReason || "initial plan";
+    return {
+      ...scheduledEvent,
+      refresh: true,
+      trigger,
+      eventKey: scheduledEvent.eventKey ?? `initial:${trigger}:${forecastFetchedAt ?? "none"}`,
+    };
+  }
+  if (forecastFetchedAt && state.plan.forecastFetchedAt !== forecastFetchedAt) {
+    return {
+      ...scheduledEvent,
+      refresh: true,
+      trigger: "forecast refresh",
+      eventKey: scheduledEvent.eventKey ?? `forecast:${forecastFetchedAt}`,
+    };
+  }
+  if (scheduledEvent.eventKey) {
+    if (state.lastPlanEventKey !== scheduledEvent.eventKey) {
+      return { refresh: true, ...scheduledEvent };
+    }
+    return { refresh: false, ...scheduledEvent };
+  }
+  return { refresh: false, ...scheduledEvent };
+}
+
+function plannerClock(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--:--";
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function solarPlanLogMessage(plan, trigger, liveSoc) {
+  if (!plan?.available) return `Plan recalculated (${trigger}); planner unavailable: ${plan?.reason || "unknown reason"}`;
+  const targets = (plan.windows ?? [])
+    .map((window) => `${window.label} ${Number(window.targetSocPercent).toFixed(0)}%/${Number(window.plannedChargeKwh).toFixed(2)} kWh`)
+    .join(", ") || "none";
+  const slots = (plan.slots ?? [])
+    .map((slot) => `${plannerClock(slot.start)}-${plannerClock(slot.end)} ${slot.targetWh} Wh`)
+    .join(", ") || "none";
+  return `Plan recalculated (${trigger}): SOC ${Number(liveSoc).toFixed(0)}%; ${Number(plan.predictedSolarKwh).toFixed(2)} kWh solar, ${Number(plan.predictedDemandKwh).toFixed(2)} kWh demand, ${Number(plan.plannedChargeKwh).toFixed(2)} kWh discounted charging; targets [${targets}]; slots [${slots}]${plan.warning ? `; ${plan.warning}` : ""}`;
 }
 
 async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
@@ -3598,6 +3971,7 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
   if (state.interruptedCharge
     && new Date(state.interruptedCharge.slotEnd).getTime() <= now.getTime()) {
     state.interruptedCharge = null;
+    state.breakerRecovery = null;
   }
   const paused = state.pausedUntil && new Date(state.pausedUntil).getTime() > now.getTime();
   const guardActive = rules.some((rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore);
@@ -3608,6 +3982,7 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
       ? "Planner is paused"
       : base.reason || forecastError || "Forecast is unavailable";
     if (!guardActive && state.owner === "planner") await releasePlannerCharge(state, unavailableReason, now);
+    finalizeExpiredPlannerWindow(state, numericMetric(status.energy?.battery?.remaining_percent), now);
     state.lastResult = { ok: true, at: now.toISOString(), skipped: paused ? "paused after manual action" : unavailableReason };
     return writeSolarPlannerState(state);
   }
@@ -3621,6 +3996,10 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
       state.activeChargedKwh = 0;
       state.activeLastCheckedAt = null;
       if (!interruption) state.plan = null;
+      if (interruption) {
+        recordPlannerWindowInterruption(state);
+        beginPlannerBreakerRecovery(state, plannerLiveChargeHeadroom(status, config, state), now);
+      }
       appendSolarPlannerLog(
         state,
         interruption
@@ -3630,6 +4009,12 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
         now,
       );
     }
+    if (state.breakerRecovery) {
+      const headroom = plannerLiveChargeHeadroom(status, config, state);
+      const recoveryStatus = advancePlannerBreakerRecovery(state, headroom, now);
+      logPlannerBreakerWait(state, headroom, recoveryStatus, now);
+    }
+    finalizeExpiredPlannerWindow(state, numericMetric(status.energy?.battery?.remaining_percent), now);
     state.lastResult = { ok: true, at: now.toISOString(), skipped: "Charging Demand Guard active" };
     return writeSolarPlannerState(state);
   }
@@ -3654,13 +4039,13 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
         now,
       );
     }
+    finalizeExpiredPlannerWindow(state, liveSoc, now);
     state.lastResult = { ok: true, at: now.toISOString(), skipped: reason };
     return writeSolarPlannerState(state);
   }
 
   const activeDiscountedWindow = discountedBandOccurrence(config, now);
-  const refreshDecision = solarPlanRefreshDecision(state, liveSoc, activeDiscountedWindow, now);
-  const { enteredDiscountedWindow } = refreshDecision;
+  const refreshDecision = solarPlanRefreshDecision(state, config, now);
   if (refreshDecision.refresh) {
     const samples = await readSolarPlannerHistory(now);
     samples.push({
@@ -3672,6 +4057,8 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     });
     state = { ...state, historicalWeather: await readJsonLinesFile(SOLAR_WEATHER_HISTORY_FILE) };
     state.plan = buildSolarChargingPlan({ config, state, samples, now });
+    state.lastPlanEventKey = refreshDecision.eventKey;
+    state.pendingPlanReason = null;
     if (activeDiscountedWindow) state.lastRebasedWindowKey = activeDiscountedWindow.key;
     if (state.interruptedCharge) {
       const capped = applyInterruptedChargeCap(
@@ -3685,20 +4072,23 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     }
     appendSolarPlannerLog(
       state,
-      state.plan.available
-        ? `${enteredDiscountedWindow ? `Plan rebased from live SOC ${liveSoc}% on entering ${activeDiscountedWindow.band.label || "discounted window"}` : "Plan recalculated"}: ${state.plan.predictedSolarKwh.toFixed(2)} kWh solar, ${state.plan.predictedDemandKwh.toFixed(2)} kWh demand, ${state.plan.plannedChargeKwh.toFixed(2)} kWh discounted charging${state.plan.warning ? `; ${state.plan.warning}` : ""}`
-        : `Planner unavailable: ${state.plan.reason}`,
+      solarPlanLogMessage(state.plan, refreshDecision.trigger, liveSoc),
       state.plan.warning ? "warning" : "plan",
       now,
     );
   }
   if (!state.plan?.available) {
     if (state.owner === "planner") await releasePlannerCharge(state, state.plan?.reason || "Plan is unavailable", now);
+    finalizeExpiredPlannerWindow(state, liveSoc, now);
     state.lastResult = { ok: true, at: now.toISOString(), skipped: state.plan?.reason || "plan unavailable" };
     return writeSolarPlannerState(state);
   }
 
   const soc = liveSoc;
+  if (activeDiscountedWindow) {
+    syncPlannerWindowExecution(state, activeDiscountedWindow, state.plan, soc, now, refreshDecision.refresh);
+  }
+  else finalizeExpiredPlannerWindow(state, soc, now);
   const gridExportW = numericMetric(status.meter?.grid_export_power);
   const liveExportNeedsHeadroom = Number.isFinite(gridExportW) && gridExportW > 50;
   if (state.solarHeadroomHoldUntil && new Date(state.solarHeadroomHoldUntil).getTime() <= now.getTime()) {
@@ -3726,6 +4116,7 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     || activeSocTargetReached
     || liveExportNeedsHeadroom
   )) {
+    const completedSlot = state.activeSlot;
     let stopReason = "Planned charge target reached";
     if (activeExpired) stopReason = "Planned discounted window ended";
     else if (activePlanStopReason) stopReason = activePlanStopReason;
@@ -3733,6 +4124,10 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
       const interruption = breakerReserveInterrupted
         ? preserveInterruptedPlannerCharge(state, now)
         : null;
+      if (interruption) {
+        recordPlannerWindowInterruption(state);
+        beginPlannerBreakerRecovery(state, plannerLiveChargeHeadroom(status, config, state), now);
+      }
       stopReason = interruption
         ? `Live grid import reached the breaker reserve limit after ${interruption.deliveredWh} Wh; ${interruption.remainingWh} Wh remains in this charge`
         : "Live grid import reached the breaker reserve limit";
@@ -3743,8 +4138,9 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     }
     await releasePlannerCharge(state, stopReason, now);
     if (activeEnergyTargetReached || activeSocTargetReached) {
-      state.plan = null;
+      state.plan = consumeCompletedPlannerSlot(state.plan, completedSlot);
       state.interruptedCharge = null;
+      state.breakerRecovery = null;
     }
   } else if (state.owner === "planner" && state.activePlanCreatedAt !== state.plan.createdAt) {
     const replacement = plannerSlotAt(state.plan, now);
@@ -3770,8 +4166,12 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     && Number.isFinite(soc)
     && soc >= Number(slot.targetSocPercent ?? config.solarPlanner.targetSocPercent);
   if (slot && state.owner !== "planner" && !solarHeadroomHoldActive && !slotTargetReached) {
-    const headroom = plannerLiveChargeHeadroom(status, config);
+    const headroom = plannerLiveChargeHeadroom(status, config, state);
     if (!headroom.available) {
+      if (state.breakerRecovery) {
+        const recoveryStatus = advancePlannerBreakerRecovery(state, headroom, now);
+        logPlannerBreakerWait(state, headroom, recoveryStatus, now);
+      }
       state.lastResult = {
         ok: true,
         at: now.toISOString(),
@@ -3779,6 +4179,20 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
         ...headroom,
       };
       return writeSolarPlannerState(state);
+    }
+    if (state.breakerRecovery) {
+      const recoveryStatus = advancePlannerBreakerRecovery(state, headroom, now);
+      if (!recoveryStatus.ready) {
+        logPlannerBreakerWait(state, headroom, recoveryStatus, now);
+        state.lastResult = {
+          ok: true,
+          at: now.toISOString(),
+          skipped: "waiting for stable breaker headroom",
+          ...headroom,
+          ...recoveryStatus,
+        };
+        return writeSolarPlannerState(state);
+      }
     }
     const result = await executeAction("charge", { targetWh: slot.targetWh });
     state.owner = "planner";
@@ -3788,6 +4202,7 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     state.activeLastCheckedAt = now.toISOString();
     startPlannerChargeSession(state, slot, soc, now);
     state.interruptedCharge = null;
+    state.breakerRecovery = null;
     state.lastResult = { ok: true, at: now.toISOString(), kind: "charge", slot, result };
     appendSolarPlannerLog(state, `Starting ${slot.targetWh} Wh charge in ${slot.label} band at ${slot.yenPerKwh} yen/kWh`, "charge", now);
   } else if (slot && state.owner !== "planner" && (solarHeadroomHoldActive || slotTargetReached)) {
@@ -3799,6 +4214,7 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
   } else if (!slot && state.owner !== "planner") {
     state.lastResult = { ok: true, at: now.toISOString(), skipped: "no planned charge is due" };
   }
+  finalizeExpiredPlannerWindow(state, soc, now);
   return writeSolarPlannerState(state);
 }
 
@@ -4526,6 +4942,8 @@ async function api(req, res, url) {
     const samples = await readSolarPlannerHistory(now);
     state = { ...state, historicalWeather: await readJsonLinesFile(SOLAR_WEATHER_HISTORY_FILE) };
     state.plan = buildSolarChargingPlan({ config, state, samples, now });
+    state.lastPlanEventKey = solarPlanScheduledEvent(config, now).eventKey ?? `manual:${now.toISOString()}`;
+    state.pendingPlanReason = null;
     if (state.interruptedCharge) {
       const capped = applyInterruptedChargeCap(
         state.plan,
@@ -4538,7 +4956,7 @@ async function api(req, res, url) {
     }
     appendSolarPlannerLog(
       state,
-      `Plan recalculated manually${state.plan.warning ? `; ${state.plan.warning}` : ""}`,
+      solarPlanLogMessage(state.plan, "manual request", state.plan.currentSocPercent),
       state.plan.warning ? "warning" : "plan",
       now,
     );
@@ -4681,8 +5099,10 @@ export const server = http.createServer(async (req, res) => {
 
 export {
   activePlannerSlotStopReason,
+  advancePlannerBreakerRecovery,
   applyInterruptedChargeCap,
   aggregateEnergyReportSamples,
+  beginPlannerBreakerRecovery,
   buildSolarChargingPlan,
   capPlannerSlotToRemainingTime,
   clearStaleScheduleRuns,
@@ -4691,16 +5111,20 @@ export {
   cleanConfig,
   cleanPlannerChargingPerformance,
   cleanSolarPlannerState,
+  consumeCompletedPlannerSlot,
   countGuardTriggersForRange,
   discountedBandOccurrence,
+  discountedBandOccurrences,
   discountedPlanStatus,
   effectivePlannerChargeWatts,
   evaluateAutomationRule,
   estimateEffectiveBatteryCapacity,
   finalizePlannerChargeSession,
+  finalizePlannerWindowExecution,
   forecastHourForInterval,
   forecastIsFresh,
   learnedSolarFactor,
+  logPlannerBreakerWait,
   normalizeCircuitLabels,
   normalizeDashboardWidgets,
   normalizeRateBands,
@@ -4722,11 +5146,14 @@ export {
   sampleFromStatus,
   shouldTriggerDemandGuard,
   solarPlanRefreshDecision,
+  solarPlanLogMessage,
   preserveInterruptedPlannerCharge,
+  recordPlannerWindowInterruption,
   solarPlannerBaseAvailability,
   solarPowerFromIrradiance,
   summarizeSamples,
   summarizeCircuits,
+  syncPlannerWindowExecution,
   predictHouseDemand,
 };
 

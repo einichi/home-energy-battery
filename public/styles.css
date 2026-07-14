@@ -1306,10 +1306,26 @@ output {
   font-weight: 800;
 }
 
+.planner-window-range {
+  margin: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-weight: 800;
+}
+
 .planner-window-metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 0;
+}
+
+.planner-result-metrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.planner-window-results:empty {
+  display: none;
 }
 
 .planner-window-metrics div {

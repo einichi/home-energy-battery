@@ -334,7 +334,16 @@ const I18N = {
     requiredCharge: "Required charge",
     availableCharge: "Available charge",
     plannedCharge: "Planned charge",
+    plannedChargingRange: "Planned charging",
+    noChargingPlanned: "No charging planned",
     remainingShortfall: "Remaining shortfall",
+    recentWindowResults: "Recent window results",
+    deliveredCharge: "Delivered charge",
+    breakerInterruptions: "Breaker interruptions",
+    startingSoc: "Starting SOC",
+    endingSoc: "Ending SOC",
+    inProgress: "In progress",
+    noWindowResults: "No completed discounted windows yet.",
     chargeSamples: "{count} samples",
     estimatedEfficiency: "estimated storage {value}%",
     demandImpact: "demand effect {value} W/kW",
@@ -676,7 +685,16 @@ const I18N = {
     requiredCharge: "必要充電量",
     availableCharge: "充電可能量",
     plannedCharge: "予定充電量",
+    plannedChargingRange: "予定充電時間",
+    noChargingPlanned: "充電予定なし",
     remainingShortfall: "残り不足量",
+    recentWindowResults: "最近の時間帯実績",
+    deliveredCharge: "実績充電量",
+    breakerInterruptions: "ブレーカー中断回数",
+    startingSoc: "開始時充電率",
+    endingSoc: "終了時充電率",
+    inProgress: "実行中",
+    noWindowResults: "完了した割安時間帯はまだありません。",
     chargeSamples: "{count}件の測定",
     estimatedEfficiency: "推定蓄電効率 {value}%",
     demandImpact: "需要影響 {value} W/kW",
@@ -2095,6 +2113,9 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
   for (const windowPlan of plan.windows ?? []) {
     const card = document.createElement("article");
     card.className = "planner-window-summary";
+    const slotRows = (plan.slots ?? []).filter(
+      (slot) => new Date(slot.windowEnd).getTime() === new Date(windowPlan.end).getTime(),
+    );
     const heading = document.createElement("div");
     heading.className = "planner-window-heading";
     const title = document.createElement("h3");
@@ -2103,6 +2124,13 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
     rate.textContent = `${windowPlan.yenPerKwh} yen/kWh`;
     heading.append(title, rate);
     card.append(heading);
+
+    const plannedRange = document.createElement("p");
+    plannedRange.className = "planner-window-range";
+    plannedRange.textContent = slotRows.length
+      ? `${t("plannedChargingRange")} · ${new Date(slotRows[0].start).toLocaleTimeString()}–${new Date(slotRows.at(-1).end).toLocaleTimeString()}`
+      : t("noChargingPlanned");
+    card.append(plannedRange);
 
     const metrics = document.createElement("dl");
     metrics.className = "planner-window-metrics";
@@ -2140,9 +2168,6 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
       card.append(note);
     }
 
-    const slotRows = (plan.slots ?? []).filter(
-      (slot) => new Date(slot.windowEnd).getTime() === new Date(windowPlan.end).getTime(),
-    );
     for (const slot of slotRows) {
       const row = document.createElement("div");
       row.className = "planner-slot-summary";
@@ -2152,6 +2177,54 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
     windows.append(card);
   }
   if (!windows.children.length) windows.textContent = t("noPlannedWindows");
+
+  const executionHistory = $("#solarPlannerWindowSummaries");
+  executionHistory.innerHTML = "";
+  const executions = [
+    ...(status.activeWindowExecution ? [{
+      ...status.activeWindowExecution,
+      unmetWh: Math.max(0, Number(status.activeWindowExecution.plannedWh) - Number(status.activeWindowExecution.deliveredWh)),
+      endSocPercent: status.activeWindowExecution.latestSocPercent,
+      active: true,
+    }] : []),
+    ...[...(status.windowSummaries ?? [])].reverse(),
+  ];
+  for (const execution of executions) {
+    const card = document.createElement("article");
+    card.className = "planner-window-summary planner-window-result";
+    const heading = document.createElement("div");
+    heading.className = "planner-window-heading";
+    const title = document.createElement("h3");
+    title.textContent = `${execution.label || "Discounted"} · ${new Date(execution.windowStart).toLocaleTimeString()}–${new Date(execution.windowEnd).toLocaleTimeString()}`;
+    const stateLabel = document.createElement("span");
+    stateLabel.textContent = execution.active
+      ? t("inProgress")
+      : new Date(execution.windowStart).toLocaleDateString();
+    heading.append(title, stateLabel);
+    card.append(heading);
+    const metrics = document.createElement("dl");
+    metrics.className = "planner-window-metrics planner-result-metrics";
+    const values = [
+      [t("plannedCharge"), `${Number(execution.plannedWh || 0)} Wh`],
+      [t("deliveredCharge"), `${Number(execution.deliveredWh || 0)} Wh`],
+      [t("remainingShortfall"), `${Number(execution.unmetWh || 0)} Wh`],
+      [t("breakerInterruptions"), String(Number(execution.interruptionCount || 0))],
+      [t("startingSoc"), formatPlannerPercent(execution.startSocPercent)],
+      [t("endingSoc"), formatPlannerPercent(execution.endSocPercent)],
+    ];
+    for (const [label, value] of values) {
+      const metric = document.createElement("div");
+      const term = document.createElement("dt");
+      term.textContent = label;
+      const description = document.createElement("dd");
+      description.textContent = value;
+      metric.append(term, description);
+      metrics.append(metric);
+    }
+    card.append(metrics);
+    executionHistory.append(card);
+  }
+  if (!executionHistory.children.length) executionHistory.textContent = t("noWindowResults");
   const log = $("#solarPlannerLog");
   log.innerHTML = "";
   for (const entry of [...(status.log ?? [])].reverse()) {
