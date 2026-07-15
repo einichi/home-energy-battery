@@ -114,6 +114,10 @@ nav {
   color: #fff;
 }
 
+.nav-label-short {
+  display: none;
+}
+
 .nav-section {
   display: grid;
   gap: 4px;
@@ -1290,27 +1294,97 @@ output {
   margin-bottom: 16px;
 }
 
-.planner-notice {
+.adaptive-charging-notice {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
 }
 
-.planner-disabled {
+.adaptive-charging-widget {
+  cursor: pointer;
+}
+
+.adaptive-charging-widget:hover,
+.adaptive-charging-widget:focus-visible {
+  border-color: rgba(18, 124, 120, 0.55);
+  outline: none;
+}
+
+.adaptive-charging-workspace {
+  display: grid;
+  gap: 16px;
+}
+
+.adaptive-charging-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.adaptive-charging-heading .adaptive-charging-actions {
+  display: flex;
+  flex: none;
+}
+
+.adaptive-charging-timeline-panel,
+.adaptive-charging-details {
+  display: grid;
+  gap: 10px;
+}
+
+.adaptive-charging-timeline {
+  display: block;
+  width: 100%;
+  height: min(52vh, 430px);
+  min-height: 300px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.adaptive-charging-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.adaptive-charging-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.timeline-swatch {
+  width: 20px;
+  height: 4px;
+  border-radius: 2px;
+  background: #64748b;
+}
+
+.timeline-swatch.demand { background: #dc2626; }
+.timeline-swatch.solar { background: #d8872c; }
+.timeline-swatch.soc { background: #7c3aed; }
+.timeline-swatch.charging { height: 8px; background: #127c78; }
+
+.adaptive-charging-disabled {
   opacity: 0.68;
 }
 
-.planner-actions {
+.adaptive-charging-actions {
   display: grid;
   grid-template-columns: minmax(0, 1fr) repeat(2, minmax(120px, auto));
   gap: 10px;
 }
 
-.planner-actions button {
+.adaptive-charging-actions button {
   grid-column: auto;
 }
 
-.planner-status-grid {
+.adaptive-charging-status-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1px;
@@ -1321,26 +1395,26 @@ output {
   background: var(--border);
 }
 
-.planner-status-grid div {
+.adaptive-charging-status-grid div {
   min-width: 0;
   padding: 10px;
   background: #fff;
 }
 
-.planner-status-grid dt {
+.adaptive-charging-status-grid dt {
   color: var(--muted);
   font-size: 11px;
   font-weight: 800;
 }
 
-.planner-status-grid dd {
+.adaptive-charging-status-grid dd {
   margin: 3px 0 0;
   overflow-wrap: anywhere;
   font-size: 13px;
   font-weight: 800;
 }
 
-.planner-windows {
+.adaptive-charging-windows {
   display: grid;
   gap: 10px;
   margin: 8px 0 14px;
@@ -1348,7 +1422,7 @@ output {
   font-size: 12px;
 }
 
-.planner-window-summary {
+.adaptive-charging-window-summary {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1356,7 +1430,7 @@ output {
   color: var(--text);
 }
 
-.planner-window-heading {
+.adaptive-charging-window-heading {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -1365,18 +1439,18 @@ output {
   border-bottom: 1px solid var(--border);
 }
 
-.planner-window-heading h3 {
+.adaptive-charging-window-heading h3 {
   margin: 0;
   font-size: 13px;
 }
 
-.planner-window-heading span {
+.adaptive-charging-window-heading span {
   flex: none;
   color: var(--muted);
   font-weight: 800;
 }
 
-.planner-window-range {
+.adaptive-charging-window-range {
   margin: 0;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
@@ -1384,45 +1458,45 @@ output {
   font-weight: 800;
 }
 
-.planner-window-metrics {
+.adaptive-charging-window-metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 0;
 }
 
-.planner-result-metrics {
+.adaptive-charging-result-metrics {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.planner-window-results:empty {
+.adaptive-charging-window-results:empty {
   display: none;
 }
 
-.planner-window-metrics div {
+.adaptive-charging-window-metrics div {
   min-width: 0;
   padding: 8px 12px;
   border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
 }
 
-.planner-window-metrics dt {
+.adaptive-charging-window-metrics dt {
   color: var(--muted);
   font-size: 10px;
   font-weight: 800;
 }
 
-.planner-window-metrics dd {
+.adaptive-charging-window-metrics dd {
   margin: 3px 0 0;
   overflow-wrap: anywhere;
   font-size: 12px;
   font-weight: 900;
 }
 
-.planner-window-metrics .planner-window-warning dd {
+.adaptive-charging-window-metrics .adaptive-charging-window-warning dd {
   color: var(--danger);
 }
 
-.planner-window-note {
+.adaptive-charging-window-note {
   margin: 0;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
@@ -1430,14 +1504,14 @@ output {
   font-weight: 800;
 }
 
-.planner-slot-summary {
+.adaptive-charging-slot-summary {
   margin: 0 12px;
   padding: 7px 0 7px 10px;
   border-left: 2px solid var(--border);
   border-bottom: 1px solid var(--border);
 }
 
-.planner-slot-summary:last-child {
+.adaptive-charging-slot-summary:last-child {
   border-bottom: 0;
 }
 
@@ -1636,7 +1710,7 @@ td code {
     order: 9;
   }
 
-  .solar-planner-panel {
+  .adaptive-charging-panel {
     order: 10;
   }
 
@@ -1718,8 +1792,9 @@ td code {
   nav {
     position: relative;
     flex: 1;
+    flex-wrap: nowrap;
     justify-content: flex-end;
-    gap: 4px;
+    gap: 2px;
   }
 
   .nav-section {
@@ -1728,8 +1803,8 @@ td code {
 
   .nav-section summary {
     min-height: 30px;
-    padding: 7px 9px;
-    font-size: 13px;
+    padding: 7px 5px;
+    font-size: 11px;
     text-transform: none;
   }
 
@@ -1752,9 +1827,17 @@ td code {
 
   .nav-button {
     min-height: 30px;
-    padding: 0 9px;
+    padding: 0 5px;
     border-radius: 7px;
-    font-size: 13px;
+    font-size: 11px;
+  }
+
+  .nav-label-long {
+    display: none;
+  }
+
+  .nav-label-short {
+    display: inline;
   }
 
   .nav-subbutton {
@@ -1854,12 +1937,36 @@ td code {
     grid-template-columns: 1fr;
   }
 
-  .planner-actions,
-  .planner-status-grid {
+  .adaptive-charging-actions,
+  .adaptive-charging-status-grid {
     grid-template-columns: 1fr;
   }
 
-  .planner-window-metrics {
+  .adaptive-charging-heading {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .adaptive-charging-heading .adaptive-charging-actions {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .adaptive-charging-heading .adaptive-charging-actions button {
+    font-size: 12px;
+  }
+
+  .adaptive-charging-heading .adaptive-charging-actions button:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .adaptive-charging-timeline {
+    min-height: 280px;
+    height: 330px;
+  }
+
+  .adaptive-charging-window-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

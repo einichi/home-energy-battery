@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import dgram from "node:dgram";
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -22,9 +22,9 @@ const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, "data");
 const SCHEDULES_FILE = path.join(DATA_DIR, "schedules.json");
 const AUTOMATION_RULES_FILE = path.join(DATA_DIR, "automation-rules.json");
 const AUTOMATION_RULE_STATE_FILE = path.join(DATA_DIR, "automation-rule-state.json");
-const SOLAR_PLANNER_STATE_FILE = path.join(DATA_DIR, "solar-planner-state.json");
-const SOLAR_PLANNER_DIR = path.join(DATA_DIR, "solar-planner");
-const SOLAR_DEMAND_PROFILE_INDEX_FILE = path.join(SOLAR_PLANNER_DIR, "demand-day-profiles.json");
+const ADAPTIVE_CHARGING_STATE_FILE = path.join(DATA_DIR, "adaptive-charging-state.json");
+const ADAPTIVE_CHARGING_DIR = path.join(DATA_DIR, "adaptive-charging");
+const ADAPTIVE_CHARGING_DEMAND_PROFILE_INDEX_FILE = path.join(ADAPTIVE_CHARGING_DIR, "demand-day-profiles.json");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
 const HISTORY_FILE = path.join(HISTORY_DIR, "samples.jsonl");
@@ -33,23 +33,23 @@ const CLI_FILE = "home-energy-battery-node.js";
 const AUTOMATION_CHECK_INTERVAL_MS = 30_000;
 const SOLAR_FORECAST_REFRESH_MS = 3 * 60 * 60_000;
 const SOLAR_FORECAST_MAX_AGE_MS = 6 * 60 * 60_000;
-const SOLAR_PLAN_PREWINDOW_MS = 30 * 60_000;
-const SOLAR_PLAN_SLOT_MS = 30 * 60_000;
-const SOLAR_HISTORY_CACHE_MS = 30 * 60_000;
-const SOLAR_SLOT_END_RETRY_MS = 5_000;
-const SOLAR_BREAKER_RETRY_COOLDOWN_MS = 3 * 60_000;
-const SOLAR_BREAKER_SAFE_CHECKS = 3;
-const SOLAR_BREAKER_SAFETY_MARGIN_W = 200;
-const SOLAR_BREAKER_WAIT_LOG_MS = 5 * 60_000;
-const SOLAR_MIN_EXECUTABLE_CHARGE_WH = 50;
+const ADAPTIVE_CHARGING_PREWINDOW_MS = 30 * 60_000;
+const ADAPTIVE_CHARGING_SLOT_MS = 30 * 60_000;
+const ADAPTIVE_CHARGING_HISTORY_CACHE_MS = 30 * 60_000;
+const ADAPTIVE_CHARGING_SLOT_END_RETRY_MS = 5_000;
+const ADAPTIVE_CHARGING_BREAKER_RETRY_COOLDOWN_MS = 3 * 60_000;
+const ADAPTIVE_CHARGING_BREAKER_SAFE_CHECKS = 3;
+const ADAPTIVE_CHARGING_BREAKER_SAFETY_MARGIN_W = 200;
+const ADAPTIVE_CHARGING_BREAKER_WAIT_LOG_MS = 5 * 60_000;
+const ADAPTIVE_CHARGING_MIN_EXECUTABLE_CHARGE_WH = 50;
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
-const SOLAR_CHARGE_SESSION_LIMIT = 30;
-const SOLAR_CHARGE_SAMPLE_LIMIT = 500;
-const SOLAR_WINDOW_SUMMARY_LIMIT = 30;
-const SOLAR_DEMAND_PROFILE_INDEX_VERSION = 1;
-const SOLAR_SEASONAL_LOOKBACK_YEARS = 10;
-const SOLAR_SEASONAL_DAY_RANGE = 28;
-const SOLAR_SEASONAL_DAYS_PER_YEAR = 2;
+const ADAPTIVE_CHARGE_SESSION_LIMIT = 30;
+const ADAPTIVE_CHARGE_SAMPLE_LIMIT = 500;
+const ADAPTIVE_CHARGING_WINDOW_SUMMARY_LIMIT = 30;
+const ADAPTIVE_CHARGING_DEMAND_PROFILE_INDEX_VERSION = 1;
+const ADAPTIVE_CHARGING_SEASONAL_LOOKBACK_YEARS = 10;
+const ADAPTIVE_CHARGING_SEASONAL_DAY_RANGE = 28;
+const ADAPTIVE_CHARGING_SEASONAL_DAYS_PER_YEAR = 2;
 
 const DEFAULT_DASHBOARD_WIDGETS = [
   { id: "solarPower", group: "trends", visible: true, priority: 10 },
@@ -59,6 +59,7 @@ const DEFAULT_DASHBOARD_WIDGETS = [
   { id: "batterySoc", group: "trends", visible: true, priority: 50 },
   { id: "gridImportPower", group: "trends", visible: true, priority: 60 },
   { id: "gridExportPower", group: "trends", visible: true, priority: 70 },
+  { id: "adaptiveCharging", group: "status", visible: true, priority: 5 },
   { id: "batteryWorking", group: "status", visible: true, priority: 10 },
   { id: "operationMode", group: "status", visible: true, priority: 20 },
   { id: "vendorProfile", group: "status", visible: true, priority: 30 },
@@ -109,7 +110,7 @@ const DEFAULT_CONFIG = {
     usableCapacityKwh: null,
     maximumChargeWatts: null,
   },
-  solarPlanner: {
+  adaptiveCharging: {
     enabled: false,
     latitude: null,
     longitude: null,
@@ -131,8 +132,8 @@ let scheduleTimer = null;
 let automationTimer = null;
 let recorderTimer = null;
 let retentionTimer = null;
-let solarPlannerSlotEndTimer = null;
-let solarPlannerSlotEndTimerKey = null;
+let adaptiveChargingSlotEndTimer = null;
+let adaptiveChargingSlotEndTimerKey = null;
 let automationRunInProgress = false;
 let automationRunContext = null;
 let discoveryRunContext = null;
@@ -147,9 +148,9 @@ const notificationService = createNotificationService({
 let cliTimingSequence = 0;
 const recentCliTimings = [];
 let lastRecordedSample = null;
-let solarPlannerHistoryCache = null;
-let solarDemandProfileIndexCache = null;
-let solarDemandProfileIndexPromise = null;
+let adaptiveChargingHistoryCache = null;
+let adaptiveChargingDemandProfileIndexCache = null;
+let adaptiveChargingDemandProfileIndexPromise = null;
 const runningScheduleIds = new Set();
 const discoveryJobs = new Map();
 const DISCOVERY_JOB_TTL_MS = 10 * 60 * 1000;
@@ -214,7 +215,7 @@ function runCliQueued(command, args = {}, positional = []) {
 async function ensureDataDir() {
   await mkdir(DATA_DIR, { recursive: true });
   await mkdir(HISTORY_DIR, { recursive: true });
-  await mkdir(SOLAR_PLANNER_DIR, { recursive: true });
+  await mkdir(ADAPTIVE_CHARGING_DIR, { recursive: true });
 }
 
 function numericMetric(item) {
@@ -545,45 +546,45 @@ async function readRecentHistorySamples(startMs, endMs, file = HISTORY_FILE, pro
   return samples.reverse();
 }
 
-function solarPlannerHistorySample(sample) {
+function adaptiveChargingHistorySample(sample) {
   const compact = { timestamp: sample.timestamp };
-  let hasPlannerMetric = false;
+  let hasAdaptiveChargingMetric = false;
   for (const key of ["stateOfChargePercent", "batteryPowerW", "solarPowerW", "houseDemandW"]) {
     if (sample[key] === undefined) continue;
     compact[key] = sample[key];
-    if (sample[key] !== null) hasPlannerMetric = true;
+    if (sample[key] !== null) hasAdaptiveChargingMetric = true;
   }
-  return hasPlannerMetric ? compact : null;
+  return hasAdaptiveChargingMetric ? compact : null;
 }
 
-async function readSolarPlannerHistory(now = new Date()) {
+async function readAdaptiveChargingHistory(now = new Date()) {
   const endMs = now.getTime();
   const startMs = endMs - 90 * 86_400_000;
-  if (solarPlannerHistoryCache
-    && endMs >= solarPlannerHistoryCache.loadedAt
-    && endMs - solarPlannerHistoryCache.loadedAt < SOLAR_HISTORY_CACHE_MS
-    && solarPlannerHistoryCache.startMs <= startMs) {
-    return solarPlannerHistoryCache.samples.filter((sample) => {
+  if (adaptiveChargingHistoryCache
+    && endMs >= adaptiveChargingHistoryCache.loadedAt
+    && endMs - adaptiveChargingHistoryCache.loadedAt < ADAPTIVE_CHARGING_HISTORY_CACHE_MS
+    && adaptiveChargingHistoryCache.startMs <= startMs) {
+    return adaptiveChargingHistoryCache.samples.filter((sample) => {
       const time = new Date(sample.timestamp).getTime();
       return time >= startMs && time <= endMs;
     });
   }
-  const samples = await readRecentHistorySamples(startMs, endMs, HISTORY_FILE, solarPlannerHistorySample);
-  solarPlannerHistoryCache = { loadedAt: endMs, startMs, samples };
+  const samples = await readRecentHistorySamples(startMs, endMs, HISTORY_FILE, adaptiveChargingHistorySample);
+  adaptiveChargingHistoryCache = { loadedAt: endMs, startMs, samples };
   return [...samples];
 }
 
-function emptySolarDemandProfileIndex() {
+function emptyAdaptiveChargingDemandProfileIndex() {
   return {
-    version: SOLAR_DEMAND_PROFILE_INDEX_VERSION,
+    version: ADAPTIVE_CHARGING_DEMAND_PROFILE_INDEX_VERSION,
     source: null,
     days: {},
   };
 }
 
-function cleanSolarDemandProfileIndex(value) {
-  if (value?.version !== SOLAR_DEMAND_PROFILE_INDEX_VERSION || !value.days || typeof value.days !== "object") {
-    return emptySolarDemandProfileIndex();
+function cleanAdaptiveChargingDemandProfileIndex(value) {
+  if (value?.version !== ADAPTIVE_CHARGING_DEMAND_PROFILE_INDEX_VERSION || !value.days || typeof value.days !== "object") {
+    return emptyAdaptiveChargingDemandProfileIndex();
   }
   const days = {};
   for (const [key, day] of Object.entries(value.days)) {
@@ -599,7 +600,7 @@ function cleanSolarDemandProfileIndex(value) {
     days[key] = { sums, counts };
   }
   return {
-    version: SOLAR_DEMAND_PROFILE_INDEX_VERSION,
+    version: ADAPTIVE_CHARGING_DEMAND_PROFILE_INDEX_VERSION,
     source: value.source && Number.isFinite(Number(value.source.size))
       ? { size: Number(value.source.size), ino: Number(value.source.ino) }
       : null,
@@ -607,7 +608,7 @@ function cleanSolarDemandProfileIndex(value) {
   };
 }
 
-function addSampleToSolarDemandProfileIndex(index, sample) {
+function addSampleToAdaptiveChargingDemandProfileIndex(index, sample) {
   const demand = Number(sample?.houseDemandW);
   const time = new Date(sample?.timestamp);
   if (!Number.isFinite(demand) || Number.isNaN(time.getTime())) return;
@@ -622,7 +623,7 @@ function addSampleToSolarDemandProfileIndex(index, sample) {
   index.days[key] = day;
 }
 
-async function scanSolarDemandProfiles(index, start, end) {
+async function scanAdaptiveChargingDemandProfiles(index, start, end) {
   if (end <= start) return;
   const stream = createReadStream(HISTORY_FILE, { encoding: "utf8", start, end: end - 1 });
   const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -632,7 +633,7 @@ async function scanSolarDemandProfiles(index, start, end) {
       lineNumber += 1;
       if (!line.trim()) continue;
       try {
-        addSampleToSolarDemandProfileIndex(
+        addSampleToAdaptiveChargingDemandProfileIndex(
           index,
           parseJsonWithContext(line, `${HISTORY_FILE}:demand-index:${lineNumber}`),
         );
@@ -646,7 +647,7 @@ async function scanSolarDemandProfiles(index, start, end) {
   }
 }
 
-function solarDemandProfileDays(index) {
+function adaptiveChargingDemandProfileDays(index) {
   return Object.entries(index.days).map(([key, day]) => {
     const values = new Map();
     for (let bucket = 0; bucket < 48; bucket += 1) {
@@ -664,17 +665,17 @@ function solarDemandProfileDays(index) {
   }).filter((day) => !Number.isNaN(day.date.getTime()));
 }
 
-async function refreshSolarDemandProfileIndex() {
+async function refreshAdaptiveChargingDemandProfileIndex() {
   await ensureDataDir();
   if (historyStore.isReady()) {
     const endMs = Date.now();
-    const startMs = endMs - SOLAR_SEASONAL_LOOKBACK_YEARS * 366 * 86_400_000;
-    const index = emptySolarDemandProfileIndex();
+    const startMs = endMs - ADAPTIVE_CHARGING_SEASONAL_LOOKBACK_YEARS * 366 * 86_400_000;
+    const index = emptyAdaptiveChargingDemandProfileIndex();
     for (const sample of historyStore.querySamples(startMs, endMs, { resolution: "interval" })) {
-      addSampleToSolarDemandProfileIndex(index, sample);
+      addSampleToAdaptiveChargingDemandProfileIndex(index, sample);
     }
-    solarDemandProfileIndexCache = index;
-    return solarDemandProfileDays(index);
+    adaptiveChargingDemandProfileIndexCache = index;
+    return adaptiveChargingDemandProfileDays(index);
   }
   let historyStat;
   try {
@@ -683,45 +684,159 @@ async function refreshSolarDemandProfileIndex() {
     if (err.code === "ENOENT") return [];
     throw err;
   }
-  let index = solarDemandProfileIndexCache;
+  let index = adaptiveChargingDemandProfileIndexCache;
   if (!index) {
     try {
       const value = parseJsonWithContext(
-        await readFile(SOLAR_DEMAND_PROFILE_INDEX_FILE, "utf8"),
-        SOLAR_DEMAND_PROFILE_INDEX_FILE,
+        await readFile(ADAPTIVE_CHARGING_DEMAND_PROFILE_INDEX_FILE, "utf8"),
+        ADAPTIVE_CHARGING_DEMAND_PROFILE_INDEX_FILE,
       );
-      index = cleanSolarDemandProfileIndex(value);
+      index = cleanAdaptiveChargingDemandProfileIndex(value);
     } catch (err) {
       if (err.code !== "ENOENT") logDetailedError("solar demand profile index", err);
-      index = emptySolarDemandProfileIndex();
+      index = emptyAdaptiveChargingDemandProfileIndex();
     }
   }
   const sameHistoryFile = index.source
     && Number(index.source.ino) === Number(historyStat.ino)
     && index.source.size <= historyStat.size;
-  if (!sameHistoryFile) index = emptySolarDemandProfileIndex();
+  if (!sameHistoryFile) index = emptyAdaptiveChargingDemandProfileIndex();
   const start = index.source?.size ?? 0;
   if (start < historyStat.size) {
-    await scanSolarDemandProfiles(index, start, historyStat.size);
+    await scanAdaptiveChargingDemandProfiles(index, start, historyStat.size);
     index.source = { size: historyStat.size, ino: Number(historyStat.ino) };
-    await writeJsonFileAtomic(SOLAR_DEMAND_PROFILE_INDEX_FILE, index);
+    await writeJsonFileAtomic(ADAPTIVE_CHARGING_DEMAND_PROFILE_INDEX_FILE, index);
   }
-  solarDemandProfileIndexCache = index;
-  return solarDemandProfileDays(index);
+  adaptiveChargingDemandProfileIndexCache = index;
+  return adaptiveChargingDemandProfileDays(index);
 }
 
-async function readSolarDemandProfileDays() {
-  if (!solarDemandProfileIndexPromise) {
-    solarDemandProfileIndexPromise = refreshSolarDemandProfileIndex()
-      .finally(() => { solarDemandProfileIndexPromise = null; });
+async function readAdaptiveChargingDemandProfileDays() {
+  if (!adaptiveChargingDemandProfileIndexPromise) {
+    adaptiveChargingDemandProfileIndexPromise = refreshAdaptiveChargingDemandProfileIndex()
+      .finally(() => { adaptiveChargingDemandProfileIndexPromise = null; });
   }
-  return solarDemandProfileIndexPromise;
+  return adaptiveChargingDemandProfileIndexPromise;
 }
 
 async function writeJsonFileAtomic(file, data) {
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`);
   await rename(tmp, file);
+}
+
+async function pathExists(file) {
+  try {
+    await stat(file);
+    return true;
+  } catch (err) {
+    if (err.code === "ENOENT") return false;
+    throw err;
+  }
+}
+
+async function migrateLegacyAdaptiveChargingData(dataDir = DATA_DIR, logger = console) {
+  await mkdir(dataDir, { recursive: true });
+  const configFile = path.join(dataDir, "config.json");
+  if (await pathExists(configFile)) {
+    const parsed = parseJsonWithContext(await readFile(configFile, "utf8"), configFile);
+    let changed = false;
+    if (Object.prototype.hasOwnProperty.call(parsed, "solarPlanner")) {
+      const canonicalValid = parsed.adaptiveCharging
+        && typeof parsed.adaptiveCharging === "object"
+        && !Array.isArray(parsed.adaptiveCharging);
+      const legacyValid = parsed.solarPlanner
+        && typeof parsed.solarPlanner === "object"
+        && !Array.isArray(parsed.solarPlanner);
+      if (!canonicalValid && legacyValid) {
+        parsed.adaptiveCharging = parsed.solarPlanner;
+      } else {
+        logger.warn?.("Adaptive Charging migration: canonical configuration already exists; discarding obsolete solar planner configuration");
+      }
+      delete parsed.solarPlanner;
+      changed = true;
+    }
+    if (parsed.retention && Object.prototype.hasOwnProperty.call(parsed.retention, "plannerHistoryDays")) {
+      if (!Object.prototype.hasOwnProperty.call(parsed.retention, "adaptiveChargingHistoryDays")) {
+        parsed.retention.adaptiveChargingHistoryDays = parsed.retention.plannerHistoryDays;
+      }
+      delete parsed.retention.plannerHistoryDays;
+      changed = true;
+    }
+    const triggerRenames = {
+      plannerUnavailable: "adaptiveChargingUnavailable",
+      plannerRecovered: "adaptiveChargingRecovered",
+      plannerWindowShortfall: "adaptiveChargingWindowShortfall",
+    };
+    for (const [legacyId, canonicalId] of Object.entries(triggerRenames)) {
+      const triggers = parsed.notifications?.triggers;
+      if (!triggers || !Object.prototype.hasOwnProperty.call(triggers, legacyId)) continue;
+      if (!Object.prototype.hasOwnProperty.call(triggers, canonicalId)) {
+        triggers[canonicalId] = triggers[legacyId];
+      }
+      delete triggers[legacyId];
+      changed = true;
+    }
+    if (changed) {
+      await writeJsonFileAtomic(configFile, parsed);
+      logger.info?.("Adaptive Charging migration: updated configuration");
+    }
+  }
+
+  const legacyStateFile = path.join(dataDir, "solar-planner-state.json");
+  const stateFile = path.join(dataDir, "adaptive-charging-state.json");
+  if (await pathExists(legacyStateFile)) {
+    const readMigratingState = async (file) => {
+      const text = await readFile(file, "utf8");
+      let parsed;
+      try {
+        parsed = parseJsonWithContext(text, file);
+      } catch (err) {
+        const recovered = recoverConcatenatedJsonValue(
+          text,
+          (value) => value && typeof value === "object" && !Array.isArray(value),
+        );
+        if (!recovered) throw err;
+        parsed = recovered.value;
+      }
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    };
+    let canonicalState = null;
+    if (await pathExists(stateFile)) {
+      try {
+        canonicalState = await readMigratingState(stateFile);
+      } catch (err) {
+        logger.warn?.(`Adaptive Charging migration: canonical state is invalid and will be replaced: ${err.message}`);
+      }
+    }
+    if (!canonicalState) {
+      const legacyState = await readMigratingState(legacyStateFile);
+      if (legacyState.owner === "planner") legacyState.owner = "adaptiveCharging";
+      await writeJsonFileAtomic(stateFile, legacyState);
+    } else {
+      logger.warn?.("Adaptive Charging migration: canonical state already exists; discarding obsolete solar planner state");
+    }
+    await rm(legacyStateFile, { force: true });
+    logger.info?.("Adaptive Charging migration: updated state file");
+  }
+
+  const legacyDir = path.join(dataDir, "solar-planner");
+  const canonicalDir = path.join(dataDir, "adaptive-charging");
+  if (await pathExists(legacyDir)) {
+    await mkdir(canonicalDir, { recursive: true });
+    for (const entry of await readdir(legacyDir, { withFileTypes: true })) {
+      const source = path.join(legacyDir, entry.name);
+      const target = path.join(canonicalDir, entry.name);
+      if (!(await pathExists(target))) {
+        await rename(source, target);
+      } else {
+        logger.warn?.(`Adaptive Charging migration: keeping canonical ${entry.name} and discarding obsolete copy`);
+        await rm(source, { recursive: entry.isDirectory(), force: true });
+      }
+    }
+    await rm(legacyDir, { recursive: true, force: true });
+    logger.info?.("Adaptive Charging migration: updated data directory");
+  }
 }
 
 async function writeJsonLinesAtomic(file, rows) {
@@ -731,7 +846,7 @@ async function writeJsonLinesAtomic(file, rows) {
   await rename(tmp, file);
 }
 
-function cleanSolarPlannerState(value = {}) {
+function cleanAdaptiveChargingState(value = {}) {
   const plan = value.plan?.available === false
     && value.plan.reason === "discounted windows cannot safely reach their planned SOC targets"
     && Number(value.plan.plannedChargeKwh) > 0
@@ -740,7 +855,7 @@ function cleanSolarPlannerState(value = {}) {
   return {
     forecast: value.forecast ?? null,
     plan,
-    owner: value.owner === "planner" ? "planner" : null,
+    owner: value.owner === "adaptiveCharging" ? "adaptiveCharging" : null,
     activeSlot: value.activeSlot ?? null,
     activePlanCreatedAt: value.activePlanCreatedAt ?? null,
     activeChargedKwh: Math.max(0, Number(value.activeChargedKwh) || 0),
@@ -755,7 +870,7 @@ function cleanSolarPlannerState(value = {}) {
       slotEnd: value.activeChargeSession.slotEnd ?? null,
       label: value.activeChargeSession.label ?? null,
     } : null,
-    chargingPerformance: cleanPlannerChargingPerformance(value.chargingPerformance),
+    chargingPerformance: cleanAdaptiveChargingPerformance(value.chargingPerformance),
     lastRebasedWindowKey: value.lastRebasedWindowKey ?? null,
     lastPlanEventKey: value.lastPlanEventKey ?? null,
     pendingPlanReason: value.pendingPlanReason ?? null,
@@ -820,7 +935,7 @@ function cleanSolarPlannerState(value = {}) {
         completedAt: summary.completedAt ?? null,
         reason: summary.reason ?? null,
       }))
-      .slice(-SOLAR_WINDOW_SUMMARY_LIMIT),
+      .slice(-ADAPTIVE_CHARGING_WINDOW_SUMMARY_LIMIT),
     pausedUntil: value.pausedUntil ?? null,
     solarHeadroomHoldUntil: value.solarHeadroomHoldUntil ?? null,
     lastResult: value.lastResult ?? null,
@@ -837,7 +952,7 @@ function finiteNumberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
-function cleanPlannerChargingPerformance(value = {}) {
+function cleanAdaptiveChargingPerformance(value = {}) {
   const samples = (Array.isArray(value.samples) ? value.samples : [])
     .map((sample) => ({
       at: sample.at ?? null,
@@ -852,7 +967,7 @@ function cleanPlannerChargingPerformance(value = {}) {
     .filter((sample) => sample.at
       && Number.isFinite(sample.batteryChargingW)
       && sample.batteryChargingW > 0)
-    .slice(-SOLAR_CHARGE_SAMPLE_LIMIT);
+    .slice(-ADAPTIVE_CHARGE_SAMPLE_LIMIT);
   const sessions = (Array.isArray(value.sessions) ? value.sessions : [])
     .map((session) => ({
       startedAt: session.startedAt ?? null,
@@ -867,7 +982,7 @@ function cleanPlannerChargingPerformance(value = {}) {
       estimatedStorageEfficiencyPercent: finiteNumberOrNull(session.estimatedStorageEfficiencyPercent),
     }))
     .filter((session) => session.startedAt && session.endedAt)
-    .slice(-SOLAR_CHARGE_SESSION_LIMIT);
+    .slice(-ADAPTIVE_CHARGE_SESSION_LIMIT);
   const chargingPowers = samples.map((sample) => sample.batteryChargingW).sort((a, b) => a - b);
   const upperQuartile = chargingPowers.slice(Math.floor(chargingPowers.length * 0.75));
   const learnedChargeWatts = chargingPowers.length >= 10 ? median(upperQuartile) : null;
@@ -899,7 +1014,7 @@ function cleanPlannerChargingPerformance(value = {}) {
   };
 }
 
-function effectivePlannerChargeWatts(config, state = {}) {
+function effectiveAdaptiveChargeWatts(config, state = {}) {
   const configuredWatts = Number(config.batteryCapabilities?.maximumChargeWatts);
   const learnedWatts = Number(state.chargingPerformance?.learnedChargeWatts);
   const learned = Number(state.chargingPerformance?.sampleCount) >= 10
@@ -915,59 +1030,59 @@ function effectivePlannerChargeWatts(config, state = {}) {
   };
 }
 
-async function readSolarPlannerState() {
+async function readAdaptiveChargingState() {
   await ensureDataDir();
   try {
-    const text = await readFile(SOLAR_PLANNER_STATE_FILE, "utf8");
+    const text = await readFile(ADAPTIVE_CHARGING_STATE_FILE, "utf8");
     let parsed;
     let recovered = null;
     try {
-      parsed = parseJsonWithContext(text, SOLAR_PLANNER_STATE_FILE);
+      parsed = parseJsonWithContext(text, ADAPTIVE_CHARGING_STATE_FILE);
     } catch (err) {
       recovered = recoverConcatenatedJsonValue(text, (value) => value && typeof value === "object" && !Array.isArray(value));
       if (!recovered) throw err;
-      logDetailedError("solar-planner-state", err);
+      logDetailedError("adaptive-charging-state", err);
       parsed = recovered.value;
     }
-    const cleaned = cleanSolarPlannerState(parsed);
-    if (recovered) await writeJsonFileAtomic(SOLAR_PLANNER_STATE_FILE, cleaned);
+    const cleaned = cleanAdaptiveChargingState(parsed);
+    if (recovered) await writeJsonFileAtomic(ADAPTIVE_CHARGING_STATE_FILE, cleaned);
     return cleaned;
   } catch (err) {
-    if (err.code === "ENOENT") return cleanSolarPlannerState();
+    if (err.code === "ENOENT") return cleanAdaptiveChargingState();
     throw err;
   }
 }
 
-async function writeSolarPlannerState(state) {
-  const cleaned = cleanSolarPlannerState({ ...state, updatedAt: new Date().toISOString() });
+async function writeAdaptiveChargingState(state) {
+  const cleaned = cleanAdaptiveChargingState({ ...state, updatedAt: new Date().toISOString() });
   await ensureDataDir();
-  await writeJsonFileAtomic(SOLAR_PLANNER_STATE_FILE, cleaned);
+  await writeJsonFileAtomic(ADAPTIVE_CHARGING_STATE_FILE, cleaned);
   if (historyStore.isReady()) {
     for (const entry of cleaned.log) {
       historyStore.recordEvent({
-        eventKey: `planner:log:${entry.at}:${entry.kind ?? "info"}:${entry.message}`,
+        eventKey: `adaptiveCharging:log:${entry.at}:${entry.kind ?? "info"}:${entry.message}`,
         at: entry.at,
-        category: "planner",
+        category: "adaptiveCharging",
         type: entry.kind ?? "log",
         message: entry.message,
       });
     }
     for (const summary of cleaned.windowSummaries) {
       historyStore.recordEvent({
-        eventKey: `planner:window:${summary.key}`,
+        eventKey: `adaptiveCharging:window:${summary.key}`,
         at: summary.completedAt ?? summary.windowEnd,
-        category: "planner",
+        category: "adaptiveCharging",
         type: "window-summary",
         message: summary.reason,
         payload: summary,
       });
     }
   }
-  syncSolarPlannerSlotEndTimer(cleaned);
+  syncAdaptiveChargingSlotEndTimer(cleaned);
   return cleaned;
 }
 
-function appendSolarPlannerLog(state, message, kind = "info", at = new Date()) {
+function appendAdaptiveChargingLog(state, message, kind = "info", at = new Date()) {
   state.log = [
     ...(Array.isArray(state.log) ? state.log : []),
     { at: at.toISOString(), kind, message },
@@ -987,17 +1102,17 @@ async function fetchJson(url, fetchImpl = fetch) {
 }
 
 function openMeteoUrl(config, historical = false, now = new Date()) {
-  const planner = config.solarPlanner;
+  const adaptiveCharging = config.adaptiveCharging;
   const endpoint = historical
     ? "https://historical-forecast-api.open-meteo.com/v1/forecast"
     : "https://api.open-meteo.com/v1/jma";
   const params = new URLSearchParams({
-    latitude: String(planner.latitude),
-    longitude: String(planner.longitude),
+    latitude: String(adaptiveCharging.latitude),
+    longitude: String(adaptiveCharging.longitude),
     hourly: "shortwave_radiation,global_tilted_irradiance,cloud_cover,temperature_2m",
     timezone: "auto",
-    tilt: String(planner.panelTiltDegrees),
-    azimuth: String(planner.panelAzimuthDegrees),
+    tilt: String(adaptiveCharging.panelTiltDegrees),
+    azimuth: String(adaptiveCharging.panelAzimuthDegrees),
   });
   if (historical) {
     const end = new Date(now);
@@ -1014,7 +1129,7 @@ function openMeteoUrl(config, historical = false, now = new Date()) {
   return `${endpoint}?${params}`;
 }
 
-function plannerTimezoneError(forecast) {
+function adaptiveChargingTimezoneError(forecast) {
   const configuredTimezone = process.env.TZ;
   if (!configuredTimezone) return "container TZ must be configured before rate-band times can be aligned";
   if (!forecast?.timezone) return "forecast timezone is unavailable";
@@ -1023,20 +1138,20 @@ function plannerTimezoneError(forecast) {
     : `container timezone ${configuredTimezone} does not match forecast timezone ${forecast.timezone}`;
 }
 
-async function refreshSolarPlannerForecast(config, { fetchImpl = fetch, now = new Date(), forceHistorical = false } = {}) {
-  let state = await readSolarPlannerState();
+async function refreshAdaptiveChargingForecast(config, { fetchImpl = fetch, now = new Date(), forceHistorical = false } = {}) {
+  let state = await readAdaptiveChargingState();
   try {
     const forecast = parseOpenMeteoForecast(await fetchJson(openMeteoUrl(config, false, now), fetchImpl), now);
-    const timezoneError = plannerTimezoneError(forecast);
+    const timezoneError = adaptiveChargingTimezoneError(forecast);
     if (timezoneError) throw new Error(timezoneError);
     state.forecast = forecast;
     state.lastForecastError = null;
-    appendSolarPlannerLog(state, `Open-Meteo forecast refreshed for ${forecast.timezone || "local time"}`, "forecast", now);
+    appendAdaptiveChargingLog(state, `Open-Meteo forecast refreshed for ${forecast.timezone || "local time"}`, "forecast", now);
     historyStore.recordForecast(forecast);
   } catch (err) {
     state.lastForecastError = { at: now.toISOString(), error: err.message };
-    appendSolarPlannerLog(state, `Forecast refresh failed: ${err.message}`, "error", now);
-    return writeSolarPlannerState(state);
+    appendAdaptiveChargingLog(state, `Forecast refresh failed: ${err.message}`, "error", now);
+    return writeAdaptiveChargingState(state);
   }
   const historicalAge = now.getTime() - new Date(state.historicalWeatherFetchedAt ?? 0).getTime();
   if (forceHistorical || !Number.isFinite(historicalAge) || historicalAge > 24 * 60 * 60_000) {
@@ -1045,21 +1160,21 @@ async function refreshSolarPlannerForecast(config, { fetchImpl = fetch, now = ne
       historyStore.recordWeather(historical.hours);
       state.historicalWeatherFetchedAt = now.toISOString();
     } catch (err) {
-      appendSolarPlannerLog(state, `Historical weather refresh failed; using demand recency fallback: ${err.message}`, "warning", now);
+      appendAdaptiveChargingLog(state, `Historical weather refresh failed; using demand recency fallback: ${err.message}`, "warning", now);
     }
   }
-  return writeSolarPlannerState(state);
+  return writeAdaptiveChargingState(state);
 }
 
-function solarPlannerView(config, state, rules = [], now = new Date()) {
-  const availability = solarPlannerAvailability(config, rules);
+function adaptiveChargingView(config, state, rules = [], now = new Date()) {
+  const availability = adaptiveChargingAvailability(config, rules);
   const forecastAgeMs = state.forecast?.fetchedAt
     ? now.getTime() - new Date(state.forecast.fetchedAt).getTime()
     : null;
   const paused = Boolean(state.pausedUntil && new Date(state.pausedUntil).getTime() > now.getTime());
   const planUnavailableReason = state.plan && state.plan.available === false ? state.plan.reason : null;
   return {
-    enabled: config.solarPlanner?.enabled === true,
+    enabled: config.adaptiveCharging?.enabled === true,
     available: availability.available
       && forecastIsFresh(state.forecast, now)
       && !paused
@@ -1204,26 +1319,26 @@ function discountedBandOccurrence(config, now = new Date()) {
 
 function solarPowerFromIrradiance(irradianceWm2, config, learnedFactor = null) {
   const irradiance = Math.max(0, Number(irradianceWm2) || 0);
-  const planner = config.solarPlanner ?? config;
-  const peakW = Math.max(0, Number(planner.arrayPeakKw) || 0) * 1000;
-  const fallbackFactor = Math.max(0, Number(planner.arrayPeakKw) || 0)
-    * (1 - Math.max(0, Number(planner.systemLossPercent) || 0) / 100);
+  const adaptiveCharging = config.adaptiveCharging ?? config;
+  const peakW = Math.max(0, Number(adaptiveCharging.arrayPeakKw) || 0) * 1000;
+  const fallbackFactor = Math.max(0, Number(adaptiveCharging.arrayPeakKw) || 0)
+    * (1 - Math.max(0, Number(adaptiveCharging.systemLossPercent) || 0) / 100);
   const factor = Number.isFinite(Number(learnedFactor)) && Number(learnedFactor) > 0
     ? Number(learnedFactor)
     : fallbackFactor;
   return Math.min(peakW, irradiance * factor);
 }
 
-function solarPlannerBaseAvailability(config) {
+function adaptiveChargingBaseAvailability(config) {
   if (config.solarEnabled === false) return { available: false, reason: "solar generation is disabled" };
-  if (!config.solarPlanner?.enabled) return { available: false, reason: "adaptive solar charging is disabled" };
+  if (!config.adaptiveCharging?.enabled) return { available: false, reason: "adaptive charging is disabled" };
   if (config.rateMode === "simple") return { available: false, reason: "Off-Peak or Multi-Rate pricing is required" };
   const coordinates = [
-    [config.solarPlanner.latitude, "latitude"],
-    [config.solarPlanner.longitude, "longitude"],
+    [config.adaptiveCharging.latitude, "latitude"],
+    [config.adaptiveCharging.longitude, "longitude"],
   ];
   const positive = [
-    [config.solarPlanner.arrayPeakKw, "array peak capacity"],
+    [config.adaptiveCharging.arrayPeakKw, "array peak capacity"],
     [config.batteryCapabilities?.usableCapacityKwh, "usable battery capacity"],
     [config.batteryCapabilities?.maximumChargeWatts, "maximum battery charge watts"],
   ];
@@ -1236,10 +1351,10 @@ function solarPlannerBaseAvailability(config) {
   return { available: true, reason: null };
 }
 
-function solarPlannerAvailability(config, rules = []) {
-  const base = solarPlannerBaseAvailability(config);
+function adaptiveChargingAvailability(config, rules = []) {
+  const base = adaptiveChargingBaseAvailability(config);
   if (!base.available) return base;
-  return plannerBreakerSettings(rules).valid
+  return adaptiveChargingBreakerSettings(rules).valid
     ? base
     : { available: false, reason: "Charging Demand Guard settings are unavailable" };
 }
@@ -1408,7 +1523,7 @@ function applyPredictedBatteryFlow(storedKwh, netKwh, floorKwh, capacityKwh) {
   return Math.max(floorKwh, Math.min(capacityKwh, storedKwh + Number(netKwh || 0)));
 }
 
-function applyPlannerTimelineSlot(storedKwh, slot, chargeKwh, floorKwh, capacityKwh) {
+function applyAdaptiveChargingTimelineSlot(storedKwh, slot, chargeKwh, floorKwh, capacityKwh) {
   const allocatedChargeKwh = Math.max(0, Number(chargeKwh) || 0);
   const slotChargeCapacityKwh = Math.max(0, Number(slot?.chargeCapacityKwh) || 0);
   const forcedChargeFraction = slotChargeCapacityKwh > 0
@@ -1417,6 +1532,54 @@ function applyPlannerTimelineSlot(storedKwh, slot, chargeKwh, floorKwh, capacity
   const autoNetKwh = Number(slot?.netKwh || 0) * (1 - forcedChargeFraction);
   const afterAuto = applyPredictedBatteryFlow(storedKwh, autoNetKwh, floorKwh, capacityKwh);
   return Math.min(capacityKwh, afterAuto + allocatedChargeKwh);
+}
+
+function buildAdaptiveChargingTimelineView({
+  timeline = [],
+  slots = [],
+  initialStoredKwh,
+  floorKwh,
+  capacityKwh,
+  config,
+} = {}) {
+  let storedKwh = Math.max(floorKwh, Math.min(capacityKwh, Number(initialStoredKwh)));
+  return timeline.map((interval) => {
+    const intervalSlots = slots.filter((slot) => {
+      const startMs = new Date(slot.start).getTime();
+      const endMs = new Date(slot.end).getTime();
+      return Number.isFinite(startMs) && Number.isFinite(endMs)
+        && startMs >= interval.startMs
+        && endMs <= interval.endMs;
+    });
+    const plannedChargeKwh = intervalSlots.reduce(
+      (sum, slot) => sum + Math.max(0, Number(slot.targetWh) || 0) / 1000,
+      0,
+    );
+    storedKwh = applyAdaptiveChargingTimelineSlot(
+      storedKwh,
+      interval,
+      plannedChargeKwh,
+      floorKwh,
+      capacityKwh,
+    );
+    const durationHours = Math.max(0, interval.endMs - interval.startMs) / 3_600_000;
+    const rate = interval.band ?? rateForTimestamp(
+      config.rateBands,
+      new Date(interval.startMs),
+      config.standardRateYenPerKwh,
+    );
+    return {
+      start: new Date(interval.startMs).toISOString(),
+      end: new Date(interval.endMs).toISOString(),
+      solarW: durationHours > 0 ? Number(interval.solarKwh || 0) * 1000 / durationHours : 0,
+      demandW: Number(interval.demandW) || 0,
+      predictedSocPercent: capacityKwh > 0 ? storedKwh / capacityKwh * 100 : null,
+      discounted: Boolean(interval.band),
+      rateLabel: rate?.label ?? null,
+      yenPerKwh: finiteNumberOrNull(rate?.yenPerKwh),
+      plannedChargeWh: Math.round(plannedChargeKwh * 1000),
+    };
+  });
 }
 
 function planChronologicalDiscountedCharging({
@@ -1439,7 +1602,7 @@ function planChronologicalDiscountedCharging({
 
     const simulate = (startIndex, endIndex, chargeByIndex = new Map()) => {
       for (let index = startIndex; index < endIndex; index += 1) {
-        storedKwh = applyPlannerTimelineSlot(
+        storedKwh = applyAdaptiveChargingTimelineSlot(
           storedKwh,
           timeline[index],
           chargeByIndex.get(index),
@@ -1456,7 +1619,7 @@ function planChronologicalDiscountedCharging({
       const simulateWindow = (chargeByIndex = new Map()) => {
         let projectedStoredKwh = storedKwh;
         for (let index = window.startIndex; index < window.endIndex; index += 1) {
-          projectedStoredKwh = applyPlannerTimelineSlot(
+          projectedStoredKwh = applyAdaptiveChargingTimelineSlot(
             projectedStoredKwh,
             timeline[index],
             chargeByIndex.get(index),
@@ -1676,9 +1839,9 @@ function selectSeasonalDemandDays(validDays, target, targetIsWeekend, targetTemp
   const byYear = new Map();
   for (const day of validDays) {
     const yearsAgo = target.getFullYear() - day.date.getFullYear();
-    if (yearsAgo < 1 || yearsAgo > SOLAR_SEASONAL_LOOKBACK_YEARS) continue;
+    if (yearsAgo < 1 || yearsAgo > ADAPTIVE_CHARGING_SEASONAL_LOOKBACK_YEARS) continue;
     const calendarDistance = calendarDayDistance(day.date, target);
-    if (calendarDistance > SOLAR_SEASONAL_DAY_RANGE) continue;
+    if (calendarDistance > ADAPTIVE_CHARGING_SEASONAL_DAY_RANGE) continue;
     const sameDayType = [0, 6].includes(day.date.getDay()) === targetIsWeekend;
     const temperature = Number(temperatureByDay.get(day.key));
     const hasTemperatureMatch = Number.isFinite(targetTemperature) && Number.isFinite(temperature);
@@ -1698,7 +1861,7 @@ function selectSeasonalDemandDays(validDays, target, targetIsWeekend, targetTemp
     byYear.set(day.date.getFullYear(), candidates);
   }
   return [...byYear.values()]
-    .flatMap((days) => days.sort((a, b) => a.score - b.score).slice(0, SOLAR_SEASONAL_DAYS_PER_YEAR))
+    .flatMap((days) => days.sort((a, b) => a.score - b.score).slice(0, ADAPTIVE_CHARGING_SEASONAL_DAYS_PER_YEAR))
     .sort((a, b) => a.score - b.score);
 }
 
@@ -1852,7 +2015,7 @@ function learnedSolarFactor(samples, historicalWeather, config) {
     daily.set(key, row);
   }
   const factors = [...daily.values()].map((day) => median(day.factors)).filter(Number.isFinite);
-  const fallback = Number(config.solarPlanner.arrayPeakKw) * (1 - Number(config.solarPlanner.systemLossPercent) / 100);
+  const fallback = Number(config.adaptiveCharging.arrayPeakKw) * (1 - Number(config.adaptiveCharging.systemLossPercent) / 100);
   const learned = factors.length >= 7;
   const groupNames = new Set([...daily.values()].flatMap((day) => [...day.groups.keys()]));
   const groupFactors = {};
@@ -1915,15 +2078,16 @@ function planningSunsetWithDiscountedWindow(config, forecast, now = new Date()) 
     }) ?? null;
 }
 
-function buildSolarChargingPlan({ config, state, samples, historicalDemandDays = [], now = new Date() } = {}) {
+function buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDays = [], now = new Date() } = {}) {
   const unavailable = (reason) => ({
     available: false,
     reason,
     createdAt: now.toISOString(),
     forecastFetchedAt: state.forecast?.fetchedAt ?? null,
     slots: [],
+    timeline: [],
   });
-  const baseAvailability = solarPlannerBaseAvailability(config);
+  const baseAvailability = adaptiveChargingBaseAvailability(config);
   if (!baseAvailability.available) return unavailable(baseAvailability.reason);
   if (!forecastIsFresh(state.forecast, now)) return unavailable("solar forecast is stale or unavailable");
   const sunset = planningSunsetWithDiscountedWindow(config, state.forecast, now);
@@ -1935,8 +2099,10 @@ function buildSolarChargingPlan({ config, state, samples, historicalDemandDays =
   const capacityEstimate = estimateEffectiveBatteryCapacity(samples, config.batteryCapabilities.usableCapacityKwh);
   const capacityKwh = Number(capacityEstimate.capacityKwh);
   const dischargeLimit = Number(config.settingCache?.discharge_limit?.lastKnown?.decoded?.percent ?? 20);
+  const initialStoredKwh = capacityKwh * soc / 100;
+  const dischargeFloorKwh = capacityKwh * Math.max(0, dischargeLimit) / 100;
   const calibration = learnedSolarFactor(samples, state.historicalWeather, config);
-  const chargePerformance = effectivePlannerChargeWatts(config, state);
+  const chargePerformance = effectiveAdaptiveChargeWatts(config, state);
   const maximumChargeWatts = chargePerformance.effectiveWatts;
   const startMs = now.getTime();
   const demandByDay = new Map();
@@ -1957,9 +2123,9 @@ function buildSolarChargingPlan({ config, state, samples, historicalDemandDays =
     const hour = forecastHourForInterval(state.forecast, time, slotEndMs);
     const factor = calibration.groupFactors?.[solarCalibrationGroup(date)] ?? calibration.factor;
     const rawSolarW = solarPowerFromIrradiance(hour?.tiltedIrradianceWm2, config, factor);
-    const margin = Number(config.solarPlanner.forecastMarginPercent) / 100;
+    const margin = Number(config.adaptiveCharging.forecastMarginPercent) / 100;
     const solarW = rawSolarW * (1 - margin);
-    const highSolarW = Math.min(Number(config.solarPlanner.arrayPeakKw) * 1000, rawSolarW * (1 + margin));
+    const highSolarW = Math.min(Number(config.adaptiveCharging.arrayPeakKw) * 1000, rawSolarW * (1 + margin));
     const slotDemandW = Number(demand.profile.get(halfHourIndex(date)) ?? 0);
     const durationHours = (slotEndMs - time) / 3_600_000;
     const solarKwh = solarW * durationHours / 1000;
@@ -1990,11 +2156,19 @@ function buildSolarChargingPlan({ config, state, samples, historicalDemandDays =
   const demandPredictions = [...demandByDay.values()];
   const optimized = planChronologicalDiscountedCharging({
     timeline,
-    currentStoredKwh: capacityKwh * soc / 100,
+    currentStoredKwh: initialStoredKwh,
     capacityKwh,
-    dischargeFloorKwh: capacityKwh * Math.max(0, dischargeLimit) / 100,
-    maximumTargetPercent: Number(config.solarPlanner.targetSocPercent),
+    dischargeFloorKwh,
+    maximumTargetPercent: Number(config.adaptiveCharging.targetSocPercent),
     maximumChargeWatts,
+  });
+  const timelineView = buildAdaptiveChargingTimelineView({
+    timeline,
+    slots: optimized.slots,
+    initialStoredKwh,
+    floorKwh: dischargeFloorKwh,
+    capacityKwh,
+    config,
   });
   const planStatus = discountedPlanStatus(optimized);
   return {
@@ -2004,7 +2178,7 @@ function buildSolarChargingPlan({ config, state, samples, historicalDemandDays =
     targetSunset: new Date(sunset.timestamp).toISOString(),
     forecastFetchedAt: state.forecast?.fetchedAt ?? null,
     currentSocPercent: soc,
-    targetSocPercent: Number(config.solarPlanner.targetSocPercent),
+    targetSocPercent: Number(config.adaptiveCharging.targetSocPercent),
     expectedSunsetSocPercent: capacityKwh ? Math.min(100, optimized.expectedEndStoredKwh / capacityKwh * 100) : null,
     predictedSolarKwh,
     predictedDemandKwh,
@@ -2028,6 +2202,7 @@ function buildSolarChargingPlan({ config, state, samples, historicalDemandDays =
     solarCalibration: calibration,
     batteryCapacity: capacityEstimate,
     slots: optimized.slots,
+    timeline: timelineView,
   };
 }
 
@@ -2103,11 +2278,11 @@ function sampleFromStatus(status, config, previousSample) {
 async function recordStatusSample(status, config) {
   const sample = sampleFromStatus(status, config, lastRecordedSample);
   lastRecordedSample = historyStore.appendSample(sample);
-  if (solarPlannerHistoryCache) {
-    const plannerSample = solarPlannerHistorySample(sample);
-    if (plannerSample) solarPlannerHistoryCache.samples.push(plannerSample);
-    solarPlannerHistoryCache.samples = solarPlannerHistoryCache.samples.filter(
-      (item) => new Date(item.timestamp).getTime() >= solarPlannerHistoryCache.startMs,
+  if (adaptiveChargingHistoryCache) {
+    const adaptiveChargingSample = adaptiveChargingHistorySample(sample);
+    if (adaptiveChargingSample) adaptiveChargingHistoryCache.samples.push(adaptiveChargingSample);
+    adaptiveChargingHistoryCache.samples = adaptiveChargingHistoryCache.samples.filter(
+      (item) => new Date(item.timestamp).getTime() >= adaptiveChargingHistoryCache.startMs,
     );
   }
   return sample;
@@ -2588,8 +2763,8 @@ async function readHistoryStats() {
 }
 
 async function trimHistory(retention) {
-  solarPlannerHistoryCache = null;
-  solarDemandProfileIndexCache = null;
+  adaptiveChargingHistoryCache = null;
+  adaptiveChargingDemandProfileIndexCache = null;
   return historyStore.applyRetention(retention);
 }
 
@@ -2704,17 +2879,17 @@ function normalizeBatteryCapabilities(value = {}) {
   };
 }
 
-function normalizeSolarPlanner(value = {}) {
+function normalizeAdaptiveCharging(value = {}) {
   return {
-    enabled: configBool(value.enabled, DEFAULT_CONFIG.solarPlanner.enabled),
+    enabled: configBool(value.enabled, DEFAULT_CONFIG.adaptiveCharging.enabled),
     latitude: optionalConfigNumber(value.latitude, -90, 90),
     longitude: optionalConfigNumber(value.longitude, -180, 180),
     arrayPeakKw: optionalConfigNumber(value.arrayPeakKw, 0.1, 10000),
-    panelTiltDegrees: configNumber(value.panelTiltDegrees, DEFAULT_CONFIG.solarPlanner.panelTiltDegrees, 0, 90),
-    panelAzimuthDegrees: configNumber(value.panelAzimuthDegrees, DEFAULT_CONFIG.solarPlanner.panelAzimuthDegrees, -180, 180),
-    systemLossPercent: configNumber(value.systemLossPercent, DEFAULT_CONFIG.solarPlanner.systemLossPercent, 0, 50),
-    targetSocPercent: configNumber(value.targetSocPercent, DEFAULT_CONFIG.solarPlanner.targetSocPercent, 50, 100),
-    forecastMarginPercent: configNumber(value.forecastMarginPercent, DEFAULT_CONFIG.solarPlanner.forecastMarginPercent, 0, 50),
+    panelTiltDegrees: configNumber(value.panelTiltDegrees, DEFAULT_CONFIG.adaptiveCharging.panelTiltDegrees, 0, 90),
+    panelAzimuthDegrees: configNumber(value.panelAzimuthDegrees, DEFAULT_CONFIG.adaptiveCharging.panelAzimuthDegrees, -180, 180),
+    systemLossPercent: configNumber(value.systemLossPercent, DEFAULT_CONFIG.adaptiveCharging.systemLossPercent, 0, 50),
+    targetSocPercent: configNumber(value.targetSocPercent, DEFAULT_CONFIG.adaptiveCharging.targetSocPercent, 50, 100),
+    forecastMarginPercent: configNumber(value.forecastMarginPercent, DEFAULT_CONFIG.adaptiveCharging.forecastMarginPercent, 0, 50),
   };
 }
 
@@ -2791,7 +2966,7 @@ function cleanConfig(input = {}) {
     updateIntervalSeconds: configNumber(input.updateIntervalSeconds, DEFAULT_CONFIG.updateIntervalSeconds, 5, 3600),
     rateBands,
     batteryCapabilities: normalizeBatteryCapabilities(input.batteryCapabilities ?? {}),
-    solarPlanner: normalizeSolarPlanner(input.solarPlanner ?? {}),
+    adaptiveCharging: normalizeAdaptiveCharging(input.adaptiveCharging ?? {}),
     notifications: normalizeNotificationConfig(input.notifications ?? {}),
     dashboardWidgets: normalizeDashboardWidgets(input.dashboardWidgets),
     settingCache: normalizeSettingCache(input.settingCache ?? {}),
@@ -2823,7 +2998,7 @@ async function writeConfig(config) {
   const hostKeys = ["batteryHost", "meterHost", "meterEoj", "solarHost"];
   const hostChanged = hostKeys.some((key) => previous[key] !== cleaned[key])
     || JSON.stringify(previous.fuelCellHosts) !== JSON.stringify(cleaned.fuelCellHosts);
-  const plannerInputsChanged = JSON.stringify({
+  const adaptiveChargingInputsChanged = JSON.stringify({
     batteryHost: previous.batteryHost,
     meterHost: previous.meterHost,
     meterEoj: previous.meterEoj,
@@ -2834,7 +3009,7 @@ async function writeConfig(config) {
     rateBands: previous.rateBands,
     standardRateYenPerKwh: previous.standardRateYenPerKwh,
     batteryCapabilities: previous.batteryCapabilities,
-    solarPlanner: previous.solarPlanner,
+    adaptiveCharging: previous.adaptiveCharging,
   }) !== JSON.stringify({
     batteryHost: cleaned.batteryHost,
     meterHost: cleaned.meterHost,
@@ -2846,10 +3021,10 @@ async function writeConfig(config) {
     rateBands: cleaned.rateBands,
     standardRateYenPerKwh: cleaned.standardRateYenPerKwh,
     batteryCapabilities: cleaned.batteryCapabilities,
-    solarPlanner: cleaned.solarPlanner,
+    adaptiveCharging: cleaned.adaptiveCharging,
   });
-  if (plannerInputsChanged) {
-    const state = await readSolarPlannerState();
+  if (adaptiveChargingInputsChanged) {
+    const state = await readAdaptiveChargingState();
     const changedAt = new Date();
     state.plan = null;
     state.interruptedCharge = null;
@@ -2857,35 +3032,35 @@ async function writeConfig(config) {
     state.lastPlanEventKey = null;
     state.pendingPlanReason = "configuration changed";
     const forecastInputsChanged = JSON.stringify({
-      latitude: previous.solarPlanner.latitude,
-      longitude: previous.solarPlanner.longitude,
-      tilt: previous.solarPlanner.panelTiltDegrees,
-      azimuth: previous.solarPlanner.panelAzimuthDegrees,
+      latitude: previous.adaptiveCharging.latitude,
+      longitude: previous.adaptiveCharging.longitude,
+      tilt: previous.adaptiveCharging.panelTiltDegrees,
+      azimuth: previous.adaptiveCharging.panelAzimuthDegrees,
     }) !== JSON.stringify({
-      latitude: cleaned.solarPlanner.latitude,
-      longitude: cleaned.solarPlanner.longitude,
-      tilt: cleaned.solarPlanner.panelTiltDegrees,
-      azimuth: cleaned.solarPlanner.panelAzimuthDegrees,
+      latitude: cleaned.adaptiveCharging.latitude,
+      longitude: cleaned.adaptiveCharging.longitude,
+      tilt: cleaned.adaptiveCharging.panelTiltDegrees,
+      azimuth: cleaned.adaptiveCharging.panelAzimuthDegrees,
     });
     if (forecastInputsChanged) {
       state.forecast = null;
       state.historicalWeatherFetchedAt = null;
     }
-    if (state.owner === "planner") {
-      const reason = plannerConfiguredActive(cleaned)
-        ? "Adaptive solar charging configuration changed"
-        : "Adaptive solar charging was disabled";
-      await releasePlannerCharge(state, reason, changedAt, previous.batteryHost);
+    if (state.owner === "adaptiveCharging") {
+      const reason = adaptiveChargingConfiguredActive(cleaned)
+        ? "Adaptive Charging configuration changed"
+        : "Adaptive Charging was disabled";
+      await releaseAdaptiveCharge(state, reason, changedAt, previous.batteryHost);
     }
     if (state.activeWindowExecution) {
-      finalizePlannerWindowExecution(
+      finalizeAdaptiveChargingWindowExecution(
         state,
         state.activeWindowExecution.latestSocPercent,
         changedAt,
         "adaptive charging configuration changed",
       );
     }
-    await writeSolarPlannerState(state);
+    await writeAdaptiveChargingState(state);
   }
   await writeJsonFileAtomic(CONFIG_FILE, cleaned);
   if (hostChanged) lastRecordedSample = null;
@@ -3356,7 +3531,7 @@ function clearStaleScheduleRuns(schedules, activeIds = runningScheduleIds) {
 
 async function runDueSchedules() {
   const config = await readConfig();
-  if (config.solarPlanner?.enabled && config.solarEnabled !== false && config.rateMode !== "simple") return;
+  if (config.adaptiveCharging?.enabled && config.solarEnabled !== false && config.rateMode !== "simple") return;
   const schedules = await readSchedules();
   const now = new Date();
   let changed = clearStaleScheduleRuns(schedules);
@@ -3602,11 +3777,11 @@ async function evaluateAutomationRule(
     const restoreSince = rule.state.restoreSince ? new Date(rule.state.restoreSince).getTime() : now.getTime();
     rule.state.restoreSince = new Date(restoreSince).toISOString();
     if ((now.getTime() - restoreSince) / 1000 >= rule.conditions.restoreDelaySeconds) {
-      if (coordination.holdStandbyForPlanner === true) {
+      if (coordination.holdStandbyForAdaptiveCharging === true) {
         return {
           changed: true,
           result: {
-            skipped: "planner waiting to resume charging",
+            skipped: "adaptiveCharging waiting to resume charging",
             demandW,
             estimatedRestoredDemandW,
             breakerLimitW,
@@ -3651,28 +3826,28 @@ async function evaluateAutomationRule(
   return { changed: false, result: { skipped: "conditions not met", operationMode, demandW, batteryChargingW, actualDemandWithChargingW, guardDemandW, estimatedRestoredDemandW, breakerLimitW } };
 }
 
-function plannerConfiguredActive(config) {
-  return config.solarPlanner?.enabled === true && config.solarEnabled !== false && config.rateMode !== "simple";
+function adaptiveChargingConfiguredActive(config) {
+  return config.adaptiveCharging?.enabled === true && config.solarEnabled !== false && config.rateMode !== "simple";
 }
 
 function nextLocalMidnight(now = new Date()) {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
 }
 
-async function pauseSolarPlannerForManualAction(action, now = new Date()) {
+async function pauseAdaptiveChargingForManualAction(action, now = new Date()) {
   const config = await readConfig();
-  if (!plannerConfiguredActive(config)) return null;
-  const state = await readSolarPlannerState();
-  if (state.owner === "planner") await releasePlannerCharge(state, "Manual battery action received", now);
+  if (!adaptiveChargingConfiguredActive(config)) return null;
+  const state = await readAdaptiveChargingState();
+  if (state.owner === "adaptiveCharging") await releaseAdaptiveCharge(state, "Manual battery action received", now);
   state.interruptedCharge = null;
   state.breakerRecovery = null;
   state.pausedUntil = nextLocalMidnight(now);
-  appendSolarPlannerLog(state, `Manual ${action} action paused the planner until ${state.pausedUntil}`, "pause", now);
-  return writeSolarPlannerState(state);
+  appendAdaptiveChargingLog(state, `Manual ${action} action paused Adaptive Charging until ${state.pausedUntil}`, "pause", now);
+  return writeAdaptiveChargingState(state);
 }
 
-async function resumeSolarPlanner(now = new Date()) {
-  const state = await readSolarPlannerState();
+async function resumeAdaptiveCharging(now = new Date()) {
+  const state = await readAdaptiveChargingState();
   state.pausedUntil = null;
   state.plan = null;
   state.interruptedCharge = null;
@@ -3680,11 +3855,11 @@ async function resumeSolarPlanner(now = new Date()) {
   state.solarHeadroomHoldUntil = null;
   state.lastPlanEventKey = null;
   state.pendingPlanReason = "manual resume";
-  appendSolarPlannerLog(state, "Planner resumed manually", "resume", now);
-  return writeSolarPlannerState(state);
+  appendAdaptiveChargingLog(state, "Adaptive Charging resumed manually", "resume", now);
+  return writeAdaptiveChargingState(state);
 }
 
-function startPlannerChargeSession(state, slot, soc, now = new Date()) {
+function startAdaptiveChargeSession(state, slot, soc, now = new Date()) {
   state.activeChargeSession = {
     startedAt: now.toISOString(),
     requestedWh: Math.max(0, Math.round(Number(slot?.targetWh) || 0)),
@@ -3697,14 +3872,14 @@ function startPlannerChargeSession(state, slot, soc, now = new Date()) {
   };
 }
 
-function plannerWindowKey(window) {
+function adaptiveChargingWindowKey(window) {
   const start = window?.start ?? window?.windowStart;
   const end = window?.end ?? window?.windowEnd;
   if (!start || !end) return null;
   return JSON.stringify([start, end, Number(window?.band?.yenPerKwh ?? window?.yenPerKwh), window?.band?.label ?? window?.label ?? null]);
 }
 
-function plannerWindowRemainingWh(plan, window) {
+function adaptiveChargingWindowRemainingWh(plan, window) {
   const endMs = new Date(window?.end ?? window?.windowEnd).getTime();
   if (!Number.isFinite(endMs)) return 0;
   return (plan?.slots ?? [])
@@ -3712,7 +3887,7 @@ function plannerWindowRemainingWh(plan, window) {
     .reduce((sum, slot) => sum + Math.max(0, Math.round(Number(slot.targetWh) || 0)), 0);
 }
 
-function finalizePlannerWindowExecution(state, endSocPercent = null, now = new Date(), reason = "discounted window ended") {
+function finalizeAdaptiveChargingWindowExecution(state, endSocPercent = null, now = new Date(), reason = "discounted window ended") {
   const active = state.activeWindowExecution;
   if (!active) return null;
   const endSoc = Number.isFinite(Number(endSocPercent))
@@ -3736,9 +3911,9 @@ function finalizePlannerWindowExecution(state, endSocPercent = null, now = new D
   state.windowSummaries = [
     ...(state.windowSummaries ?? []).filter((item) => item.key !== summary.key),
     summary,
-  ].slice(-SOLAR_WINDOW_SUMMARY_LIMIT);
+  ].slice(-ADAPTIVE_CHARGING_WINDOW_SUMMARY_LIMIT);
   state.activeWindowExecution = null;
-  appendSolarPlannerLog(
+  appendAdaptiveChargingLog(
     state,
     `${active.label || "Discounted window"} summary: ${summary.plannedWh} Wh planned, ${summary.deliveredWh} Wh delivered, ${summary.unmetWh} Wh unmet, ${summary.interruptionCount} breaker interruptions, SOC ${summary.startSocPercent ?? "--"}% to ${summary.endSocPercent ?? "--"}%`,
     summary.unmetWh > 0 ? "warning" : "summary",
@@ -3747,15 +3922,15 @@ function finalizePlannerWindowExecution(state, endSocPercent = null, now = new D
   return summary;
 }
 
-function syncPlannerWindowExecution(state, occurrence, plan, soc, now = new Date(), planRecalculated = false) {
+function syncAdaptiveChargingWindowExecution(state, occurrence, plan, soc, now = new Date(), planRecalculated = false) {
   if (!occurrence) return null;
-  const key = plannerWindowKey(occurrence);
+  const key = adaptiveChargingWindowKey(occurrence);
   if (!key) return null;
   if (state.activeWindowExecution && state.activeWindowExecution.key !== key) {
-    finalizePlannerWindowExecution(state, soc, now, "next discounted window started");
+    finalizeAdaptiveChargingWindowExecution(state, soc, now, "next discounted window started");
   }
-  const remainingWh = plannerWindowRemainingWh(plan, occurrence);
-  const activeDeliveredWh = planRecalculated && state.owner === "planner"
+  const remainingWh = adaptiveChargingWindowRemainingWh(plan, occurrence);
+  const activeDeliveredWh = planRecalculated && state.owner === "adaptiveCharging"
     ? Math.max(0, Math.round(Number(state.activeChargedKwh) * 1000))
     : 0;
   if (!state.activeWindowExecution) {
@@ -3783,22 +3958,22 @@ function syncPlannerWindowExecution(state, occurrence, plan, soc, now = new Date
   return state.activeWindowExecution;
 }
 
-function finalizeExpiredPlannerWindow(state, soc, now = new Date()) {
+function finalizeExpiredAdaptiveChargingWindow(state, soc, now = new Date()) {
   const active = state.activeWindowExecution;
-  if (!active || state.owner === "planner") return null;
+  if (!active || state.owner === "adaptiveCharging") return null;
   const endMs = new Date(active.windowEnd).getTime();
   if (!Number.isFinite(endMs) || now.getTime() < endMs) return null;
-  return finalizePlannerWindowExecution(state, soc, now);
+  return finalizeAdaptiveChargingWindowExecution(state, soc, now);
 }
 
-function recordPlannerWindowInterruption(state) {
+function recordAdaptiveChargingWindowInterruption(state) {
   if (!state.activeWindowExecution) return 0;
   state.activeWindowExecution.interruptionCount += 1;
   return state.activeWindowExecution.interruptionCount;
 }
 
-function recordPlannerChargeSample(state, status, now = new Date()) {
-  if (state.owner !== "planner") return false;
+function recordAdaptiveChargeSample(state, status, now = new Date()) {
+  if (state.owner !== "adaptiveCharging") return false;
   const batteryChargingW = batteryChargingWatts(status) ?? 0;
   if (state.activeLastCheckedAt) {
     const elapsedHours = Math.max(
@@ -3809,12 +3984,12 @@ function recordPlannerChargeSample(state, status, now = new Date()) {
   }
   state.activeLastCheckedAt = now.toISOString();
   const soc = numericMetric(status.energy?.battery?.remaining_percent);
-  if (!state.activeChargeSession) startPlannerChargeSession(state, state.activeSlot, soc, now);
+  if (!state.activeChargeSession) startAdaptiveChargeSession(state, state.activeSlot, soc, now);
   if (Number.isFinite(soc)) state.activeChargeSession.latestSocPercent = soc;
   if (batteryChargingW > 0) {
     const houseDemandW = numericMetric(status.meter?.house_demand_power);
     const gridImportW = numericMetric(status.meter?.grid_import_power);
-    state.chargingPerformance = cleanPlannerChargingPerformance({
+    state.chargingPerformance = cleanAdaptiveChargingPerformance({
       ...state.chargingPerformance,
       samples: [
         ...(state.chargingPerformance?.samples ?? []),
@@ -3825,7 +4000,7 @@ function recordPlannerChargeSample(state, status, now = new Date()) {
   return true;
 }
 
-function finalizePlannerChargeSession(state, reason, now = new Date()) {
+function finalizeAdaptiveChargeSession(state, reason, now = new Date()) {
   const active = state.activeChargeSession;
   if (!active) return null;
   const deliveredWh = Math.max(0, Math.round(Number(state.activeChargedKwh) * 1000));
@@ -3855,7 +4030,7 @@ function finalizePlannerChargeSession(state, reason, now = new Date()) {
     averageChargeWatts,
     estimatedStorageEfficiencyPercent,
   };
-  state.chargingPerformance = cleanPlannerChargingPerformance({
+  state.chargingPerformance = cleanAdaptiveChargingPerformance({
     ...state.chargingPerformance,
     sessions: [...(state.chargingPerformance?.sessions ?? []), session],
   });
@@ -3868,11 +4043,11 @@ function finalizePlannerChargeSession(state, reason, now = new Date()) {
   return session;
 }
 
-async function releasePlannerCharge(state, reason, now = new Date(), batteryHost = null) {
-  if (state.owner !== "planner") return false;
+async function releaseAdaptiveCharge(state, reason, now = new Date(), batteryHost = null) {
+  if (state.owner !== "adaptiveCharging") return false;
   await executeAction("set-mode", { mode: "auto", ...(batteryHost ? { host: batteryHost } : {}) });
-  finalizePlannerChargeSession(state, reason, now);
-  appendSolarPlannerLog(state, `${reason}; setting operation mode to Auto`, "stop", now);
+  finalizeAdaptiveChargeSession(state, reason, now);
+  appendAdaptiveChargingLog(state, `${reason}; setting operation mode to Auto`, "stop", now);
   state.owner = null;
   state.activeSlot = null;
   state.activePlanCreatedAt = null;
@@ -3881,17 +4056,17 @@ async function releasePlannerCharge(state, reason, now = new Date(), batteryHost
   return true;
 }
 
-async function suspendPlannerChargeInStandby(
+async function suspendAdaptiveChargeInStandby(
   state,
   reason,
   now = new Date(),
   batteryHost = null,
   execute = executeAction,
 ) {
-  if (state.owner !== "planner") return false;
+  if (state.owner !== "adaptiveCharging") return false;
   await execute("set-mode", { mode: "standby", ...(batteryHost ? { host: batteryHost } : {}) });
-  finalizePlannerChargeSession(state, reason, now);
-  appendSolarPlannerLog(state, `${reason}; maintaining Standby operation mode`, "guard", now);
+  finalizeAdaptiveChargeSession(state, reason, now);
+  appendAdaptiveChargingLog(state, `${reason}; maintaining Standby operation mode`, "guard", now);
   state.owner = null;
   state.activeSlot = null;
   state.activePlanCreatedAt = null;
@@ -3900,7 +4075,7 @@ async function suspendPlannerChargeInStandby(
   return true;
 }
 
-async function executePlannerChargeStart(slot, { resumeFromStandby = false, execute = executeAction } = {}) {
+async function executeAdaptiveChargeStart(slot, { resumeFromStandby = false, execute = executeAction } = {}) {
   if (resumeFromStandby) await execute("set-mode", { mode: "auto" });
   try {
     return await execute("charge", { targetWh: slot.targetWh });
@@ -3919,8 +4094,8 @@ async function executePlannerChargeStart(slot, { resumeFromStandby = false, exec
   }
 }
 
-function plannerSlotEndKey(state) {
-  if (state?.owner !== "planner" || !state.activeSlot) return null;
+function adaptiveChargingSlotEndKey(state) {
+  if (state?.owner !== "adaptiveCharging" || !state.activeSlot) return null;
   const endMs = new Date(state.activeSlot.end).getTime();
   if (!Number.isFinite(endMs)) return null;
   return JSON.stringify([
@@ -3930,29 +4105,29 @@ function plannerSlotEndKey(state) {
   ]);
 }
 
-function plannerSlotEndDelayMs(state, now = new Date()) {
-  if (!plannerSlotEndKey(state)) return null;
+function adaptiveChargingSlotEndDelayMs(state, now = new Date()) {
+  if (!adaptiveChargingSlotEndKey(state)) return null;
   return Math.max(0, new Date(state.activeSlot.end).getTime() - now.getTime());
 }
 
-async function enforcePlannerSlotEndDeadline(expectedKey, {
+async function enforceAdaptiveChargingSlotEndDeadline(expectedKey, {
   now = new Date(),
-  readState = readSolarPlannerState,
-  release = releasePlannerCharge,
-  writeState = writeSolarPlannerState,
+  readState = readAdaptiveChargingState,
+  release = releaseAdaptiveCharge,
+  writeState = writeAdaptiveChargingState,
 } = {}) {
   const state = await readState();
-  if (plannerSlotEndKey(state) !== expectedKey) {
-    return { stopped: false, reason: "active planner slot changed" };
+  if (adaptiveChargingSlotEndKey(state) !== expectedKey) {
+    return { stopped: false, reason: "active adaptiveCharging slot changed" };
   }
-  const remainingMs = plannerSlotEndDelayMs(state, now);
+  const remainingMs = adaptiveChargingSlotEndDelayMs(state, now);
   if (remainingMs > 0) return { stopped: false, remainingMs };
   const windowEndMs = new Date(state.activeSlot?.windowEnd).getTime();
   const slotEndMs = new Date(state.activeSlot?.end).getTime();
   const windowEnded = Number.isFinite(windowEndMs) && Number.isFinite(slotEndMs) && slotEndMs >= windowEndMs;
   const reason = windowEnded ? "Planned discounted window ended" : "Planned charging slot ended";
   await release(state, reason, now);
-  finalizeExpiredPlannerWindow(state, state.activeWindowExecution?.latestSocPercent, now);
+  finalizeExpiredAdaptiveChargingWindow(state, state.activeWindowExecution?.latestSocPercent, now);
   state.lastResult = {
     ok: true,
     at: now.toISOString(),
@@ -3963,49 +4138,49 @@ async function enforcePlannerSlotEndDeadline(expectedKey, {
   return { stopped: true };
 }
 
-function clearSolarPlannerSlotEndTimer() {
-  if (solarPlannerSlotEndTimer) clearTimeout(solarPlannerSlotEndTimer);
-  solarPlannerSlotEndTimer = null;
-  solarPlannerSlotEndTimerKey = null;
+function clearAdaptiveChargingSlotEndTimer() {
+  if (adaptiveChargingSlotEndTimer) clearTimeout(adaptiveChargingSlotEndTimer);
+  adaptiveChargingSlotEndTimer = null;
+  adaptiveChargingSlotEndTimerKey = null;
 }
 
-function armSolarPlannerSlotEndTimer(key, delayMs) {
-  solarPlannerSlotEndTimerKey = key;
-  solarPlannerSlotEndTimer = setTimeout(() => {
-    solarPlannerSlotEndTimer = null;
-    solarPlannerSlotEndTimerKey = null;
-    enforcePlannerSlotEndDeadline(key)
+function armAdaptiveChargingSlotEndTimer(key, delayMs) {
+  adaptiveChargingSlotEndTimerKey = key;
+  adaptiveChargingSlotEndTimer = setTimeout(() => {
+    adaptiveChargingSlotEndTimer = null;
+    adaptiveChargingSlotEndTimerKey = null;
+    enforceAdaptiveChargingSlotEndDeadline(key)
       .then((result) => {
         if (Number.isFinite(result.remainingMs) && result.remainingMs > 0) {
-          armSolarPlannerSlotEndTimer(key, Math.min(result.remainingMs, MAX_TIMER_DELAY_MS));
+          armAdaptiveChargingSlotEndTimer(key, Math.min(result.remainingMs, MAX_TIMER_DELAY_MS));
         }
       })
       .catch((err) => {
-        logDetailedError("solar-planner-slot-end", err);
-        armSolarPlannerSlotEndTimer(key, SOLAR_SLOT_END_RETRY_MS);
+        logDetailedError("adaptive-charging-slot-end", err);
+        armAdaptiveChargingSlotEndTimer(key, ADAPTIVE_CHARGING_SLOT_END_RETRY_MS);
       });
   }, Math.max(0, Math.min(delayMs, MAX_TIMER_DELAY_MS)));
-  if (typeof solarPlannerSlotEndTimer.unref === "function") solarPlannerSlotEndTimer.unref();
+  if (typeof adaptiveChargingSlotEndTimer.unref === "function") adaptiveChargingSlotEndTimer.unref();
 }
 
-function syncSolarPlannerSlotEndTimer(state, now = new Date()) {
-  const key = plannerSlotEndKey(state);
+function syncAdaptiveChargingSlotEndTimer(state, now = new Date()) {
+  const key = adaptiveChargingSlotEndKey(state);
   if (!key) {
-    clearSolarPlannerSlotEndTimer();
+    clearAdaptiveChargingSlotEndTimer();
     return false;
   }
-  if (solarPlannerSlotEndTimer && solarPlannerSlotEndTimerKey === key) return true;
-  clearSolarPlannerSlotEndTimer();
-  armSolarPlannerSlotEndTimer(key, plannerSlotEndDelayMs(state, now));
+  if (adaptiveChargingSlotEndTimer && adaptiveChargingSlotEndTimerKey === key) return true;
+  clearAdaptiveChargingSlotEndTimer();
+  armAdaptiveChargingSlotEndTimer(key, adaptiveChargingSlotEndDelayMs(state, now));
   return true;
 }
 
-function plannerSlotAt(plan, now = new Date()) {
+function adaptiveChargingSlotAt(plan, now = new Date()) {
   const time = now.getTime();
   return (plan?.slots ?? []).find((slot) => new Date(slot.start).getTime() <= time && time < new Date(slot.end).getTime()) ?? null;
 }
 
-function capPlannerSlotToRemainingTime(slot, maximumChargeWatts, now = new Date()) {
+function capAdaptiveChargingSlotToRemainingTime(slot, maximumChargeWatts, now = new Date()) {
   const endMs = new Date(slot?.end).getTime();
   const nowMs = now.getTime();
   const maximumWatts = Number(maximumChargeWatts);
@@ -4017,7 +4192,7 @@ function capPlannerSlotToRemainingTime(slot, maximumChargeWatts, now = new Date(
     Math.max(0, Math.round(Number(slot?.targetWh) || 0)),
     Math.max(0, maximumRemainingWh),
   );
-  if (targetWh < SOLAR_MIN_EXECUTABLE_CHARGE_WH) return null;
+  if (targetWh < ADAPTIVE_CHARGING_MIN_EXECUTABLE_CHARGE_WH) return null;
   const durationMs = targetWh / maximumWatts * 3_600_000;
   return {
     ...slot,
@@ -4026,7 +4201,7 @@ function capPlannerSlotToRemainingTime(slot, maximumChargeWatts, now = new Date(
   };
 }
 
-function plannerSlotIdentity(slot) {
+function adaptiveChargingSlotIdentity(slot) {
   if (!slot) return null;
   const endMs = new Date(slot.end).getTime();
   const windowEndMs = new Date(slot.windowEnd ?? slot.end).getTime();
@@ -4040,18 +4215,18 @@ function plannerSlotIdentity(slot) {
   ]);
 }
 
-function plannerSlotsMatch(left, right) {
+function adaptiveChargingSlotsMatch(left, right) {
   if (left?.slotId && right?.slotId) return left.slotId === right.slotId;
-  const leftIdentity = plannerSlotIdentity(left);
-  const rightIdentity = plannerSlotIdentity(right);
+  const leftIdentity = adaptiveChargingSlotIdentity(left);
+  const rightIdentity = adaptiveChargingSlotIdentity(right);
   return leftIdentity !== null && leftIdentity === rightIdentity;
 }
 
-function consumeCompletedPlannerSlot(plan, completedSlot) {
+function consumeCompletedAdaptiveChargingSlot(plan, completedSlot) {
   if (!plan || !completedSlot) return plan;
   let removedWh = 0;
   const slots = (plan.slots ?? []).filter((slot) => {
-    if (!plannerSlotsMatch(slot, completedSlot)) return true;
+    if (!adaptiveChargingSlotsMatch(slot, completedSlot)) return true;
     removedWh += Math.max(0, Math.round(Number(slot.targetWh) || 0));
     return false;
   });
@@ -4073,7 +4248,7 @@ function consumeCompletedPlannerSlot(plan, completedSlot) {
   };
 }
 
-function preserveInterruptedPlannerCharge(state, now = new Date()) {
+function preserveInterruptedAdaptiveCharge(state, now = new Date()) {
   const activeSlot = state.activeSlot;
   const targetWh = Math.max(0, Math.round(Number(activeSlot?.targetWh) || 0));
   if (!activeSlot || !targetWh) return null;
@@ -4086,7 +4261,7 @@ function preserveInterruptedPlannerCharge(state, now = new Date()) {
     state.plan = {
       ...state.plan,
       slots: (state.plan.slots ?? []).flatMap((slot) => {
-        if (!plannerSlotsMatch(slot, activeSlot)) return [slot];
+        if (!adaptiveChargingSlotsMatch(slot, activeSlot)) return [slot];
         return remainingWh > 0 ? [{ ...slot, targetWh: remainingWh }] : [];
       }),
     };
@@ -4138,7 +4313,7 @@ function applyInterruptedChargeCap(plan, interruption, maximumChargeWatts, now =
   };
 }
 
-function plannerBreakerSettings(rules = []) {
+function adaptiveChargingBreakerSettings(rules = []) {
   const guardRules = (Array.isArray(rules) ? rules : [])
     .filter((rule) => rule?.type === "backup-demand-guard");
   const preferredRules = guardRules.some((rule) => rule.enabled)
@@ -4176,17 +4351,17 @@ function plannerBreakerSettings(rules = []) {
   };
 }
 
-function plannerLiveChargeHeadroom(status, config, state = {}, rules = []) {
+function adaptiveChargingLiveChargeHeadroom(status, config, state = {}, rules = []) {
   const rawGridImportW = status.meter?.grid_import_power?.value;
   const gridImportW = rawGridImportW === null || rawGridImportW === undefined || rawGridImportW === ""
     ? Number.NaN
     : Number(rawGridImportW);
   const maximumChargeWatts = Number(config.batteryCapabilities?.maximumChargeWatts);
-  const chargePerformance = effectivePlannerChargeWatts(config, state);
+  const chargePerformance = effectiveAdaptiveChargeWatts(config, state);
   const chargeWatts = Number(chargePerformance.effectiveWatts);
-  const breakerSettings = plannerBreakerSettings(rules);
+  const breakerSettings = adaptiveChargingBreakerSettings(rules);
   const breakerLimitW = breakerSettings.breakerLimitW;
-  const safetyMarginW = SOLAR_BREAKER_SAFETY_MARGIN_W;
+  const safetyMarginW = ADAPTIVE_CHARGING_BREAKER_SAFETY_MARGIN_W;
   const thresholdW = breakerSettings.valid && breakerLimitW > 0
     ? breakerLimitW - chargeWatts - safetyMarginW
     : Number.NaN;
@@ -4207,10 +4382,10 @@ function plannerLiveChargeHeadroom(status, config, state = {}, rules = []) {
   };
 }
 
-function beginPlannerBreakerRecovery(state, headroom, now = new Date()) {
+function beginAdaptiveChargingBreakerRecovery(state, headroom, now = new Date()) {
   state.breakerRecovery = {
     interruptedAt: now.toISOString(),
-    cooldownUntil: new Date(now.getTime() + SOLAR_BREAKER_RETRY_COOLDOWN_MS).toISOString(),
+    cooldownUntil: new Date(now.getTime() + ADAPTIVE_CHARGING_BREAKER_RETRY_COOLDOWN_MS).toISOString(),
     consecutiveSafeChecks: 0,
     lastCheckedAt: null,
     lastWaitLogAt: null,
@@ -4222,7 +4397,7 @@ function beginPlannerBreakerRecovery(state, headroom, now = new Date()) {
   return state.breakerRecovery;
 }
 
-function advancePlannerBreakerRecovery(state, headroom, now = new Date()) {
+function advanceAdaptiveChargingBreakerRecovery(state, headroom, now = new Date()) {
   const recovery = state.breakerRecovery;
   if (!recovery) return { ready: true, waiting: false };
   const checkedAt = now.toISOString();
@@ -4237,11 +4412,11 @@ function advancePlannerBreakerRecovery(state, headroom, now = new Date()) {
   recovery.chargeWatts = finiteNumberOrNull(headroom.chargeWatts);
   recovery.safetyMarginW = finiteNumberOrNull(headroom.safetyMarginW);
   const cooldownReady = now.getTime() >= new Date(recovery.cooldownUntil).getTime();
-  const checksReady = recovery.consecutiveSafeChecks >= SOLAR_BREAKER_SAFE_CHECKS;
+  const checksReady = recovery.consecutiveSafeChecks >= ADAPTIVE_CHARGING_BREAKER_SAFE_CHECKS;
   const lastWaitLogMs = new Date(recovery.lastWaitLogAt ?? 0).getTime();
   const shouldLog = !Number.isFinite(lastWaitLogMs)
     || lastWaitLogMs <= 0
-    || now.getTime() - lastWaitLogMs >= SOLAR_BREAKER_WAIT_LOG_MS;
+    || now.getTime() - lastWaitLogMs >= ADAPTIVE_CHARGING_BREAKER_WAIT_LOG_MS;
   return {
     ready: Boolean(headroom.available && cooldownReady && checksReady),
     waiting: true,
@@ -4249,33 +4424,33 @@ function advancePlannerBreakerRecovery(state, headroom, now = new Date()) {
     checksReady,
     shouldLog,
     consecutiveSafeChecks: recovery.consecutiveSafeChecks,
-    requiredSafeChecks: SOLAR_BREAKER_SAFE_CHECKS,
+    requiredSafeChecks: ADAPTIVE_CHARGING_BREAKER_SAFE_CHECKS,
     cooldownUntil: recovery.cooldownUntil,
   };
 }
 
-function plannerBreakerRecoveryReady(state, now = new Date()) {
+function adaptiveChargingBreakerRecoveryReady(state, now = new Date()) {
   const recovery = state?.breakerRecovery;
   if (!recovery) return false;
   const cooldownUntilMs = new Date(recovery.cooldownUntil).getTime();
   return Number.isFinite(cooldownUntilMs)
     && now.getTime() >= cooldownUntilMs
-    && Number(recovery.consecutiveSafeChecks) >= SOLAR_BREAKER_SAFE_CHECKS;
+    && Number(recovery.consecutiveSafeChecks) >= ADAPTIVE_CHARGING_BREAKER_SAFE_CHECKS;
 }
 
-function shouldHoldGuardStandbyForPlanner(state, now = new Date()) {
+function shouldHoldGuardStandbyForAdaptiveCharging(state, now = new Date()) {
   const slotEndMs = new Date(state?.interruptedCharge?.slotEnd ?? 0).getTime();
   return Number.isFinite(slotEndMs)
     && slotEndMs > now.getTime()
-    && !plannerBreakerRecoveryReady(state, now);
+    && !adaptiveChargingBreakerRecoveryReady(state, now);
 }
 
-function logPlannerBreakerWait(state, headroom, recoveryStatus, now = new Date()) {
+function logAdaptiveChargingBreakerWait(state, headroom, recoveryStatus, now = new Date()) {
   if (!state.breakerRecovery || !recoveryStatus.shouldLog) return false;
   const importText = Number.isFinite(headroom.gridImportW) ? `(${Math.round(headroom.gridImportW)} W)` : "unavailable";
   const thresholdText = Number.isFinite(headroom.thresholdW) ? `(${Math.round(headroom.thresholdW)} W)` : "unrestricted";
   const limitText = Number.isFinite(headroom.breakerLimitW) ? `(${Math.round(headroom.breakerLimitW)} W)` : "unavailable";
-  appendSolarPlannerLog(
+  appendAdaptiveChargingLog(
     state,
     `Waiting for breaker headroom: Grid Import ${importText}, required at or below ${thresholdText} from Charging Demand Guard limit ${limitText}, safe checks (${recoveryStatus.consecutiveSafeChecks}/${recoveryStatus.requiredSafeChecks}), retry after ${state.breakerRecovery.cooldownUntil}`,
     "guard",
@@ -4285,9 +4460,9 @@ function logPlannerBreakerWait(state, headroom, recoveryStatus, now = new Date()
   return true;
 }
 
-function logPlannerInitialHeadroomWait(state, headroom, now = new Date()) {
+function logAdaptiveChargingInitialHeadroomWait(state, headroom, now = new Date()) {
   const lastLogMs = new Date(state.lastHeadroomWaitLogAt ?? 0).getTime();
-  if (Number.isFinite(lastLogMs) && lastLogMs > 0 && now.getTime() - lastLogMs < SOLAR_BREAKER_WAIT_LOG_MS) {
+  if (Number.isFinite(lastLogMs) && lastLogMs > 0 && now.getTime() - lastLogMs < ADAPTIVE_CHARGING_BREAKER_WAIT_LOG_MS) {
     return false;
   }
   const importText = Number.isFinite(headroom.gridImportW) ? `${Math.round(headroom.gridImportW)} W` : "unavailable";
@@ -4300,7 +4475,7 @@ function logPlannerInitialHeadroomWait(state, headroom, now = new Date()) {
     .every((value) => Number.isFinite(Number(value)))
     ? `${settings.breakerAmps} A - ${settings.reserveAmps} A reserve at ${settings.breakerVoltage} V`
     : "settings unavailable";
-  appendSolarPlannerLog(
+  appendAdaptiveChargingLog(
     state,
     `Waiting to start planned charge: Grid Import (${importText}), required at or below (${thresholdText}) using Charging Demand Guard (${guardValues}) = Guard limit (${limitText}), charge estimate (${chargeText}), and safety margin (${marginText})`,
     "guard",
@@ -4310,12 +4485,12 @@ function logPlannerInitialHeadroomWait(state, headroom, now = new Date()) {
   return true;
 }
 
-function plannerLiveImportSafety(status, rules = []) {
+function adaptiveChargingLiveImportSafety(status, rules = []) {
   const rawGridImportW = status.meter?.grid_import_power?.value;
   const gridImportW = rawGridImportW === null || rawGridImportW === undefined || rawGridImportW === ""
     ? Number.NaN
     : Number(rawGridImportW);
-  const breakerSettings = plannerBreakerSettings(rules);
+  const breakerSettings = adaptiveChargingBreakerSettings(rules);
   const breakerLimitW = breakerSettings.breakerLimitW;
   return {
     available: breakerSettings.valid
@@ -4327,10 +4502,10 @@ function plannerLiveImportSafety(status, rules = []) {
   };
 }
 
-function activePlannerSlotStopReason(state, config, plan, now = new Date()) {
-  if (state.owner !== "planner") return null;
+function activeAdaptiveChargingSlotStopReason(state, config, plan, now = new Date()) {
+  if (state.owner !== "adaptiveCharging") return null;
   if (!explicitDiscountedBand(config, now)) return "Current rate is no longer discounted";
-  const replacement = plannerSlotAt(plan, now);
+  const replacement = adaptiveChargingSlotAt(plan, now);
   if (!replacement) return "Recalculated plan no longer includes the active charging period";
   const planChanged = state.activePlanCreatedAt !== plan?.createdAt;
   if (planChanged) {
@@ -4343,8 +4518,8 @@ function activePlannerSlotStopReason(state, config, plan, now = new Date()) {
       return "Recalculated plan changed the remaining charge target";
     }
   }
-  const activeTarget = Number(state.activeSlot?.targetSocPercent ?? config.solarPlanner.targetSocPercent);
-  const replacementTarget = Number(replacement.targetSocPercent ?? config.solarPlanner.targetSocPercent);
+  const activeTarget = Number(state.activeSlot?.targetSocPercent ?? config.adaptiveCharging.targetSocPercent);
+  const replacementTarget = Number(replacement.targetSocPercent ?? config.adaptiveCharging.targetSocPercent);
   if (Number.isFinite(activeTarget) && Number.isFinite(replacementTarget) && replacementTarget < activeTarget - 0.1) {
     return "Recalculated plan reduced the active SOC target";
   }
@@ -4356,11 +4531,11 @@ function activePlannerSlotStopReason(state, config, plan, now = new Date()) {
   return null;
 }
 
-function solarPlanScheduledEvent(config, now = new Date()) {
+function adaptiveChargingScheduledEvent(config, now = new Date()) {
   const activeWindow = discountedBandOccurrence(config, now);
   if (activeWindow) {
     const elapsedMs = Math.max(0, now.getTime() - new Date(activeWindow.start).getTime());
-    const slotIndex = Math.floor(elapsedMs / SOLAR_PLAN_SLOT_MS);
+    const slotIndex = Math.floor(elapsedMs / ADAPTIVE_CHARGING_SLOT_MS);
     return {
       eventKey: `window:${activeWindow.key}:slot:${slotIndex}`,
       trigger: slotIndex === 0
@@ -4373,7 +4548,7 @@ function solarPlanScheduledEvent(config, now = new Date()) {
     .find((occurrence) => new Date(occurrence.start).getTime() > now.getTime());
   if (!upcomingWindow) return { upcomingWindow: null };
   const timeUntilStartMs = new Date(upcomingWindow.start).getTime() - now.getTime();
-  if (timeUntilStartMs > SOLAR_PLAN_PREWINDOW_MS) return { upcomingWindow };
+  if (timeUntilStartMs > ADAPTIVE_CHARGING_PREWINDOW_MS) return { upcomingWindow };
   return {
     eventKey: `prewindow:${upcomingWindow.key}`,
     trigger: `30 minutes before ${upcomingWindow.band.label || "discounted window"}`,
@@ -4381,9 +4556,9 @@ function solarPlanScheduledEvent(config, now = new Date()) {
   };
 }
 
-function solarPlanRefreshDecision(state, config, now = new Date()) {
+function adaptiveChargingPlanRefreshDecision(state, config, now = new Date()) {
   const forecastFetchedAt = state.forecast?.fetchedAt ?? null;
-  const scheduledEvent = solarPlanScheduledEvent(config, now);
+  const scheduledEvent = adaptiveChargingScheduledEvent(config, now);
   if (!state.plan) {
     const trigger = state.pendingPlanReason || "initial plan";
     return {
@@ -4410,26 +4585,26 @@ function solarPlanRefreshDecision(state, config, now = new Date()) {
   return { refresh: false, ...scheduledEvent };
 }
 
-function plannerClock(value) {
+function adaptiveChargingClock(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "--:--";
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
-function solarPlanLogMessage(plan, trigger, liveSoc) {
-  if (!plan?.available) return `Plan recalculated (${trigger}); planner unavailable: ${plan?.reason || "unknown reason"}`;
+function adaptiveChargingPlanLogMessage(plan, trigger, liveSoc) {
+  if (!plan?.available) return `Plan recalculated (${trigger}); adaptiveCharging unavailable: ${plan?.reason || "unknown reason"}`;
   const targets = (plan.windows ?? [])
     .map((window) => `${window.label} ${Number(window.targetSocPercent).toFixed(0)}%/${Number(window.plannedChargeKwh).toFixed(2)} kWh`)
     .join(", ") || "none";
   const slots = (plan.slots ?? [])
-    .map((slot) => `${plannerClock(slot.start)}-${plannerClock(slot.end)} ${slot.targetWh} Wh`)
+    .map((slot) => `${adaptiveChargingClock(slot.start)}-${adaptiveChargingClock(slot.end)} ${slot.targetWh} Wh`)
     .join(", ") || "none";
   return `Plan recalculated (${trigger}): SOC ${Number(liveSoc).toFixed(0)}%; ${Number(plan.predictedSolarKwh).toFixed(2)} kWh solar, ${Number(plan.predictedDemandKwh).toFixed(2)} kWh demand, ${Number(plan.plannedChargeKwh).toFixed(2)} kWh discounted charging; targets [${targets}]; slots [${slots}]${plan.warning ? `; ${plan.warning}` : ""}`;
 }
 
-async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
-  let state = await readSolarPlannerState();
-  recordPlannerChargeSample(state, status, now);
+async function evaluateAdaptiveCharging(config, status, rules, now = new Date()) {
+  let state = await readAdaptiveChargingState();
+  recordAdaptiveChargeSample(state, status, now);
   if (state.interruptedCharge
     && new Date(state.interruptedCharge.slotEnd).getTime() <= now.getTime()) {
     state.interruptedCharge = null;
@@ -4437,25 +4612,25 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
   }
   const paused = state.pausedUntil && new Date(state.pausedUntil).getTime() > now.getTime();
   const guardActive = rules.some((rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore);
-  const guardSettings = plannerBreakerSettings(rules);
-  const base = solarPlannerBaseAvailability(config);
+  const guardSettings = adaptiveChargingBreakerSettings(rules);
+  const base = adaptiveChargingBaseAvailability(config);
   const forecastError = state.lastForecastError?.error;
   if (!base.available || !guardSettings.valid || paused || !forecastIsFresh(state.forecast, now) || forecastError) {
     const unavailableReason = paused
-      ? "Planner is paused"
+      ? "Adaptive Charging is paused"
       : base.reason
         || (!guardSettings.valid ? "Charging Demand Guard settings are unavailable" : null)
         || forecastError
         || "Forecast is unavailable";
-    if (!guardActive && state.owner === "planner") await releasePlannerCharge(state, unavailableReason, now);
-    finalizeExpiredPlannerWindow(state, numericMetric(status.energy?.battery?.remaining_percent), now);
+    if (!guardActive && state.owner === "adaptiveCharging") await releaseAdaptiveCharge(state, unavailableReason, now);
+    finalizeExpiredAdaptiveChargingWindow(state, numericMetric(status.energy?.battery?.remaining_percent), now);
     state.lastResult = { ok: true, at: now.toISOString(), skipped: paused ? "paused after manual action" : unavailableReason };
-    return writeSolarPlannerState(state);
+    return writeAdaptiveChargingState(state);
   }
   if (guardActive) {
-    if (state.owner === "planner") {
-      const interruption = preserveInterruptedPlannerCharge(state, now);
-      finalizePlannerChargeSession(state, "Charging Demand Guard interrupted planner charging", now);
+    if (state.owner === "adaptiveCharging") {
+      const interruption = preserveInterruptedAdaptiveCharge(state, now);
+      finalizeAdaptiveChargeSession(state, "Charging Demand Guard interrupted Adaptive Charging", now);
       state.owner = null;
       state.activeSlot = null;
       state.activePlanCreatedAt = null;
@@ -4463,26 +4638,26 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
       state.activeLastCheckedAt = null;
       if (!interruption) state.plan = null;
       if (interruption) {
-        recordPlannerWindowInterruption(state);
-        beginPlannerBreakerRecovery(state, plannerLiveChargeHeadroom(status, config, state, rules), now);
+        recordAdaptiveChargingWindowInterruption(state);
+        beginAdaptiveChargingBreakerRecovery(state, adaptiveChargingLiveChargeHeadroom(status, config, state, rules), now);
       }
-      appendSolarPlannerLog(
+      appendAdaptiveChargingLog(
         state,
         interruption
-          ? `Charging Demand Guard interrupted planner charging after ${interruption.deliveredWh} Wh; ${interruption.remainingWh} Wh remains`
-          : "Charging Demand Guard owns battery control; planner is waiting",
+          ? `Charging Demand Guard interrupted Adaptive Charging after ${interruption.deliveredWh} Wh; ${interruption.remainingWh} Wh remains`
+          : "Charging Demand Guard owns battery control; adaptiveCharging is waiting",
         "guard",
         now,
       );
     }
     if (state.breakerRecovery) {
-      const headroom = plannerLiveChargeHeadroom(status, config, state, rules);
-      const recoveryStatus = advancePlannerBreakerRecovery(state, headroom, now);
-      logPlannerBreakerWait(state, headroom, recoveryStatus, now);
+      const headroom = adaptiveChargingLiveChargeHeadroom(status, config, state, rules);
+      const recoveryStatus = advanceAdaptiveChargingBreakerRecovery(state, headroom, now);
+      logAdaptiveChargingBreakerWait(state, headroom, recoveryStatus, now);
     }
-    finalizeExpiredPlannerWindow(state, numericMetric(status.energy?.battery?.remaining_percent), now);
+    finalizeExpiredAdaptiveChargingWindow(state, numericMetric(status.energy?.battery?.remaining_percent), now);
     state.lastResult = { ok: true, at: now.toISOString(), skipped: "Charging Demand Guard active" };
-    return writeSolarPlannerState(state);
+    return writeAdaptiveChargingState(state);
   }
 
   const liveSoc = numericMetric(status.energy?.battery?.remaining_percent);
@@ -4495,9 +4670,9 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
   ].filter(([value]) => !Number.isFinite(value)).map(([, label]) => label);
   if (missingTelemetry.length) {
     const reason = `${missingTelemetry.join(", ")} unavailable`;
-    if (state.owner === "planner") {
-      const interruption = preserveInterruptedPlannerCharge(state, now);
-      await releasePlannerCharge(
+    if (state.owner === "adaptiveCharging") {
+      const interruption = preserveInterruptedAdaptiveCharge(state, now);
+      await releaseAdaptiveCharge(
         state,
         interruption
           ? `${reason} after ${interruption.deliveredWh} Wh; ${interruption.remainingWh} Wh remains in this charge`
@@ -4505,15 +4680,15 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
         now,
       );
     }
-    finalizeExpiredPlannerWindow(state, liveSoc, now);
+    finalizeExpiredAdaptiveChargingWindow(state, liveSoc, now);
     state.lastResult = { ok: true, at: now.toISOString(), skipped: reason };
-    return writeSolarPlannerState(state);
+    return writeAdaptiveChargingState(state);
   }
 
   const activeDiscountedWindow = discountedBandOccurrence(config, now);
-  const refreshDecision = solarPlanRefreshDecision(state, config, now);
+  const refreshDecision = adaptiveChargingPlanRefreshDecision(state, config, now);
   if (refreshDecision.refresh) {
-    const samples = await readSolarPlannerHistory(now);
+    const samples = await readAdaptiveChargingHistory(now);
     samples.push({
       timestamp: now.toISOString(),
       stateOfChargePercent: liveSoc,
@@ -4522,8 +4697,8 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
       houseDemandW: liveHouseDemandW,
     });
     state = { ...state, historicalWeather: historyStore.historicalWeather() };
-    const historicalDemandDays = await readSolarDemandProfileDays();
-    state.plan = buildSolarChargingPlan({ config, state, samples, historicalDemandDays, now });
+    const historicalDemandDays = await readAdaptiveChargingDemandProfileDays();
+    state.plan = buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDays, now });
     state.lastPlanEventKey = refreshDecision.eventKey;
     state.pendingPlanReason = null;
     if (activeDiscountedWindow) state.lastRebasedWindowKey = activeDiscountedWindow.key;
@@ -4537,45 +4712,45 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
       state.plan = capped.plan;
       state.interruptedCharge = capped.interruption;
     }
-    appendSolarPlannerLog(
+    appendAdaptiveChargingLog(
       state,
-      solarPlanLogMessage(state.plan, refreshDecision.trigger, liveSoc),
+      adaptiveChargingPlanLogMessage(state.plan, refreshDecision.trigger, liveSoc),
       state.plan.warning ? "warning" : "plan",
       now,
     );
   }
   if (!state.plan?.available) {
-    if (state.owner === "planner") await releasePlannerCharge(state, state.plan?.reason || "Plan is unavailable", now);
-    finalizeExpiredPlannerWindow(state, liveSoc, now);
+    if (state.owner === "adaptiveCharging") await releaseAdaptiveCharge(state, state.plan?.reason || "Plan is unavailable", now);
+    finalizeExpiredAdaptiveChargingWindow(state, liveSoc, now);
     state.lastResult = { ok: true, at: now.toISOString(), skipped: state.plan?.reason || "plan unavailable" };
-    return writeSolarPlannerState(state);
+    return writeAdaptiveChargingState(state);
   }
 
   const soc = liveSoc;
   if (activeDiscountedWindow) {
-    syncPlannerWindowExecution(state, activeDiscountedWindow, state.plan, soc, now, refreshDecision.refresh);
+    syncAdaptiveChargingWindowExecution(state, activeDiscountedWindow, state.plan, soc, now, refreshDecision.refresh);
   }
-  else finalizeExpiredPlannerWindow(state, soc, now);
+  else finalizeExpiredAdaptiveChargingWindow(state, soc, now);
   const gridExportW = numericMetric(status.meter?.grid_export_power);
   const liveExportNeedsHeadroom = Number.isFinite(gridExportW) && gridExportW > 50;
   if (state.solarHeadroomHoldUntil && new Date(state.solarHeadroomHoldUntil).getTime() <= now.getTime()) {
     state.solarHeadroomHoldUntil = null;
   }
   const activeTargetKwh = Number(state.activeSlot?.targetWh ?? 0) / 1000;
-  const activeTargetSocPercent = Number(state.activeSlot?.targetSocPercent ?? config.solarPlanner.targetSocPercent);
+  const activeTargetSocPercent = Number(state.activeSlot?.targetSocPercent ?? config.adaptiveCharging.targetSocPercent);
   const activeExpired = state.activeSlot && now.getTime() >= new Date(state.activeSlot.end).getTime();
-  const activePlanStopReason = activePlannerSlotStopReason(state, config, state.plan, now);
-  const liveImportSafety = plannerLiveImportSafety(status, rules);
-  const activeEnergyTargetReached = state.owner === "planner" && state.activeChargedKwh >= activeTargetKwh;
-  const activeSocTargetReached = state.owner === "planner" && soc >= activeTargetSocPercent;
-  const breakerReserveInterrupted = state.owner === "planner"
+  const activePlanStopReason = activeAdaptiveChargingSlotStopReason(state, config, state.plan, now);
+  const liveImportSafety = adaptiveChargingLiveImportSafety(status, rules);
+  const activeEnergyTargetReached = state.owner === "adaptiveCharging" && state.activeChargedKwh >= activeTargetKwh;
+  const activeSocTargetReached = state.owner === "adaptiveCharging" && soc >= activeTargetSocPercent;
+  const breakerReserveInterrupted = state.owner === "adaptiveCharging"
     && !activeExpired
     && !activePlanStopReason
     && !liveImportSafety.available
     && !activeEnergyTargetReached
     && !activeSocTargetReached
     && !liveExportNeedsHeadroom;
-  if (state.owner === "planner" && (
+  if (state.owner === "adaptiveCharging" && (
     activeExpired
     || activePlanStopReason
     || !liveImportSafety.available
@@ -4589,11 +4764,11 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     else if (activePlanStopReason) stopReason = activePlanStopReason;
     else if (!liveImportSafety.available) {
       const interruption = breakerReserveInterrupted
-        ? preserveInterruptedPlannerCharge(state, now)
+        ? preserveInterruptedAdaptiveCharge(state, now)
         : null;
       if (interruption) {
-        recordPlannerWindowInterruption(state);
-        beginPlannerBreakerRecovery(state, plannerLiveChargeHeadroom(status, config, state, rules), now);
+        recordAdaptiveChargingWindowInterruption(state);
+        beginAdaptiveChargingBreakerRecovery(state, adaptiveChargingLiveChargeHeadroom(status, config, state, rules), now);
       }
       const importText = Number.isFinite(liveImportSafety.gridImportW)
         ? `${Math.round(liveImportSafety.gridImportW)} W`
@@ -4610,17 +4785,17 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
       state.solarHeadroomHoldUntil = state.activeSlot.windowEnd;
     }
     if (breakerReserveInterrupted) {
-      await suspendPlannerChargeInStandby(state, stopReason, now);
+      await suspendAdaptiveChargeInStandby(state, stopReason, now);
     } else {
-      await releasePlannerCharge(state, stopReason, now);
+      await releaseAdaptiveCharge(state, stopReason, now);
     }
     if (activeEnergyTargetReached || activeSocTargetReached) {
-      state.plan = consumeCompletedPlannerSlot(state.plan, completedSlot);
+      state.plan = consumeCompletedAdaptiveChargingSlot(state.plan, completedSlot);
       state.interruptedCharge = null;
       state.breakerRecovery = null;
     }
-  } else if (state.owner === "planner" && state.activePlanCreatedAt !== state.plan.createdAt) {
-    const replacement = plannerSlotAt(state.plan, now);
+  } else if (state.owner === "adaptiveCharging" && state.activePlanCreatedAt !== state.plan.createdAt) {
+    const replacement = adaptiveChargingSlotAt(state.plan, now);
     state.activeSlot = {
       ...state.activeSlot,
       ...replacement,
@@ -4629,8 +4804,8 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     state.activePlanCreatedAt = state.plan.createdAt;
   }
 
-  const plannedSlot = explicitDiscountedBand(config, now) ? plannerSlotAt(state.plan, now) : null;
-  const slot = plannedSlot ? capPlannerSlotToRemainingTime(
+  const plannedSlot = explicitDiscountedBand(config, now) ? adaptiveChargingSlotAt(state.plan, now) : null;
+  const slot = plannedSlot ? capAdaptiveChargingSlotToRemainingTime(
     plannedSlot,
     state.plan.chargePerformance?.effectiveWatts ?? config.batteryCapabilities.maximumChargeWatts,
     now,
@@ -4641,15 +4816,15 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
   );
   const slotTargetReached = slot
     && Number.isFinite(soc)
-    && soc >= Number(slot.targetSocPercent ?? config.solarPlanner.targetSocPercent);
-  if (slot && state.owner !== "planner" && !solarHeadroomHoldActive && !slotTargetReached) {
+    && soc >= Number(slot.targetSocPercent ?? config.adaptiveCharging.targetSocPercent);
+  if (slot && state.owner !== "adaptiveCharging" && !solarHeadroomHoldActive && !slotTargetReached) {
     const resumeFromStandby = Boolean(state.breakerRecovery || state.interruptedCharge);
-    const headroom = plannerLiveChargeHeadroom(status, config, state, rules);
+    const headroom = adaptiveChargingLiveChargeHeadroom(status, config, state, rules);
     if (!headroom.available) {
-      if (!state.breakerRecovery) logPlannerInitialHeadroomWait(state, headroom, now);
+      if (!state.breakerRecovery) logAdaptiveChargingInitialHeadroomWait(state, headroom, now);
       if (state.breakerRecovery) {
-        const recoveryStatus = advancePlannerBreakerRecovery(state, headroom, now);
-        logPlannerBreakerWait(state, headroom, recoveryStatus, now);
+        const recoveryStatus = advanceAdaptiveChargingBreakerRecovery(state, headroom, now);
+        logAdaptiveChargingBreakerWait(state, headroom, recoveryStatus, now);
       }
       state.lastResult = {
         ok: true,
@@ -4657,12 +4832,12 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
         skipped: "live grid import leaves insufficient breaker headroom",
         ...headroom,
       };
-      return writeSolarPlannerState(state);
+      return writeAdaptiveChargingState(state);
     }
     if (state.breakerRecovery) {
-      const recoveryStatus = advancePlannerBreakerRecovery(state, headroom, now);
+      const recoveryStatus = advanceAdaptiveChargingBreakerRecovery(state, headroom, now);
       if (!recoveryStatus.ready) {
-        logPlannerBreakerWait(state, headroom, recoveryStatus, now);
+        logAdaptiveChargingBreakerWait(state, headroom, recoveryStatus, now);
         state.lastResult = {
           ok: true,
           at: now.toISOString(),
@@ -4670,14 +4845,14 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
           ...headroom,
           ...recoveryStatus,
         };
-        return writeSolarPlannerState(state);
+        return writeAdaptiveChargingState(state);
       }
     }
     let result;
     try {
-      result = await executePlannerChargeStart(slot, { resumeFromStandby });
+      result = await executeAdaptiveChargeStart(slot, { resumeFromStandby });
     } catch (error) {
-      appendSolarPlannerLog(
+      appendAdaptiveChargingLog(
         state,
         resumeFromStandby
           ? `Failed to resume charging: ${error.message}; maintaining Standby operation mode`
@@ -4686,15 +4861,15 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
         now,
       );
       state.lastResult = { ok: false, at: now.toISOString(), error: error.message };
-      await writeSolarPlannerState(state);
+      await writeAdaptiveChargingState(state);
       throw error;
     }
-    state.owner = "planner";
+    state.owner = "adaptiveCharging";
     state.activeSlot = slot;
     state.activePlanCreatedAt = state.plan.createdAt;
     state.activeChargedKwh = 0;
     state.activeLastCheckedAt = now.toISOString();
-    startPlannerChargeSession(state, slot, soc, now);
+    startAdaptiveChargeSession(state, slot, soc, now);
     state.interruptedCharge = null;
     state.breakerRecovery = null;
     state.lastHeadroomWaitLogAt = null;
@@ -4702,63 +4877,63 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     const startImportText = Number.isFinite(headroom.gridImportW) ? `${Math.round(headroom.gridImportW)} W` : "unavailable";
     const startThresholdText = Number.isFinite(headroom.thresholdW) ? `${Math.round(headroom.thresholdW)} W` : "unrestricted";
     const startLimitText = Number.isFinite(headroom.breakerLimitW) ? `${Math.round(headroom.breakerLimitW)} W` : "unavailable";
-    appendSolarPlannerLog(
+    appendAdaptiveChargingLog(
       state,
       `${resumeFromStandby ? "Restoring operation mode to Auto and resuming" : "Starting"} ${slot.targetWh} Wh charge in ${slot.label} band at ${slot.yenPerKwh} yen/kWh; Grid Import (${startImportText}) is at or below start threshold (${startThresholdText}) from Charging Demand Guard limit (${startLimitText})`,
       "charge",
       now,
     );
-  } else if (slot && state.owner !== "planner" && (solarHeadroomHoldActive || slotTargetReached)) {
+  } else if (slot && state.owner !== "adaptiveCharging" && (solarHeadroomHoldActive || slotTargetReached)) {
     state.lastResult = {
       ok: true,
       at: now.toISOString(),
       skipped: solarHeadroomHoldActive ? "solar export requires battery headroom for the rest of this window" : "window SOC target already reached",
     };
-  } else if (!slot && state.owner !== "planner") {
+  } else if (!slot && state.owner !== "adaptiveCharging") {
     state.lastResult = { ok: true, at: now.toISOString(), skipped: "no planned charge is due" };
   }
-  finalizeExpiredPlannerWindow(state, soc, now);
-  return writeSolarPlannerState(state);
+  finalizeExpiredAdaptiveChargingWindow(state, soc, now);
+  return writeAdaptiveChargingState(state);
 }
 
-function observeSolarPlannerNotifications(config, plannerState) {
-  if (!plannerConfiguredActive(config)) return;
-  const paused = plannerState.pausedUntil && new Date(plannerState.pausedUntil).getTime() > Date.now();
+function observeAdaptiveChargingNotifications(config, adaptiveChargingState) {
+  if (!adaptiveChargingConfiguredActive(config)) return;
+  const paused = adaptiveChargingState.pausedUntil && new Date(adaptiveChargingState.pausedUntil).getTime() > Date.now();
   if (!paused) {
-    const reason = plannerState.lastForecastError?.error
-      ?? (plannerState.plan?.available === false ? plannerState.plan.reason : null)
-      ?? (!plannerState.plan ? plannerState.lastResult?.skipped : null);
+    const reason = adaptiveChargingState.lastForecastError?.error
+      ?? (adaptiveChargingState.plan?.available === false ? adaptiveChargingState.plan.reason : null)
+      ?? (!adaptiveChargingState.plan ? adaptiveChargingState.lastResult?.skipped : null);
     notificationService.observeCondition({
-      key: "solar-planner-availability",
+      key: "adaptive-charging-availability",
       active: Boolean(reason),
       activateAfter: 2,
       recoverAfter: 1,
       activeEvent: {
-        type: "plannerUnavailable",
+        type: "adaptiveChargingUnavailable",
         severity: "warning",
-        title: "Adaptive solar planner unavailable",
-        message: `The adaptive solar planner remained unavailable for two checks: ${reason || "unknown reason"}`,
-        dedupeKey: "solar-planner:unavailable",
+        title: "Adaptive Charging unavailable",
+        message: `Adaptive Charging remained unavailable for two checks: ${reason || "unknown reason"}`,
+        dedupeKey: "adaptive-charging:unavailable",
       },
       recoveryEvent: {
-        type: "plannerRecovered",
+        type: "adaptiveChargingRecovered",
         severity: "info",
-        title: "Adaptive solar planner recovered",
-        message: "The adaptive solar planner is available again and can evaluate discounted charging windows.",
-        dedupeKey: "solar-planner:recovered",
+        title: "Adaptive Charging recovered",
+        message: "Adaptive Charging is available again and can evaluate discounted charging windows.",
+        dedupeKey: "adaptive-charging:recovered",
       },
     });
   }
 
-  const summary = plannerState.windowSummaries?.at(-1);
+  const summary = adaptiveChargingState.windowSummaries?.at(-1);
   if (summary?.unmetWh >= 50) {
     notificationService.enqueue({
-      type: "plannerWindowShortfall",
+      type: "adaptiveChargingWindowShortfall",
       severity: "warning",
       title: "Discounted charging window ended with a shortfall",
       message: `${summary.label || "Discounted window"} planned ${summary.plannedWh} Wh and delivered ${summary.deliveredWh} Wh, leaving ${summary.unmetWh} Wh unmet. Breaker interruptions: ${summary.interruptionCount}. SOC: ${summary.startSocPercent ?? "--"}% to ${summary.endSocPercent ?? "--"}%.`,
       occurredAt: summary.completedAt,
-      dedupeKey: `solar-planner-window:${summary.key}`,
+      dedupeKey: `adaptive-charging-window:${summary.key}`,
       once: true,
     });
   }
@@ -4771,18 +4946,18 @@ async function runAutomationRules(context = {}) {
   const config = await readConfig();
   const rules = await readAutomationRules();
   const enabledRules = rules.filter((rule) => rule.enabled);
-  const plannerRequested = plannerConfiguredActive(config);
-  const plannerStateBeforeStatus = plannerRequested ? await readSolarPlannerState() : null;
-  const plannerEnabled = plannerRequested
-    && (solarPlannerBaseAvailability(config).available || plannerStateBeforeStatus?.owner === "planner");
+  const adaptiveChargingRequested = adaptiveChargingConfiguredActive(config);
+  const adaptiveChargingStateBeforeStatus = adaptiveChargingRequested ? await readAdaptiveChargingState() : null;
+  const adaptiveChargingEnabled = adaptiveChargingRequested
+    && (adaptiveChargingBaseAvailability(config).available || adaptiveChargingStateBeforeStatus?.owner === "adaptiveCharging");
   context.enabledRules = [
     ...enabledRules.map(automationRuleLabel),
-    ...(plannerEnabled ? ["Adaptive solar charging"] : []),
+    ...(adaptiveChargingEnabled ? ["Adaptive Charging"] : []),
   ];
-  if (!enabledRules.length && !plannerEnabled) {
-    if (plannerRequested) {
-      const plannerState = await evaluateSolarPlanner(config, {}, rules, startedAt);
-      observeSolarPlannerNotifications(config, plannerState);
+  if (!enabledRules.length && !adaptiveChargingEnabled) {
+    if (adaptiveChargingRequested) {
+      const adaptiveChargingState = await evaluateAdaptiveCharging(config, {}, rules, startedAt);
+      observeAdaptiveChargingNotifications(config, adaptiveChargingState);
     }
     context.phase = "complete; no enabled rules";
     return;
@@ -4808,7 +4983,7 @@ async function runAutomationRules(context = {}) {
     );
   }
   let changed = false;
-  const plannerCoordinationState = plannerEnabled ? await readSolarPlannerState() : null;
+  const adaptiveChargingCoordinationState = adaptiveChargingEnabled ? await readAdaptiveChargingState() : null;
   for (const rule of rules) {
     const now = new Date();
     const ruleLabel = automationRuleLabel(rule);
@@ -4818,8 +4993,8 @@ async function runAutomationRules(context = {}) {
       const result = await evaluateAutomationRule(rule, status, now, (phase) => {
         context.phase = `${phase} for ${ruleLabel}`;
       }, config, {
-        holdStandbyForPlanner: plannerEnabled
-          && shouldHoldGuardStandbyForPlanner(plannerCoordinationState, now),
+        holdStandbyForAdaptiveCharging: adaptiveChargingEnabled
+          && shouldHoldGuardStandbyForAdaptiveCharging(adaptiveChargingCoordinationState, now),
       });
       const checkFinishedAt = new Date();
       const checkMeta = {
@@ -4863,17 +5038,17 @@ async function runAutomationRules(context = {}) {
     context.phase = `persisting state for ${automationRuleList(enabledRules)}`;
     await writeAutomationRuleStates(rules);
   }
-  if (plannerEnabled) {
-    context.phase = "evaluating adaptive solar charging";
-    let plannerState = await readSolarPlannerState();
-    const forecastAge = startedAt.getTime() - new Date(plannerState.forecast?.fetchedAt ?? 0).getTime();
-    if (solarPlannerAvailability(config, rules).available
+  if (adaptiveChargingEnabled) {
+    context.phase = "evaluating adaptive charging";
+    let adaptiveChargingState = await readAdaptiveChargingState();
+    const forecastAge = startedAt.getTime() - new Date(adaptiveChargingState.forecast?.fetchedAt ?? 0).getTime();
+    if (adaptiveChargingAvailability(config, rules).available
       && (!Number.isFinite(forecastAge) || forecastAge >= SOLAR_FORECAST_REFRESH_MS)) {
       context.phase = "refreshing Open-Meteo forecast";
-      plannerState = await refreshSolarPlannerForecast(config, { now: startedAt });
+      adaptiveChargingState = await refreshAdaptiveChargingForecast(config, { now: startedAt });
     }
-    plannerState = await evaluateSolarPlanner(config, status, rules, new Date());
-    observeSolarPlannerNotifications(config, plannerState);
+    adaptiveChargingState = await evaluateAdaptiveCharging(config, status, rules, new Date());
+    observeAdaptiveChargingNotifications(config, adaptiveChargingState);
   }
   context.phase = "complete";
   const totalDurationMs = Date.now() - startedAt.getTime();
@@ -5501,26 +5676,26 @@ async function api(req, res, url) {
       ),
     );
   }
-  if (req.method === "GET" && url.pathname === "/api/solar-planner") {
+  if (req.method === "GET" && url.pathname === "/api/adaptive-charging") {
     const config = await readConfig();
     const rules = await readAutomationRules();
-    return json(res, 200, solarPlannerView(config, await readSolarPlannerState(), rules));
+    return json(res, 200, adaptiveChargingView(config, await readAdaptiveChargingState(), rules));
   }
-  if (req.method === "POST" && url.pathname === "/api/solar-planner/recalculate") {
+  if (req.method === "POST" && url.pathname === "/api/adaptive-charging/recalculate") {
     const config = await readConfig();
     const rules = await readAutomationRules();
-    const availability = solarPlannerAvailability(config, rules);
+    const availability = adaptiveChargingAvailability(config, rules);
     if (!availability.available) return json(res, 409, { error: availability.reason });
     const now = new Date();
-    let state = await refreshSolarPlannerForecast(config, { forceHistorical: true, now });
+    let state = await refreshAdaptiveChargingForecast(config, { forceHistorical: true, now });
     if (!state.forecast || !forecastIsFresh(state.forecast, now) || state.lastForecastError) {
-      return json(res, 503, solarPlannerView(config, state, rules));
+      return json(res, 503, adaptiveChargingView(config, state, rules));
     }
-    const samples = await readSolarPlannerHistory(now);
+    const samples = await readAdaptiveChargingHistory(now);
     state = { ...state, historicalWeather: historyStore.historicalWeather() };
-    const historicalDemandDays = await readSolarDemandProfileDays();
-    state.plan = buildSolarChargingPlan({ config, state, samples, historicalDemandDays, now });
-    state.lastPlanEventKey = solarPlanScheduledEvent(config, now).eventKey ?? `manual:${now.toISOString()}`;
+    const historicalDemandDays = await readAdaptiveChargingDemandProfileDays();
+    state.plan = buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDays, now });
+    state.lastPlanEventKey = adaptiveChargingScheduledEvent(config, now).eventKey ?? `manual:${now.toISOString()}`;
     state.pendingPlanReason = null;
     if (state.interruptedCharge) {
       const capped = applyInterruptedChargeCap(
@@ -5532,30 +5707,30 @@ async function api(req, res, url) {
       state.plan = capped.plan;
       state.interruptedCharge = capped.interruption;
     }
-    appendSolarPlannerLog(
+    appendAdaptiveChargingLog(
       state,
-      solarPlanLogMessage(state.plan, "manual request", state.plan.currentSocPercent),
+      adaptiveChargingPlanLogMessage(state.plan, "manual request", state.plan.currentSocPercent),
       state.plan.warning ? "warning" : "plan",
       now,
     );
-    state = await writeSolarPlannerState(state);
-    return json(res, 200, solarPlannerView(config, state, rules));
+    state = await writeAdaptiveChargingState(state);
+    return json(res, 200, adaptiveChargingView(config, state, rules));
   }
-  if (req.method === "POST" && url.pathname === "/api/solar-planner/resume") {
+  if (req.method === "POST" && url.pathname === "/api/adaptive-charging/resume") {
     const config = await readConfig();
     const rules = await readAutomationRules();
-    return json(res, 200, solarPlannerView(config, await resumeSolarPlanner(), rules));
+    return json(res, 200, adaptiveChargingView(config, await resumeAdaptiveCharging(), rules));
   }
   if (req.method === "POST" && url.pathname.startsWith("/api/settings/")) {
     const body = await readBody(req);
     const action = url.pathname.replace("/api/settings/", "");
-    await pauseSolarPlannerForManualAction(action);
+    await pauseAdaptiveChargingForManualAction(action);
     return json(res, 200, await executeAction(action, body));
   }
   if (req.method === "POST" && url.pathname.startsWith("/api/actions/")) {
     const body = await readBody(req);
     const action = url.pathname.replace("/api/actions/", "");
-    await pauseSolarPlannerForManualAction(action);
+    await pauseAdaptiveChargingForManualAction(action);
     return json(res, 200, await executeAction(action, body));
   }
   if (req.method === "GET" && url.pathname === "/api/schedules") {
@@ -5596,8 +5771,8 @@ async function api(req, res, url) {
     return json(res, 200, { ok: next.length !== rules.length });
   }
   if (req.method === "POST" && url.pathname === "/api/schedules") {
-    if (plannerConfiguredActive(await readConfig())) {
-      return json(res, 409, { error: "schedules are preserved but disabled while adaptive solar charging is enabled" });
+    if (adaptiveChargingConfiguredActive(await readConfig())) {
+      return json(res, 409, { error: "schedules are preserved but disabled while adaptive charging is enabled" });
     }
     const body = await readBody(req);
     const schedule = {
@@ -5620,8 +5795,8 @@ async function api(req, res, url) {
     return json(res, 201, schedule);
   }
   if (req.method === "PATCH" && url.pathname.startsWith("/api/schedules/")) {
-    if (plannerConfiguredActive(await readConfig())) {
-      return json(res, 409, { error: "schedules are preserved but disabled while adaptive solar charging is enabled" });
+    if (adaptiveChargingConfiguredActive(await readConfig())) {
+      return json(res, 409, { error: "schedules are preserved but disabled while adaptive charging is enabled" });
     }
     const id = url.pathname.split("/").pop();
     const body = await readBody(req);
@@ -5677,35 +5852,37 @@ export const server = http.createServer(async (req, res) => {
 });
 
 export {
-  activePlannerSlotStopReason,
-  advancePlannerBreakerRecovery,
+  activeAdaptiveChargingSlotStopReason,
+  advanceAdaptiveChargingBreakerRecovery,
   applyInterruptedChargeCap,
   aggregateEnergyReportSamples,
-  beginPlannerBreakerRecovery,
-  buildSolarChargingPlan,
-  capPlannerSlotToRemainingTime,
+  beginAdaptiveChargingBreakerRecovery,
+  buildAdaptiveChargingPlan,
+  buildAdaptiveChargingTimelineView,
+  capAdaptiveChargingSlotToRemainingTime,
   clearStaleScheduleRuns,
   cleanAutomationRule,
   cleanAutomationRuleConfig,
   cleanConfig,
-  cleanPlannerChargingPerformance,
-  cleanSolarPlannerState,
-  consumeCompletedPlannerSlot,
+  cleanAdaptiveChargingPerformance,
+  cleanAdaptiveChargingState,
+  consumeCompletedAdaptiveChargingSlot,
   countGuardTriggersForRange,
   discountedBandOccurrence,
   discountedBandOccurrences,
   discountedPlanStatus,
-  effectivePlannerChargeWatts,
-  executePlannerChargeStart,
+  effectiveAdaptiveChargeWatts,
+  executeAdaptiveChargeStart,
   evaluateAutomationRule,
   estimateEffectiveBatteryCapacity,
-  finalizePlannerChargeSession,
-  finalizePlannerWindowExecution,
+  finalizeAdaptiveChargeSession,
+  finalizeAdaptiveChargingWindowExecution,
   forecastHourForInterval,
   forecastIsFresh,
   learnedSolarFactor,
-  logPlannerInitialHeadroomWait,
-  logPlannerBreakerWait,
+  migrateLegacyAdaptiveChargingData,
+  logAdaptiveChargingInitialHeadroomWait,
+  logAdaptiveChargingBreakerWait,
   normalizeCircuitLabels,
   normalizeDashboardWidgets,
   normalizeNotificationConfig,
@@ -5716,41 +5893,42 @@ export {
   parseJsonWithContext,
   parseOpenMeteoForecast,
   planChronologicalDiscountedCharging,
-  enforcePlannerSlotEndDeadline,
-  plannerLiveChargeHeadroom,
-  plannerLiveImportSafety,
-  plannerBreakerSettings,
-  plannerBreakerRecoveryReady,
-  plannerSlotEndDelayMs,
-  plannerSlotEndKey,
-  plannerTimezoneError,
+  enforceAdaptiveChargingSlotEndDeadline,
+  adaptiveChargingLiveChargeHeadroom,
+  adaptiveChargingLiveImportSafety,
+  adaptiveChargingBreakerSettings,
+  adaptiveChargingBreakerRecoveryReady,
+  adaptiveChargingSlotEndDelayMs,
+  adaptiveChargingSlotEndKey,
+  adaptiveChargingTimezoneError,
   rateForTimestamp,
   readRecentHistorySamples,
-  readSolarDemandProfileDays,
+  readAdaptiveChargingDemandProfileDays,
   recoverConcatenatedJsonValue,
   sampleFromStatus,
   shouldTriggerDemandGuard,
-  shouldHoldGuardStandbyForPlanner,
-  solarPlanRefreshDecision,
-  solarPlanLogMessage,
-  preserveInterruptedPlannerCharge,
-  recordPlannerWindowInterruption,
-  solarPlannerAvailability,
-  solarPlannerBaseAvailability,
+  shouldHoldGuardStandbyForAdaptiveCharging,
+  adaptiveChargingPlanRefreshDecision,
+  adaptiveChargingPlanLogMessage,
+  preserveInterruptedAdaptiveCharge,
+  recordAdaptiveChargingWindowInterruption,
+  adaptiveChargingAvailability,
+  adaptiveChargingBaseAvailability,
   solarPowerFromIrradiance,
   summarizeSamples,
-  suspendPlannerChargeInStandby,
+  suspendAdaptiveChargeInStandby,
   summarizeCircuits,
-  syncPlannerWindowExecution,
+  syncAdaptiveChargingWindowExecution,
   predictHouseDemand,
 };
 
 async function main() {
   await ensureDataDir();
+  await migrateLegacyAdaptiveChargingData();
   await historyStore.initialize();
   lastRecordedSample = historyStore.latestSample();
   await migrateBatteryCapabilitiesFromGuard();
-  await writeSolarPlannerState(await readSolarPlannerState());
+  await writeAdaptiveChargingState(await readAdaptiveChargingState());
   await writeAutomationRuleStates(await readAutomationRules());
   const notificationHistory = await notificationService.view();
   for (const delivery of notificationHistory.deliveries) {
@@ -5791,7 +5969,7 @@ process.on("SIGTERM", () => {
   if (automationTimer) clearInterval(automationTimer);
   if (recorderTimer) clearTimeout(recorderTimer);
   if (retentionTimer) clearInterval(retentionTimer);
-  clearSolarPlannerSlotEndTimer();
+  clearAdaptiveChargingSlotEndTimer();
   server.close(() => {
     historyStore.close();
     process.exit(0);

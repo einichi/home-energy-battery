@@ -99,7 +99,7 @@ actions, schedules, device discovery, and simple historical recording.
 
 SMTP notifications are configured from the Notifications panel in Settings and
 are disabled by default. They can report Charging Demand Guard transitions,
-schedule failures, device outages and recoveries, adaptive planner availability,
+schedule failures, device outages and recoveries, Adaptive Charging availability,
 discounted charging-window shortfalls, and an optional low-SOC threshold.
 Non-secret settings are stored in `/data/config.json`; the SMTP password is stored separately in
 `/data/notification-secrets.json` and is never returned by the API. Delivery
@@ -107,14 +107,14 @@ cooldowns and recent results are stored in `/data/notification-state.json`.
 
 ### History storage
 
-Telemetry, aggregates, planner context, automation events, and notification
+Telemetry, aggregates, Adaptive Charging context, automation events, and notification
 delivery history are stored in `/data/history.sqlite`. On first startup after an
-upgrade, existing `/data/history/samples.jsonl` and solar-planner JSONL files are
+upgrade, existing `/data/history/samples.jsonl` and `/data/adaptive-charging/*.jsonl` files are
 imported in restart-safe batches. The original files are retained as migration
 backups and are no longer appended after the import.
 
 Retention is configured in Settings. Defaults preserve raw telemetry for 1,095
-days, 30-minute and daily aggregates indefinitely, planner and automation
+days, 30-minute and daily aggregates indefinitely, Adaptive Charging and automation
 history indefinitely, and notification deliveries for 365 days. Automatic
 maintenance runs daily and deletes old records in small batches.
 

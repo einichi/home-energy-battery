@@ -15,7 +15,7 @@ assert.deepEqual(normalizeRetentionPolicy({}, 730), {
   rawTelemetryDays: 730,
   intervalAggregatesDays: null,
   dailyAggregatesDays: null,
-  plannerHistoryDays: null,
+  adaptiveChargingHistoryDays: null,
   automationEventDays: null,
   notificationDeliveryDays: 365,
 });
@@ -31,7 +31,7 @@ assert.equal(enriched.batteryDischargeKwh, 0.25);
 const dataDir = await mkdtemp(path.join(os.tmpdir(), "history-store-"));
 try {
   await mkdir(path.join(dataDir, "history"), { recursive: true });
-  await mkdir(path.join(dataDir, "solar-planner"), { recursive: true });
+  await mkdir(path.join(dataDir, "adaptive-charging"), { recursive: true });
   const legacy = [
     sample("2024-01-01T00:00:00.000Z", { houseDemandW: 1000, solarPowerW: null }),
     sample("2024-01-01T00:30:00.000Z", { houseDemandW: 2000, solarPowerW: 500 }),
@@ -42,11 +42,11 @@ try {
     `${legacy.map((value) => JSON.stringify(value)).join("\n")}\n{"truncated":\n`,
   );
   await writeFile(
-    path.join(dataDir, "solar-planner", "forecast-snapshots.jsonl"),
+    path.join(dataDir, "adaptive-charging", "forecast-snapshots.jsonl"),
     `${JSON.stringify({ fetchedAt: "2024-01-01T00:00:00.000Z", hours: [] })}\n`,
   );
   await writeFile(
-    path.join(dataDir, "solar-planner", "historical-weather.jsonl"),
+    path.join(dataDir, "adaptive-charging", "historical-weather.jsonl"),
     `${JSON.stringify({ time: "2024-01-01T00:00:00.000Z", temperature: 10 })}\n`,
   );
 
@@ -86,16 +86,16 @@ try {
     type: "delivery",
   });
   store.recordEvent({
-    eventKey: "planner:old",
+    eventKey: "adaptiveCharging:old",
     at: "2024-01-01T00:00:00.000Z",
-    category: "planner",
+    category: "adaptiveCharging",
     type: "plan",
   });
   await store.applyRetention({
     rawTelemetryDays: 365,
     intervalAggregatesDays: null,
     dailyAggregatesDays: null,
-    plannerHistoryDays: null,
+    adaptiveChargingHistoryDays: null,
     automationEventDays: null,
     notificationDeliveryDays: 365,
   }, new Date("2026-01-01T00:00:00.000Z"));
@@ -104,7 +104,7 @@ try {
   assert.equal(stats.rollups.interval, 3);
   assert.equal(stats.rollups.daily, 1);
   assert.equal(stats.events.notification ?? 0, 0);
-  assert.equal(stats.events.planner, 1);
+  assert.equal(stats.events.adaptiveCharging, 1);
   store.close();
 
   store = createHistoryStore({ dataDir, logger: { log() {}, warn() {} } });

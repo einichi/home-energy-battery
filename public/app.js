@@ -46,7 +46,8 @@ const state = {
   reportData: null,
   reportBucket: "day",
   automationRules: [],
-  solarPlannerStatus: null,
+  adaptiveChargingStatus: null,
+  adaptiveChargingTimelineHover: null,
   notifications: null,
   isComposing: false,
   discoveryInProgress: false,
@@ -86,9 +87,9 @@ const NOTIFICATION_TRIGGER_DEFINITIONS = [
   { id: "scheduleFailed", labelKey: "triggerScheduleFailed" },
   { id: "deviceOffline", labelKey: "triggerDeviceOffline" },
   { id: "deviceRecovered", labelKey: "triggerDeviceRecovered" },
-  { id: "plannerUnavailable", labelKey: "triggerPlannerUnavailable" },
-  { id: "plannerRecovered", labelKey: "triggerPlannerRecovered" },
-  { id: "plannerWindowShortfall", labelKey: "triggerPlannerWindowShortfall" },
+  { id: "adaptiveChargingUnavailable", labelKey: "triggerAdaptiveChargingUnavailable" },
+  { id: "adaptiveChargingRecovered", labelKey: "triggerAdaptiveChargingRecovered" },
+  { id: "adaptiveChargingWindowShortfall", labelKey: "triggerAdaptiveChargingWindowShortfall" },
   { id: "lowBattery", labelKey: "triggerLowBattery", threshold: true },
 ];
 
@@ -100,6 +101,7 @@ const DASHBOARD_WIDGET_DEFAULTS = [
   { id: "batterySoc", group: "trends", labelKey: "stateOfCharge", visible: true, priority: 50 },
   { id: "gridImportPower", group: "trends", labelKey: "gridImport", visible: true, priority: 60 },
   { id: "gridExportPower", group: "trends", labelKey: "gridExport", visible: true, priority: 70 },
+  { id: "adaptiveCharging", group: "status", labelKey: "adaptiveCharging", visible: true, priority: 5 },
   { id: "batteryWorking", group: "status", labelKey: "batteryWorkingStatus", visible: true, priority: 10 },
   { id: "operationMode", group: "status", labelKey: "operationMode", visible: true, priority: 20 },
   { id: "vendorProfile", group: "status", labelKey: "chargingProfile", visible: true, priority: 30 },
@@ -115,6 +117,7 @@ const DASHBOARD_WIDGET_DEFAULTS = [
 ];
 
 const DASHBOARD_WIDGET_FEATURES = {
+  adaptiveCharging: "solar",
   solarPower: "solar",
   fuelCellPower: "fuel-cell",
   houseDemandPower: "smart-cosmo",
@@ -193,6 +196,8 @@ const I18N = {
     brand: "HOME ENERGY <strong>& BATTERY</strong>",
     navDashboard: "Dashboard",
     navGraphs: "Graphs",
+    navAdaptiveCharging: "Adaptive Charging",
+    navAdaptiveChargingShort: "Charging",
     navReports: "Reports",
     navSettings: "Settings",
     liveDashboard: "Live dashboard",
@@ -338,9 +343,9 @@ const I18N = {
     triggerScheduleFailed: "Schedule failed",
     triggerDeviceOffline: "Device unavailable",
     triggerDeviceRecovered: "Device recovered",
-    triggerPlannerUnavailable: "Solar planner unavailable",
-    triggerPlannerRecovered: "Solar planner recovered",
-    triggerPlannerWindowShortfall: "Charging-window shortfall",
+    triggerAdaptiveChargingUnavailable: "Adaptive Charging unavailable",
+    triggerAdaptiveChargingRecovered: "Adaptive Charging recovered",
+    triggerAdaptiveChargingWindowShortfall: "Charging-window shortfall",
     triggerLowBattery: "Low battery SOC",
     notificationSocThreshold: "SOC threshold (%)",
     saveNotifications: "Save Notifications",
@@ -359,9 +364,11 @@ const I18N = {
     maximumBatteryChargeWatts: "Maximum battery charge watts",
     saveBatteryCapabilities: "Save Battery Capabilities",
     batteryCapabilitiesSaved: "Battery capabilities saved",
-    solarForecastCharging: "Solar Forecast & Charging",
-    solarPlannerHelp: "Charge toward the configured maximum in each discounted period while preserving forecast solar headroom and deferring energy to cheaper upcoming periods.",
-    enableSolarPlanner: "Enable adaptive solar charging",
+    adaptiveCharging: "Adaptive Charging",
+    chargingAutomation: "Charging Automation",
+    adaptiveChargingHelp: "Automatically plans discounted charging using demand history, solar forecasts, battery state, electricity rates, and live safety limits.",
+    adaptiveChargingSettingsHelp: "Configure the forecasts and limits used by charging automation.",
+    enableAdaptiveCharging: "Enable adaptive charging",
     latitude: "Latitude",
     longitude: "Longitude",
     arrayPeakCapacity: "Array peak capacity (kW)",
@@ -370,10 +377,12 @@ const I18N = {
     systemLoss: "Initial system loss (%)",
     sunsetSocTarget: "Maximum off-peak SOC target (%)",
     forecastMargin: "Forecast confidence margin (%)",
-    saveSolarPlanner: "Save Solar Planner",
-    solarPlannerSaved: "Solar planner saved",
+    saveAdaptiveCharging: "Save Adaptive Charging",
+    adaptiveChargingSaved: "Adaptive Charging settings saved",
+    openAdaptiveCharging: "Open Adaptive Charging",
     recalculatePlan: "Recalculate",
-    resumePlanner: "Resume Planner",
+    resumeAdaptiveCharging: "Resume Adaptive Charging",
+    configure: "Configure",
     forecastAge: "Forecast age",
     predictedSolar: "Predicted solar",
     predictedDemand: "Predicted demand",
@@ -385,9 +394,9 @@ const I18N = {
     demandHistoryModel: "Demand history model",
     recentAndSeasonalHistory: "{days} recent days + {years} seasonal years ({percent}% seasonal)",
     recentHistoryOnly: "{days} recent days",
-    plannerWaitingForHeadroom: "Waiting for breaker headroom ({current} W; must be at or below {threshold} W before charging)",
-    plannerState: "Planner state",
-    plannerConfidence: "Forecast confidence",
+    adaptiveChargingWaitingForHeadroom: "Waiting for breaker headroom ({current} W; must be at or below {threshold} W before charging)",
+    adaptiveChargingState: "Adaptive Charging state",
+    adaptiveChargingConfidence: "Forecast confidence",
     calibratedForecast: "calibrated",
     initialForecastModel: "initial model",
     selectedRateWindows: "Discounted window plan",
@@ -415,18 +424,26 @@ const I18N = {
     demandImpact: "demand effect {value} W/kW",
     decisionLog: "Decision log",
     forecastDataAttribution: "Weather forecasts:",
-    schedulesDisabledByPlanner: "Schedules are preserved but disabled while adaptive solar charging is enabled.",
+    schedulesDisabledByAdaptiveCharging: "Schedules are preserved but disabled while adaptive charging is enabled.",
     noPlannedWindows: "No discounted charging windows selected.",
-    noPlannerLog: "No planner decisions yet.",
-    plannerNeedsRates: "Off-Peak or Multi-Rate pricing is required.",
-    plannerNeedsSolar: "Solar generation must be enabled.",
-    plannerNeedsDemand: "Overall house demand must be enabled.",
-    plannerNeedsLocation: "Latitude and longitude are required.",
-    plannerNeedsArray: "Array peak capacity is required.",
-    plannerNeedsBattery: "Usable battery capacity and maximum charge watts are required.",
-    plannerCharging: "Charging",
-    plannerReady: "Ready",
-    plannerReadyPartial: "Ready - charging as much as discounted windows allow",
+    noAdaptiveChargingLog: "No Adaptive Charging decisions yet.",
+    adaptiveChargingNeedsRates: "Off-Peak or Multi-Rate pricing is required.",
+    adaptiveChargingNeedsSolar: "Solar generation must be enabled.",
+    adaptiveChargingNeedsDemand: "Overall house demand must be enabled.",
+    adaptiveChargingNeedsLocation: "Latitude and longitude are required.",
+    adaptiveChargingNeedsArray: "Array peak capacity is required.",
+    adaptiveChargingNeedsBattery: "Usable battery capacity and maximum charge watts are required.",
+    adaptiveChargingCharging: "Charging",
+    adaptiveChargingReady: "Ready",
+    adaptiveChargingReadyPartial: "Ready - charging as much as discounted windows allow",
+    adaptiveChargingDisabled: "Disabled",
+    adaptiveChargingUnavailable: "Unavailable",
+    nextAdaptiveCharge: "Next charge {time} · {energy} Wh",
+    chargingUntil: "Charging until {time}",
+    chargingTimeline: "Charging Timeline",
+    chargingTimelineHelp: "Forecast demand, solar generation, battery state, rates, and planned charging.",
+    plannedCharging: "Planned charging",
+    noChargingTimeline: "A timeline will appear after a charging plan is calculated.",
     rateMode: "Rate Mode",
     rateModeSimple: "Simple",
     rateModeOffPeak: "Off-Peak",
@@ -451,7 +468,7 @@ const I18N = {
     rawTelemetryRetention: "Raw telemetry (days)",
     intervalRetention: "30-minute aggregates (days)",
     dailyRetention: "Daily aggregates (days)",
-    plannerRetention: "Planner history (days)",
+    adaptiveChargingRetention: "Adaptive Charging history (days)",
     automationRetention: "Automation history (days)",
     notificationRetention: "Notification deliveries (days)",
     keepIndefinitely: "Keep indefinitely",
@@ -598,6 +615,8 @@ const I18N = {
     brand: "ホームエネルギー <strong>& バッテリー</strong>",
     navDashboard: "ダッシュボード",
     navGraphs: "グラフ",
+    navAdaptiveCharging: "適応充電",
+    navAdaptiveChargingShort: "充電",
     navReports: "レポート",
     navSettings: "設定",
     liveDashboard: "ライブ表示",
@@ -741,9 +760,9 @@ const I18N = {
     triggerScheduleFailed: "スケジュール失敗",
     triggerDeviceOffline: "機器応答なし",
     triggerDeviceRecovered: "機器復旧",
-    triggerPlannerUnavailable: "太陽光プランナー利用不可",
-    triggerPlannerRecovered: "太陽光プランナー復旧",
-    triggerPlannerWindowShortfall: "充電時間帯の不足",
+    triggerAdaptiveChargingUnavailable: "適応充電が利用不可",
+    triggerAdaptiveChargingRecovered: "適応充電が復旧",
+    triggerAdaptiveChargingWindowShortfall: "充電時間帯の不足",
     triggerLowBattery: "蓄電池残量低下",
     notificationSocThreshold: "充電率しきい値 (%)",
     saveNotifications: "通知設定を保存",
@@ -762,9 +781,11 @@ const I18N = {
     maximumBatteryChargeWatts: "最大蓄電池充電電力 (W)",
     saveBatteryCapabilities: "蓄電池性能を保存",
     batteryCapabilitiesSaved: "蓄電池性能を保存しました",
-    solarForecastCharging: "太陽光予測と充電",
-    solarPlannerHelp: "各割安料金帯で設定上限までの充電を目指し、予測される太陽光の余地を残しつつ、より安い後続時間帯へ充電を繰り延べます。",
-    enableSolarPlanner: "太陽光適応充電を有効にする",
+    adaptiveCharging: "適応充電",
+    chargingAutomation: "充電自動化",
+    adaptiveChargingHelp: "需要履歴、太陽光予報、蓄電池状態、電気料金、リアルタイムの安全制限を使って割安な充電を自動計画します。",
+    adaptiveChargingSettingsHelp: "充電自動化で使用する予報と制限を設定します。",
+    enableAdaptiveCharging: "適応充電を有効にする",
     latitude: "緯度",
     longitude: "経度",
     arrayPeakCapacity: "太陽光パネル最大容量 (kW)",
@@ -773,10 +794,12 @@ const I18N = {
     systemLoss: "初期システム損失 (%)",
     sunsetSocTarget: "割安時間帯の最大充電率目標 (%)",
     forecastMargin: "予測信頼余裕 (%)",
-    saveSolarPlanner: "太陽光充電設定を保存",
-    solarPlannerSaved: "太陽光充電設定を保存しました",
+    saveAdaptiveCharging: "適応充電設定を保存",
+    adaptiveChargingSaved: "適応充電設定を保存しました",
+    openAdaptiveCharging: "適応充電を開く",
     recalculatePlan: "再計算",
-    resumePlanner: "プランナーを再開",
+    resumeAdaptiveCharging: "適応充電を再開",
+    configure: "設定",
     forecastAge: "予報の経過時間",
     predictedSolar: "予測太陽光発電量",
     predictedDemand: "予測使用電力量",
@@ -788,9 +811,9 @@ const I18N = {
     demandHistoryModel: "需要履歴モデル",
     recentAndSeasonalHistory: "直近{days}日 + 過去年同時期{years}年分 (季節データ{percent}%)",
     recentHistoryOnly: "直近{days}日",
-    plannerWaitingForHeadroom: "ブレーカー容量待機中 ({current} W、充電開始前に{threshold} W以下が必要)",
-    plannerState: "プランナー状態",
-    plannerConfidence: "予測信頼度",
+    adaptiveChargingWaitingForHeadroom: "ブレーカー容量待機中 ({current} W、充電開始前に{threshold} W以下が必要)",
+    adaptiveChargingState: "適応充電状態",
+    adaptiveChargingConfidence: "予測信頼度",
     calibratedForecast: "学習済み",
     initialForecastModel: "初期モデル",
     selectedRateWindows: "割安料金帯の充電計画",
@@ -818,18 +841,26 @@ const I18N = {
     demandImpact: "需要影響 {value} W/kW",
     decisionLog: "判断ログ",
     forecastDataAttribution: "天気予報:",
-    schedulesDisabledByPlanner: "太陽光適応充電が有効な間、スケジュールは保存されたまま実行されません。",
+    schedulesDisabledByAdaptiveCharging: "適応充電が有効な間、スケジュールは保存されたまま実行されません。",
     noPlannedWindows: "割安な充電時間帯は選択されていません。",
-    noPlannerLog: "プランナーの判断履歴はまだありません。",
-    plannerNeedsRates: "夜間料金または複数料金の設定が必要です。",
-    plannerNeedsSolar: "太陽光発電を有効にしてください。",
-    plannerNeedsDemand: "家庭全体の使用電力を有効にしてください。",
-    plannerNeedsLocation: "緯度と経度を入力してください。",
-    plannerNeedsArray: "太陽光パネル最大容量を入力してください。",
-    plannerNeedsBattery: "使用可能な蓄電容量と最大充電電力を入力してください。",
-    plannerCharging: "充電中",
-    plannerReady: "準備完了",
-    plannerReadyPartial: "準備完了 - 割引時間帯で可能な量を充電します",
+    noAdaptiveChargingLog: "適応充電の判断履歴はまだありません。",
+    adaptiveChargingNeedsRates: "夜間料金または複数料金の設定が必要です。",
+    adaptiveChargingNeedsSolar: "太陽光発電を有効にしてください。",
+    adaptiveChargingNeedsDemand: "家庭全体の使用電力を有効にしてください。",
+    adaptiveChargingNeedsLocation: "緯度と経度を入力してください。",
+    adaptiveChargingNeedsArray: "太陽光パネル最大容量を入力してください。",
+    adaptiveChargingNeedsBattery: "使用可能な蓄電容量と最大充電電力を入力してください。",
+    adaptiveChargingCharging: "充電中",
+    adaptiveChargingReady: "準備完了",
+    adaptiveChargingReadyPartial: "準備完了 - 割引時間帯で可能な量を充電します",
+    adaptiveChargingDisabled: "無効",
+    adaptiveChargingUnavailable: "利用不可",
+    nextAdaptiveCharge: "次回充電 {time} · {energy} Wh",
+    chargingUntil: "{time}まで充電中",
+    chargingTimeline: "充電タイムライン",
+    chargingTimelineHelp: "予測需要、太陽光発電、蓄電池残量、料金帯、予定充電を表示します。",
+    plannedCharging: "予定充電",
+    noChargingTimeline: "充電計画が計算されるとタイムラインが表示されます。",
     rateMode: "料金モード",
     rateModeSimple: "シンプル",
     rateModeOffPeak: "夜間料金",
@@ -854,7 +885,7 @@ const I18N = {
     rawTelemetryRetention: "生テレメトリ (日)",
     intervalRetention: "30分集計 (日)",
     dailyRetention: "日次集計 (日)",
-    plannerRetention: "充電プランナー履歴 (日)",
+    adaptiveChargingRetention: "適応充電履歴 (日)",
     automationRetention: "自動化履歴 (日)",
     notificationRetention: "通知配信履歴 (日)",
     keepIndefinitely: "無期限に保存",
@@ -1053,6 +1084,7 @@ function setLanguage(language) {
   drawGraphAnalysis();
   renderDashboardWidgetControls(state.config ?? {});
   if (state.notifications) renderNotificationView(state.notifications);
+  if (state.adaptiveChargingStatus) renderAdaptiveChargingStatus(state.adaptiveChargingStatus);
   setPage(state.currentPage);
 }
 
@@ -2350,46 +2382,225 @@ async function refreshNotifications() {
   return view;
 }
 
-function plannerConfiguredInUi(config = state.config ?? {}) {
-  return config.solarPlanner?.enabled === true && config.solarEnabled !== false && config.rateMode !== "simple";
+function adaptiveChargingConfiguredInUi(config = state.config ?? {}) {
+  return config.adaptiveCharging?.enabled === true && config.solarEnabled !== false && config.rateMode !== "simple";
 }
 
-function updateSchedulePlannerState(config = state.config ?? {}) {
-  const disabled = plannerConfiguredInUi(config);
-  $("#schedulePlannerNotice")?.classList.toggle("hidden", !disabled);
-  $(".schedule-panel")?.classList.toggle("planner-disabled", disabled);
+function updateScheduleAdaptiveChargingState(config = state.config ?? {}) {
+  const disabled = adaptiveChargingConfiguredInUi(config);
+  $("#scheduleAdaptiveChargingNotice")?.classList.toggle("hidden", !disabled);
+  $(".schedule-panel")?.classList.toggle("adaptive-charging-disabled", disabled);
   $$("#scheduleForm input, #scheduleForm select, #scheduleForm button, #scheduleRows button").forEach((control) => {
     control.disabled = disabled;
   });
 }
 
-function formatPlannerKwh(value) {
+function formatAdaptiveChargingKwh(value) {
   return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
     ? `${Number(value).toFixed(2)} kWh`
     : "--";
 }
 
-function formatPlannerPercent(value) {
+function formatAdaptiveChargingPercent(value) {
   return value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
     ? `${Number(value).toFixed(0)}%`
     : "--";
 }
 
-function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
+function adaptiveChargingDisplayState(status) {
+  if (!status?.enabled) return t("adaptiveChargingDisabled");
+  if (status.owner === "adaptiveCharging") return t("adaptiveChargingCharging");
+  if (status.paused) return t("paused");
+  if (status.available) return status.warning ? t("adaptiveChargingReadyPartial") : t("adaptiveChargingReady");
+  return t("adaptiveChargingUnavailable");
+}
+
+function adaptiveChargingNextAction(status) {
+  if (!status?.enabled) return t("enableAdaptiveCharging");
+  if (status.owner === "adaptiveCharging" && status.activeSlot?.end) {
+    return template("chargingUntil", { time: new Date(status.activeSlot.end).toLocaleTimeString() });
+  }
+  const now = Date.now();
+  const next = (status.plan?.slots ?? []).find((slot) => new Date(slot.end).getTime() > now);
+  if (next) {
+    return template("nextAdaptiveCharge", {
+      time: new Date(next.start).toLocaleString(),
+      energy: Math.round(Number(next.targetWh) || 0),
+    });
+  }
+  return status.reason || status.warning || t("noChargingPlanned");
+}
+
+function renderAdaptiveChargingWidget(status) {
+  const stateEl = $("#adaptiveChargingWidgetState");
+  const note = $("#adaptiveChargingWidgetNote");
+  if (!stateEl || !note) return;
+  stateEl.textContent = adaptiveChargingDisplayState(status);
+  note.textContent = adaptiveChargingNextAction(status);
+}
+
+function drawAdaptiveChargingTimeline(status = state.adaptiveChargingStatus) {
+  const canvas = $("#adaptiveChargingTimeline");
+  if (!canvas) return;
+  const timeline = (status?.plan?.timeline ?? []).filter((item) => {
+    return Number.isFinite(new Date(item.start).getTime()) && Number.isFinite(new Date(item.end).getTime());
+  });
+  $("#adaptiveChargingTimelineEmpty")?.classList.toggle("hidden", timeline.length > 0);
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(1, Math.round(rect.width || canvas.width));
+  const height = Math.max(1, Math.round(rect.height || canvas.height));
+  const dpr = window.devicePixelRatio || 1;
+  if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  if (!timeline.length) return;
+
+  const pad = { top: 22, right: 58, bottom: 42, left: 58 };
+  const chartWidth = Math.max(1, width - pad.left - pad.right);
+  const chartHeight = Math.max(1, height - pad.top - pad.bottom);
+  const startMs = new Date(timeline[0].start).getTime();
+  const endMs = new Date(timeline.at(-1).end).getTime();
+  const spanMs = Math.max(1, endMs - startMs);
+  const chargeW = (item) => {
+    const durationHours = (new Date(item.end) - new Date(item.start)) / 3_600_000;
+    return durationHours > 0 ? Number(item.plannedChargeWh || 0) / durationHours : 0;
+  };
+  const maxPower = Math.max(100, ...timeline.flatMap((item) => [item.demandW, item.solarW, chargeW(item)]).map(Number).filter(Number.isFinite));
+  const xFor = (time) => pad.left + ((new Date(time).getTime() - startMs) / spanMs) * chartWidth;
+  const powerY = (value) => pad.top + chartHeight - Math.max(0, Number(value) || 0) / maxPower * chartHeight;
+  const socY = (value) => pad.top + chartHeight - Math.max(0, Math.min(100, Number(value) || 0)) / 100 * chartHeight;
+
+  for (const item of timeline) {
+    if (!item.discounted) continue;
+    ctx.fillStyle = "rgba(18, 124, 120, 0.08)";
+    ctx.fillRect(xFor(item.start), pad.top, Math.max(1, xFor(item.end) - xFor(item.start)), chartHeight);
+  }
+  ctx.strokeStyle = "#dbe5ef";
+  ctx.fillStyle = "#64748b";
+  ctx.font = "11px system-ui";
+  for (let index = 0; index <= 4; index += 1) {
+    const y = pad.top + chartHeight * index / 4;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(width - pad.right, y);
+    ctx.stroke();
+    ctx.fillText(`${Math.round(maxPower * (4 - index) / 4)} W`, 5, y + 4);
+    ctx.textAlign = "right";
+    ctx.fillText(`${Math.round(100 * (4 - index) / 4)}%`, width - 5, y + 4);
+    ctx.textAlign = "left";
+  }
+
+  const drawLine = (key, color, yFor) => {
+    ctx.beginPath();
+    timeline.forEach((item, index) => {
+      const x = xFor((new Date(item.start).getTime() + new Date(item.end).getTime()) / 2);
+      const y = yFor(item[key]);
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.stroke();
+  };
+  drawLine("demandW", "#dc2626", powerY);
+  drawLine("solarW", "#d8872c", powerY);
+  drawLine("predictedSocPercent", "#7c3aed", socY);
+
+  for (const item of timeline) {
+    if (!(Number(item.plannedChargeWh) > 0)) continue;
+    ctx.fillStyle = "#127c78";
+    ctx.fillRect(xFor(item.start), pad.top + chartHeight - 9, Math.max(2, xFor(item.end) - xFor(item.start)), 9);
+  }
+  const now = Date.now();
+  if (now >= startMs && now <= endMs) {
+    const x = xFor(now);
+    ctx.strokeStyle = "rgba(15, 23, 42, 0.6)";
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(x, pad.top);
+    ctx.lineTo(x, pad.top + chartHeight);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.fillStyle = "#64748b";
+  const startDate = new Date(startMs);
+  const endDate = new Date(endMs);
+  const timeLabel = (date) => date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const sameLocalDay = startDate.getFullYear() === endDate.getFullYear()
+    && startDate.getMonth() === endDate.getMonth()
+    && startDate.getDate() === endDate.getDate();
+  const startLabel = width < 520
+    ? timeLabel(startDate)
+    : startDate.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const endLabel = width < 520 || sameLocalDay
+    ? timeLabel(endDate)
+    : endDate.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  ctx.fillText(startLabel, pad.left, height - 12);
+  ctx.textAlign = "right";
+  ctx.fillText(endLabel, width - pad.right, height - 12);
+  ctx.textAlign = "left";
+
+  const hover = state.adaptiveChargingTimelineHover;
+  if (hover) {
+    const item = timeline[hover.index];
+    if (item) {
+      const x = xFor((new Date(item.start).getTime() + new Date(item.end).getTime()) / 2);
+      ctx.strokeStyle = "rgba(15, 23, 42, 0.5)";
+      ctx.beginPath();
+      ctx.moveTo(x, pad.top);
+      ctx.lineTo(x, pad.top + chartHeight);
+      ctx.stroke();
+    }
+  }
+}
+
+function handleAdaptiveChargingTimelinePointer(event) {
+  const timeline = state.adaptiveChargingStatus?.plan?.timeline ?? [];
+  const canvas = $("#adaptiveChargingTimeline");
+  if (!canvas || !timeline.length) return;
+  const rect = canvas.getBoundingClientRect();
+  const pad = { right: 58, left: 58 };
+  const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left - pad.left) / Math.max(1, rect.width - pad.left - pad.right)));
+  const index = Math.min(timeline.length - 1, Math.floor(ratio * timeline.length));
+  const item = timeline[index];
+  state.adaptiveChargingTimelineHover = { index };
+  drawAdaptiveChargingTimeline();
+  const tooltip = ensureTrendTooltip();
+  const rate = item.yenPerKwh === null || item.yenPerKwh === undefined ? "--" : `${item.yenPerKwh} yen/kWh`;
+  tooltip.textContent = `${new Date(item.start).toLocaleString()} - ${new Date(item.end).toLocaleTimeString()} · ${Math.round(item.demandW)} W demand · ${Math.round(item.solarW)} W solar · ${formatAdaptiveChargingPercent(item.predictedSocPercent)} SOC · ${item.plannedChargeWh} Wh charge · ${item.rateLabel || "Standard"} (${rate})`;
+  tooltip.style.left = `${Math.min(window.innerWidth - 270, event.clientX + 12)}px`;
+  tooltip.style.top = `${Math.max(8, event.clientY - 48)}px`;
+  tooltip.classList.remove("hidden");
+}
+
+function clearAdaptiveChargingTimelinePointer() {
+  state.adaptiveChargingTimelineHover = null;
+  drawAdaptiveChargingTimeline();
+  $("#trendTooltip")?.classList.add("hidden");
+}
+
+function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
   if (!status) return;
-  state.solarPlannerStatus = status;
+  state.adaptiveChargingStatus = status;
+  renderAdaptiveChargingWidget(status);
   const plan = status.plan ?? {};
-  $("#solarPlannerForecastAge").textContent = Number.isFinite(status.forecast?.ageMs)
+  $("#adaptiveChargingForecastAge").textContent = Number.isFinite(status.forecast?.ageMs)
     ? `${Math.round(status.forecast.ageMs / 60_000)} min`
     : "--";
-  $("#solarPlannerPredictedSolar").textContent = formatPlannerKwh(plan.predictedSolarKwh);
-  $("#solarPlannerPredictedDemand").textContent = formatPlannerKwh(plan.predictedDemandKwh);
-  $("#solarPlannerPredictedSurplus").textContent = formatPlannerKwh(plan.predictedSurplusKwh);
-  $("#solarPlannerGridCharge").textContent = formatPlannerKwh(plan.plannedChargeKwh);
-  $("#solarPlannerSunsetSoc").textContent = Number.isFinite(Number(plan.expectedSunsetSocPercent))
+  $("#adaptiveChargingPredictedSolar").textContent = formatAdaptiveChargingKwh(plan.predictedSolarKwh);
+  $("#adaptiveChargingPredictedDemand").textContent = formatAdaptiveChargingKwh(plan.predictedDemandKwh);
+  $("#adaptiveChargingPredictedSurplus").textContent = formatAdaptiveChargingKwh(plan.predictedSurplusKwh);
+  $("#adaptiveChargingGridCharge").textContent = formatAdaptiveChargingKwh(plan.plannedChargeKwh);
+  $("#adaptiveChargingSunsetSoc").textContent = Number.isFinite(Number(plan.expectedSunsetSocPercent))
     ? `${Number(plan.expectedSunsetSocPercent).toFixed(0)}%`
     : "--";
-  $("#solarPlannerLearnedCapacity").textContent = formatPlannerKwh(status.learnedCapacityKwh);
+  $("#adaptiveChargingLearnedCapacity").textContent = formatAdaptiveChargingKwh(status.learnedCapacityKwh);
   const chargingPerformance = status.chargingPerformance ?? {};
   const chargePerformanceParts = [];
   if (chargingPerformance.learnedChargeWatts !== null
@@ -2412,10 +2623,10 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
       value: Math.round(Number(chargingPerformance.demandImpactWattsPerKw)),
     }));
   }
-  $("#solarPlannerChargePerformance").textContent = chargePerformanceParts.join(" · ") || "--";
-  $("#solarPlannerConfidence").textContent = `${state.config?.solarPlanner?.forecastMarginPercent ?? 10}% · ${plan.solarCalibration?.learned ? t("calibratedForecast") : t("initialForecastModel")}`;
+  $("#adaptiveChargingChargePerformance").textContent = chargePerformanceParts.join(" · ") || "--";
+  $("#adaptiveChargingConfidence").textContent = `${state.config?.adaptiveCharging?.forecastMarginPercent ?? 10}% · ${plan.solarCalibration?.learned ? t("calibratedForecast") : t("initialForecastModel")}`;
   const demandHistory = plan.demandHistory ?? {};
-  $("#solarPlannerDemandHistory").textContent = Number(demandHistory.recentComparableDayCount) > 0
+  $("#adaptiveChargingDemandHistory").textContent = Number(demandHistory.recentComparableDayCount) > 0
     ? Number(demandHistory.seasonalYears?.length) > 0
       ? template("recentAndSeasonalHistory", {
           days: demandHistory.recentComparableDayCount,
@@ -2425,12 +2636,12 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
       : template("recentHistoryOnly", { days: demandHistory.recentComparableDayCount })
     : "--";
   const waitingForHeadroom = status.lastResult?.skipped === "live grid import leaves insufficient breaker headroom";
-  $("#solarPlannerState").textContent = status.owner === "planner"
-    ? t("plannerCharging")
+  $("#adaptiveChargingState").textContent = status.owner === "adaptiveCharging"
+    ? t("adaptiveChargingCharging")
     : status.paused
       ? t("paused")
       : waitingForHeadroom
-        ? template("plannerWaitingForHeadroom", {
+        ? template("adaptiveChargingWaitingForHeadroom", {
             current: status.lastResult.gridImportW !== null
               && status.lastResult.gridImportW !== undefined
               && Number.isFinite(Number(status.lastResult.gridImportW))
@@ -2443,18 +2654,18 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
               : "--",
           })
       : status.available
-        ? status.warning ? t("plannerReadyPartial") : t("plannerReady")
-        : status.reason ?? "Unavailable";
-  const windows = $("#solarPlannerWindows");
+        ? status.warning ? t("adaptiveChargingReadyPartial") : t("adaptiveChargingReady")
+        : adaptiveChargingDisplayState(status);
+  const windows = $("#adaptiveChargingWindows");
   windows.innerHTML = "";
   for (const windowPlan of plan.windows ?? []) {
     const card = document.createElement("article");
-    card.className = "planner-window-summary";
+    card.className = "adaptive-charging-window-summary";
     const slotRows = (plan.slots ?? []).filter(
       (slot) => new Date(slot.windowEnd).getTime() === new Date(windowPlan.end).getTime(),
     );
     const heading = document.createElement("div");
-    heading.className = "planner-window-heading";
+    heading.className = "adaptive-charging-window-heading";
     const title = document.createElement("h3");
     title.textContent = `${windowPlan.label} · ${new Date(windowPlan.start).toLocaleTimeString()}–${new Date(windowPlan.end).toLocaleTimeString()}`;
     const rate = document.createElement("span");
@@ -2463,17 +2674,17 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
     card.append(heading);
 
     const plannedRange = document.createElement("p");
-    plannedRange.className = "planner-window-range";
+    plannedRange.className = "adaptive-charging-window-range";
     plannedRange.textContent = slotRows.length
       ? `${t("plannedChargingRange")} · ${new Date(slotRows[0].start).toLocaleTimeString()}–${new Date(slotRows.at(-1).end).toLocaleTimeString()}`
       : t("noChargingPlanned");
     card.append(plannedRange);
 
     const metrics = document.createElement("dl");
-    metrics.className = "planner-window-metrics";
+    metrics.className = "adaptive-charging-window-metrics";
     const addMetric = (label, value, warning = false) => {
       const metric = document.createElement("div");
-      if (warning) metric.className = "planner-window-warning";
+      if (warning) metric.className = "adaptive-charging-window-warning";
       const term = document.createElement("dt");
       term.textContent = label;
       const description = document.createElement("dd");
@@ -2481,33 +2692,33 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
       metric.append(term, description);
       metrics.append(metric);
     };
-    addMetric(t("predictedStartSoc"), formatPlannerPercent(windowPlan.predictedStartSocPercent));
-    addMetric(t("windowTarget"), formatPlannerPercent(windowPlan.targetSocPercent));
-    addMetric(t("predictedEndSoc"), formatPlannerPercent(windowPlan.predictedEndSocPercent));
-    addMetric(t("requiredCharge"), formatPlannerKwh(windowPlan.requestedChargeKwh));
-    addMetric(t("availableCharge"), formatPlannerKwh(windowPlan.availableChargeKwh));
-    addMetric(t("plannedCharge"), formatPlannerKwh(windowPlan.plannedChargeKwh));
-    addMetric(t("solarHeadroom"), formatPlannerKwh(windowPlan.solarHeadroomKwh));
+    addMetric(t("predictedStartSoc"), formatAdaptiveChargingPercent(windowPlan.predictedStartSocPercent));
+    addMetric(t("windowTarget"), formatAdaptiveChargingPercent(windowPlan.targetSocPercent));
+    addMetric(t("predictedEndSoc"), formatAdaptiveChargingPercent(windowPlan.predictedEndSocPercent));
+    addMetric(t("requiredCharge"), formatAdaptiveChargingKwh(windowPlan.requestedChargeKwh));
+    addMetric(t("availableCharge"), formatAdaptiveChargingKwh(windowPlan.availableChargeKwh));
+    addMetric(t("plannedCharge"), formatAdaptiveChargingKwh(windowPlan.plannedChargeKwh));
+    addMetric(t("solarHeadroom"), formatAdaptiveChargingKwh(windowPlan.solarHeadroomKwh));
     if (Number(windowPlan.unmetChargeKwh) > 0.0001) {
-      addMetric(t("remainingShortfall"), formatPlannerKwh(windowPlan.unmetChargeKwh), true);
+      addMetric(t("remainingShortfall"), formatAdaptiveChargingKwh(windowPlan.unmetChargeKwh), true);
     }
     card.append(metrics);
 
     const notes = [];
     if (windowPlan.bridgeToCheaperWindow) notes.push(t("bridgeCharge"));
     if (Number(windowPlan.backfillForLaterKwh) > 0.0001) {
-      notes.push(`${t("laterWindowBackfill")} · ${formatPlannerKwh(windowPlan.backfillForLaterKwh)}`);
+      notes.push(`${t("laterWindowBackfill")} · ${formatAdaptiveChargingKwh(windowPlan.backfillForLaterKwh)}`);
     }
     if (notes.length) {
       const note = document.createElement("p");
-      note.className = "planner-window-note";
+      note.className = "adaptive-charging-window-note";
       note.textContent = notes.join(" · ");
       card.append(note);
     }
 
     for (const slot of slotRows) {
       const row = document.createElement("div");
-      row.className = "planner-slot-summary";
+      row.className = "adaptive-charging-slot-summary";
       row.textContent = `${new Date(slot.start).toLocaleString()} - ${new Date(slot.end).toLocaleTimeString()} · ${slot.targetWh} Wh`;
       card.append(row);
     }
@@ -2515,7 +2726,7 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
   }
   if (!windows.children.length) windows.textContent = t("noPlannedWindows");
 
-  const executionHistory = $("#solarPlannerWindowSummaries");
+  const executionHistory = $("#adaptiveChargingWindowSummaries");
   executionHistory.innerHTML = "";
   const executions = [
     ...(status.activeWindowExecution ? [{
@@ -2528,9 +2739,9 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
   ];
   for (const execution of executions) {
     const card = document.createElement("article");
-    card.className = "planner-window-summary planner-window-result";
+    card.className = "adaptive-charging-window-summary adaptive-charging-window-result";
     const heading = document.createElement("div");
-    heading.className = "planner-window-heading";
+    heading.className = "adaptive-charging-window-heading";
     const title = document.createElement("h3");
     title.textContent = `${execution.label || "Discounted"} · ${new Date(execution.windowStart).toLocaleTimeString()}–${new Date(execution.windowEnd).toLocaleTimeString()}`;
     const stateLabel = document.createElement("span");
@@ -2540,14 +2751,14 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
     heading.append(title, stateLabel);
     card.append(heading);
     const metrics = document.createElement("dl");
-    metrics.className = "planner-window-metrics planner-result-metrics";
+    metrics.className = "adaptive-charging-window-metrics adaptive-charging-result-metrics";
     const values = [
       [t("plannedCharge"), `${Number(execution.plannedWh || 0)} Wh`],
       [t("deliveredCharge"), `${Number(execution.deliveredWh || 0)} Wh`],
       [t("remainingShortfall"), `${Number(execution.unmetWh || 0)} Wh`],
       [t("breakerInterruptions"), String(Number(execution.interruptionCount || 0))],
-      [t("startingSoc"), formatPlannerPercent(execution.startSocPercent)],
-      [t("endingSoc"), formatPlannerPercent(execution.endSocPercent)],
+      [t("startingSoc"), formatAdaptiveChargingPercent(execution.startSocPercent)],
+      [t("endingSoc"), formatAdaptiveChargingPercent(execution.endSocPercent)],
     ];
     for (const [label, value] of values) {
       const metric = document.createElement("div");
@@ -2562,7 +2773,7 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
     executionHistory.append(card);
   }
   if (!executionHistory.children.length) executionHistory.textContent = t("noWindowResults");
-  const log = $("#solarPlannerLog");
+  const log = $("#adaptiveChargingLog");
   log.innerHTML = "";
   for (const entry of [...(status.log ?? [])].reverse()) {
     const row = document.createElement("div");
@@ -2570,55 +2781,57 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
     row.querySelector("span").textContent = entry.message;
     log.append(row);
   }
-  if (!log.children.length) log.textContent = t("noPlannerLog");
-  $("#solarPlannerResume").disabled = !status.paused;
+  if (!log.children.length) log.textContent = t("noAdaptiveChargingLog");
+  $("#adaptiveChargingResume").disabled = !status.paused;
+  drawAdaptiveChargingTimeline(status);
 }
 
-function updateSolarPlannerAvailability(config = state.config ?? {}) {
+function updateAdaptiveChargingAvailability(config = state.config ?? {}) {
   const reasons = [];
-  if (config.solarEnabled === false) reasons.push(t("plannerNeedsSolar"));
-  if (config.rateMode === "simple") reasons.push(t("plannerNeedsRates"));
-  if (config.smartCosmoEnabled === false) reasons.push(t("plannerNeedsDemand"));
+  if (config.solarEnabled === false) reasons.push(t("adaptiveChargingNeedsSolar"));
+  if (config.rateMode === "simple") reasons.push(t("adaptiveChargingNeedsRates"));
+  if (config.smartCosmoEnabled === false) reasons.push(t("adaptiveChargingNeedsDemand"));
   const requiredNumber = (selector, fallback) => {
     const field = $(selector);
     const value = field ? field.value : fallback;
     return value === "" || value === null || value === undefined ? Number.NaN : Number(value);
   };
-  const latitude = requiredNumber("#solarPlannerLatitude", config.solarPlanner?.latitude);
-  const longitude = requiredNumber("#solarPlannerLongitude", config.solarPlanner?.longitude);
-  const arrayPeakKw = requiredNumber("#solarPlannerArrayPeak", config.solarPlanner?.arrayPeakKw);
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) reasons.push(t("plannerNeedsLocation"));
-  if (!Number.isFinite(arrayPeakKw) || arrayPeakKw <= 0) reasons.push(t("plannerNeedsArray"));
+  const latitude = requiredNumber("#adaptiveChargingLatitude", config.adaptiveCharging?.latitude);
+  const longitude = requiredNumber("#adaptiveChargingLongitude", config.adaptiveCharging?.longitude);
+  const arrayPeakKw = requiredNumber("#adaptiveChargingArrayPeak", config.adaptiveCharging?.arrayPeakKw);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) reasons.push(t("adaptiveChargingNeedsLocation"));
+  if (!Number.isFinite(arrayPeakKw) || arrayPeakKw <= 0) reasons.push(t("adaptiveChargingNeedsArray"));
   const capacityValue = config.batteryCapabilities?.usableCapacityKwh;
   const chargeWattsValue = config.batteryCapabilities?.maximumChargeWatts;
   const usableCapacityKwh = capacityValue === null || capacityValue === undefined ? Number.NaN : Number(capacityValue);
   const maximumChargeWatts = chargeWattsValue === null || chargeWattsValue === undefined ? Number.NaN : Number(chargeWattsValue);
   if (!Number.isFinite(usableCapacityKwh) || usableCapacityKwh <= 0
     || !Number.isFinite(maximumChargeWatts) || maximumChargeWatts <= 0) {
-    reasons.push(t("plannerNeedsBattery"));
+    reasons.push(t("adaptiveChargingNeedsBattery"));
   }
-  const enable = $("#solarPlannerEnabled");
+  const enable = $("#adaptiveChargingEnabled");
   const enabled = enable.checked;
-  const configuredEnabled = config.solarPlanner?.enabled === true;
+  const configuredEnabled = config.adaptiveCharging?.enabled === true;
   enable.disabled = reasons.length > 0 && !enabled;
-  const planUnavailable = configuredEnabled && state.solarPlannerStatus?.plan?.available === false;
-  $("#solarPlannerRecalculate").disabled = !enabled || !configuredEnabled || reasons.length > 0 || planUnavailable;
-  $("#solarPlannerResume").disabled = !configuredEnabled || !state.solarPlannerStatus?.paused || reasons.length > 0;
+  $("#adaptiveChargingRecalculate").disabled = !enabled || !configuredEnabled || reasons.length > 0;
+  $("#adaptiveChargingResume").disabled = !configuredEnabled || !state.adaptiveChargingStatus?.paused || reasons.length > 0;
   const runtimeReason = configuredEnabled
-    ? state.solarPlannerStatus?.available
-      ? state.solarPlannerStatus?.warning
-      : state.solarPlannerStatus?.reason
+    ? state.adaptiveChargingStatus?.available
+      ? state.adaptiveChargingStatus?.warning
+      : state.adaptiveChargingStatus?.reason
     : null;
-  $("#solarPlannerAvailability").textContent = reasons.length
+  const availabilityText = reasons.length
     ? `${t("unavailable")}: ${reasons.join(" ")}`
     : runtimeReason ?? "";
-  updateSchedulePlannerState(config);
+  setText("#adaptiveChargingAvailability", availabilityText);
+  setText("#adaptiveChargingSettingsAvailability", availabilityText);
+  updateScheduleAdaptiveChargingState(config);
 }
 
-async function refreshSolarPlanner() {
-  const status = await api("/api/solar-planner");
-  renderSolarPlannerStatus(status);
-  updateSolarPlannerAvailability();
+async function refreshAdaptiveCharging() {
+  const status = await api("/api/adaptive-charging");
+  renderAdaptiveChargingStatus(status);
+  updateAdaptiveChargingAvailability();
   return status;
 }
 
@@ -2913,7 +3126,7 @@ function collectRetentionConfig() {
     rawTelemetryDays: $("#rawTelemetryDays").value,
     intervalAggregatesDays: finiteOrNull("#intervalAggregatesDays", "#intervalAggregatesIndefinite"),
     dailyAggregatesDays: finiteOrNull("#dailyAggregatesDays", "#dailyAggregatesIndefinite"),
-    plannerHistoryDays: finiteOrNull("#plannerHistoryDays", "#plannerHistoryIndefinite"),
+    adaptiveChargingHistoryDays: finiteOrNull("#adaptiveChargingHistoryDays", "#adaptiveChargingHistoryIndefinite"),
     automationEventDays: finiteOrNull("#automationEventDays", "#automationEventIndefinite"),
     notificationDeliveryDays: $("#notificationDeliveryDays").value,
     automaticMaintenance: $("#automaticRetention").checked,
@@ -2954,7 +3167,7 @@ function updateConfigControls(config) {
   setRetentionControl("#rawTelemetryDays", null, retention.rawTelemetryDays, 1095);
   setRetentionControl("#intervalAggregatesDays", "#intervalAggregatesIndefinite", retention.intervalAggregatesDays, 1095);
   setRetentionControl("#dailyAggregatesDays", "#dailyAggregatesIndefinite", retention.dailyAggregatesDays, 3650);
-  setRetentionControl("#plannerHistoryDays", "#plannerHistoryIndefinite", retention.plannerHistoryDays, 3650);
+  setRetentionControl("#adaptiveChargingHistoryDays", "#adaptiveChargingHistoryIndefinite", retention.adaptiveChargingHistoryDays, 3650);
   setRetentionControl("#automationEventDays", "#automationEventIndefinite", retention.automationEventDays, 3650);
   setRetentionControl("#notificationDeliveryDays", null, retention.notificationDeliveryDays, 365);
   $("#automaticRetention").checked = retention.automaticMaintenance !== false;
@@ -2962,15 +3175,15 @@ function updateConfigControls(config) {
   $("#batteryMaximumChargeWatts").value = config.batteryCapabilities?.maximumChargeWatts
     ?? state.automationRules.find((rule) => rule.type === "backup-demand-guard")?.conditions?.batteryChargingEstimateW
     ?? "";
-  $("#solarPlannerEnabled").checked = config.solarPlanner?.enabled === true;
-  $("#solarPlannerLatitude").value = config.solarPlanner?.latitude ?? "";
-  $("#solarPlannerLongitude").value = config.solarPlanner?.longitude ?? "";
-  $("#solarPlannerArrayPeak").value = config.solarPlanner?.arrayPeakKw ?? "";
-  $("#solarPlannerTilt").value = config.solarPlanner?.panelTiltDegrees ?? 30;
-  $("#solarPlannerAzimuth").value = config.solarPlanner?.panelAzimuthDegrees ?? 0;
-  $("#solarPlannerLoss").value = config.solarPlanner?.systemLossPercent ?? 14;
-  $("#solarPlannerTargetSoc").value = config.solarPlanner?.targetSocPercent ?? 100;
-  $("#solarPlannerMargin").value = config.solarPlanner?.forecastMarginPercent ?? 10;
+  $("#adaptiveChargingEnabled").checked = config.adaptiveCharging?.enabled === true;
+  $("#adaptiveChargingLatitude").value = config.adaptiveCharging?.latitude ?? "";
+  $("#adaptiveChargingLongitude").value = config.adaptiveCharging?.longitude ?? "";
+  $("#adaptiveChargingArrayPeak").value = config.adaptiveCharging?.arrayPeakKw ?? "";
+  $("#adaptiveChargingTilt").value = config.adaptiveCharging?.panelTiltDegrees ?? 30;
+  $("#adaptiveChargingAzimuth").value = config.adaptiveCharging?.panelAzimuthDegrees ?? 0;
+  $("#adaptiveChargingLoss").value = config.adaptiveCharging?.systemLossPercent ?? 14;
+  $("#adaptiveChargingTargetSoc").value = config.adaptiveCharging?.targetSocPercent ?? 100;
+  $("#adaptiveChargingMargin").value = config.adaptiveCharging?.forecastMarginPercent ?? 10;
   renderRateBands(
     rateMode === "multi"
       ? (config.rateBands ?? [])
@@ -2981,7 +3194,7 @@ function updateConfigControls(config) {
   $("#configSolarHost").disabled = config.solarEnabled === false;
   $("#configMeterHost").disabled = config.smartCosmoEnabled === false;
   $("#configFuelCellHosts").disabled = config.fuelCellEnabled === false;
-  updateSolarPlannerAvailability(config);
+  updateAdaptiveChargingAvailability(config);
 }
 
 function featureEnabled(features = {}, feature) {
@@ -3842,7 +4055,7 @@ function renderSchedules(schedules) {
   rows.innerHTML = "";
   if (!sortedSchedules.length) {
     rows.innerHTML = `<tr><td colspan="5">${t("noSchedules")}</td></tr>`;
-    updateSchedulePlannerState();
+    updateScheduleAdaptiveChargingState();
     return;
   }
   for (const schedule of sortedSchedules) {
@@ -3874,7 +4087,7 @@ function renderSchedules(schedules) {
     `;
     rows.append(tr);
   }
-  updateSchedulePlannerState();
+  updateScheduleAdaptiveChargingState();
 }
 
 function setPage(page) {
@@ -3910,6 +4123,10 @@ function setPage(page) {
     if (!state.reportData) {
       loadReport().catch((err) => toast(err.message));
     }
+  } else if (page === "adaptiveCharging") {
+    $("#pageEyebrow").textContent = t("chargingAutomation");
+    $("#pageTitle").textContent = t("adaptiveCharging");
+    drawAdaptiveChargingTimeline();
   } else if (page === "settings") {
     $("#pageEyebrow").textContent = t("navSettings");
     $("#pageTitle").textContent = t("navSettings");
@@ -3961,8 +4178,10 @@ async function refreshAll() {
   if (!state.historyMode) tasks.push(refreshStatus());
   if (state.currentPage === "settings") {
     tasks.push(refreshAutomationLog());
-    tasks.push(refreshSolarPlanner());
     tasks.push(refreshNotifications());
+  }
+  if (["dashboard", "adaptiveCharging", "settings"].includes(state.currentPage)) {
+    tasks.push(refreshAdaptiveCharging());
   }
   if (tasks.length) await Promise.allSettled(tasks);
   scheduleNextRefresh();
@@ -3991,7 +4210,7 @@ async function initialLoad() {
   if (configResult.status === "fulfilled") {
     updateConfigControls(configResult.value);
     if (state.status) renderCircuitWidgets(state.status);
-    refreshSolarPlanner().catch(() => {});
+    refreshAdaptiveCharging().catch(() => {});
   }
   scheduleNextRefresh();
 }
@@ -4007,7 +4226,7 @@ async function hydrateSettingsView() {
   const results = await Promise.allSettled([
     api("/api/status").then(updateControls),
     refreshAutomationRules(),
-    refreshSolarPlanner(),
+    refreshAdaptiveCharging(),
     refreshHistoryStats(),
     refreshNotifications(),
   ]);
@@ -4065,7 +4284,7 @@ function initForms() {
   for (const [checkbox, input] of [
     ["#intervalAggregatesIndefinite", "#intervalAggregatesDays"],
     ["#dailyAggregatesIndefinite", "#dailyAggregatesDays"],
-    ["#plannerHistoryIndefinite", "#plannerHistoryDays"],
+    ["#adaptiveChargingHistoryIndefinite", "#adaptiveChargingHistoryDays"],
     ["#automationEventIndefinite", "#automationEventDays"],
   ]) {
     $(checkbox).addEventListener("change", () => {
@@ -4170,20 +4389,39 @@ function initForms() {
   }
   $("#graphAnalysisTrend")?.addEventListener("pointermove", handleGraphPointer);
   $("#graphAnalysisTrend")?.addEventListener("pointerleave", clearGraphPointer);
+  $("#adaptiveChargingTimeline")?.addEventListener("pointermove", handleAdaptiveChargingTimelinePointer);
+  $("#adaptiveChargingTimeline")?.addEventListener("pointerleave", clearAdaptiveChargingTimelinePointer);
+  const mobileNavigation = window.matchMedia("(max-width: 720px)");
+  const closeMobileGraphMenu = () => {
+    if (mobileNavigation.matches) $(".nav-section")?.removeAttribute("open");
+  };
   $$(".nav-button").forEach((button) =>
-    button.addEventListener("click", () => setPage(button.dataset.page)),
+    button.addEventListener("click", () => {
+      closeMobileGraphMenu();
+      setPage(button.dataset.page);
+    }),
   );
   $$(".nav-subbutton").forEach((button) =>
     button.addEventListener("click", async () => {
-      if (window.matchMedia("(max-width: 720px)").matches) {
-        button.closest(".nav-section")?.removeAttribute("open");
-      }
+      if (mobileNavigation.matches) button.closest(".nav-section")?.removeAttribute("open");
       await openGraphPage(button.dataset.graphPage);
     }),
   );
-  if (window.matchMedia("(max-width: 720px)").matches) {
-    $(".nav-section")?.removeAttribute("open");
-  }
+  mobileNavigation.addEventListener?.("change", closeMobileGraphMenu);
+  closeMobileGraphMenu();
+  const openAdaptiveCharging = () => setPage("adaptiveCharging");
+  $("#adaptiveChargingWidgetState")?.closest("[data-widget-id='adaptiveCharging']")?.addEventListener("click", openAdaptiveCharging);
+  $("#adaptiveChargingWidgetState")?.closest("[data-widget-id='adaptiveCharging']")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openAdaptiveCharging();
+    }
+  });
+  $("#adaptiveChargingOpen")?.addEventListener("click", openAdaptiveCharging);
+  $("#adaptiveChargingConfigure")?.addEventListener("click", () => {
+    setPage("settings");
+    $(".adaptive-charging-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
   ["#configSolarEnabled", "#configSmartCosmoEnabled", "#configFuelCellEnabled"].forEach((selector) => {
     $(selector).addEventListener("change", () => {
       const features = {
@@ -4195,7 +4433,7 @@ function initForms() {
       $("#configMeterHost").disabled = !features.smartCosmoEnabled;
       $("#configFuelCellHosts").disabled = !features.fuelCellEnabled;
       applyFeatureVisibility(features);
-      updateSolarPlannerAvailability({ ...(state.config ?? {}), ...features });
+      updateAdaptiveChargingAvailability({ ...(state.config ?? {}), ...features });
     });
   });
 
@@ -4316,12 +4554,12 @@ function initForms() {
   $$('input[name="rateMode"]').forEach((input) => {
     input.addEventListener("change", () => {
       updateRateModeVisibility(input.value);
-      updateSolarPlannerAvailability({ ...(state.config ?? {}), rateMode: input.value });
+      updateAdaptiveChargingAvailability({ ...(state.config ?? {}), rateMode: input.value });
     });
   });
 
-  $("#solarPlannerForm").addEventListener("input", () => {
-    updateSolarPlannerAvailability(state.config ?? {});
+  $("#adaptiveChargingForm").addEventListener("input", () => {
+    updateAdaptiveChargingAvailability(state.config ?? {});
   });
 
   $("#batteryCapabilitiesForm").addEventListener("submit", async (event) => {
@@ -4344,47 +4582,47 @@ function initForms() {
     }
   });
 
-  $("#solarPlannerForm").addEventListener("submit", async (event) => {
+  $("#adaptiveChargingForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
       const config = await api("/api/config", {
         method: "PUT",
         body: {
           ...(state.config ?? {}),
-          solarPlanner: {
-            enabled: $("#solarPlannerEnabled").checked,
-            latitude: $("#solarPlannerLatitude").value,
-            longitude: $("#solarPlannerLongitude").value,
-            arrayPeakKw: $("#solarPlannerArrayPeak").value,
-            panelTiltDegrees: $("#solarPlannerTilt").value,
-            panelAzimuthDegrees: $("#solarPlannerAzimuth").value,
-            systemLossPercent: $("#solarPlannerLoss").value,
-            targetSocPercent: $("#solarPlannerTargetSoc").value,
-            forecastMarginPercent: $("#solarPlannerMargin").value,
+          adaptiveCharging: {
+            enabled: $("#adaptiveChargingEnabled").checked,
+            latitude: $("#adaptiveChargingLatitude").value,
+            longitude: $("#adaptiveChargingLongitude").value,
+            arrayPeakKw: $("#adaptiveChargingArrayPeak").value,
+            panelTiltDegrees: $("#adaptiveChargingTilt").value,
+            panelAzimuthDegrees: $("#adaptiveChargingAzimuth").value,
+            systemLossPercent: $("#adaptiveChargingLoss").value,
+            targetSocPercent: $("#adaptiveChargingTargetSoc").value,
+            forecastMarginPercent: $("#adaptiveChargingMargin").value,
           },
         },
       });
       updateConfigControls(config);
-      await refreshSolarPlanner();
-      toast(t("solarPlannerSaved"));
+      await refreshAdaptiveCharging();
+      toast(t("adaptiveChargingSaved"));
     } catch (err) {
       toast(err.message);
     }
   });
 
-  $("#solarPlannerRecalculate").addEventListener("click", async () => {
+  $("#adaptiveChargingRecalculate").addEventListener("click", async () => {
     try {
-      renderSolarPlannerStatus(await api("/api/solar-planner/recalculate", { method: "POST", body: {} }));
-      updateSolarPlannerAvailability();
+      renderAdaptiveChargingStatus(await api("/api/adaptive-charging/recalculate", { method: "POST", body: {} }));
+      updateAdaptiveChargingAvailability();
     } catch (err) {
       toast(err.message);
     }
   });
 
-  $("#solarPlannerResume").addEventListener("click", async () => {
+  $("#adaptiveChargingResume").addEventListener("click", async () => {
     try {
-      renderSolarPlannerStatus(await api("/api/solar-planner/resume", { method: "POST", body: {} }));
-      updateSolarPlannerAvailability();
+      renderAdaptiveChargingStatus(await api("/api/adaptive-charging/resume", { method: "POST", body: {} }));
+      updateAdaptiveChargingAvailability();
     } catch (err) {
       toast(err.message);
     }

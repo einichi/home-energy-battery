@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -9,35 +9,37 @@ import {
   validateSmtpSettings,
 } from "../lib/notifications.js";
 import {
-  activePlannerSlotStopReason,
-  advancePlannerBreakerRecovery,
+  activeAdaptiveChargingSlotStopReason,
+  advanceAdaptiveChargingBreakerRecovery,
   applyInterruptedChargeCap,
   aggregateEnergyReportSamples,
-  beginPlannerBreakerRecovery,
-  capPlannerSlotToRemainingTime,
+  beginAdaptiveChargingBreakerRecovery,
+  buildAdaptiveChargingTimelineView,
+  capAdaptiveChargingSlotToRemainingTime,
   clearStaleScheduleRuns,
   cleanAutomationRule,
   cleanAutomationRuleConfig,
   cleanConfig,
-  cleanPlannerChargingPerformance,
-  cleanSolarPlannerState,
-  consumeCompletedPlannerSlot,
+  cleanAdaptiveChargingPerformance,
+  cleanAdaptiveChargingState,
+  consumeCompletedAdaptiveChargingSlot,
   countGuardTriggersForRange,
   discountedBandOccurrence,
   discountedBandOccurrences,
   discountedPlanStatus,
-  effectivePlannerChargeWatts,
-  executePlannerChargeStart,
-  enforcePlannerSlotEndDeadline,
+  effectiveAdaptiveChargeWatts,
+  executeAdaptiveChargeStart,
+  enforceAdaptiveChargingSlotEndDeadline,
   evaluateAutomationRule,
   estimateEffectiveBatteryCapacity,
   forecastHourForInterval,
   forecastIsFresh,
-  finalizePlannerChargeSession,
-  finalizePlannerWindowExecution,
+  finalizeAdaptiveChargeSession,
+  finalizeAdaptiveChargingWindowExecution,
   learnedSolarFactor,
-  logPlannerInitialHeadroomWait,
-  logPlannerBreakerWait,
+  logAdaptiveChargingInitialHeadroomWait,
+  logAdaptiveChargingBreakerWait,
+  migrateLegacyAdaptiveChargingData,
   normalizeCircuitLabels,
   normalizeDashboardWidgets,
   normalizeRateBands,
@@ -47,30 +49,30 @@ import {
   parseJsonWithContext,
   parseOpenMeteoForecast,
   planChronologicalDiscountedCharging,
-  plannerLiveChargeHeadroom,
-  plannerLiveImportSafety,
-  plannerBreakerSettings,
-  plannerBreakerRecoveryReady,
-  plannerSlotEndDelayMs,
-  plannerSlotEndKey,
-  preserveInterruptedPlannerCharge,
-  recordPlannerWindowInterruption,
-  plannerTimezoneError,
+  adaptiveChargingLiveChargeHeadroom,
+  adaptiveChargingLiveImportSafety,
+  adaptiveChargingBreakerSettings,
+  adaptiveChargingBreakerRecoveryReady,
+  adaptiveChargingSlotEndDelayMs,
+  adaptiveChargingSlotEndKey,
+  preserveInterruptedAdaptiveCharge,
+  recordAdaptiveChargingWindowInterruption,
+  adaptiveChargingTimezoneError,
   rateForTimestamp,
   readRecentHistorySamples,
   recoverConcatenatedJsonValue,
   sampleFromStatus,
   shouldTriggerDemandGuard,
-  shouldHoldGuardStandbyForPlanner,
-  solarPlanRefreshDecision,
-  solarPlanLogMessage,
-  solarPlannerAvailability,
-  solarPlannerBaseAvailability,
+  shouldHoldGuardStandbyForAdaptiveCharging,
+  adaptiveChargingPlanRefreshDecision,
+  adaptiveChargingPlanLogMessage,
+  adaptiveChargingAvailability,
+  adaptiveChargingBaseAvailability,
   solarPowerFromIrradiance,
   predictHouseDemand,
   summarizeSamples,
-  suspendPlannerChargeInStandby,
-  syncPlannerWindowExecution,
+  suspendAdaptiveChargeInStandby,
+  syncAdaptiveChargingWindowExecution,
 } from "../server.js";
 
 const staleSchedules = [
@@ -106,7 +108,7 @@ assert.equal(simple.rateBands.length, 1);
 assert.equal(simple.retention.rawTelemetryDays, 1095);
 assert.equal(simple.retention.intervalAggregatesDays, null);
 assert.equal(simple.retention.dailyAggregatesDays, null);
-assert.equal(simple.retention.plannerHistoryDays, null);
+assert.equal(simple.retention.adaptiveChargingHistoryDays, null);
 assert.equal(simple.retention.automationEventDays, null);
 assert.equal(simple.retention.notificationDeliveryDays, 365);
 assert.equal(simple.retention.automaticMaintenance, true);
@@ -141,13 +143,14 @@ assert.equal(simple.smartCosmoEnabled, true);
 assert.deepEqual(simple.circuitLabels, {});
 assert.equal(simple.circuitSortMode, "number");
 assert.equal(rateForTimestamp(simple.rateBands, "2026-05-31T23:30:00+09:00").yenPerKwh, 42);
-assert.equal(simple.dashboardWidgets.length, 19);
+assert.equal(simple.dashboardWidgets.length, 20);
 assert.equal(simple.dashboardWidgets[0].id, "solarPower");
+assert.equal(simple.dashboardWidgets.find((widget) => widget.id === "adaptiveCharging")?.priority, 5);
 assert.deepEqual(simple.batteryCapabilities, { usableCapacityKwh: null, maximumChargeWatts: null });
-assert.equal(simple.solarPlanner.enabled, false);
-assert.equal(simple.solarPlanner.systemLossPercent, 14);
-assert.equal(simple.solarPlanner.targetSocPercent, 100);
-assert.equal(simple.solarPlanner.forecastMarginPercent, 10);
+assert.equal(simple.adaptiveCharging.enabled, false);
+assert.equal(simple.adaptiveCharging.systemLossPercent, 14);
+assert.equal(simple.adaptiveCharging.targetSocPercent, 100);
+assert.equal(simple.adaptiveCharging.forecastMarginPercent, 10);
 assert.equal(Object.prototype.hasOwnProperty.call(cleanConfig({
   automation: { breakerVoltage: 100, breakerAmps: 60, reserveAmps: 5 },
 }), "automation"), false);
@@ -155,11 +158,66 @@ assert.equal(cleanConfig({ batteryCapabilities: { maximumChargeWatts: 2200 } }).
 assert.equal(cleanConfig({ batteryCapabilities: { maximumChargeWatts: 2224 } }).batteryCapabilities.maximumChargeWatts, 2200);
 assert.equal(cleanConfig({ batteryCapabilities: { maximumChargeWatts: 2225 } }).batteryCapabilities.maximumChargeWatts, 2250);
 
+const migrationDir = await mkdtemp(path.join(os.tmpdir(), "adaptive-charging-migration-"));
+try {
+  await mkdir(path.join(migrationDir, "solar-planner"), { recursive: true });
+  await writeFile(path.join(migrationDir, "config.json"), JSON.stringify({
+    adaptiveCharging: null,
+    solarPlanner: { enabled: true, latitude: 35, longitude: 139, arrayPeakKw: 4 },
+    retention: { plannerHistoryDays: 1800 },
+    notifications: { triggers: { plannerUnavailable: { enabled: false, cooldownMinutes: 90 } } },
+  }));
+  await writeFile(path.join(migrationDir, "solar-planner-state.json"), JSON.stringify({
+    owner: "planner",
+    log: [{ at: "2026-07-11T00:00:00.000Z", message: "existing decision" }],
+  }));
+  await writeFile(path.join(migrationDir, "adaptive-charging-state.json"), "{invalid canonical state");
+  await writeFile(
+    path.join(migrationDir, "solar-planner", "demand-day-profiles.json"),
+    JSON.stringify({ version: 1, days: {} }),
+  );
+  await migrateLegacyAdaptiveChargingData(migrationDir, { info() {}, warn() {} });
+  const migratedConfig = JSON.parse(await readFile(path.join(migrationDir, "config.json"), "utf8"));
+  assert.equal(migratedConfig.adaptiveCharging.enabled, true);
+  assert.equal(migratedConfig.solarPlanner, undefined);
+  assert.equal(migratedConfig.retention.adaptiveChargingHistoryDays, 1800);
+  assert.equal(migratedConfig.notifications.triggers.adaptiveChargingUnavailable.enabled, false);
+  const migratedState = JSON.parse(await readFile(path.join(migrationDir, "adaptive-charging-state.json"), "utf8"));
+  assert.equal(migratedState.owner, "adaptiveCharging");
+  assert.equal(
+    JSON.parse(await readFile(path.join(migrationDir, "adaptive-charging", "demand-day-profiles.json"), "utf8")).version,
+    1,
+  );
+  await assert.rejects(readFile(path.join(migrationDir, "solar-planner-state.json"), "utf8"), { code: "ENOENT" });
+} finally {
+  await rm(migrationDir, { recursive: true, force: true });
+}
+
+const timelineView = buildAdaptiveChargingTimelineView({
+  timeline: [
+    { startMs: 0, endMs: 1_800_000, demandW: 1000, solarKwh: 0.1, netKwh: -0.4, chargeCapacityKwh: 1, band: { label: "Night", yenPerKwh: 12 } },
+    { startMs: 1_800_000, endMs: 3_600_000, demandW: 800, solarKwh: 0.6, netKwh: 0.2, chargeCapacityKwh: 0, band: null },
+  ],
+  slots: [{ start: new Date(900_000).toISOString(), end: new Date(1_800_000).toISOString(), targetWh: 500 }],
+  initialStoredKwh: 2,
+  floorKwh: 1,
+  capacityKwh: 5,
+  config: {
+    rateBands: [{ start: "00:00", end: "00:30", label: "Night", yenPerKwh: 12 }],
+    standardRateYenPerKwh: 30,
+  },
+});
+assert.equal(timelineView.length, 2);
+assert.equal(timelineView[0].plannedChargeWh, 500);
+assert.equal(timelineView[0].discounted, true);
+assert.equal(timelineView[0].rateLabel, "Night");
+assert.ok(timelineView.every((item) => item.predictedSocPercent >= 20));
+
 assert.equal(solarPowerFromIrradiance(500, {
-  solarPlanner: { arrayPeakKw: 5, systemLossPercent: 14 },
+  adaptiveCharging: { arrayPeakKw: 5, systemLossPercent: 14 },
 }), 2150);
 assert.equal(solarPowerFromIrradiance(2000, {
-  solarPlanner: { arrayPeakKw: 5, systemLossPercent: 14 },
+  adaptiveCharging: { arrayPeakKw: 5, systemLossPercent: 14 },
 }), 5000);
 assert.equal(forecastIsFresh({ fetchedAt: "2026-07-11T00:00:00.000Z" }, new Date("2026-07-11T05:59:00.000Z")), true);
 assert.equal(forecastIsFresh({ fetchedAt: "2026-07-11T00:00:00.000Z" }, new Date("2026-07-11T06:01:00.000Z")), false);
@@ -199,13 +257,13 @@ assert.equal(
 );
 const originalTimezone = process.env.TZ;
 process.env.TZ = "Asia/Tokyo";
-assert.equal(plannerTimezoneError(parsedForecast), null);
+assert.equal(adaptiveChargingTimezoneError(parsedForecast), null);
 process.env.TZ = "UTC";
-assert.match(plannerTimezoneError(parsedForecast), /does not match/);
+assert.match(adaptiveChargingTimezoneError(parsedForecast), /does not match/);
 if (originalTimezone === undefined) delete process.env.TZ;
 else process.env.TZ = originalTimezone;
 
-const plannerConfig = cleanConfig({
+const adaptiveChargingConfig = cleanConfig({
   solarEnabled: true,
   smartCosmoEnabled: true,
   rateMode: "multi",
@@ -215,62 +273,62 @@ const plannerConfig = cleanConfig({
     { start: "01:00", end: "03:00", yenPerKwh: 20, label: "Night" },
   ],
   batteryCapabilities: { usableCapacityKwh: 10, maximumChargeWatts: 2000 },
-  solarPlanner: { enabled: true, latitude: -33.8, longitude: -151.2, arrayPeakKw: 5 },
+  adaptiveCharging: { enabled: true, latitude: -33.8, longitude: -151.2, arrayPeakKw: 5 },
 });
-assert.equal(solarPlannerBaseAvailability(plannerConfig).available, true);
-assert.equal(solarPlannerBaseAvailability(cleanConfig({ ...plannerConfig, rateMode: "simple" })).available, false);
-const overnightOccurrence = discountedBandOccurrence(plannerConfig, new Date(2026, 6, 11, 23, 30));
+assert.equal(adaptiveChargingBaseAvailability(adaptiveChargingConfig).available, true);
+assert.equal(adaptiveChargingBaseAvailability(cleanConfig({ ...adaptiveChargingConfig, rateMode: "simple" })).available, false);
+const overnightOccurrence = discountedBandOccurrence(adaptiveChargingConfig, new Date(2026, 6, 11, 23, 30));
 assert.equal(new Date(overnightOccurrence.start).getHours(), 23);
 assert.equal(new Date(overnightOccurrence.end).getDate(), new Date(2026, 6, 12).getDate());
 assert.equal(new Date(overnightOccurrence.end).getHours(), 1);
 const rebaseNow = new Date(2026, 6, 11, 23, 30);
-const waitingPlannerState = {
+const waitingAdaptiveChargingState = {
   owner: null,
   forecast: { fetchedAt: "2026-07-11T10:00:00.000Z" },
   plan: { createdAt: rebaseNow.toISOString(), currentSocPercent: 30, forecastFetchedAt: "2026-07-11T10:00:00.000Z" },
   lastPlanEventKey: null,
 };
-const entryRefresh = solarPlanRefreshDecision(waitingPlannerState, plannerConfig, rebaseNow);
+const entryRefresh = adaptiveChargingPlanRefreshDecision(waitingAdaptiveChargingState, adaptiveChargingConfig, rebaseNow);
 assert.equal(entryRefresh.refresh, true);
 assert.match(entryRefresh.trigger, /30-minute slot boundary/);
-const rebasedPlannerState = { ...waitingPlannerState, lastPlanEventKey: entryRefresh.eventKey };
-assert.equal(solarPlanRefreshDecision(rebasedPlannerState, plannerConfig, rebaseNow).refresh, false);
-assert.equal(solarPlanRefreshDecision(rebasedPlannerState, plannerConfig, new Date(2026, 6, 12, 0, 0)).refresh, true);
+const rebasedAdaptiveChargingState = { ...waitingAdaptiveChargingState, lastPlanEventKey: entryRefresh.eventKey };
+assert.equal(adaptiveChargingPlanRefreshDecision(rebasedAdaptiveChargingState, adaptiveChargingConfig, rebaseNow).refresh, false);
+assert.equal(adaptiveChargingPlanRefreshDecision(rebasedAdaptiveChargingState, adaptiveChargingConfig, new Date(2026, 6, 12, 0, 0)).refresh, true);
 const prewindowNow = new Date(2026, 6, 11, 22, 30);
-const prewindowRefresh = solarPlanRefreshDecision(waitingPlannerState, plannerConfig, prewindowNow);
+const prewindowRefresh = adaptiveChargingPlanRefreshDecision(waitingAdaptiveChargingState, adaptiveChargingConfig, prewindowNow);
 assert.equal(prewindowRefresh.refresh, true);
 assert.match(prewindowRefresh.trigger, /30 minutes before Cheapest/);
-assert.equal(solarPlanRefreshDecision({
-  ...waitingPlannerState,
+assert.equal(adaptiveChargingPlanRefreshDecision({
+  ...waitingAdaptiveChargingState,
   lastPlanEventKey: prewindowRefresh.eventKey,
-}, plannerConfig, new Date(2026, 6, 11, 22, 45)).refresh, false);
-const windowEntryRefresh = solarPlanRefreshDecision(waitingPlannerState, plannerConfig, new Date(2026, 6, 11, 23, 0));
+}, adaptiveChargingConfig, new Date(2026, 6, 11, 22, 45)).refresh, false);
+const windowEntryRefresh = adaptiveChargingPlanRefreshDecision(waitingAdaptiveChargingState, adaptiveChargingConfig, new Date(2026, 6, 11, 23, 0));
 assert.equal(windowEntryRefresh.refresh, true);
 assert.match(windowEntryRefresh.trigger, /entering Cheapest/);
-const forecastRefresh = solarPlanRefreshDecision({
-  ...waitingPlannerState,
+const forecastRefresh = adaptiveChargingPlanRefreshDecision({
+  ...waitingAdaptiveChargingState,
   forecast: { fetchedAt: "2026-07-11T11:00:00.000Z" },
-}, plannerConfig, new Date(2026, 6, 11, 12, 0));
+}, adaptiveChargingConfig, new Date(2026, 6, 11, 12, 0));
 assert.equal(forecastRefresh.refresh, true);
 assert.equal(forecastRefresh.trigger, "forecast refresh");
-const activeForecastRefresh = solarPlanRefreshDecision({
-  ...waitingPlannerState,
+const activeForecastRefresh = adaptiveChargingPlanRefreshDecision({
+  ...waitingAdaptiveChargingState,
   forecast: { fetchedAt: "2026-07-11T11:00:00.000Z" },
-}, plannerConfig, rebaseNow);
+}, adaptiveChargingConfig, rebaseNow);
 assert.equal(activeForecastRefresh.trigger, "forecast refresh");
-assert.equal(solarPlanRefreshDecision({
-  ...waitingPlannerState,
+assert.equal(adaptiveChargingPlanRefreshDecision({
+  ...waitingAdaptiveChargingState,
   forecast: { fetchedAt: "2026-07-11T11:00:00.000Z" },
-  plan: { ...waitingPlannerState.plan, forecastFetchedAt: "2026-07-11T11:00:00.000Z" },
+  plan: { ...waitingAdaptiveChargingState.plan, forecastFetchedAt: "2026-07-11T11:00:00.000Z" },
   lastPlanEventKey: activeForecastRefresh.eventKey,
-}, plannerConfig, rebaseNow).refresh, false);
-const initialRefresh = solarPlanRefreshDecision({
-  forecast: waitingPlannerState.forecast,
+}, adaptiveChargingConfig, rebaseNow).refresh, false);
+const initialRefresh = adaptiveChargingPlanRefreshDecision({
+  forecast: waitingAdaptiveChargingState.forecast,
   plan: null,
   pendingPlanReason: "configuration changed",
-}, plannerConfig, new Date(2026, 6, 11, 12, 0));
+}, adaptiveChargingConfig, new Date(2026, 6, 11, 12, 0));
 assert.equal(initialRefresh.trigger, "configuration changed");
-const recalculationLog = solarPlanLogMessage({
+const recalculationLog = adaptiveChargingPlanLogMessage({
   available: true,
   predictedSolarKwh: 5.65,
   predictedDemandKwh: 17.64,
@@ -283,13 +341,13 @@ assert.match(recalculationLog, /Plan recalculated \(entering Cheapest\)/);
 assert.match(recalculationLog, /targets \[Cheapest 52%\/1\.97 kWh\]/);
 assert.match(recalculationLog, /slots \[.*1970 Wh\]/);
 assert.match(recalculationLog, /test warning/);
-assert.equal(solarPlanRefreshDecision({
-  ...waitingPlannerState,
-  plan: { ...waitingPlannerState.plan, createdAt: "2026-07-01T00:00:00.000Z" },
-}, plannerConfig, new Date(2026, 6, 11, 12, 0)).refresh, false);
-assert.ok(discountedBandOccurrences(plannerConfig, prewindowNow).length >= 2);
+assert.equal(adaptiveChargingPlanRefreshDecision({
+  ...waitingAdaptiveChargingState,
+  plan: { ...waitingAdaptiveChargingState.plan, createdAt: "2026-07-01T00:00:00.000Z" },
+}, adaptiveChargingConfig, new Date(2026, 6, 11, 12, 0)).refresh, false);
+assert.ok(discountedBandOccurrences(adaptiveChargingConfig, prewindowNow).length >= 2);
 
-const learnedChargingPerformance = cleanPlannerChargingPerformance({
+const learnedChargingPerformance = cleanAdaptiveChargingPerformance({
   samples: Array.from({ length: 10 }, (_, index) => ({
     at: new Date(2026, 6, 11, 1, index).toISOString(),
     batteryChargingW: 2000 - index * 50,
@@ -311,7 +369,7 @@ const learnedChargingPerformance = cleanPlannerChargingPerformance({
 assert.equal(learnedChargingPerformance.sampleCount, 10);
 assert.equal(learnedChargingPerformance.learnedChargeWatts, 1950);
 assert.ok(Math.abs(learnedChargingPerformance.demandImpactWattsPerKw + 100) < 0.001);
-assert.equal(effectivePlannerChargeWatts(plannerConfig, {
+assert.equal(effectiveAdaptiveChargeWatts(adaptiveChargingConfig, {
   chargingPerformance: learnedChargingPerformance,
 }).effectiveWatts, 1950);
 
@@ -324,9 +382,9 @@ const completedChargeState = {
     latestSocPercent: 30,
     capacityKwh: 10,
   },
-  chargingPerformance: cleanPlannerChargingPerformance(),
+  chargingPerformance: cleanAdaptiveChargingPerformance(),
 };
-const completedChargeSession = finalizePlannerChargeSession(
+const completedChargeSession = finalizeAdaptiveChargeSession(
   completedChargeState,
   "Planned charge target reached",
   new Date("2026-07-11T01:00:00.000Z"),
@@ -344,10 +402,10 @@ const executionOccurrence = {
 const executionState = {
   owner: null,
   activeChargedKwh: 0,
-  chargingPerformance: cleanPlannerChargingPerformance(),
+  chargingPerformance: cleanAdaptiveChargingPerformance(),
   windowSummaries: [],
 };
-syncPlannerWindowExecution(executionState, executionOccurrence, {
+syncAdaptiveChargingWindowExecution(executionState, executionOccurrence, {
   slots: [{
     start: "2026-07-11T12:30:00.000Z",
     end: executionOccurrence.end,
@@ -356,9 +414,9 @@ syncPlannerWindowExecution(executionState, executionOccurrence, {
     targetWh: 1000,
   }],
 }, 20, new Date("2026-07-11T11:00:00.000Z"));
-executionState.owner = "planner";
+executionState.owner = "adaptiveCharging";
 executionState.activeChargedKwh = 0.2;
-syncPlannerWindowExecution(executionState, executionOccurrence, {
+syncAdaptiveChargingWindowExecution(executionState, executionOccurrence, {
   slots: [{
     start: "2026-07-11T12:30:00.000Z",
     end: executionOccurrence.end,
@@ -377,9 +435,9 @@ executionState.activeChargeSession = {
   capacityKwh: 5,
 };
 executionState.activeChargedKwh = 0.6;
-finalizePlannerChargeSession(executionState, "breaker interruption", new Date("2026-07-11T12:20:00.000Z"));
-recordPlannerWindowInterruption(executionState);
-syncPlannerWindowExecution(executionState, executionOccurrence, {
+finalizeAdaptiveChargeSession(executionState, "breaker interruption", new Date("2026-07-11T12:20:00.000Z"));
+recordAdaptiveChargingWindowInterruption(executionState);
+syncAdaptiveChargingWindowExecution(executionState, executionOccurrence, {
   slots: [{
     start: "2026-07-11T12:40:00.000Z",
     end: executionOccurrence.end,
@@ -388,7 +446,7 @@ syncPlannerWindowExecution(executionState, executionOccurrence, {
     targetWh: 400,
   }],
 }, 30, new Date("2026-07-11T12:30:00.000Z"));
-const executionSummary = finalizePlannerWindowExecution(
+const executionSummary = finalizeAdaptiveChargingWindowExecution(
   executionState,
   31,
   new Date("2026-07-11T13:00:00.000Z"),
@@ -401,7 +459,7 @@ assert.equal(executionSummary.startSocPercent, 20);
 assert.equal(executionSummary.endSocPercent, 31);
 assert.equal(executionState.windowSummaries.length, 1);
 assert.equal(executionState.activeWindowExecution, null);
-const persistedPlannerExecution = cleanSolarPlannerState({
+const persistedAdaptiveChargingExecution = cleanAdaptiveChargingState({
   breakerRecovery: {
     interruptedAt: "2026-07-11T00:00:00.000Z",
     cooldownUntil: "2026-07-11T00:03:00.000Z",
@@ -409,10 +467,10 @@ const persistedPlannerExecution = cleanSolarPlannerState({
   },
   windowSummaries: executionState.windowSummaries,
 });
-assert.equal(persistedPlannerExecution.breakerRecovery.consecutiveSafeChecks, 1);
-assert.equal(persistedPlannerExecution.windowSummaries[0].unmetWh, 400);
+assert.equal(persistedAdaptiveChargingExecution.breakerRecovery.consecutiveSafeChecks, 1);
+assert.equal(persistedAdaptiveChargingExecution.windowSummaries[0].unmetWh, 400);
 const optimizedSlots = optimizeDiscountedChargeSlots({
-  config: plannerConfig,
+  config: adaptiveChargingConfig,
   start: new Date(2026, 6, 11, 23, 0),
   end: new Date(2026, 6, 12, 3, 0),
   requiredKwh: 4.5,
@@ -423,7 +481,7 @@ assert.equal(optimizedSlots.slots[0].yenPerKwh, 15);
 assert.equal(optimizedSlots.slots.at(-1).yenPerKwh, 20);
 assert.equal(optimizedSlots.slots.filter((slot) => slot.yenPerKwh === 15).at(-1).end, new Date(2026, 6, 12, 1, 0).toISOString());
 const smallCharge = optimizeDiscountedChargeSlots({
-  config: plannerConfig,
+  config: adaptiveChargingConfig,
   start: new Date(2026, 6, 11, 23, 0),
   end: new Date(2026, 6, 12, 3, 0),
   requiredKwh: 0.5,
@@ -432,7 +490,7 @@ assert.equal(smallCharge.slots.length, 1);
 assert.equal(smallCharge.slots[0].start, new Date(2026, 6, 12, 0, 45).toISOString());
 assert.equal(smallCharge.slots[0].end, new Date(2026, 6, 12, 1, 0).toISOString());
 const standardOnly = optimizeDiscountedChargeSlots({
-  config: plannerConfig,
+  config: adaptiveChargingConfig,
   start: new Date(2026, 6, 11, 12, 0),
   end: new Date(2026, 6, 11, 18, 0),
   requiredKwh: 2,
@@ -440,7 +498,7 @@ const standardOnly = optimizeDiscountedChargeSlots({
 assert.equal(standardOnly.slots.length, 0);
 assert.equal(standardOnly.unmetChargeKwh, 2);
 const forecastDemandDoesNotRemoveSlots = optimizeDiscountedChargeSlots({
-  config: plannerConfig,
+  config: adaptiveChargingConfig,
   start: new Date(2026, 6, 11, 23, 0),
   end: new Date(2026, 6, 12, 1, 0),
   requiredKwh: 1,
@@ -449,27 +507,27 @@ const forecastDemandDoesNotRemoveSlots = optimizeDiscountedChargeSlots({
 assert.equal(forecastDemandDoesNotRemoveSlots.plannedChargeKwh, 1);
 assert.equal(forecastDemandDoesNotRemoveSlots.unmetChargeKwh, 0);
 
-const plannerGuardRules = [{
+const adaptiveChargingGuardRules = [{
   id: "guard-60a",
   name: "Charging Demand Guard",
   type: "backup-demand-guard",
   enabled: true,
   conditions: { breakerVoltage: 100, breakerAmps: 60, reserveAmps: 5 },
 }];
-const livePlannerHeadroom = plannerLiveChargeHeadroom({
+const liveAdaptiveChargingHeadroom = adaptiveChargingLiveChargeHeadroom({
   meter: { grid_import_power: { value: 3000 } },
-}, plannerConfig, {}, plannerGuardRules);
-assert.equal(livePlannerHeadroom.available, true);
-assert.equal(livePlannerHeadroom.gridImportW, 3000);
-assert.equal(plannerLiveChargeHeadroom({
+}, adaptiveChargingConfig, {}, adaptiveChargingGuardRules);
+assert.equal(liveAdaptiveChargingHeadroom.available, true);
+assert.equal(liveAdaptiveChargingHeadroom.gridImportW, 3000);
+assert.equal(adaptiveChargingLiveChargeHeadroom({
   meter: { grid_import_power: { value: 4000 } },
-}, plannerConfig, {}, plannerGuardRules).available, false);
-assert.equal(plannerLiveChargeHeadroom({
+}, adaptiveChargingConfig, {}, adaptiveChargingGuardRules).available, false);
+assert.equal(adaptiveChargingLiveChargeHeadroom({
   meter: { grid_import_power: { value: null } },
-}, plannerConfig, {}, plannerGuardRules).available, false);
-const learnedHeadroom = plannerLiveChargeHeadroom({
+}, adaptiveChargingConfig, {}, adaptiveChargingGuardRules).available, false);
+const learnedHeadroom = adaptiveChargingLiveChargeHeadroom({
   meter: { grid_import_power: { value: 3300 } },
-}, plannerConfig, { chargingPerformance: learnedChargingPerformance }, plannerGuardRules);
+}, adaptiveChargingConfig, { chargingPerformance: learnedChargingPerformance }, adaptiveChargingGuardRules);
 assert.equal(learnedHeadroom.chargeWatts, 1950);
 assert.equal(learnedHeadroom.thresholdW, 3350);
 assert.equal(learnedHeadroom.available, true);
@@ -484,7 +542,7 @@ const enabledGuardRules = [{
     reserveAmps: 2,
   },
 }];
-assert.deepEqual(plannerBreakerSettings(enabledGuardRules), {
+assert.deepEqual(adaptiveChargingBreakerSettings(enabledGuardRules), {
   breakerVoltage: 100,
   breakerAmps: 50,
   reserveAmps: 2,
@@ -494,45 +552,45 @@ assert.deepEqual(plannerBreakerSettings(enabledGuardRules), {
   source: "automation-rule",
   valid: true,
 });
-assert.equal(plannerBreakerSettings([{
+assert.equal(adaptiveChargingBreakerSettings([{
   ...enabledGuardRules[0],
   enabled: false,
 }]).breakerLimitW, 4800);
-assert.equal(plannerBreakerSettings([]).valid, false);
-assert.equal(Number.isNaN(plannerBreakerSettings([]).breakerLimitW), true);
-assert.deepEqual(solarPlannerAvailability(plannerConfig, []), {
+assert.equal(adaptiveChargingBreakerSettings([]).valid, false);
+assert.equal(Number.isNaN(adaptiveChargingBreakerSettings([]).breakerLimitW), true);
+assert.deepEqual(adaptiveChargingAvailability(adaptiveChargingConfig, []), {
   available: false,
   reason: "Charging Demand Guard settings are unavailable",
 });
-assert.equal(solarPlannerAvailability(plannerConfig, enabledGuardRules).available, true);
-const missingGuardHeadroom = plannerLiveChargeHeadroom({
+assert.equal(adaptiveChargingAvailability(adaptiveChargingConfig, enabledGuardRules).available, true);
+const missingGuardHeadroom = adaptiveChargingLiveChargeHeadroom({
   meter: { grid_import_power: { value: 0 } },
-}, plannerConfig);
+}, adaptiveChargingConfig);
 assert.equal(missingGuardHeadroom.available, false);
 assert.equal(Number.isNaN(missingGuardHeadroom.thresholdW), true);
-assert.equal(plannerLiveImportSafety({
+assert.equal(adaptiveChargingLiveImportSafety({
   meter: { grid_import_power: { value: 0 } },
 }).available, false);
-const guardRuleHeadroom = plannerLiveChargeHeadroom({
+const guardRuleHeadroom = adaptiveChargingLiveChargeHeadroom({
   meter: { grid_import_power: { value: 2380 } },
-}, plannerConfig, {}, enabledGuardRules);
+}, adaptiveChargingConfig, {}, enabledGuardRules);
 assert.equal(guardRuleHeadroom.breakerLimitW, 4800);
 assert.equal(guardRuleHeadroom.thresholdW, 2600);
 assert.equal(guardRuleHeadroom.available, true);
-assert.equal(plannerLiveChargeHeadroom({
+assert.equal(adaptiveChargingLiveChargeHeadroom({
   meter: { grid_import_power: { value: 2700 } },
-}, plannerConfig, {}, enabledGuardRules).available, false);
-assert.equal(plannerLiveImportSafety({
+}, adaptiveChargingConfig, {}, enabledGuardRules).available, false);
+assert.equal(adaptiveChargingLiveImportSafety({
   meter: { grid_import_power: { value: 4799 } },
 }, enabledGuardRules).available, true);
-assert.equal(plannerLiveImportSafety({
+assert.equal(adaptiveChargingLiveImportSafety({
   meter: { grid_import_power: { value: 4800 } },
 }, enabledGuardRules).available, false);
 const initialWaitState = { log: [] };
-const unavailableGuardHeadroom = plannerLiveChargeHeadroom({
+const unavailableGuardHeadroom = adaptiveChargingLiveChargeHeadroom({
   meter: { grid_import_power: { value: 2700 } },
-}, plannerConfig, {}, enabledGuardRules);
-assert.equal(logPlannerInitialHeadroomWait(
+}, adaptiveChargingConfig, {}, enabledGuardRules);
+assert.equal(logAdaptiveChargingInitialHeadroomWait(
   initialWaitState,
   unavailableGuardHeadroom,
   new Date("2026-07-11T00:00:00.000Z"),
@@ -541,26 +599,26 @@ assert.match(initialWaitState.log[0].message, /Grid Import \(2700 W\)/);
 assert.match(initialWaitState.log[0].message, /50 A - 2 A reserve at 100 V/);
 assert.match(initialWaitState.log[0].message, /Guard limit \(4800 W\)/);
 assert.match(initialWaitState.log[0].message, /required at or below \(2600 W\)/);
-assert.equal(logPlannerInitialHeadroomWait(
+assert.equal(logAdaptiveChargingInitialHeadroomWait(
   initialWaitState,
   unavailableGuardHeadroom,
   new Date("2026-07-11T00:01:00.000Z"),
 ), false);
-assert.equal(logPlannerInitialHeadroomWait(
+assert.equal(logAdaptiveChargingInitialHeadroomWait(
   initialWaitState,
   unavailableGuardHeadroom,
   new Date("2026-07-11T00:05:00.000Z"),
 ), true);
 const recoveryState = {};
-beginPlannerBreakerRecovery(
+beginAdaptiveChargingBreakerRecovery(
   recoveryState,
-  plannerLiveChargeHeadroom({ meter: { grid_import_power: { value: 4000 } } }, plannerConfig, {}, plannerGuardRules),
+  adaptiveChargingLiveChargeHeadroom({ meter: { grid_import_power: { value: 4000 } } }, adaptiveChargingConfig, {}, adaptiveChargingGuardRules),
   new Date("2026-07-11T00:00:00.000Z"),
 );
-const safeRecoveryHeadroom = plannerLiveChargeHeadroom({
+const safeRecoveryHeadroom = adaptiveChargingLiveChargeHeadroom({
   meter: { grid_import_power: { value: 3000 } },
-}, plannerConfig, {}, plannerGuardRules);
-const recoveryCheck1 = advancePlannerBreakerRecovery(
+}, adaptiveChargingConfig, {}, adaptiveChargingGuardRules);
+const recoveryCheck1 = advanceAdaptiveChargingBreakerRecovery(
   recoveryState,
   safeRecoveryHeadroom,
   new Date("2026-07-11T00:00:30.000Z"),
@@ -568,7 +626,7 @@ const recoveryCheck1 = advancePlannerBreakerRecovery(
 assert.equal(recoveryCheck1.consecutiveSafeChecks, 1);
 assert.equal(recoveryCheck1.ready, false);
 recoveryState.log = [];
-assert.equal(logPlannerBreakerWait(
+assert.equal(logAdaptiveChargingBreakerWait(
   recoveryState,
   safeRecoveryHeadroom,
   recoveryCheck1,
@@ -579,12 +637,12 @@ assert.match(recoveryState.log[0].message, /required at or below \(3300 W\)/);
 assert.match(recoveryState.log[0].message, /Guard limit \(5500 W\)/);
 assert.match(recoveryState.log[0].message, /safe checks \(1\/3\)/);
 recoveryState.breakerRecovery.lastWaitLogAt = "2026-07-11T00:00:30.000Z";
-const recoveryCheck2 = advancePlannerBreakerRecovery(
+const recoveryCheck2 = advanceAdaptiveChargingBreakerRecovery(
   recoveryState,
   safeRecoveryHeadroom,
   new Date("2026-07-11T00:01:00.000Z"),
 );
-const recoveryCheck3 = advancePlannerBreakerRecovery(
+const recoveryCheck3 = advanceAdaptiveChargingBreakerRecovery(
   recoveryState,
   safeRecoveryHeadroom,
   new Date("2026-07-11T00:01:30.000Z"),
@@ -593,45 +651,45 @@ assert.equal(recoveryCheck2.shouldLog, false);
 assert.equal(recoveryCheck3.consecutiveSafeChecks, 3);
 assert.equal(recoveryCheck3.checksReady, true);
 assert.equal(recoveryCheck3.cooldownReady, false);
-const recoveryReady = advancePlannerBreakerRecovery(
+const recoveryReady = advanceAdaptiveChargingBreakerRecovery(
   recoveryState,
   safeRecoveryHeadroom,
   new Date("2026-07-11T00:03:00.000Z"),
 );
 assert.equal(recoveryReady.ready, true);
-const unsafeRecovery = advancePlannerBreakerRecovery(
+const unsafeRecovery = advanceAdaptiveChargingBreakerRecovery(
   recoveryState,
-  plannerLiveChargeHeadroom({ meter: { grid_import_power: { value: 4000 } } }, plannerConfig, {}, plannerGuardRules),
+  adaptiveChargingLiveChargeHeadroom({ meter: { grid_import_power: { value: 4000 } } }, adaptiveChargingConfig, {}, adaptiveChargingGuardRules),
   new Date("2026-07-11T00:03:30.000Z"),
 );
 assert.equal(unsafeRecovery.consecutiveSafeChecks, 0);
 assert.equal(unsafeRecovery.ready, false);
-assert.equal(advancePlannerBreakerRecovery(
+assert.equal(advanceAdaptiveChargingBreakerRecovery(
   recoveryState,
   safeRecoveryHeadroom,
   new Date("2026-07-11T00:06:00.000Z"),
 ).shouldLog, true);
 recoveryState.breakerRecovery.consecutiveSafeChecks = 3;
 recoveryState.breakerRecovery.cooldownUntil = "2026-07-11T00:05:00.000Z";
-assert.equal(plannerBreakerRecoveryReady(recoveryState, new Date("2026-07-11T00:06:00.000Z")), true);
-assert.equal(shouldHoldGuardStandbyForPlanner({
+assert.equal(adaptiveChargingBreakerRecoveryReady(recoveryState, new Date("2026-07-11T00:06:00.000Z")), true);
+assert.equal(shouldHoldGuardStandbyForAdaptiveCharging({
   ...recoveryState,
   interruptedCharge: { slotEnd: "2026-07-11T00:30:00.000Z" },
 }, new Date("2026-07-11T00:06:00.000Z")), false);
 recoveryState.breakerRecovery.consecutiveSafeChecks = 2;
-assert.equal(shouldHoldGuardStandbyForPlanner({
+assert.equal(shouldHoldGuardStandbyForAdaptiveCharging({
   ...recoveryState,
   interruptedCharge: { slotEnd: "2026-07-11T00:30:00.000Z" },
 }, new Date("2026-07-11T00:06:00.000Z")), true);
-assert.equal(plannerLiveImportSafety({
+assert.equal(adaptiveChargingLiveImportSafety({
   meter: { grid_import_power: { value: 5400 } },
-}, plannerGuardRules).available, true);
-assert.equal(plannerLiveImportSafety({
+}, adaptiveChargingGuardRules).available, true);
+assert.equal(adaptiveChargingLiveImportSafety({
   meter: { grid_import_power: { value: 5500 } },
-}, plannerGuardRules).available, false);
-assert.equal(plannerLiveImportSafety({
+}, adaptiveChargingGuardRules).available, false);
+assert.equal(adaptiveChargingLiveImportSafety({
   meter: { grid_import_power: { value: null } },
-}, plannerGuardRules).available, false);
+}, adaptiveChargingGuardRules).available, false);
 assert.equal(shouldTriggerDemandGuard({
   operationMode: "charging",
   batteryChargingW: 2000,
@@ -645,40 +703,40 @@ assert.equal(shouldTriggerDemandGuard({
   breakerLimitW: 5500,
 }), false);
 
-const activePlannerNow = new Date(2026, 6, 11, 23, 30);
-const activePlannerSlot = {
+const activeAdaptiveChargingNow = new Date(2026, 6, 11, 23, 30);
+const activeAdaptiveChargingSlot = {
   start: new Date(2026, 6, 11, 23, 0).toISOString(),
   end: new Date(2026, 6, 12, 0, 0).toISOString(),
   targetWh: 1000,
   targetSocPercent: 100,
 };
-assert.equal(activePlannerSlotStopReason({
-  owner: "planner",
-  activeSlot: activePlannerSlot,
+assert.equal(activeAdaptiveChargingSlotStopReason({
+  owner: "adaptiveCharging",
+  activeSlot: activeAdaptiveChargingSlot,
   activePlanCreatedAt: "old-plan",
   activeChargedKwh: 0.2,
-}, plannerConfig, {
+}, adaptiveChargingConfig, {
   createdAt: "new-plan",
-  slots: [{ ...activePlannerSlot, targetWh: 800 }],
-}, activePlannerNow), null);
-assert.match(activePlannerSlotStopReason({
-  owner: "planner",
-  activeSlot: activePlannerSlot,
+  slots: [{ ...activeAdaptiveChargingSlot, targetWh: 800 }],
+}, activeAdaptiveChargingNow), null);
+assert.match(activeAdaptiveChargingSlotStopReason({
+  owner: "adaptiveCharging",
+  activeSlot: activeAdaptiveChargingSlot,
   activePlanCreatedAt: "old-plan",
   activeChargedKwh: 0.2,
-}, plannerConfig, {
+}, adaptiveChargingConfig, {
   createdAt: "new-plan",
-  slots: [{ ...activePlannerSlot, targetWh: 600 }],
-}, activePlannerNow), /remaining charge target/);
-assert.match(activePlannerSlotStopReason({
-  owner: "planner",
-  activeSlot: activePlannerSlot,
+  slots: [{ ...activeAdaptiveChargingSlot, targetWh: 600 }],
+}, activeAdaptiveChargingNow), /remaining charge target/);
+assert.match(activeAdaptiveChargingSlotStopReason({
+  owner: "adaptiveCharging",
+  activeSlot: activeAdaptiveChargingSlot,
   activePlanCreatedAt: "old-plan",
   activeChargedKwh: 0.2,
-}, plannerConfig, {
+}, adaptiveChargingConfig, {
   createdAt: "new-plan",
   slots: [],
-}, activePlannerNow), /no longer includes/);
+}, activeAdaptiveChargingNow), /no longer includes/);
 
 const interruptedSlot = {
   start: "2026-07-11T12:00:00.000Z",
@@ -691,7 +749,7 @@ const interruptedState = {
   activeChargedKwh: 0.3,
   plan: { slots: [interruptedSlot] },
 };
-const firstInterruption = preserveInterruptedPlannerCharge(
+const firstInterruption = preserveInterruptedAdaptiveCharge(
   interruptedState,
   new Date("2026-07-11T12:10:00.000Z"),
 );
@@ -701,7 +759,7 @@ assert.equal(interruptedState.plan.slots[0].targetWh, 750);
 
 interruptedState.activeSlot = interruptedState.plan.slots[0];
 interruptedState.activeChargedKwh = 0.2;
-const repeatedInterruption = preserveInterruptedPlannerCharge(
+const repeatedInterruption = preserveInterruptedAdaptiveCharge(
   interruptedState,
   new Date("2026-07-11T12:20:00.000Z"),
 );
@@ -719,7 +777,7 @@ const cappedSmallerReplan = applyInterruptedChargeCap({
 }, firstInterruption, 2100, new Date("2026-07-11T12:15:00.000Z"));
 assert.equal(cappedSmallerReplan.plan.slots[0].targetWh, 600);
 assert.equal(applyInterruptedChargeCap({ slots: [] }, firstInterruption, 2100).interruption, null);
-const completedSlotPlan = consumeCompletedPlannerSlot({
+const completedSlotPlan = consumeCompletedAdaptiveChargingSlot({
   plannedChargeKwh: 1.8,
   slots: [
     { ...interruptedSlot, targetWh: 750 },
@@ -731,7 +789,7 @@ assert.equal(completedSlotPlan.slots.length, 1);
 assert.equal(completedSlotPlan.slots[0].targetWh, 1050);
 assert.ok(Math.abs(completedSlotPlan.plannedChargeKwh - 1.05) < 0.0001);
 assert.ok(Math.abs(completedSlotPlan.windows[0].plannedChargeKwh - 1.05) < 0.0001);
-const delayedCompletedSlotPlan = consumeCompletedPlannerSlot({
+const delayedCompletedSlotPlan = consumeCompletedAdaptiveChargingSlot({
   plannedChargeKwh: 0.75,
   slots: [{ ...interruptedSlot, slotId: "window:slot", targetWh: 750 }],
   windows: [{ end: interruptedSlot.windowEnd, plannedChargeKwh: 0.75, requestedChargeKwh: 0.75 }],
@@ -743,7 +801,7 @@ const delayedCompletedSlotPlan = consumeCompletedPlannerSlot({
 });
 assert.equal(delayedCompletedSlotPlan.slots.length, 0);
 assert.equal(delayedCompletedSlotPlan.plannedChargeKwh, 0);
-const legacyDelayedCompletedSlotPlan = consumeCompletedPlannerSlot({
+const legacyDelayedCompletedSlotPlan = consumeCompletedAdaptiveChargingSlot({
   plannedChargeKwh: 0.75,
   slots: [{ ...interruptedSlot, targetWh: 750 }],
   windows: [{ end: interruptedSlot.windowEnd, plannedChargeKwh: 0.75, requestedChargeKwh: 0.75 }],
@@ -765,7 +823,7 @@ const delayedInterruptedState = {
     slots: [{ ...interruptedSlot, slotId: "window:interrupted" }],
   },
 };
-const delayedInterruption = preserveInterruptedPlannerCharge(
+const delayedInterruption = preserveInterruptedAdaptiveCharge(
   delayedInterruptedState,
   new Date("2026-07-11T12:10:00.000Z"),
 );
@@ -774,7 +832,7 @@ assert.equal(delayedInterruptedState.plan.slots[0].targetWh, 750);
 
 const suspendedActions = [];
 const suspendedState = {
-  owner: "planner",
+  owner: "adaptiveCharging",
   activeSlot: interruptedSlot,
   activePlanCreatedAt: "plan",
   activeChargedKwh: 0.25,
@@ -782,7 +840,7 @@ const suspendedState = {
   activeChargeSession: null,
   log: [],
 };
-await suspendPlannerChargeInStandby(
+await suspendAdaptiveChargeInStandby(
   suspendedState,
   "Breaker limit reached",
   new Date("2026-07-11T12:10:00.000Z"),
@@ -797,7 +855,7 @@ assert.equal(suspendedState.owner, null);
 assert.match(suspendedState.log.at(-1).message, /maintaining Standby operation mode/);
 
 const resumedActions = [];
-await executePlannerChargeStart({ targetWh: 750 }, {
+await executeAdaptiveChargeStart({ targetWh: 750 }, {
   resumeFromStandby: true,
   execute: async (action, payload) => {
     resumedActions.push({ action, payload });
@@ -810,7 +868,7 @@ assert.deepEqual(resumedActions, [
 ]);
 
 const failedResumeActions = [];
-await assert.rejects(executePlannerChargeStart({ targetWh: 750 }, {
+await assert.rejects(executeAdaptiveChargeStart({ targetWh: 750 }, {
   resumeFromStandby: true,
   execute: async (action, payload) => {
     failedResumeActions.push({ action, payload });
@@ -824,31 +882,31 @@ assert.deepEqual(failedResumeActions, [
   { action: "set-mode", payload: { mode: "standby" } },
 ]);
 
-const latePlannerSlot = capPlannerSlotToRemainingTime(
+const lateAdaptiveChargingSlot = capAdaptiveChargingSlotToRemainingTime(
   { ...interruptedSlot, targetWh: 750 },
   2100,
   new Date("2026-07-11T12:20:00.000Z"),
 );
-assert.equal(latePlannerSlot.targetWh, 350);
-assert.equal(latePlannerSlot.start, "2026-07-11T12:20:00.000Z");
-assert.equal(capPlannerSlotToRemainingTime(
+assert.equal(lateAdaptiveChargingSlot.targetWh, 350);
+assert.equal(lateAdaptiveChargingSlot.start, "2026-07-11T12:20:00.000Z");
+assert.equal(capAdaptiveChargingSlotToRemainingTime(
   { ...interruptedSlot, targetWh: 49 },
   2100,
   new Date("2026-07-11T12:20:00.000Z"),
 ), null);
-assert.equal(capPlannerSlotToRemainingTime(
+assert.equal(capAdaptiveChargingSlotToRemainingTime(
   { ...interruptedSlot, targetWh: 50 },
   2100,
   new Date("2026-07-11T12:20:00.000Z"),
 )?.targetWh, 50);
-assert.equal(capPlannerSlotToRemainingTime(
+assert.equal(capAdaptiveChargingSlotToRemainingTime(
   { ...interruptedSlot, targetWh: 750 },
   2100,
   new Date("2026-07-11T12:30:00.000Z"),
 ), null);
 
 const deadlineState = {
-  owner: "planner",
+  owner: "adaptiveCharging",
   activePlanCreatedAt: "deadline-plan",
   activeSlot: {
     start: "2026-07-11T12:00:00.000Z",
@@ -856,12 +914,12 @@ const deadlineState = {
     targetWh: 1050,
   },
 };
-const deadlineKey = plannerSlotEndKey(deadlineState);
+const deadlineKey = adaptiveChargingSlotEndKey(deadlineState);
 assert.equal(
-  plannerSlotEndDelayMs(deadlineState, new Date("2026-07-11T12:20:00.000Z")),
+  adaptiveChargingSlotEndDelayMs(deadlineState, new Date("2026-07-11T12:20:00.000Z")),
   10 * 60_000,
 );
-assert.equal(plannerSlotEndKey({ ...deadlineState, owner: null }), null);
+assert.equal(adaptiveChargingSlotEndKey({ ...deadlineState, owner: null }), null);
 
 let deadlineReleaseCount = 0;
 let deadlineWriteCount = 0;
@@ -877,7 +935,7 @@ const deadlineDependencies = {
     deadlineWriteCount += 1;
   },
 };
-const earlyDeadline = await enforcePlannerSlotEndDeadline(deadlineKey, {
+const earlyDeadline = await enforceAdaptiveChargingSlotEndDeadline(deadlineKey, {
   ...deadlineDependencies,
   now: new Date("2026-07-11T12:29:55.000Z"),
 });
@@ -886,7 +944,7 @@ assert.equal(earlyDeadline.remainingMs, 5000);
 assert.equal(deadlineReleaseCount, 0);
 assert.equal(deadlineWriteCount, 0);
 
-const expiredDeadline = await enforcePlannerSlotEndDeadline(deadlineKey, {
+const expiredDeadline = await enforceAdaptiveChargingSlotEndDeadline(deadlineKey, {
   ...deadlineDependencies,
   now: new Date("2026-07-11T12:30:00.000Z"),
 });
@@ -896,12 +954,12 @@ assert.equal(deadlineWriteCount, 1);
 assert.equal(deadlineState.owner, null);
 assert.equal(deadlineState.activeSlot, null);
 
-const staleDeadline = await enforcePlannerSlotEndDeadline(deadlineKey, {
+const staleDeadline = await enforceAdaptiveChargingSlotEndDeadline(deadlineKey, {
   ...deadlineDependencies,
   now: new Date("2026-07-11T12:31:00.000Z"),
 });
 assert.equal(staleDeadline.stopped, false);
-assert.equal(staleDeadline.reason, "active planner slot changed");
+assert.equal(staleDeadline.reason, "active adaptiveCharging slot changed");
 assert.equal(deadlineReleaseCount, 1);
 
 function chronologicalSlot(hour, band, netKwh = 0, highSolarNetKwh = netKwh) {
@@ -1068,7 +1126,7 @@ assert.equal(constrainedPlanStatus.available, true);
 assert.equal(constrainedPlanStatus.reason, null);
 assert.match(constrainedPlanStatus.warning, /2\.50 kWh shortfall remains.*feasible discounted capacity/);
 assert.equal(discountedPlanStatus({ plannedChargeKwh: 0, unmetChargeKwh: 2 }).available, false);
-const migratedShortfallState = cleanSolarPlannerState({
+const migratedShortfallState = cleanAdaptiveChargingState({
   plan: {
     available: false,
     reason: "discounted windows cannot safely reach their planned SOC targets",
@@ -1214,7 +1272,7 @@ for (let day = 1; day <= 7; day += 1) {
     { timestamp: new Date(sampleTime + 3_600_000).toISOString(), tiltedIrradianceWm2: 500 },
   );
 }
-const alignedSolarFactor = learnedSolarFactor(alignedSolarSamples, alignedWeather, plannerConfig);
+const alignedSolarFactor = learnedSolarFactor(alignedSolarSamples, alignedWeather, adaptiveChargingConfig);
 assert.equal(alignedSolarFactor.learned, true);
 assert.equal(alignedSolarFactor.factor, 2);
 
@@ -1257,7 +1315,7 @@ const normalizedWidgets = normalizeDashboardWidgets([
   { id: "houseDemandPower", visible: true, priority: "bad" },
   { id: "unknownWidget", visible: true, priority: 1 },
 ]);
-assert.equal(normalizedWidgets.length, 19);
+assert.equal(normalizedWidgets.length, 20);
 assert.deepEqual(normalizedWidgets.find((widget) => widget.id === "solarPower"), {
   id: "solarPower",
   group: "trends",
@@ -1276,6 +1334,7 @@ assert.equal(normalizedWidgets.some((widget) => widget.id === "powerImported"), 
 assert.equal(normalizedWidgets.some((widget) => widget.id === "powerExported"), true);
 assert.equal(normalizedWidgets.some((widget) => widget.id === "guardTriggerCount"), true);
 assert.equal(normalizedWidgets.some((widget) => widget.id === "energySources"), true);
+assert.equal(normalizedWidgets.some((widget) => widget.id === "adaptiveCharging"), true);
 
 assert.throws(
   () => parseJsonWithContext("[1]\n[2]", "test.json"),
@@ -1722,10 +1781,10 @@ const deferredRestore = await evaluateAutomationRule(deferredRestoreRule, {
   energy: { battery: { operation_mode: { value: "standby" }, instant_power: { value: 0 } } },
   meter: { grid_import_power: { value: 2000 } },
 }, new Date("2026-05-31T00:01:00.000Z"), () => {}, null, {
-  holdStandbyForPlanner: true,
+  holdStandbyForAdaptiveCharging: true,
   execute: async (action, payload) => deferredRestoreActions.push({ action, payload }),
 });
-assert.equal(deferredRestore.result.skipped, "planner waiting to resume charging");
+assert.equal(deferredRestore.result.skipped, "adaptiveCharging waiting to resume charging");
 assert.deepEqual(deferredRestoreActions, []);
 assert.equal(deferredRestoreRule.state.awaitingRestore, true);
 
