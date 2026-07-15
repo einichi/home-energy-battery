@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import dgram from "node:dgram";
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { appendFile, mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +14,7 @@ import {
   createNotificationService,
   normalizeNotificationConfig,
 } from "./lib/notifications.js";
+import { createHistoryStore, normalizeRetentionPolicy } from "./lib/history-store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 8787);
@@ -23,8 +24,6 @@ const AUTOMATION_RULES_FILE = path.join(DATA_DIR, "automation-rules.json");
 const AUTOMATION_RULE_STATE_FILE = path.join(DATA_DIR, "automation-rule-state.json");
 const SOLAR_PLANNER_STATE_FILE = path.join(DATA_DIR, "solar-planner-state.json");
 const SOLAR_PLANNER_DIR = path.join(DATA_DIR, "solar-planner");
-const SOLAR_FORECAST_HISTORY_FILE = path.join(SOLAR_PLANNER_DIR, "forecast-snapshots.jsonl");
-const SOLAR_WEATHER_HISTORY_FILE = path.join(SOLAR_PLANNER_DIR, "historical-weather.jsonl");
 const SOLAR_DEMAND_PROFILE_INDEX_FILE = path.join(SOLAR_PLANNER_DIR, "demand-day-profiles.json");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
@@ -80,6 +79,8 @@ const DEFAULT_GUARD_CONDITIONS = {
   reserveAmps: 5,
 };
 
+const DEFAULT_RETENTION = normalizeRetentionPolicy();
+
 // Public defaults use RFC 5737 documentation addresses. Real deployments should
 // set device addresses from the Settings page, where they are persisted in /data.
 const DEFAULT_CONFIG = {
@@ -98,7 +99,7 @@ const DEFAULT_CONFIG = {
   offPeakRateYenPerKwh: 25,
   offPeakSavingsEnabled: false,
   discoverySubnets: [],
-  historyRetentionDays: 1095,
+  retention: { ...DEFAULT_RETENTION, automaticMaintenance: true },
   updateIntervalSeconds: 15,
   co2TonnesPerKwh: 0.000423,
   rateBands: [
@@ -129,6 +130,7 @@ let cliQueue = Promise.resolve();
 let scheduleTimer = null;
 let automationTimer = null;
 let recorderTimer = null;
+let retentionTimer = null;
 let solarPlannerSlotEndTimer = null;
 let solarPlannerSlotEndTimerKey = null;
 let automationRunInProgress = false;
@@ -136,9 +138,11 @@ let automationRunContext = null;
 let discoveryRunContext = null;
 let activeCliContext = null;
 
+const historyStore = createHistoryStore({ dataDir: DATA_DIR });
 const notificationService = createNotificationService({
   dataDir: DATA_DIR,
   getConfig: () => readConfig(),
+  recordEvent: (event) => historyStore.isReady() && historyStore.recordEvent(event),
 });
 let cliTimingSequence = 0;
 const recentCliTimings = [];
@@ -442,23 +446,8 @@ function logDetailedError(label, err) {
   }
 }
 
-function parseHistorySamples(text) {
-  return text
-    .split("\n")
-    .map((line, index) => ({ line, index }))
-    .filter(({ line }) => line.trim())
-    .map(({ line, index }) => {
-      try {
-        return parseJsonWithContext(line, `${HISTORY_FILE}:line ${index + 1}`);
-      } catch (err) {
-        logDetailedError("history", err);
-        return null;
-      }
-    })
-    .filter(Boolean);
-}
-
 async function readHistorySamplesInRange(startMs, endMs) {
+  if (historyStore.isReady()) return historyStore.querySamples(startMs, endMs);
   try {
     await stat(HISTORY_FILE);
   } catch (err) {
@@ -497,6 +486,9 @@ async function readHistorySamplesInRange(startMs, endMs) {
 }
 
 async function readRecentHistorySamples(startMs, endMs, file = HISTORY_FILE, project = (sample) => sample) {
+  if (file === HISTORY_FILE && historyStore.isReady()) {
+    return historyStore.querySamples(startMs, endMs).map(project).filter(Boolean);
+  }
   let handle;
   try {
     handle = await open(file, "r");
@@ -674,6 +666,16 @@ function solarDemandProfileDays(index) {
 
 async function refreshSolarDemandProfileIndex() {
   await ensureDataDir();
+  if (historyStore.isReady()) {
+    const endMs = Date.now();
+    const startMs = endMs - SOLAR_SEASONAL_LOOKBACK_YEARS * 366 * 86_400_000;
+    const index = emptySolarDemandProfileIndex();
+    for (const sample of historyStore.querySamples(startMs, endMs, { resolution: "interval" })) {
+      addSampleToSolarDemandProfileIndex(index, sample);
+    }
+    solarDemandProfileIndexCache = index;
+    return solarDemandProfileDays(index);
+  }
   let historyStat;
   try {
     historyStat = await stat(HISTORY_FILE);
@@ -940,6 +942,27 @@ async function writeSolarPlannerState(state) {
   const cleaned = cleanSolarPlannerState({ ...state, updatedAt: new Date().toISOString() });
   await ensureDataDir();
   await writeJsonFileAtomic(SOLAR_PLANNER_STATE_FILE, cleaned);
+  if (historyStore.isReady()) {
+    for (const entry of cleaned.log) {
+      historyStore.recordEvent({
+        eventKey: `planner:log:${entry.at}:${entry.kind ?? "info"}:${entry.message}`,
+        at: entry.at,
+        category: "planner",
+        type: entry.kind ?? "log",
+        message: entry.message,
+      });
+    }
+    for (const summary of cleaned.windowSummaries) {
+      historyStore.recordEvent({
+        eventKey: `planner:window:${summary.key}`,
+        at: summary.completedAt ?? summary.windowEnd,
+        category: "planner",
+        type: "window-summary",
+        message: summary.reason,
+        payload: summary,
+      });
+    }
+  }
   syncSolarPlannerSlotEndTimer(cleaned);
   return cleaned;
 }
@@ -949,16 +972,6 @@ function appendSolarPlannerLog(state, message, kind = "info", at = new Date()) {
     ...(Array.isArray(state.log) ? state.log : []),
     { at: at.toISOString(), kind, message },
   ].slice(-200);
-}
-
-async function readJsonLinesFile(file) {
-  try {
-    const text = await readFile(file, "utf8");
-    return parseHistorySamples(text);
-  } catch (err) {
-    if (err.code === "ENOENT") return [];
-    throw err;
-  }
 }
 
 async function fetchJson(url, fetchImpl = fetch) {
@@ -1019,7 +1032,7 @@ async function refreshSolarPlannerForecast(config, { fetchImpl = fetch, now = ne
     state.forecast = forecast;
     state.lastForecastError = null;
     appendSolarPlannerLog(state, `Open-Meteo forecast refreshed for ${forecast.timezone || "local time"}`, "forecast", now);
-    await appendFile(SOLAR_FORECAST_HISTORY_FILE, `${JSON.stringify(forecast)}\n`);
+    historyStore.recordForecast(forecast);
   } catch (err) {
     state.lastForecastError = { at: now.toISOString(), error: err.message };
     appendSolarPlannerLog(state, `Forecast refresh failed: ${err.message}`, "error", now);
@@ -1029,7 +1042,7 @@ async function refreshSolarPlannerForecast(config, { fetchImpl = fetch, now = ne
   if (forceHistorical || !Number.isFinite(historicalAge) || historicalAge > 24 * 60 * 60_000) {
     try {
       const historical = parseOpenMeteoForecast(await fetchJson(openMeteoUrl(config, true, now), fetchImpl), now);
-      await writeJsonLinesAtomic(SOLAR_WEATHER_HISTORY_FILE, historical.hours);
+      historyStore.recordWeather(historical.hours);
       state.historicalWeatherFetchedAt = now.toISOString();
     } catch (err) {
       appendSolarPlannerLog(state, `Historical weather refresh failed; using demand recency fallback: ${err.message}`, "warning", now);
@@ -2088,11 +2101,8 @@ function sampleFromStatus(status, config, previousSample) {
 }
 
 async function recordStatusSample(status, config) {
-  // JSON Lines keeps persistence simple: each status poll appends one complete
-  // sample, and a partially-written final line is easy to ignore on read.
   const sample = sampleFromStatus(status, config, lastRecordedSample);
-  lastRecordedSample = sample;
-  await appendFile(HISTORY_FILE, `${JSON.stringify(sample)}\n`);
+  lastRecordedSample = historyStore.appendSample(sample);
   if (solarPlannerHistoryCache) {
     const plannerSample = solarPlannerHistorySample(sample);
     if (plannerSample) solarPlannerHistoryCache.samples.push(plannerSample);
@@ -2105,17 +2115,17 @@ async function recordStatusSample(status, config) {
 
 async function recordGuardTriggerSample(at = new Date()) {
   await ensureDataDir();
-  await appendFile(HISTORY_FILE, `${JSON.stringify({
+  historyStore.appendSample({
     timestamp: at.toISOString(),
     guardTriggerCount: 1,
-  })}\n`);
+  });
 }
 
 function sampleSolarGenerationKwh(sample) {
-  const direct = Number(sample.solarGenerationKwh);
+  const direct = finiteNumberOrNull(sample.solarGenerationKwh);
   if (Number.isFinite(direct)) return direct;
-  const solarSavingYen = Number(sample.solarSavingYen);
-  const rateYenPerKwh = Number(sample.rateYenPerKwh);
+  const solarSavingYen = finiteNumberOrNull(sample.solarSavingYen);
+  const rateYenPerKwh = finiteNumberOrNull(sample.rateYenPerKwh);
   if (Number.isFinite(solarSavingYen) && Number.isFinite(rateYenPerKwh) && rateYenPerKwh > 0) {
     return solarSavingYen / rateYenPerKwh;
   }
@@ -2123,18 +2133,20 @@ function sampleSolarGenerationKwh(sample) {
 }
 
 function samplePowerKwh(sample, directKey, wattsKey, previousSample) {
-  const direct = Number(sample[directKey]);
+  const direct = finiteNumberOrNull(sample[directKey]);
   if (Number.isFinite(direct)) return direct;
   if (!previousSample?.timestamp || !sample?.timestamp) return 0;
-  const watts = Number(sample[wattsKey]);
+  const watts = finiteNumberOrNull(sample[wattsKey]);
   if (!Number.isFinite(watts)) return 0;
   const deltaHours = Math.max(0, Math.min(1, (new Date(sample.timestamp).getTime() - new Date(previousSample.timestamp).getTime()) / 3_600_000));
   return deltaHours * (Math.max(0, watts) / 1000);
 }
 
 function hasPowerSample(sample, directKey, wattsKey, previousSample) {
-  if (Number.isFinite(Number(sample?.[directKey]))) return true;
-  return Boolean(previousSample?.timestamp && sample?.timestamp && Number.isFinite(Number(sample?.[wattsKey])));
+  if (Number.isFinite(finiteNumberOrNull(sample?.[directKey]))) return true;
+  return Boolean(previousSample?.timestamp
+    && sample?.timestamp
+    && Number.isFinite(finiteNumberOrNull(sample?.[wattsKey])));
 }
 
 function summarizeEnergySources(samples, config, solarGenerationKwh, gridExportKwh) {
@@ -2210,7 +2222,7 @@ function summarizeSamples(samples, config = DEFAULT_CONFIG, extras = {}) {
     { chargedKwh: 0, dischargedKwh: 0 },
   );
   const socSamples = samples
-    .map((sample) => Number(sample.stateOfChargePercent))
+    .map((sample) => finiteNumberOrNull(sample.stateOfChargePercent))
     .filter((value) => Number.isFinite(value));
   const averageStateOfChargePercent = socSamples.length
     ? socSamples.reduce((sum, value) => sum + value, 0) / socSamples.length
@@ -2363,7 +2375,9 @@ function summarizeReportBuckets(buckets) {
       .filter((value) => typeof value === "number" && Number.isFinite(value));
     return values.length ? values.reduce((total, value) => total + value, 0) : null;
   };
-  const peaks = buckets.map((bucket) => Number(bucket.peakDemandW)).filter(Number.isFinite);
+  const peaks = buckets
+    .map((bucket) => finiteNumberOrNull(bucket.peakDemandW))
+    .filter(Number.isFinite);
   const houseDemandKwh = sum("houseDemandKwh");
   const solarGenerationKwh = sum("solarGenerationKwh");
   return {
@@ -2413,7 +2427,7 @@ function createEnergyReportAccumulator({ start, end, bucket = "day", config = DE
       const key = reportBucketKey(bucketStart, bucketMode);
       if (!byKey.has(key)) byKey.set(key, emptyReportBucket(bucketStart, bucketMode));
       const row = byKey.get(key);
-      row.sampleCount += 1;
+      row.sampleCount += Number(sample.rollupSampleCount ?? 1) || 1;
       addReportEnergy(
         row,
         "houseDemandKwh",
@@ -2455,12 +2469,13 @@ function createEnergyReportAccumulator({ start, end, bucket = "day", config = DE
         row,
         "solarGenerationKwh",
         solarGenerationKwh,
-        Number.isFinite(Number(sample.solarGenerationKwh)) || hasPowerSample(sample, "solarGenerationKwh", "solarPowerW", prev),
+        Number.isFinite(finiteNumberOrNull(sample.solarGenerationKwh))
+          || hasPowerSample(sample, "solarGenerationKwh", "solarPowerW", prev),
       );
       row.solarSavingYen += Number(sample.solarSavingYen ?? 0) || 0;
       row.offPeakSavingYen += Number(sample.offPeakSavingYen ?? 0) || 0;
       row.co2SavingKg += solarGenerationKwh * co2TonnesPerKwh * 1000;
-      const demand = Number(sample.houseDemandW);
+      const demand = Number(sample.peakHouseDemandW ?? sample.houseDemandW);
       if (Number.isFinite(demand)) row.peakDemandW = Math.max(row.peakDemandW ?? demand, demand);
       prev = sample;
       return "included";
@@ -2522,8 +2537,6 @@ function countGuardTriggersForRange(rules, start, end, options = {}) {
 }
 
 async function readHistoryRange(start, end, config = DEFAULT_CONFIG) {
-  // History is read by scanning the JSONL file. This is intentionally boring and
-  // inspectable; a database can replace it later if retention grows large.
   await ensureDataDir();
   const startMs = start ? new Date(start).getTime() : Date.now() - 30 * 60_000;
   const endMs = end ? new Date(end).getTime() : Date.now();
@@ -2553,115 +2566,31 @@ async function readEnergyReport(start, end, bucket, config = DEFAULT_CONFIG) {
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs >= endMs) {
     throw new Error("valid start and end date/time are required");
   }
-  try {
-    await stat(HISTORY_FILE);
-  } catch (err) {
-    if (err.code === "ENOENT") {
-      return {
-        ...aggregateEnergyReportSamples([], {
-          start: new Date(startMs).toISOString(),
-          end: new Date(endMs).toISOString(),
-          bucket: bucketMode,
-          config,
-        }),
-        meta: { recordsRead: 0, recordsIncluded: 0, invalidRecords: 0 },
-      };
-    }
-    throw err;
-  }
-
-  const accumulator = createEnergyReportAccumulator({
-    start: new Date(startMs).toISOString(),
-    end: new Date(endMs).toISOString(),
-    bucket: bucketMode,
-    config,
-  });
-  const stream = createReadStream(HISTORY_FILE, { encoding: "utf8" });
-  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
-  let lineNumber = 0;
-  let recordsIncluded = 0;
-  let invalidRecords = 0;
-  try {
-    for await (const line of lines) {
-      lineNumber += 1;
-      if (!line.trim()) continue;
-      let sample = null;
-      try {
-        sample = parseJsonWithContext(line, `${HISTORY_FILE}:line ${lineNumber}`);
-      } catch (err) {
-        invalidRecords += 1;
-        logDetailedError("history", err);
-        continue;
-      }
-      const result = accumulator.process(sample);
-      if (result === "included") recordsIncluded += 1;
-      if (result === "after") {
-        lines.close();
-        stream.destroy();
-        break;
-      }
-    }
-  } finally {
-    lines.close();
-    if (!stream.destroyed) stream.destroy();
-  }
-
+  const samples = historyStore.querySamples(startMs, endMs, { resolution: "interval" });
   return {
-    ...accumulator.finish(),
-    meta: { recordsRead: lineNumber, recordsIncluded, invalidRecords },
+    ...aggregateEnergyReportSamples(samples, {
+      start: new Date(startMs).toISOString(),
+      end: new Date(endMs).toISOString(),
+      bucket: bucketMode,
+      config,
+    }),
+    meta: {
+      recordsRead: samples.length,
+      recordsIncluded: samples.length,
+      invalidRecords: 0,
+      resolution: "30-minute",
+    },
   };
 }
 
-async function readAllHistorySamples() {
-  await ensureDataDir();
-  let text = "";
-  try {
-    text = await readFile(HISTORY_FILE, "utf8");
-  } catch (err) {
-    if (err.code !== "ENOENT") throw err;
-  }
-  return parseHistorySamples(text);
-}
-
 async function readHistoryStats() {
-  // Summarizes the on-disk history store for the Data Retention settings panel:
-  // how large the JSONL file is and how much of a time span it covers.
-  await ensureDataDir();
-  let sizeBytes = 0;
-  try {
-    sizeBytes = (await stat(HISTORY_FILE)).size;
-  } catch (err) {
-    if (err.code !== "ENOENT") throw err;
-  }
-  const samples = await readAllHistorySamples();
-  const earliest = samples[0]?.timestamp ?? null;
-  const latest = samples[samples.length - 1]?.timestamp ?? null;
-  const daysRecorded =
-    earliest && latest
-      ? Math.max(0, (new Date(latest).getTime() - new Date(earliest).getTime()) / 86_400_000)
-      : 0;
-  return { sizeBytes, sampleCount: samples.length, earliest, latest, daysRecorded };
+  return historyStore.stats();
 }
 
-async function trimHistory(retentionDays) {
-  await ensureDataDir();
-  const days = configNumber(retentionDays, DEFAULT_CONFIG.historyRetentionDays, 1, 3650);
-  const cutoff = Date.now() - days * 24 * 60 * 60_000;
-  const samples = await readAllHistorySamples();
-  const kept = samples.filter((sample) => new Date(sample.timestamp).getTime() >= cutoff);
-  await writeJsonLinesAtomic(HISTORY_FILE, kept);
+async function trimHistory(retention) {
   solarPlannerHistoryCache = null;
   solarDemandProfileIndexCache = null;
-  const contextualCutoff = Date.now() - Math.min(days, 365) * 24 * 60 * 60_000;
-  for (const file of [SOLAR_FORECAST_HISTORY_FILE, SOLAR_WEATHER_HISTORY_FILE]) {
-    const records = await readJsonLinesFile(file);
-    const contextual = records.filter((record) => {
-      const timestamp = record.timestamp ?? record.fetchedAt ?? record.time;
-      return Number.isFinite(new Date(timestamp).getTime()) && new Date(timestamp).getTime() >= contextualCutoff;
-    });
-    await writeJsonLinesAtomic(file, contextual);
-  }
-  return { retentionDays: days, before: samples.length, after: kept.length, deleted: samples.length - kept.length };
+  return historyStore.applyRetention(retention);
 }
 
 async function readSchedules() {
@@ -2827,6 +2756,13 @@ function normalizeSettingCache(value = {}) {
   return out;
 }
 
+function normalizeRetentionConfig(value = {}, legacyDays = undefined) {
+  return {
+    ...normalizeRetentionPolicy(value, legacyDays),
+    automaticMaintenance: configBool(value.automaticMaintenance, true),
+  };
+}
+
 function cleanConfig(input = {}) {
   // Config can arrive from old files, forms, or hand-edited JSON. Normalize it
   // here so the rest of the server can assume stable types.
@@ -2851,7 +2787,7 @@ function cleanConfig(input = {}) {
     offPeakSavingsEnabled: rateMode !== "simple",
     co2TonnesPerKwh: configNumber(input.co2TonnesPerKwh, DEFAULT_CONFIG.co2TonnesPerKwh, 0, 1),
     discoverySubnets: normalizeSubnets(input.discoverySubnets),
-    historyRetentionDays: configNumber(input.historyRetentionDays, DEFAULT_CONFIG.historyRetentionDays, 1, 3650),
+    retention: normalizeRetentionConfig(input.retention, input.historyRetentionDays),
     updateIntervalSeconds: configNumber(input.updateIntervalSeconds, DEFAULT_CONFIG.updateIntervalSeconds, 5, 3600),
     rateBands,
     batteryCapabilities: normalizeBatteryCapabilities(input.batteryCapabilities ?? {}),
@@ -2869,7 +2805,8 @@ async function readConfig() {
     const text = await readFile(CONFIG_FILE, "utf8");
     const parsed = parseJsonWithContext(text, CONFIG_FILE);
     const cleaned = cleanConfig(parsed);
-    if (Object.prototype.hasOwnProperty.call(parsed, "automation")) {
+    if (Object.prototype.hasOwnProperty.call(parsed, "automation")
+      || Object.prototype.hasOwnProperty.call(parsed, "historyRetentionDays")) {
       await writeJsonFileAtomic(CONFIG_FILE, cleaned);
     }
     return cleaned;
@@ -3060,6 +2997,20 @@ async function writeAutomationRuleStates(rules) {
     rules.map((rule) => [rule.id, cleanAutomationRuleState(rule)]),
   );
   await writeJsonFileAtomic(AUTOMATION_RULE_STATE_FILE, states);
+  if (historyStore.isReady()) {
+    for (const rule of rules) {
+      for (const entry of rule.log ?? []) {
+        historyStore.recordEvent({
+          eventKey: `automation:${rule.id}:${entry.at}:${entry.kind ?? "log"}:${entry.message}`,
+          at: entry.at,
+          category: "automation",
+          type: entry.kind ?? "log",
+          message: entry.message,
+          payload: { ruleId: rule.id, ruleType: rule.type },
+        });
+      }
+    }
+  }
   return states;
 }
 
@@ -3560,8 +3511,16 @@ function activeCliLabel(context) {
   return `${context.command}${context.host ? ` on ${context.host}` : ""} (${elapsedMs}ms)`;
 }
 
-async function evaluateAutomationRule(rule, status, now = new Date(), onPhase = () => {}, config = null) {
+async function evaluateAutomationRule(
+  rule,
+  status,
+  now = new Date(),
+  onPhase = () => {},
+  config = null,
+  coordination = {},
+) {
   onPhase("evaluating conditions");
+  const execute = coordination.execute ?? executeAction;
   if (!rule.enabled) return { changed: false, result: { skipped: "disabled" } };
   if (rule.type !== "backup-demand-guard") return { changed: false, result: { skipped: "unknown rule type" } };
 
@@ -3581,10 +3540,11 @@ async function evaluateAutomationRule(rule, status, now = new Date(), onPhase = 
   const restoreLimitW = rule.conditions.restoreBelowAmps * rule.conditions.breakerVoltage;
   const demandLabel = automationDemandLabel(rule.conditions.source);
 
-  if (shouldTriggerDemandGuard({ operationMode, batteryChargingW, guardDemandW, breakerLimitW })) {
+  if (!rule.state?.awaitingRestore
+    && shouldTriggerDemandGuard({ operationMode, batteryChargingW, guardDemandW, breakerLimitW })) {
     if (!canRunAutomation(rule, now)) return { changed: false, result: { skipped: "cooldown" } };
     onPhase("executing Standby guard action");
-    const result = await executeAction(rule.action, rule.payload);
+    const result = await execute(rule.action, rule.payload);
     appendAutomationLog(
       rule,
       `${demandLabel} (${formatWatts(guardDemandW)}) exceeds Charge Demand Guard limit (${formatWatts(breakerLimitW)}), setting operation mode from ${operationMode} to Standby`,
@@ -3610,6 +3570,30 @@ async function evaluateAutomationRule(rule, status, now = new Date(), onPhase = 
     return { changed: true, result: rule.lastResult };
   }
 
+  if (rule.state?.awaitingRestore
+    && operationMode
+    && String(operationMode).toLowerCase() !== "standby") {
+    onPhase("reasserting Standby guard action");
+    const result = await execute(rule.action, rule.payload);
+    appendAutomationLog(
+      rule,
+      `Charging Demand Guard restore is pending; operation mode changed to ${operationMode}, returning it to Standby`,
+      now,
+      "maintain",
+    );
+    rule.state = { ...rule.state, restoreSince: null };
+    rule.lastResult = {
+      ok: true,
+      at: now.toISOString(),
+      kind: "maintain",
+      operationMode,
+      demandW,
+      breakerLimitW,
+      result,
+    };
+    return { changed: true, result: rule.lastResult };
+  }
+
   if (rule.state?.awaitingRestore && demandW <= restoreLimitW) {
     if (estimatedRestoredDemandW > breakerLimitW) {
       rule.state = { ...rule.state, restoreSince: null };
@@ -3618,8 +3602,20 @@ async function evaluateAutomationRule(rule, status, now = new Date(), onPhase = 
     const restoreSince = rule.state.restoreSince ? new Date(rule.state.restoreSince).getTime() : now.getTime();
     rule.state.restoreSince = new Date(restoreSince).toISOString();
     if ((now.getTime() - restoreSince) / 1000 >= rule.conditions.restoreDelaySeconds) {
+      if (coordination.holdStandbyForPlanner === true) {
+        return {
+          changed: true,
+          result: {
+            skipped: "planner waiting to resume charging",
+            demandW,
+            estimatedRestoredDemandW,
+            breakerLimitW,
+            restoreLimitW,
+          },
+        };
+      }
       onPhase("executing Auto restore action");
-      const result = await executeAction(rule.restoreAction, rule.restorePayload);
+      const result = await execute(rule.restoreAction, rule.restorePayload);
       appendAutomationLog(
         rule,
         `${demandLabel} (${formatWatts(demandW)}) now below Guard restore limit (${formatWatts(restoreLimitW)}), setting operation mode to Auto`,
@@ -3883,6 +3879,44 @@ async function releasePlannerCharge(state, reason, now = new Date(), batteryHost
   state.activeChargedKwh = 0;
   state.activeLastCheckedAt = null;
   return true;
+}
+
+async function suspendPlannerChargeInStandby(
+  state,
+  reason,
+  now = new Date(),
+  batteryHost = null,
+  execute = executeAction,
+) {
+  if (state.owner !== "planner") return false;
+  await execute("set-mode", { mode: "standby", ...(batteryHost ? { host: batteryHost } : {}) });
+  finalizePlannerChargeSession(state, reason, now);
+  appendSolarPlannerLog(state, `${reason}; maintaining Standby operation mode`, "guard", now);
+  state.owner = null;
+  state.activeSlot = null;
+  state.activePlanCreatedAt = null;
+  state.activeChargedKwh = 0;
+  state.activeLastCheckedAt = null;
+  return true;
+}
+
+async function executePlannerChargeStart(slot, { resumeFromStandby = false, execute = executeAction } = {}) {
+  if (resumeFromStandby) await execute("set-mode", { mode: "auto" });
+  try {
+    return await execute("charge", { targetWh: slot.targetWh });
+  } catch (error) {
+    if (resumeFromStandby) {
+      try {
+        await execute("set-mode", { mode: "standby" });
+      } catch (standbyError) {
+        throw new Error(
+          `${error.message}; failed to return battery to Standby: ${standbyError.message}`,
+          { cause: error },
+        );
+      }
+    }
+    throw error;
+  }
 }
 
 function plannerSlotEndKey(state) {
@@ -4220,6 +4254,22 @@ function advancePlannerBreakerRecovery(state, headroom, now = new Date()) {
   };
 }
 
+function plannerBreakerRecoveryReady(state, now = new Date()) {
+  const recovery = state?.breakerRecovery;
+  if (!recovery) return false;
+  const cooldownUntilMs = new Date(recovery.cooldownUntil).getTime();
+  return Number.isFinite(cooldownUntilMs)
+    && now.getTime() >= cooldownUntilMs
+    && Number(recovery.consecutiveSafeChecks) >= SOLAR_BREAKER_SAFE_CHECKS;
+}
+
+function shouldHoldGuardStandbyForPlanner(state, now = new Date()) {
+  const slotEndMs = new Date(state?.interruptedCharge?.slotEnd ?? 0).getTime();
+  return Number.isFinite(slotEndMs)
+    && slotEndMs > now.getTime()
+    && !plannerBreakerRecoveryReady(state, now);
+}
+
 function logPlannerBreakerWait(state, headroom, recoveryStatus, now = new Date()) {
   if (!state.breakerRecovery || !recoveryStatus.shouldLog) return false;
   const importText = Number.isFinite(headroom.gridImportW) ? `(${Math.round(headroom.gridImportW)} W)` : "unavailable";
@@ -4471,7 +4521,7 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
       solarPowerW: numericMetric(status.energy?.solar?.instant_power),
       houseDemandW: liveHouseDemandW,
     });
-    state = { ...state, historicalWeather: await readJsonLinesFile(SOLAR_WEATHER_HISTORY_FILE) };
+    state = { ...state, historicalWeather: historyStore.historicalWeather() };
     const historicalDemandDays = await readSolarDemandProfileDays();
     state.plan = buildSolarChargingPlan({ config, state, samples, historicalDemandDays, now });
     state.lastPlanEventKey = refreshDecision.eventKey;
@@ -4559,7 +4609,11 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     if (liveExportNeedsHeadroom && state.activeSlot?.windowEnd) {
       state.solarHeadroomHoldUntil = state.activeSlot.windowEnd;
     }
-    await releasePlannerCharge(state, stopReason, now);
+    if (breakerReserveInterrupted) {
+      await suspendPlannerChargeInStandby(state, stopReason, now);
+    } else {
+      await releasePlannerCharge(state, stopReason, now);
+    }
     if (activeEnergyTargetReached || activeSocTargetReached) {
       state.plan = consumeCompletedPlannerSlot(state.plan, completedSlot);
       state.interruptedCharge = null;
@@ -4589,6 +4643,7 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     && Number.isFinite(soc)
     && soc >= Number(slot.targetSocPercent ?? config.solarPlanner.targetSocPercent);
   if (slot && state.owner !== "planner" && !solarHeadroomHoldActive && !slotTargetReached) {
+    const resumeFromStandby = Boolean(state.breakerRecovery || state.interruptedCharge);
     const headroom = plannerLiveChargeHeadroom(status, config, state, rules);
     if (!headroom.available) {
       if (!state.breakerRecovery) logPlannerInitialHeadroomWait(state, headroom, now);
@@ -4618,7 +4673,22 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
         return writeSolarPlannerState(state);
       }
     }
-    const result = await executeAction("charge", { targetWh: slot.targetWh });
+    let result;
+    try {
+      result = await executePlannerChargeStart(slot, { resumeFromStandby });
+    } catch (error) {
+      appendSolarPlannerLog(
+        state,
+        resumeFromStandby
+          ? `Failed to resume charging: ${error.message}; maintaining Standby operation mode`
+          : `Failed to start charging: ${error.message}`,
+        "error",
+        now,
+      );
+      state.lastResult = { ok: false, at: now.toISOString(), error: error.message };
+      await writeSolarPlannerState(state);
+      throw error;
+    }
     state.owner = "planner";
     state.activeSlot = slot;
     state.activePlanCreatedAt = state.plan.createdAt;
@@ -4634,7 +4704,7 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     const startLimitText = Number.isFinite(headroom.breakerLimitW) ? `${Math.round(headroom.breakerLimitW)} W` : "unavailable";
     appendSolarPlannerLog(
       state,
-      `Starting ${slot.targetWh} Wh charge in ${slot.label} band at ${slot.yenPerKwh} yen/kWh; Grid Import (${startImportText}) is at or below start threshold (${startThresholdText}) from Charging Demand Guard limit (${startLimitText})`,
+      `${resumeFromStandby ? "Restoring operation mode to Auto and resuming" : "Starting"} ${slot.targetWh} Wh charge in ${slot.label} band at ${slot.yenPerKwh} yen/kWh; Grid Import (${startImportText}) is at or below start threshold (${startThresholdText}) from Charging Demand Guard limit (${startLimitText})`,
       "charge",
       now,
     );
@@ -4738,6 +4808,7 @@ async function runAutomationRules(context = {}) {
     );
   }
   let changed = false;
+  const plannerCoordinationState = plannerEnabled ? await readSolarPlannerState() : null;
   for (const rule of rules) {
     const now = new Date();
     const ruleLabel = automationRuleLabel(rule);
@@ -4746,7 +4817,10 @@ async function runAutomationRules(context = {}) {
     try {
       const result = await evaluateAutomationRule(rule, status, now, (phase) => {
         context.phase = `${phase} for ${ruleLabel}`;
-      }, config);
+      }, config, {
+        holdStandbyForPlanner: plannerEnabled
+          && shouldHoldGuardStandbyForPlanner(plannerCoordinationState, now),
+      });
       const checkFinishedAt = new Date();
       const checkMeta = {
         checkStartedAt: startedAt.toISOString(),
@@ -5374,7 +5448,9 @@ async function api(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/history/trim") {
     const config = await readConfig();
     const body = await readBody(req);
-    return json(res, 200, await trimHistory(body.retentionDays ?? config.historyRetentionDays));
+    const retention = body.retention
+      ?? (body.retentionDays ? normalizeRetentionConfig({}, body.retentionDays) : config.retention);
+    return json(res, 200, await trimHistory(retention));
   }
   if (req.method === "POST" && url.pathname === "/api/discovery") {
     const body = await readBody(req);
@@ -5441,7 +5517,7 @@ async function api(req, res, url) {
       return json(res, 503, solarPlannerView(config, state, rules));
     }
     const samples = await readSolarPlannerHistory(now);
-    state = { ...state, historicalWeather: await readJsonLinesFile(SOLAR_WEATHER_HISTORY_FILE) };
+    state = { ...state, historicalWeather: historyStore.historicalWeather() };
     const historicalDemandDays = await readSolarDemandProfileDays();
     state.plan = buildSolarChargingPlan({ config, state, samples, historicalDemandDays, now });
     state.lastPlanEventKey = solarPlanScheduledEvent(config, now).eventKey ?? `manual:${now.toISOString()}`;
@@ -5620,6 +5696,7 @@ export {
   discountedBandOccurrences,
   discountedPlanStatus,
   effectivePlannerChargeWatts,
+  executePlannerChargeStart,
   evaluateAutomationRule,
   estimateEffectiveBatteryCapacity,
   finalizePlannerChargeSession,
@@ -5643,6 +5720,7 @@ export {
   plannerLiveChargeHeadroom,
   plannerLiveImportSafety,
   plannerBreakerSettings,
+  plannerBreakerRecoveryReady,
   plannerSlotEndDelayMs,
   plannerSlotEndKey,
   plannerTimezoneError,
@@ -5652,6 +5730,7 @@ export {
   recoverConcatenatedJsonValue,
   sampleFromStatus,
   shouldTriggerDemandGuard,
+  shouldHoldGuardStandbyForPlanner,
   solarPlanRefreshDecision,
   solarPlanLogMessage,
   preserveInterruptedPlannerCharge,
@@ -5660,6 +5739,7 @@ export {
   solarPlannerBaseAvailability,
   solarPowerFromIrradiance,
   summarizeSamples,
+  suspendPlannerChargeInStandby,
   summarizeCircuits,
   syncPlannerWindowExecution,
   predictHouseDemand,
@@ -5667,10 +5747,36 @@ export {
 
 async function main() {
   await ensureDataDir();
+  await historyStore.initialize();
+  lastRecordedSample = historyStore.latestSample();
   await migrateBatteryCapabilitiesFromGuard();
-  syncSolarPlannerSlotEndTimer(await readSolarPlannerState());
+  await writeSolarPlannerState(await readSolarPlannerState());
+  await writeAutomationRuleStates(await readAutomationRules());
+  const notificationHistory = await notificationService.view();
+  for (const delivery of notificationHistory.deliveries) {
+    const at = delivery.at ?? delivery.event?.occurredAt;
+    historyStore.recordEvent({
+      eventKey: `notification:legacy:${at}:${delivery.event?.dedupeKey ?? "delivery"}`,
+      at,
+      category: "notification",
+      type: delivery.ok ? "delivered" : "failed",
+      message: delivery.event?.message,
+      payload: delivery,
+    });
+  }
   startScheduler();
   startBackgroundRecorder();
+  const runRetention = async () => {
+    try {
+      const config = await readConfig();
+      if (config.retention.automaticMaintenance) await trimHistory(config.retention);
+    } catch (err) {
+      logDetailedError("retention", err);
+    }
+  };
+  retentionTimer = setInterval(runRetention, 24 * 60 * 60_000);
+  retentionTimer.unref?.();
+  void runRetention();
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`HOME ENERGY & BATTERY listening on http://0.0.0.0:${PORT}`);
   });
@@ -5684,6 +5790,10 @@ process.on("SIGTERM", () => {
   if (scheduleTimer) clearInterval(scheduleTimer);
   if (automationTimer) clearInterval(automationTimer);
   if (recorderTimer) clearTimeout(recorderTimer);
+  if (retentionTimer) clearInterval(retentionTimer);
   clearSolarPlannerSlotEndTimer();
-  server.close(() => process.exit(0));
+  server.close(() => {
+    historyStore.close();
+    process.exit(0);
+  });
 });

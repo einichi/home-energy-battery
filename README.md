@@ -23,6 +23,10 @@ Use this project at your own risk, you must read AND AGREE to the disclaimer at 
 
 ## Install
 
+Node.js 24.15 or newer is required. The application uses Node's built-in
+`node:sqlite` module, so no native SQLite package or platform-specific build is
+needed.
+
 ```bash
 npm install --ignore-scripts
 ```
@@ -100,6 +104,19 @@ discounted charging-window shortfalls, and an optional low-SOC threshold.
 Non-secret settings are stored in `/data/config.json`; the SMTP password is stored separately in
 `/data/notification-secrets.json` and is never returned by the API. Delivery
 cooldowns and recent results are stored in `/data/notification-state.json`.
+
+### History storage
+
+Telemetry, aggregates, planner context, automation events, and notification
+delivery history are stored in `/data/history.sqlite`. On first startup after an
+upgrade, existing `/data/history/samples.jsonl` and solar-planner JSONL files are
+imported in restart-safe batches. The original files are retained as migration
+backups and are no longer appended after the import.
+
+Retention is configured in Settings. Defaults preserve raw telemetry for 1,095
+days, 30-minute and daily aggregates indefinitely, planner and automation
+history indefinitely, and notification deliveries for 365 days. Automatic
+maintenance runs daily and deletes old records in small batches.
 
 ## DISCLAIMER
 

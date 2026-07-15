@@ -27,6 +27,7 @@ import {
   discountedBandOccurrences,
   discountedPlanStatus,
   effectivePlannerChargeWatts,
+  executePlannerChargeStart,
   enforcePlannerSlotEndDeadline,
   evaluateAutomationRule,
   estimateEffectiveBatteryCapacity,
@@ -49,6 +50,7 @@ import {
   plannerLiveChargeHeadroom,
   plannerLiveImportSafety,
   plannerBreakerSettings,
+  plannerBreakerRecoveryReady,
   plannerSlotEndDelayMs,
   plannerSlotEndKey,
   preserveInterruptedPlannerCharge,
@@ -59,6 +61,7 @@ import {
   recoverConcatenatedJsonValue,
   sampleFromStatus,
   shouldTriggerDemandGuard,
+  shouldHoldGuardStandbyForPlanner,
   solarPlanRefreshDecision,
   solarPlanLogMessage,
   solarPlannerAvailability,
@@ -66,6 +69,7 @@ import {
   solarPowerFromIrradiance,
   predictHouseDemand,
   summarizeSamples,
+  suspendPlannerChargeInStandby,
   syncPlannerWindowExecution,
 } from "../server.js";
 
@@ -99,7 +103,38 @@ const simple = cleanConfig({ standardRateYenPerKwh: 42 });
 assert.equal(simple.rateMode, "simple");
 assert.equal(simple.offPeakSavingsEnabled, false);
 assert.equal(simple.rateBands.length, 1);
-assert.equal(simple.historyRetentionDays, 1095);
+assert.equal(simple.retention.rawTelemetryDays, 1095);
+assert.equal(simple.retention.intervalAggregatesDays, null);
+assert.equal(simple.retention.dailyAggregatesDays, null);
+assert.equal(simple.retention.plannerHistoryDays, null);
+assert.equal(simple.retention.automationEventDays, null);
+assert.equal(simple.retention.notificationDeliveryDays, 365);
+assert.equal(simple.retention.automaticMaintenance, true);
+assert.equal(cleanConfig({ historyRetentionDays: 730 }).retention.rawTelemetryDays, 730);
+assert.equal(cleanConfig({
+  retention: {
+    rawTelemetryDays: 365,
+    intervalAggregatesDays: null,
+    notificationDeliveryDays: 90,
+    automaticMaintenance: false,
+  },
+}).retention.rawTelemetryDays, 365);
+assert.equal(cleanConfig({
+  retention: {
+    rawTelemetryDays: 365,
+    intervalAggregatesDays: null,
+    notificationDeliveryDays: 90,
+    automaticMaintenance: false,
+  },
+}).retention.intervalAggregatesDays, null);
+assert.equal(cleanConfig({
+  retention: {
+    rawTelemetryDays: 365,
+    intervalAggregatesDays: null,
+    notificationDeliveryDays: 90,
+    automaticMaintenance: false,
+  },
+}).retention.automaticMaintenance, false);
 assert.equal(simple.updateIntervalSeconds, 15);
 assert.equal(simple.co2TonnesPerKwh, 0.000423);
 assert.equal(simple.smartCosmoEnabled, true);
@@ -576,6 +611,18 @@ assert.equal(advancePlannerBreakerRecovery(
   safeRecoveryHeadroom,
   new Date("2026-07-11T00:06:00.000Z"),
 ).shouldLog, true);
+recoveryState.breakerRecovery.consecutiveSafeChecks = 3;
+recoveryState.breakerRecovery.cooldownUntil = "2026-07-11T00:05:00.000Z";
+assert.equal(plannerBreakerRecoveryReady(recoveryState, new Date("2026-07-11T00:06:00.000Z")), true);
+assert.equal(shouldHoldGuardStandbyForPlanner({
+  ...recoveryState,
+  interruptedCharge: { slotEnd: "2026-07-11T00:30:00.000Z" },
+}, new Date("2026-07-11T00:06:00.000Z")), false);
+recoveryState.breakerRecovery.consecutiveSafeChecks = 2;
+assert.equal(shouldHoldGuardStandbyForPlanner({
+  ...recoveryState,
+  interruptedCharge: { slotEnd: "2026-07-11T00:30:00.000Z" },
+}, new Date("2026-07-11T00:06:00.000Z")), true);
 assert.equal(plannerLiveImportSafety({
   meter: { grid_import_power: { value: 5400 } },
 }, plannerGuardRules).available, true);
@@ -724,6 +771,58 @@ const delayedInterruption = preserveInterruptedPlannerCharge(
 );
 assert.equal(delayedInterruption.remainingWh, 750);
 assert.equal(delayedInterruptedState.plan.slots[0].targetWh, 750);
+
+const suspendedActions = [];
+const suspendedState = {
+  owner: "planner",
+  activeSlot: interruptedSlot,
+  activePlanCreatedAt: "plan",
+  activeChargedKwh: 0.25,
+  activeLastCheckedAt: "2026-07-11T12:10:00.000Z",
+  activeChargeSession: null,
+  log: [],
+};
+await suspendPlannerChargeInStandby(
+  suspendedState,
+  "Breaker limit reached",
+  new Date("2026-07-11T12:10:00.000Z"),
+  null,
+  async (action, payload) => {
+    suspendedActions.push({ action, payload });
+    return { ok: true };
+  },
+);
+assert.deepEqual(suspendedActions, [{ action: "set-mode", payload: { mode: "standby" } }]);
+assert.equal(suspendedState.owner, null);
+assert.match(suspendedState.log.at(-1).message, /maintaining Standby operation mode/);
+
+const resumedActions = [];
+await executePlannerChargeStart({ targetWh: 750 }, {
+  resumeFromStandby: true,
+  execute: async (action, payload) => {
+    resumedActions.push({ action, payload });
+    return { ok: true };
+  },
+});
+assert.deepEqual(resumedActions, [
+  { action: "set-mode", payload: { mode: "auto" } },
+  { action: "charge", payload: { targetWh: 750 } },
+]);
+
+const failedResumeActions = [];
+await assert.rejects(executePlannerChargeStart({ targetWh: 750 }, {
+  resumeFromStandby: true,
+  execute: async (action, payload) => {
+    failedResumeActions.push({ action, payload });
+    if (action === "charge") throw new Error("charge failed");
+    return { ok: true };
+  },
+}), /charge failed/);
+assert.deepEqual(failedResumeActions, [
+  { action: "set-mode", payload: { mode: "auto" } },
+  { action: "charge", payload: { targetWh: 750 } },
+  { action: "set-mode", payload: { mode: "standby" } },
+]);
 
 const latePlannerSlot = capPlannerSlotToRemainingTime(
   { ...interruptedSlot, targetWh: 750 },
@@ -1581,6 +1680,55 @@ assert.equal(repeatedRestoreLogRule.log.length, 2);
 assert.match(repeatedRestoreLogRule.log[0].message, /Grid Import \(3200 W\) still exceeds/);
 assert.match(repeatedRestoreLogRule.log[1].message, /Grid Import \(3100 W\) still exceeds/);
 
+const reassertActions = [];
+const reassertStandbyRule = cleanAutomationRule({
+  enabled: true,
+  state: { awaitingRestore: true },
+  conditions: {
+    source: "gridImportW",
+    breakerAmps: 40,
+    reserveAmps: 5,
+    batteryChargingEstimateW: 1000,
+    restoreBelowAmps: 30,
+  },
+});
+await evaluateAutomationRule(reassertStandbyRule, {
+  energy: { battery: { operation_mode: { value: "auto" }, instant_power: { value: 0 } } },
+  meter: { grid_import_power: { value: 2000 } },
+}, new Date("2026-05-31T00:03:00.000Z"), () => {}, null, {
+  execute: async (action, payload) => {
+    reassertActions.push({ action, payload });
+    return { ok: true };
+  },
+});
+assert.deepEqual(reassertActions, [{ action: "set-mode", payload: { mode: "standby" } }]);
+assert.equal(reassertStandbyRule.state.awaitingRestore, true);
+assert.match(reassertStandbyRule.log.at(-1).message, /returning it to Standby/);
+
+const deferredRestoreActions = [];
+const deferredRestoreRule = cleanAutomationRule({
+  enabled: true,
+  state: { awaitingRestore: true, restoreSince: "2026-05-31T00:00:00.000Z" },
+  conditions: {
+    source: "gridImportW",
+    breakerAmps: 40,
+    reserveAmps: 5,
+    batteryChargingEstimateW: 1000,
+    restoreBelowAmps: 30,
+    restoreDelaySeconds: 30,
+  },
+});
+const deferredRestore = await evaluateAutomationRule(deferredRestoreRule, {
+  energy: { battery: { operation_mode: { value: "standby" }, instant_power: { value: 0 } } },
+  meter: { grid_import_power: { value: 2000 } },
+}, new Date("2026-05-31T00:01:00.000Z"), () => {}, null, {
+  holdStandbyForPlanner: true,
+  execute: async (action, payload) => deferredRestoreActions.push({ action, payload }),
+});
+assert.equal(deferredRestore.result.skipped, "planner waiting to resume charging");
+assert.deepEqual(deferredRestoreActions, []);
+assert.equal(deferredRestoreRule.state.awaitingRestore, true);
+
 const normalizedNotifications = normalizeNotificationConfig({
   enabled: "true",
   channels: [{
@@ -1624,6 +1772,7 @@ assert.deepEqual(smtpTransportOptions({
 
 const notificationDir = await mkdtemp(path.join(os.tmpdir(), "home-energy-notifications-"));
 const sentMessages = [];
+const recordedNotificationEvents = [];
 const notificationConfig = normalizeNotificationConfig({
   enabled: true,
   channels: [{
@@ -1650,6 +1799,7 @@ const notificationService = createNotificationService({
     },
     close() {},
   }),
+  recordEvent: async (event) => recordedNotificationEvents.push(event),
 });
 await notificationService.updateSecret({ channelId: "primary-email", password: "secret" });
 assert.equal((await notificationService.view()).passwordConfigured, true);
@@ -1666,6 +1816,9 @@ assert.equal((await notificationService.deliver({
   dedupeKey: "schedule:test",
 })).skipped, "cooldown");
 assert.equal(sentMessages.length, 1);
+assert.equal(recordedNotificationEvents.length, 1);
+assert.equal(recordedNotificationEvents[0].category, "notification");
+assert.equal(recordedNotificationEvents[0].type, "delivered");
 
 for (let index = 0; index < 3; index += 1) {
   await notificationService.observeCondition({

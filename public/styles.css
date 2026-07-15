@@ -1062,6 +1062,29 @@ output {
   border: 0;
 }
 
+.retention-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.retention-row .check-row {
+  min-height: 42px;
+  padding-bottom: 3px;
+  white-space: nowrap;
+}
+
+@media (max-width: 620px) {
+  .retention-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .retention-row .check-row {
+    min-height: 24px;
+  }
+}
+
 .rate-mode-options {
   grid-column: 1 / -1;
   display: grid;

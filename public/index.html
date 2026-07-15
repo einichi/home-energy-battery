@@ -1113,14 +1113,74 @@
                 <dt data-i18n="samplesRecorded">Samples recorded</dt>
                 <dd id="historyStatSamples">--</dd>
               </div>
+              <div>
+                <dt data-i18n="intervalAggregates">30-minute aggregates</dt>
+                <dd id="historyStatIntervals">--</dd>
+              </div>
+              <div>
+                <dt data-i18n="dailyAggregates">Daily aggregates</dt>
+                <dd id="historyStatDaily">--</dd>
+              </div>
+              <div>
+                <dt data-i18n="storedEvents">Stored events</dt>
+                <dd id="historyStatEvents">--</dd>
+              </div>
             </dl>
 
             <form id="historyConfigForm" class="config-form">
               <fieldset class="feature-options">
                 <legend data-i18n="historyRetention">History Retention</legend>
                 <label>
-                  <span data-i18n="retentionDays">Keep samples for days</span>
-                  <input id="historyRetentionDays" type="number" min="1" step="1" inputmode="numeric" />
+                  <span data-i18n="rawTelemetryRetention">Raw telemetry (days)</span>
+                  <input id="rawTelemetryDays" type="number" min="1" step="1" inputmode="numeric" />
+                </label>
+                <div class="retention-row">
+                  <label>
+                    <span data-i18n="intervalRetention">30-minute aggregates (days)</span>
+                    <input id="intervalAggregatesDays" type="number" min="1" step="1" inputmode="numeric" />
+                  </label>
+                  <label class="check-row">
+                    <input id="intervalAggregatesIndefinite" type="checkbox" />
+                    <span data-i18n="keepIndefinitely">Keep indefinitely</span>
+                  </label>
+                </div>
+                <div class="retention-row">
+                  <label>
+                    <span data-i18n="dailyRetention">Daily aggregates (days)</span>
+                    <input id="dailyAggregatesDays" type="number" min="1" step="1" inputmode="numeric" />
+                  </label>
+                  <label class="check-row">
+                    <input id="dailyAggregatesIndefinite" type="checkbox" />
+                    <span data-i18n="keepIndefinitely">Keep indefinitely</span>
+                  </label>
+                </div>
+                <div class="retention-row">
+                  <label>
+                    <span data-i18n="plannerRetention">Planner history (days)</span>
+                    <input id="plannerHistoryDays" type="number" min="1" step="1" inputmode="numeric" />
+                  </label>
+                  <label class="check-row">
+                    <input id="plannerHistoryIndefinite" type="checkbox" />
+                    <span data-i18n="keepIndefinitely">Keep indefinitely</span>
+                  </label>
+                </div>
+                <div class="retention-row">
+                  <label>
+                    <span data-i18n="automationRetention">Automation history (days)</span>
+                    <input id="automationEventDays" type="number" min="1" step="1" inputmode="numeric" />
+                  </label>
+                  <label class="check-row">
+                    <input id="automationEventIndefinite" type="checkbox" />
+                    <span data-i18n="keepIndefinitely">Keep indefinitely</span>
+                  </label>
+                </div>
+                <label>
+                  <span data-i18n="notificationRetention">Notification deliveries (days)</span>
+                  <input id="notificationDeliveryDays" type="number" min="1" step="1" inputmode="numeric" />
+                </label>
+                <label class="check-row">
+                  <input id="automaticRetention" type="checkbox" />
+                  <span data-i18n="automaticMaintenance">Run retention maintenance automatically</span>
                 </label>
                 <button data-i18n="saveRetention">Save Retention</button>
                 <button id="trimHistoryBtn" class="ghost" type="button" data-i18n="trimHistoryNow">

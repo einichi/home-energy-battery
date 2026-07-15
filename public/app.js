@@ -1,3 +1,9 @@
+import {
+  decimateTimeSeries,
+  pruneTrendPoints,
+  trendSamplePoints,
+} from "./chart-utils.js";
+
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -5,7 +11,10 @@ const ACTIVE_REFRESH_MS = 15_000;
 const INACTIVE_REFRESH_MS = 5 * 60_000;
 const POWER_TREND_MS = 30 * 60_000;
 const SOC_TREND_MS = POWER_TREND_MS;
+const HISTORY_BATCH_SIZE = 400;
+const HISTORY_PREVIEW_RECORD_INTERVAL = 10_000;
 const DASHBOARD_LAYOUT_CACHE_KEY = "hemsDashboardWidgets";
+const PAGE_LOAD_TIME_MS = Date.now();
 
 // Frontend state is intentionally kept in one small object. The app has no build
 // step, so avoiding framework state makes it easier to inspect in a browser.
@@ -14,6 +23,7 @@ const state = {
   schedules: [],
   refreshTimer: null,
   lastLivePollAt: 0,
+  liveWindowEndMs: PAGE_LOAD_TIME_MS,
   controlsInitialized: false,
   config: null,
   language: "en",
@@ -28,6 +38,7 @@ const state = {
   activeGraph: "solarPower",
   activeCircuit: "1",
   graphPoints: [],
+  graphRecordCount: 0,
   graphHover: null,
   graphHistoryHorizonMs: POWER_TREND_MS,
   graphLoadToken: 0,
@@ -437,7 +448,17 @@ const I18N = {
     saveCo2Release: "Save CO2 Release",
     co2ReleaseSaved: "CO2 release saved",
     historyRetention: "History Retention",
-    retentionDays: "Keep samples for days",
+    rawTelemetryRetention: "Raw telemetry (days)",
+    intervalRetention: "30-minute aggregates (days)",
+    dailyRetention: "Daily aggregates (days)",
+    plannerRetention: "Planner history (days)",
+    automationRetention: "Automation history (days)",
+    notificationRetention: "Notification deliveries (days)",
+    keepIndefinitely: "Keep indefinitely",
+    automaticMaintenance: "Run retention maintenance automatically",
+    intervalAggregates: "30-minute aggregates",
+    dailyAggregates: "Daily aggregates",
+    storedEvents: "Stored events",
     saveRetention: "Save Retention",
     trimHistoryNow: "Trim history now",
     historyTrimmed: "History trimmed",
@@ -830,7 +851,17 @@ const I18N = {
     saveCo2Release: "CO2排出係数を保存",
     co2ReleaseSaved: "CO2排出係数を保存しました",
     historyRetention: "電力使用データの保存期間",
-    retentionDays: "保存日数",
+    rawTelemetryRetention: "生テレメトリ (日)",
+    intervalRetention: "30分集計 (日)",
+    dailyRetention: "日次集計 (日)",
+    plannerRetention: "充電プランナー履歴 (日)",
+    automationRetention: "自動化履歴 (日)",
+    notificationRetention: "通知配信履歴 (日)",
+    keepIndefinitely: "無期限に保存",
+    automaticMaintenance: "保存期間のメンテナンスを自動実行",
+    intervalAggregates: "30分集計",
+    dailyAggregates: "日次集計",
+    storedEvents: "保存イベント",
     saveRetention: "保存期間設定を保存",
     trimHistoryNow: "データを今すぐトリム",
     historyTrimmed: "履歴をトリムしました",
@@ -1330,14 +1361,14 @@ function ensureCircuitTrendConfigsForSamples(samples = []) {
   }
 }
 
-function appendSampleToTrendBuffers(sample) {
-  const time = new Date(sample.timestamp).getTime();
-  if (!Number.isFinite(time)) return false;
+function appendSampleToTrendBuffers(sample, rangeStartMs, rangeEndMs) {
+  const plottingPoints = trendSamplePoints(sample, rangeStartMs, rangeEndMs);
+  if (!plottingPoints.length) return false;
   for (const name of Object.keys(TREND_CONFIG)) {
-    (state.trendHistory[name] ??= []).push({
-      time,
-      value: sampleValueForTrend(name, sample),
-    });
+    const value = sampleValueForTrend(name, sample);
+    for (const point of plottingPoints) {
+      (state.trendHistory[name] ??= []).push({ ...point, value });
+    }
   }
   return true;
 }
@@ -1381,18 +1412,28 @@ function nextFrame() {
   return new Promise((resolve) => window.setTimeout(resolve, 0));
 }
 
-function historyHorizonForSamples(samples) {
-  if (samples.length > 1) {
+function historyHorizonForSamples(samples, rangeStartMs, rangeEndMs) {
+  if (samples.length) {
+    const first = trendSamplePoints(samples[0], rangeStartMs, rangeEndMs)[0];
+    const last = trendSamplePoints(samples[samples.length - 1], rangeStartMs, rangeEndMs).at(-1);
+    if (!first || !last) return POWER_TREND_MS;
     return Math.max(
       60_000,
-      new Date(samples[samples.length - 1].timestamp).getTime() -
-        new Date(samples[0].timestamp).getTime(),
+      last.time - first.time,
     );
   }
   return POWER_TREND_MS;
 }
 
-async function loadHistorySamplesAsync(history, { target = "dashboard", graphName = state.activeGraph } = {}) {
+async function loadHistorySamplesAsync(
+  history,
+  {
+    target = "dashboard",
+    graphName = state.activeGraph,
+    rangeStartMs,
+    rangeEndMs,
+  } = {},
+) {
   const samples = history.samples ?? [];
   const total = samples.length;
   const prefix = target === "graph" ? "graph" : "history";
@@ -1402,56 +1443,59 @@ async function loadHistorySamplesAsync(history, { target = "dashboard", graphNam
   if (target === "dashboard") {
     resetTrendHistory();
     ensureCircuitTrendConfigsForSamples(samples);
-    state.historyHorizonMs = historyHorizonForSamples(samples);
+    state.historyHorizonMs = historyHorizonForSamples(samples, rangeStartMs, rangeEndMs);
   } else {
     state.graphPoints = [];
+    state.graphRecordCount = total;
     state.graphHover = null;
-    state.graphHistoryHorizonMs = historyHorizonForSamples(samples);
+    state.graphHistoryHorizonMs = historyHorizonForSamples(samples, rangeStartMs, rangeEndMs);
   }
-  const batchSize = 400;
-  let lastDrawAt = 0;
-  let drewFinalBatch = false;
-  for (let index = 0; index < samples.length; index += batchSize) {
+  let nextPreviewAt = HISTORY_PREVIEW_RECORD_INTERVAL;
+  for (let index = 0; index < samples.length; index += HISTORY_BATCH_SIZE) {
     if (token !== state[tokenKey]) return false;
-    const batch = samples.slice(index, index + batchSize);
+    const batch = samples.slice(index, index + HISTORY_BATCH_SIZE);
     for (const sample of batch) {
-      const time = new Date(sample.timestamp).getTime();
-      if (!Number.isFinite(time)) continue;
+      const plottingPoints = trendSamplePoints(sample, rangeStartMs, rangeEndMs);
+      if (!plottingPoints.length) continue;
       if (target === "dashboard") {
-        appendSampleToTrendBuffers(sample);
+        appendSampleToTrendBuffers(sample, rangeStartMs, rangeEndMs);
       } else {
         const value = sampleValueForTrend(graphName, sample);
-        state.graphPoints.push({ time, value });
+        for (const point of plottingPoints) state.graphPoints.push({ ...point, value });
       }
     }
     const parsed = Math.min(index + batch.length, total);
     setLoadProgress(prefix, parsed, total, true);
-    const now = Date.now();
-    if (now - lastDrawAt > 250 || parsed === total) {
+    if (parsed < total && parsed >= nextPreviewAt) {
       if (target === "dashboard") drawAllTrends();
-      else drawGraphAnalysis();
-      lastDrawAt = now;
-      drewFinalBatch = parsed === total;
+      else drawGraphAnalysis({ decimate: true });
+      while (nextPreviewAt <= parsed) {
+        nextPreviewAt += HISTORY_PREVIEW_RECORD_INTERVAL;
+      }
     }
     await nextFrame();
   }
-  if (!drewFinalBatch) {
-    if (target === "dashboard") drawAllTrends();
-    else drawGraphAnalysis();
-  }
+  if (target === "dashboard") drawAllTrends();
+  else drawGraphAnalysis();
   finishLoadProgress(prefix, total, total);
   return true;
 }
 
-async function loadLiveTrendHistory() {
-  const end = new Date();
+async function loadLiveTrendHistory(endMs = Date.now()) {
+  const end = new Date(endMs);
   const start = new Date(end.getTime() - POWER_TREND_MS);
   const previousMode = state.historyMode;
   state.historyMode = false;
   state.historyHorizonMs = null;
+  state.liveWindowEndMs = endMs;
   setLoadProgress("history", 0, 0, true);
   const history = await api(`/api/history?${historyParams(start, end)}`);
-  await loadHistorySamplesAsync(history, { target: "dashboard" });
+  await loadHistorySamplesAsync(history, {
+    target: "dashboard",
+    rangeStartMs: start.getTime(),
+    rangeEndMs: end.getTime(),
+  });
+  advanceLiveTrendWindow(endMs, { draw: false });
   state.historyMode = previousMode;
   state.lastLivePollAt = Date.now();
   setLiveModeButton();
@@ -1531,13 +1575,23 @@ function pushTrend(name, value, time = Date.now(), options = {}) {
     state.historyMode && state.historyHorizonMs
       ? state.historyHorizonMs
       : config.horizonMs;
-  const cutoff = time - horizonMs;
-  state.trendHistory[name] = history.filter((point) => point.time >= cutoff);
+  const windowEndMs = state.historyMode ? time : state.liveWindowEndMs;
+  state.trendHistory[name] = pruneTrendPoints(history, windowEndMs - horizonMs);
   if (options.draw !== false) drawTrend(name);
 }
 
+function advanceLiveTrendWindow(endMs = Date.now(), options = {}) {
+  if (state.historyMode || !Number.isFinite(endMs)) return;
+  state.liveWindowEndMs = endMs;
+  for (const [name, points] of Object.entries(state.trendHistory)) {
+    const horizonMs = TREND_CONFIG[name]?.horizonMs ?? POWER_TREND_MS;
+    state.trendHistory[name] = pruneTrendPoints(points, endMs - horizonMs);
+  }
+  if (options.draw !== false) drawAllTrends();
+}
+
 function drawAllTrends() {
-  Object.keys(TREND_CONFIG).forEach(drawTrend);
+  Object.keys(TREND_CONFIG).forEach((name) => drawTrend(name));
 }
 
 function drawTrend(name) {
@@ -1546,16 +1600,24 @@ function drawTrend(name) {
     state.historyMode && state.historyHorizonMs
       ? state.historyHorizonMs
       : config?.horizonMs;
+  const liveWindowEndMs = state.historyMode ? null : state.liveWindowEndMs;
   drawTrendCanvas(
     name,
     config ? $(config.canvas) : null,
     state.trendHistory[name] ?? [],
     state.trendHover[name],
     horizonMs,
+    {
+      decimate: true,
+      windowStartMs: Number.isFinite(liveWindowEndMs)
+        ? liveWindowEndMs - horizonMs
+        : null,
+      windowEndMs: liveWindowEndMs,
+    },
   );
 }
 
-function drawTrendCanvas(name, canvas, points, hover, horizonMs) {
+function drawTrendCanvas(name, canvas, points, hover, horizonMs, options = {}) {
   // Canvas keeps the UI dependency-free. The chart is deliberately simple:
   // gridlines, min/max labels, a time axis, filled area, and current point.
   const config = TREND_CONFIG[name];
@@ -1581,6 +1643,28 @@ function drawTrendCanvas(name, canvas, points, hover, horizonMs) {
   const chartHeight = Math.max(1, height - pad.top - pad.bottom);
   const unit = name === "batterySoc" ? "%" : "W";
 
+  const configuredIntervalMs = Math.max(
+    5,
+    Number(state.config?.updateIntervalSeconds ?? ACTIVE_REFRESH_MS / 1000),
+  ) * 1000;
+  let intervalTotal = 0;
+  let intervalCount = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    if (points[index].continuousFromPrevious) continue;
+    const interval = points[index].time - points[index - 1].time;
+    if (!Number.isFinite(interval) || interval <= 0) continue;
+    intervalTotal += interval;
+    intervalCount += 1;
+  }
+  const typicalIntervalMs = intervalCount
+    ? intervalTotal / intervalCount
+    : configuredIntervalMs;
+  const gapThresholdMs = Math.max(configuredIntervalMs, typicalIntervalMs) * 3;
+  const renderedPoints = options.decimate
+    ? decimateTimeSeries(points, Math.ceil(chartWidth), gapThresholdMs)
+    : points;
+  const wasDecimated = renderedPoints !== points;
+
   ctx.strokeStyle = "#dbe5ef";
   ctx.lineWidth = 1;
   for (let i = 0; i < 3; i += 1) {
@@ -1594,7 +1678,7 @@ function drawTrendCanvas(name, canvas, points, hover, horizonMs) {
   let validCount = 0;
   let observedMin = Infinity;
   let observedMax = -Infinity;
-  for (const point of points) {
+  for (const point of renderedPoints) {
     if (!Number.isFinite(point.value)) continue;
     validCount += 1;
     observedMin = Math.min(observedMin, point.value);
@@ -1640,16 +1724,24 @@ function drawTrendCanvas(name, canvas, points, hover, horizonMs) {
 
   ctx.textBaseline = "alphabetic";
   ctx.textAlign = "left";
-  const firstLabel = points[0]?.time
-    ? new Date(points[0].time).toLocaleTimeString([], {
+  const windowEndMs = Number.isFinite(options.windowEndMs)
+    ? options.windowEndMs
+    : points[points.length - 1]?.time;
+  const windowStartMs = Number.isFinite(options.windowStartMs)
+    ? options.windowStartMs
+    : Number.isFinite(windowEndMs)
+      ? windowEndMs - horizonMs
+      : null;
+  const firstLabel = Number.isFinite(windowStartMs)
+    ? new Date(windowStartMs).toLocaleTimeString([], {
         hour: "2-digit",
         minute: "2-digit",
       })
     : state.historyMode
       ? t("selectedRange")
       : t("minAgo");
-  const lastLabel = points[points.length - 1]?.time
-    ? new Date(points[points.length - 1].time).toLocaleTimeString([], {
+  const lastLabel = Number.isFinite(windowEndMs)
+    ? new Date(windowEndMs).toLocaleTimeString([], {
         hour: "2-digit",
         minute: "2-digit",
       })
@@ -1662,10 +1754,11 @@ function drawTrendCanvas(name, canvas, points, hover, horizonMs) {
 
   if (!points.length || !validCount) return;
 
-  const now = points[points.length - 1].time;
-  const start = now - horizonMs;
+  const start = windowStartMs;
+  const visibleHorizonMs = Math.max(1, windowEndMs - start);
   const range = max - min;
-  const xFor = (time) => pad.left + ((time - start) / horizonMs) * chartWidth;
+  const xFor = (time) =>
+    pad.left + ((time - start) / visibleHorizonMs) * chartWidth;
   const yFor = (value) =>
     pad.top + chartHeight - ((value - min) / range) * chartHeight;
 
@@ -1678,29 +1771,16 @@ function drawTrendCanvas(name, canvas, points, hover, horizonMs) {
     ctx.stroke();
   }
 
-  const configuredIntervalMs = Math.max(
-    5,
-    Number(state.config?.updateIntervalSeconds ?? ACTIVE_REFRESH_MS / 1000),
-  ) * 1000;
-  let intervalTotal = 0;
-  let intervalCount = 0;
-  for (let index = 1; index < points.length; index += 1) {
-    const interval = points[index].time - points[index - 1].time;
-    if (!Number.isFinite(interval) || interval <= 0) continue;
-    intervalTotal += interval;
-    intervalCount += 1;
-  }
-  const typicalIntervalMs = intervalCount
-    ? intervalTotal / intervalCount
-    : configuredIntervalMs;
-  const gapThresholdMs = Math.max(configuredIntervalMs, typicalIntervalMs) * 3;
   const segments = [];
   let segment = [];
-  for (const point of points) {
+  for (const point of renderedPoints) {
     const previous = segment[segment.length - 1];
     const startsGap =
       !Number.isFinite(point.value) ||
-      (previous && point.time - previous.time > gapThresholdMs);
+      (!wasDecimated &&
+        !point.continuousFromPrevious &&
+        previous &&
+        point.time - previous.time > gapThresholdMs);
     if (startsGap) {
       if (segment.length) segments.push(segment);
       segment = [];
@@ -1786,8 +1866,10 @@ function handleTrendPointer(name, event) {
     state.historyMode && state.historyHorizonMs
       ? state.historyHorizonMs
       : config.horizonMs;
-  const now = allPoints[allPoints.length - 1].time;
-  const start = now - horizonMs;
+  const windowEndMs = state.historyMode
+    ? allPoints[allPoints.length - 1].time
+    : state.liveWindowEndMs;
+  const start = windowEndMs - horizonMs;
   const x = Math.max(
     pad.left,
     Math.min(rect.width - pad.right, event.clientX - rect.left),
@@ -1816,11 +1898,11 @@ function clearTrendPointer(name) {
   $("#trendTooltip")?.classList.add("hidden");
 }
 
-function drawGraphAnalysis() {
+function drawGraphAnalysis(options = {}) {
   const graphName = state.activeGraph;
   $("#graphTitle").textContent = trendLabel(graphName);
   $("#graphMeta").textContent = template("graphRecordCount", {
-    count: state.graphPoints.length.toLocaleString(),
+    count: state.graphRecordCount.toLocaleString(),
   });
   drawTrendCanvas(
     graphName,
@@ -1828,6 +1910,7 @@ function drawGraphAnalysis() {
     state.graphPoints,
     state.graphHover,
     state.graphHistoryHorizonMs,
+    options,
   );
 }
 
@@ -2814,6 +2897,29 @@ function collectCircuitLabels() {
   return labels;
 }
 
+function setRetentionControl(inputSelector, indefiniteSelector, value, fallback) {
+  const input = $(inputSelector);
+  const indefinite = indefiniteSelector ? $(indefiniteSelector) : null;
+  const isIndefinite = value === null;
+  input.value = isIndefinite ? fallback : value ?? fallback;
+  input.disabled = isIndefinite;
+  if (indefinite) indefinite.checked = isIndefinite;
+}
+
+function collectRetentionConfig() {
+  const finiteOrNull = (inputSelector, indefiniteSelector) =>
+    $(indefiniteSelector).checked ? null : $(inputSelector).value;
+  return {
+    rawTelemetryDays: $("#rawTelemetryDays").value,
+    intervalAggregatesDays: finiteOrNull("#intervalAggregatesDays", "#intervalAggregatesIndefinite"),
+    dailyAggregatesDays: finiteOrNull("#dailyAggregatesDays", "#dailyAggregatesIndefinite"),
+    plannerHistoryDays: finiteOrNull("#plannerHistoryDays", "#plannerHistoryIndefinite"),
+    automationEventDays: finiteOrNull("#automationEventDays", "#automationEventIndefinite"),
+    notificationDeliveryDays: $("#notificationDeliveryDays").value,
+    automaticMaintenance: $("#automaticRetention").checked,
+  };
+}
+
 function updateConfigControls(config) {
   state.config = config;
   setLanguage(config.language ?? "en");
@@ -2844,7 +2950,14 @@ function updateConfigControls(config) {
   $("#offPeakRate").value = config.offPeakRateYenPerKwh ?? "";
   $("#multiStandardRate").value = config.standardRateYenPerKwh ?? "";
   $("#co2TonnesPerKwh").value = config.co2TonnesPerKwh ?? "";
-  $("#historyRetentionDays").value = config.historyRetentionDays ?? "";
+  const retention = config.retention ?? {};
+  setRetentionControl("#rawTelemetryDays", null, retention.rawTelemetryDays, 1095);
+  setRetentionControl("#intervalAggregatesDays", "#intervalAggregatesIndefinite", retention.intervalAggregatesDays, 1095);
+  setRetentionControl("#dailyAggregatesDays", "#dailyAggregatesIndefinite", retention.dailyAggregatesDays, 3650);
+  setRetentionControl("#plannerHistoryDays", "#plannerHistoryIndefinite", retention.plannerHistoryDays, 3650);
+  setRetentionControl("#automationEventDays", "#automationEventIndefinite", retention.automationEventDays, 3650);
+  setRetentionControl("#notificationDeliveryDays", null, retention.notificationDeliveryDays, 365);
+  $("#automaticRetention").checked = retention.automaticMaintenance !== false;
   $("#batteryUsableCapacity").value = config.batteryCapabilities?.usableCapacityKwh ?? "";
   $("#batteryMaximumChargeWatts").value = config.batteryCapabilities?.maximumChargeWatts
     ?? state.automationRules.find((rule) => rule.type === "backup-demand-guard")?.conditions?.batteryChargingEstimateW
@@ -3027,6 +3140,9 @@ function renderDashboard(data, options = {}) {
   state.status = data;
   applyFeatureVisibility(data.features ?? state.config ?? {});
   const now = Date.now();
+  if (recordTrend && !state.historyMode) {
+    advanceLiveTrendWindow(now, { draw: false });
+  }
   setText("#batteryPower", watts(data.energy?.battery?.instant_power?.value));
   setText(
     "#batterySoc",
@@ -3231,14 +3347,18 @@ function renderInitialStatus(data) {
   renderDashboard(data);
 }
 
-async function renderHistory(history) {
+async function renderHistory(history, { start, end } = {}) {
   // Historical mode uses persisted samples instead of live polling. It pauses the
   // refresh timer until the user presses Live again.
   state.historyMode = true;
   setLiveModeButton();
   clearTimeout(state.refreshTimer);
   const samples = history.samples ?? [];
-  await loadHistorySamplesAsync(history, { target: "dashboard" });
+  await loadHistorySamplesAsync(history, {
+    target: "dashboard",
+    rangeStartMs: start?.getTime(),
+    rangeEndMs: end?.getTime(),
+  });
   const latest = samples[samples.length - 1] ?? {};
   const syntheticStatus = {
     ...(state.status ?? {}),
@@ -3285,6 +3405,8 @@ async function loadGraphHistory() {
   await loadHistorySamplesAsync(history, {
     target: "graph",
     graphName: state.activeGraph,
+    rangeStartMs: start.getTime(),
+    rangeEndMs: end.getTime(),
   });
   setServiceState("historicalData");
 }
@@ -3813,6 +3935,7 @@ function scheduleNextRefresh() {
 
 async function refreshStatus() {
   if (state.historyMode) return;
+  advanceLiveTrendWindow(Date.now());
   if (state.discoveryInProgress) return;
   setServiceState("readingDevices");
   try {
@@ -3848,7 +3971,7 @@ async function refreshAll() {
 async function initialLoad() {
   applyCachedDashboardLayout();
   setServiceState("readingDevices");
-  await loadLiveTrendHistory().catch(() => {});
+  await loadLiveTrendHistory(PAGE_LOAD_TIME_MS).catch(() => {});
   const [statusResult, configResult] = await Promise.allSettled([
     api("/api/status"),
     api("/api/config"),
@@ -3917,6 +4040,12 @@ async function refreshHistoryStats() {
       "#historyStatSamples",
       Number(stats.sampleCount ?? 0).toLocaleString(),
     );
+    setText("#historyStatIntervals", Number(stats.rollups?.interval ?? 0).toLocaleString());
+    setText("#historyStatDaily", Number(stats.rollups?.daily ?? 0).toLocaleString());
+    setText(
+      "#historyStatEvents",
+      Object.values(stats.events ?? {}).reduce((sum, value) => sum + Number(value || 0), 0).toLocaleString(),
+    );
   } catch (err) {
     toast(err.message);
   }
@@ -3933,6 +4062,16 @@ async function mutate(path, body, success) {
 }
 
 function initForms() {
+  for (const [checkbox, input] of [
+    ["#intervalAggregatesIndefinite", "#intervalAggregatesDays"],
+    ["#dailyAggregatesIndefinite", "#dailyAggregatesDays"],
+    ["#plannerHistoryIndefinite", "#plannerHistoryDays"],
+    ["#automationEventIndefinite", "#automationEventDays"],
+  ]) {
+    $(checkbox).addEventListener("change", () => {
+      $(input).disabled = $(checkbox).checked;
+    });
+  }
   $("#settingsPage")?.addEventListener("compositionstart", () => {
     state.isComposing = true;
   });
@@ -3969,7 +4108,7 @@ function initForms() {
     const end = new Date($("#historyEnd").value);
     try {
       setLoadProgress("history", 0, 0, true);
-      await renderHistory(await api(`/api/history?${historyParams(start, end)}`));
+      await renderHistory(await api(`/api/history?${historyParams(start, end)}`), { start, end });
     } catch (err) {
       toast(err.message);
     }
@@ -4087,7 +4226,7 @@ function initForms() {
       offPeakRateYenPerKwh: state.config?.offPeakRateYenPerKwh,
       offPeakSavingsEnabled: state.config?.offPeakSavingsEnabled,
       rateBands: state.config?.rateBands,
-      historyRetentionDays: state.config?.historyRetentionDays,
+      retention: state.config?.retention,
       dashboardWidgets: state.config?.dashboardWidgets,
       circuitLabels: state.config?.circuitLabels,
       circuitSortMode: state.config?.circuitSortMode,
@@ -4258,7 +4397,7 @@ function initForms() {
         method: "PUT",
         body: {
           ...(state.config ?? {}),
-          historyRetentionDays: $("#historyRetentionDays").value,
+          retention: collectRetentionConfig(),
         },
       });
       updateConfigControls(config);
@@ -4272,9 +4411,10 @@ function initForms() {
     try {
       const result = await api("/api/history/trim", {
         method: "POST",
-        body: { retentionDays: $("#historyRetentionDays").value },
+        body: { retention: collectRetentionConfig() },
       });
-      toast(`${t("historyTrimmed")}: ${result.deleted}`);
+      const deleted = Object.values(result.deleted ?? {}).reduce((sum, value) => sum + Number(value || 0), 0);
+      toast(`${t("historyTrimmed")}: ${deleted}`);
       await refreshHistoryStats();
     } catch (err) {
       toast(err.message);
