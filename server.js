@@ -74,6 +74,12 @@ const DEFAULT_DASHBOARD_WIDGETS = [
   { id: "energySources", group: "status", visible: true, priority: 120 },
 ];
 
+const DEFAULT_GUARD_CONDITIONS = {
+  breakerVoltage: 100,
+  breakerAmps: 40,
+  reserveAmps: 5,
+};
+
 // Public defaults use RFC 5737 documentation addresses. Real deployments should
 // set device addresses from the Settings page, where they are persisted in /data.
 const DEFAULT_CONFIG = {
@@ -98,12 +104,6 @@ const DEFAULT_CONFIG = {
   rateBands: [
     { start: "00:00", end: "00:00", yenPerKwh: 35, label: "Simple" },
   ],
-  automation: {
-    breakerVoltage: 100,
-    breakerAmps: 40,
-    reserveAmps: 5,
-    enabledDefaults: false,
-  },
   batteryCapabilities: {
     usableCapacityKwh: null,
     maximumChargeWatts: null,
@@ -784,6 +784,7 @@ function cleanSolarPlannerState(value = {}) {
         safetyMarginW: finiteNumberOrNull(value.breakerRecovery.safetyMarginW),
       }
       : null,
+    lastHeadroomWaitLogAt: value.lastHeadroomWaitLogAt ?? null,
     activeWindowExecution: value.activeWindowExecution?.key
       ? {
         key: value.activeWindowExecution.key,
@@ -1037,8 +1038,8 @@ async function refreshSolarPlannerForecast(config, { fetchImpl = fetch, now = ne
   return writeSolarPlannerState(state);
 }
 
-function solarPlannerView(config, state, now = new Date()) {
-  const availability = solarPlannerBaseAvailability(config);
+function solarPlannerView(config, state, rules = [], now = new Date()) {
+  const availability = solarPlannerAvailability(config, rules);
   const forecastAgeMs = state.forecast?.fetchedAt
     ? now.getTime() - new Date(state.forecast.fetchedAt).getTime()
     : null;
@@ -1220,6 +1221,14 @@ function solarPlannerBaseAvailability(config) {
   if (missing.length) return { available: false, reason: `missing ${missing.join(", ")}` };
   if (config.smartCosmoEnabled === false) return { available: false, reason: "overall house demand is unavailable" };
   return { available: true, reason: null };
+}
+
+function solarPlannerAvailability(config, rules = []) {
+  const base = solarPlannerBaseAvailability(config);
+  if (!base.available) return base;
+  return plannerBreakerSettings(rules).valid
+    ? base
+    : { available: false, reason: "Charging Demand Guard settings are unavailable" };
 }
 
 function forecastIsFresh(forecast, now = new Date()) {
@@ -2759,15 +2768,6 @@ function normalizeRateBands(input = {}) {
   return bands.length ? bands : DEFAULT_CONFIG.rateBands;
 }
 
-function normalizeAutomationConfig(value = {}) {
-  return {
-    breakerVoltage: configNumber(value.breakerVoltage, DEFAULT_CONFIG.automation.breakerVoltage, 1, 1000),
-    breakerAmps: configNumber(value.breakerAmps, DEFAULT_CONFIG.automation.breakerAmps, 1, 400),
-    reserveAmps: configNumber(value.reserveAmps, DEFAULT_CONFIG.automation.reserveAmps, 0, 200),
-    enabledDefaults: configBool(value.enabledDefaults, DEFAULT_CONFIG.automation.enabledDefaults),
-  };
-}
-
 function normalizeBatteryCapabilities(value = {}) {
   return {
     usableCapacityKwh: optionalConfigNumber(value.usableCapacityKwh, 0.1, 1000),
@@ -2854,7 +2854,6 @@ function cleanConfig(input = {}) {
     historyRetentionDays: configNumber(input.historyRetentionDays, DEFAULT_CONFIG.historyRetentionDays, 1, 3650),
     updateIntervalSeconds: configNumber(input.updateIntervalSeconds, DEFAULT_CONFIG.updateIntervalSeconds, 5, 3600),
     rateBands,
-    automation: normalizeAutomationConfig(input.automation ?? {}),
     batteryCapabilities: normalizeBatteryCapabilities(input.batteryCapabilities ?? {}),
     solarPlanner: normalizeSolarPlanner(input.solarPlanner ?? {}),
     notifications: normalizeNotificationConfig(input.notifications ?? {}),
@@ -2868,7 +2867,12 @@ async function readConfig() {
   await ensureDataDir();
   try {
     const text = await readFile(CONFIG_FILE, "utf8");
-    return cleanConfig(parseJsonWithContext(text, CONFIG_FILE));
+    const parsed = parseJsonWithContext(text, CONFIG_FILE);
+    const cleaned = cleanConfig(parsed);
+    if (Object.prototype.hasOwnProperty.call(parsed, "automation")) {
+      await writeJsonFileAtomic(CONFIG_FILE, cleaned);
+    }
+    return cleaned;
   } catch (err) {
     if (err.code === "ENOENT") return cleanConfig(DEFAULT_CONFIG);
     throw err;
@@ -2892,7 +2896,6 @@ async function writeConfig(config) {
     rateMode: previous.rateMode,
     rateBands: previous.rateBands,
     standardRateYenPerKwh: previous.standardRateYenPerKwh,
-    automation: previous.automation,
     batteryCapabilities: previous.batteryCapabilities,
     solarPlanner: previous.solarPlanner,
   }) !== JSON.stringify({
@@ -2905,7 +2908,6 @@ async function writeConfig(config) {
     rateMode: cleaned.rateMode,
     rateBands: cleaned.rateBands,
     standardRateYenPerKwh: cleaned.standardRateYenPerKwh,
-    automation: cleaned.automation,
     batteryCapabilities: cleaned.batteryCapabilities,
     solarPlanner: cleaned.solarPlanner,
   });
@@ -3456,11 +3458,11 @@ function cleanAutomationRuleConfig(input = {}) {
     enabled: input.enabled === true,
     conditions: {
       source: ["houseDemandW", "gridImportW"].includes(conditions.source) ? conditions.source : "gridImportW",
-      breakerAmps: configNumber(conditions.breakerAmps, DEFAULT_CONFIG.automation.breakerAmps, 1, 400),
-      breakerVoltage: configNumber(conditions.breakerVoltage, DEFAULT_CONFIG.automation.breakerVoltage, 1, 1000),
-      reserveAmps: configNumber(conditions.reserveAmps, DEFAULT_CONFIG.automation.reserveAmps, 0, 200),
+      breakerAmps: configNumber(conditions.breakerAmps, DEFAULT_GUARD_CONDITIONS.breakerAmps, 1, 400),
+      breakerVoltage: configNumber(conditions.breakerVoltage, DEFAULT_GUARD_CONDITIONS.breakerVoltage, 1, 1000),
+      reserveAmps: configNumber(conditions.reserveAmps, DEFAULT_GUARD_CONDITIONS.reserveAmps, 0, 200),
       batteryChargingEstimateW: configNumber(conditions.batteryChargingEstimateW, 1000, 0, 20000),
-      restoreBelowAmps: configNumber(conditions.restoreBelowAmps, Math.max(1, DEFAULT_CONFIG.automation.breakerAmps - 10), 1, 400),
+      restoreBelowAmps: configNumber(conditions.restoreBelowAmps, Math.max(1, DEFAULT_GUARD_CONDITIONS.breakerAmps - 10), 1, 400),
       restoreDelaySeconds: configNumber(conditions.restoreDelaySeconds, 300, 0, 86400),
     },
     action: "set-mode",
@@ -4102,7 +4104,45 @@ function applyInterruptedChargeCap(plan, interruption, maximumChargeWatts, now =
   };
 }
 
-function plannerLiveChargeHeadroom(status, config, state = {}) {
+function plannerBreakerSettings(rules = []) {
+  const guardRules = (Array.isArray(rules) ? rules : [])
+    .filter((rule) => rule?.type === "backup-demand-guard");
+  const preferredRules = guardRules.some((rule) => rule.enabled)
+    ? guardRules.filter((rule) => rule.enabled)
+    : guardRules;
+  const configuredGuards = preferredRules
+    .map((rule) => {
+      const conditions = rule.conditions ?? {};
+      const breakerVoltage = Number(conditions.breakerVoltage);
+      const breakerAmps = Number(conditions.breakerAmps);
+      const reserveAmps = Number(conditions.reserveAmps);
+      const breakerLimitW = (breakerAmps - reserveAmps) * breakerVoltage;
+      return {
+        breakerVoltage,
+        breakerAmps,
+        reserveAmps,
+        breakerLimitW,
+        ruleId: rule.id ?? null,
+        ruleName: rule.name ?? "Charging Demand Guard",
+        source: "automation-rule",
+      };
+    })
+    .filter((settings) => Number.isFinite(settings.breakerLimitW) && settings.breakerLimitW > 0)
+    .sort((left, right) => left.breakerLimitW - right.breakerLimitW);
+  if (configuredGuards.length) return { ...configuredGuards[0], valid: true };
+  return {
+    breakerVoltage: null,
+    breakerAmps: null,
+    reserveAmps: null,
+    breakerLimitW: Number.NaN,
+    ruleId: null,
+    ruleName: null,
+    source: "missing",
+    valid: false,
+  };
+}
+
+function plannerLiveChargeHeadroom(status, config, state = {}, rules = []) {
   const rawGridImportW = status.meter?.grid_import_power?.value;
   const gridImportW = rawGridImportW === null || rawGridImportW === undefined || rawGridImportW === ""
     ? Number.NaN
@@ -4110,18 +4150,16 @@ function plannerLiveChargeHeadroom(status, config, state = {}) {
   const maximumChargeWatts = Number(config.batteryCapabilities?.maximumChargeWatts);
   const chargePerformance = effectivePlannerChargeWatts(config, state);
   const chargeWatts = Number(chargePerformance.effectiveWatts);
-  const breakerLimitW = Math.max(
-    0,
-    (Number(config.automation?.breakerAmps) - Number(config.automation?.reserveAmps))
-      * Number(config.automation?.breakerVoltage),
-  );
+  const breakerSettings = plannerBreakerSettings(rules);
+  const breakerLimitW = breakerSettings.breakerLimitW;
   const safetyMarginW = SOLAR_BREAKER_SAFETY_MARGIN_W;
-  const thresholdW = breakerLimitW > 0
+  const thresholdW = breakerSettings.valid && breakerLimitW > 0
     ? breakerLimitW - chargeWatts - safetyMarginW
-    : Number.POSITIVE_INFINITY;
-  const available = Number.isFinite(gridImportW)
+    : Number.NaN;
+  const available = breakerSettings.valid
+    && Number.isFinite(gridImportW)
     && Number.isFinite(chargeWatts)
-    && (breakerLimitW <= 0 || gridImportW <= thresholdW);
+    && gridImportW <= thresholdW;
   return {
     available,
     gridImportW,
@@ -4131,6 +4169,7 @@ function plannerLiveChargeHeadroom(status, config, state = {}) {
     breakerLimitW,
     safetyMarginW,
     thresholdW,
+    breakerSettings,
   };
 }
 
@@ -4185,9 +4224,10 @@ function logPlannerBreakerWait(state, headroom, recoveryStatus, now = new Date()
   if (!state.breakerRecovery || !recoveryStatus.shouldLog) return false;
   const importText = Number.isFinite(headroom.gridImportW) ? `(${Math.round(headroom.gridImportW)} W)` : "unavailable";
   const thresholdText = Number.isFinite(headroom.thresholdW) ? `(${Math.round(headroom.thresholdW)} W)` : "unrestricted";
+  const limitText = Number.isFinite(headroom.breakerLimitW) ? `(${Math.round(headroom.breakerLimitW)} W)` : "unavailable";
   appendSolarPlannerLog(
     state,
-    `Waiting for breaker headroom: Grid Import ${importText}, required at or below ${thresholdText}, safe checks (${recoveryStatus.consecutiveSafeChecks}/${recoveryStatus.requiredSafeChecks}), retry after ${state.breakerRecovery.cooldownUntil}`,
+    `Waiting for breaker headroom: Grid Import ${importText}, required at or below ${thresholdText} from Charging Demand Guard limit ${limitText}, safe checks (${recoveryStatus.consecutiveSafeChecks}/${recoveryStatus.requiredSafeChecks}), retry after ${state.breakerRecovery.cooldownUntil}`,
     "guard",
     now,
   );
@@ -4195,20 +4235,45 @@ function logPlannerBreakerWait(state, headroom, recoveryStatus, now = new Date()
   return true;
 }
 
-function plannerLiveImportSafety(status, config) {
+function logPlannerInitialHeadroomWait(state, headroom, now = new Date()) {
+  const lastLogMs = new Date(state.lastHeadroomWaitLogAt ?? 0).getTime();
+  if (Number.isFinite(lastLogMs) && lastLogMs > 0 && now.getTime() - lastLogMs < SOLAR_BREAKER_WAIT_LOG_MS) {
+    return false;
+  }
+  const importText = Number.isFinite(headroom.gridImportW) ? `${Math.round(headroom.gridImportW)} W` : "unavailable";
+  const thresholdText = Number.isFinite(headroom.thresholdW) ? `${Math.round(headroom.thresholdW)} W` : "unrestricted";
+  const limitText = Number.isFinite(headroom.breakerLimitW) ? `${Math.round(headroom.breakerLimitW)} W` : "unavailable";
+  const chargeText = Number.isFinite(headroom.chargeWatts) ? `${Math.round(headroom.chargeWatts)} W` : "unavailable";
+  const marginText = Number.isFinite(headroom.safetyMarginW) ? `${Math.round(headroom.safetyMarginW)} W` : "unavailable";
+  const settings = headroom.breakerSettings ?? {};
+  const guardValues = [settings.breakerAmps, settings.reserveAmps, settings.breakerVoltage]
+    .every((value) => Number.isFinite(Number(value)))
+    ? `${settings.breakerAmps} A - ${settings.reserveAmps} A reserve at ${settings.breakerVoltage} V`
+    : "settings unavailable";
+  appendSolarPlannerLog(
+    state,
+    `Waiting to start planned charge: Grid Import (${importText}), required at or below (${thresholdText}) using Charging Demand Guard (${guardValues}) = Guard limit (${limitText}), charge estimate (${chargeText}), and safety margin (${marginText})`,
+    "guard",
+    now,
+  );
+  state.lastHeadroomWaitLogAt = now.toISOString();
+  return true;
+}
+
+function plannerLiveImportSafety(status, rules = []) {
   const rawGridImportW = status.meter?.grid_import_power?.value;
   const gridImportW = rawGridImportW === null || rawGridImportW === undefined || rawGridImportW === ""
     ? Number.NaN
     : Number(rawGridImportW);
-  const breakerLimitW = Math.max(
-    0,
-    (Number(config.automation?.breakerAmps) - Number(config.automation?.reserveAmps))
-      * Number(config.automation?.breakerVoltage),
-  );
+  const breakerSettings = plannerBreakerSettings(rules);
+  const breakerLimitW = breakerSettings.breakerLimitW;
   return {
-    available: Number.isFinite(gridImportW) && (breakerLimitW <= 0 || gridImportW < breakerLimitW),
+    available: breakerSettings.valid
+      && Number.isFinite(gridImportW)
+      && gridImportW < breakerLimitW,
     gridImportW,
     breakerLimitW,
+    breakerSettings,
   };
 }
 
@@ -4322,12 +4387,16 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
   }
   const paused = state.pausedUntil && new Date(state.pausedUntil).getTime() > now.getTime();
   const guardActive = rules.some((rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore);
+  const guardSettings = plannerBreakerSettings(rules);
   const base = solarPlannerBaseAvailability(config);
   const forecastError = state.lastForecastError?.error;
-  if (!base.available || paused || !forecastIsFresh(state.forecast, now) || forecastError) {
+  if (!base.available || !guardSettings.valid || paused || !forecastIsFresh(state.forecast, now) || forecastError) {
     const unavailableReason = paused
       ? "Planner is paused"
-      : base.reason || forecastError || "Forecast is unavailable";
+      : base.reason
+        || (!guardSettings.valid ? "Charging Demand Guard settings are unavailable" : null)
+        || forecastError
+        || "Forecast is unavailable";
     if (!guardActive && state.owner === "planner") await releasePlannerCharge(state, unavailableReason, now);
     finalizeExpiredPlannerWindow(state, numericMetric(status.energy?.battery?.remaining_percent), now);
     state.lastResult = { ok: true, at: now.toISOString(), skipped: paused ? "paused after manual action" : unavailableReason };
@@ -4345,7 +4414,7 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
       if (!interruption) state.plan = null;
       if (interruption) {
         recordPlannerWindowInterruption(state);
-        beginPlannerBreakerRecovery(state, plannerLiveChargeHeadroom(status, config, state), now);
+        beginPlannerBreakerRecovery(state, plannerLiveChargeHeadroom(status, config, state, rules), now);
       }
       appendSolarPlannerLog(
         state,
@@ -4357,7 +4426,7 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
       );
     }
     if (state.breakerRecovery) {
-      const headroom = plannerLiveChargeHeadroom(status, config, state);
+      const headroom = plannerLiveChargeHeadroom(status, config, state, rules);
       const recoveryStatus = advancePlannerBreakerRecovery(state, headroom, now);
       logPlannerBreakerWait(state, headroom, recoveryStatus, now);
     }
@@ -4446,7 +4515,7 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
   const activeTargetSocPercent = Number(state.activeSlot?.targetSocPercent ?? config.solarPlanner.targetSocPercent);
   const activeExpired = state.activeSlot && now.getTime() >= new Date(state.activeSlot.end).getTime();
   const activePlanStopReason = activePlannerSlotStopReason(state, config, state.plan, now);
-  const liveImportSafety = plannerLiveImportSafety(status, config);
+  const liveImportSafety = plannerLiveImportSafety(status, rules);
   const activeEnergyTargetReached = state.owner === "planner" && state.activeChargedKwh >= activeTargetKwh;
   const activeSocTargetReached = state.owner === "planner" && soc >= activeTargetSocPercent;
   const breakerReserveInterrupted = state.owner === "planner"
@@ -4474,11 +4543,17 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
         : null;
       if (interruption) {
         recordPlannerWindowInterruption(state);
-        beginPlannerBreakerRecovery(state, plannerLiveChargeHeadroom(status, config, state), now);
+        beginPlannerBreakerRecovery(state, plannerLiveChargeHeadroom(status, config, state, rules), now);
       }
+      const importText = Number.isFinite(liveImportSafety.gridImportW)
+        ? `${Math.round(liveImportSafety.gridImportW)} W`
+        : "unavailable";
+      const limitText = Number.isFinite(liveImportSafety.breakerLimitW)
+        ? `${Math.round(liveImportSafety.breakerLimitW)} W`
+        : "unavailable";
       stopReason = interruption
-        ? `Live grid import reached the breaker reserve limit after ${interruption.deliveredWh} Wh; ${interruption.remainingWh} Wh remains in this charge`
-        : "Live grid import reached the breaker reserve limit";
+        ? `Grid Import (${importText}) reached Charging Demand Guard limit (${limitText}) after ${interruption.deliveredWh} Wh; ${interruption.remainingWh} Wh remains in this charge`
+        : `Grid Import (${importText}) reached Charging Demand Guard limit (${limitText})`;
     }
     else if (liveExportNeedsHeadroom) stopReason = "Live grid export indicates solar needs battery headroom";
     if (liveExportNeedsHeadroom && state.activeSlot?.windowEnd) {
@@ -4514,8 +4589,9 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     && Number.isFinite(soc)
     && soc >= Number(slot.targetSocPercent ?? config.solarPlanner.targetSocPercent);
   if (slot && state.owner !== "planner" && !solarHeadroomHoldActive && !slotTargetReached) {
-    const headroom = plannerLiveChargeHeadroom(status, config, state);
+    const headroom = plannerLiveChargeHeadroom(status, config, state, rules);
     if (!headroom.available) {
+      if (!state.breakerRecovery) logPlannerInitialHeadroomWait(state, headroom, now);
       if (state.breakerRecovery) {
         const recoveryStatus = advancePlannerBreakerRecovery(state, headroom, now);
         logPlannerBreakerWait(state, headroom, recoveryStatus, now);
@@ -4551,8 +4627,17 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
     startPlannerChargeSession(state, slot, soc, now);
     state.interruptedCharge = null;
     state.breakerRecovery = null;
+    state.lastHeadroomWaitLogAt = null;
     state.lastResult = { ok: true, at: now.toISOString(), kind: "charge", slot, result };
-    appendSolarPlannerLog(state, `Starting ${slot.targetWh} Wh charge in ${slot.label} band at ${slot.yenPerKwh} yen/kWh`, "charge", now);
+    const startImportText = Number.isFinite(headroom.gridImportW) ? `${Math.round(headroom.gridImportW)} W` : "unavailable";
+    const startThresholdText = Number.isFinite(headroom.thresholdW) ? `${Math.round(headroom.thresholdW)} W` : "unrestricted";
+    const startLimitText = Number.isFinite(headroom.breakerLimitW) ? `${Math.round(headroom.breakerLimitW)} W` : "unavailable";
+    appendSolarPlannerLog(
+      state,
+      `Starting ${slot.targetWh} Wh charge in ${slot.label} band at ${slot.yenPerKwh} yen/kWh; Grid Import (${startImportText}) is at or below start threshold (${startThresholdText}) from Charging Demand Guard limit (${startLimitText})`,
+      "charge",
+      now,
+    );
   } else if (slot && state.owner !== "planner" && (solarHeadroomHoldActive || slotTargetReached)) {
     state.lastResult = {
       ok: true,
@@ -4708,7 +4793,7 @@ async function runAutomationRules(context = {}) {
     context.phase = "evaluating adaptive solar charging";
     let plannerState = await readSolarPlannerState();
     const forecastAge = startedAt.getTime() - new Date(plannerState.forecast?.fetchedAt ?? 0).getTime();
-    if (solarPlannerBaseAvailability(config).available
+    if (solarPlannerAvailability(config, rules).available
       && (!Number.isFinite(forecastAge) || forecastAge >= SOLAR_FORECAST_REFRESH_MS)) {
       context.phase = "refreshing Open-Meteo forecast";
       plannerState = await refreshSolarPlannerForecast(config, { now: startedAt });
@@ -5342,16 +5427,18 @@ async function api(req, res, url) {
   }
   if (req.method === "GET" && url.pathname === "/api/solar-planner") {
     const config = await readConfig();
-    return json(res, 200, solarPlannerView(config, await readSolarPlannerState()));
+    const rules = await readAutomationRules();
+    return json(res, 200, solarPlannerView(config, await readSolarPlannerState(), rules));
   }
   if (req.method === "POST" && url.pathname === "/api/solar-planner/recalculate") {
     const config = await readConfig();
-    const availability = solarPlannerBaseAvailability(config);
+    const rules = await readAutomationRules();
+    const availability = solarPlannerAvailability(config, rules);
     if (!availability.available) return json(res, 409, { error: availability.reason });
     const now = new Date();
     let state = await refreshSolarPlannerForecast(config, { forceHistorical: true, now });
     if (!state.forecast || !forecastIsFresh(state.forecast, now) || state.lastForecastError) {
-      return json(res, 503, solarPlannerView(config, state));
+      return json(res, 503, solarPlannerView(config, state, rules));
     }
     const samples = await readSolarPlannerHistory(now);
     state = { ...state, historicalWeather: await readJsonLinesFile(SOLAR_WEATHER_HISTORY_FILE) };
@@ -5376,11 +5463,12 @@ async function api(req, res, url) {
       now,
     );
     state = await writeSolarPlannerState(state);
-    return json(res, 200, solarPlannerView(config, state));
+    return json(res, 200, solarPlannerView(config, state, rules));
   }
   if (req.method === "POST" && url.pathname === "/api/solar-planner/resume") {
     const config = await readConfig();
-    return json(res, 200, solarPlannerView(config, await resumeSolarPlanner()));
+    const rules = await readAutomationRules();
+    return json(res, 200, solarPlannerView(config, await resumeSolarPlanner(), rules));
   }
   if (req.method === "POST" && url.pathname.startsWith("/api/settings/")) {
     const body = await readBody(req);
@@ -5539,6 +5627,7 @@ export {
   forecastHourForInterval,
   forecastIsFresh,
   learnedSolarFactor,
+  logPlannerInitialHeadroomWait,
   logPlannerBreakerWait,
   normalizeCircuitLabels,
   normalizeDashboardWidgets,
@@ -5553,6 +5642,7 @@ export {
   enforcePlannerSlotEndDeadline,
   plannerLiveChargeHeadroom,
   plannerLiveImportSafety,
+  plannerBreakerSettings,
   plannerSlotEndDelayMs,
   plannerSlotEndKey,
   plannerTimezoneError,
@@ -5566,6 +5656,7 @@ export {
   solarPlanLogMessage,
   preserveInterruptedPlannerCharge,
   recordPlannerWindowInterruption,
+  solarPlannerAvailability,
   solarPlannerBaseAvailability,
   solarPowerFromIrradiance,
   summarizeSamples,

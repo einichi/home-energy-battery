@@ -35,6 +35,7 @@ import {
   finalizePlannerChargeSession,
   finalizePlannerWindowExecution,
   learnedSolarFactor,
+  logPlannerInitialHeadroomWait,
   logPlannerBreakerWait,
   normalizeCircuitLabels,
   normalizeDashboardWidgets,
@@ -47,6 +48,7 @@ import {
   planChronologicalDiscountedCharging,
   plannerLiveChargeHeadroom,
   plannerLiveImportSafety,
+  plannerBreakerSettings,
   plannerSlotEndDelayMs,
   plannerSlotEndKey,
   preserveInterruptedPlannerCharge,
@@ -59,6 +61,7 @@ import {
   shouldTriggerDemandGuard,
   solarPlanRefreshDecision,
   solarPlanLogMessage,
+  solarPlannerAvailability,
   solarPlannerBaseAvailability,
   solarPowerFromIrradiance,
   predictHouseDemand,
@@ -110,6 +113,9 @@ assert.equal(simple.solarPlanner.enabled, false);
 assert.equal(simple.solarPlanner.systemLossPercent, 14);
 assert.equal(simple.solarPlanner.targetSocPercent, 100);
 assert.equal(simple.solarPlanner.forecastMarginPercent, 10);
+assert.equal(Object.prototype.hasOwnProperty.call(cleanConfig({
+  automation: { breakerVoltage: 100, breakerAmps: 60, reserveAmps: 5 },
+}), "automation"), false);
 assert.equal(cleanConfig({ batteryCapabilities: { maximumChargeWatts: 2200 } }).batteryCapabilities.maximumChargeWatts, 2200);
 assert.equal(cleanConfig({ batteryCapabilities: { maximumChargeWatts: 2224 } }).batteryCapabilities.maximumChargeWatts, 2200);
 assert.equal(cleanConfig({ batteryCapabilities: { maximumChargeWatts: 2225 } }).batteryCapabilities.maximumChargeWatts, 2250);
@@ -173,7 +179,6 @@ const plannerConfig = cleanConfig({
     { start: "23:00", end: "01:00", yenPerKwh: 15, label: "Cheapest" },
     { start: "01:00", end: "03:00", yenPerKwh: 20, label: "Night" },
   ],
-  automation: { breakerVoltage: 100, breakerAmps: 60, reserveAmps: 5 },
   batteryCapabilities: { usableCapacityKwh: 10, maximumChargeWatts: 2000 },
   solarPlanner: { enabled: true, latitude: -33.8, longitude: -151.2, arrayPeakKw: 5 },
 });
@@ -409,32 +414,117 @@ const forecastDemandDoesNotRemoveSlots = optimizeDiscountedChargeSlots({
 assert.equal(forecastDemandDoesNotRemoveSlots.plannedChargeKwh, 1);
 assert.equal(forecastDemandDoesNotRemoveSlots.unmetChargeKwh, 0);
 
+const plannerGuardRules = [{
+  id: "guard-60a",
+  name: "Charging Demand Guard",
+  type: "backup-demand-guard",
+  enabled: true,
+  conditions: { breakerVoltage: 100, breakerAmps: 60, reserveAmps: 5 },
+}];
 const livePlannerHeadroom = plannerLiveChargeHeadroom({
   meter: { grid_import_power: { value: 3000 } },
-}, plannerConfig);
+}, plannerConfig, {}, plannerGuardRules);
 assert.equal(livePlannerHeadroom.available, true);
 assert.equal(livePlannerHeadroom.gridImportW, 3000);
 assert.equal(plannerLiveChargeHeadroom({
   meter: { grid_import_power: { value: 4000 } },
-}, plannerConfig).available, false);
+}, plannerConfig, {}, plannerGuardRules).available, false);
 assert.equal(plannerLiveChargeHeadroom({
   meter: { grid_import_power: { value: null } },
-}, plannerConfig).available, false);
+}, plannerConfig, {}, plannerGuardRules).available, false);
 const learnedHeadroom = plannerLiveChargeHeadroom({
   meter: { grid_import_power: { value: 3300 } },
-}, plannerConfig, { chargingPerformance: learnedChargingPerformance });
+}, plannerConfig, { chargingPerformance: learnedChargingPerformance }, plannerGuardRules);
 assert.equal(learnedHeadroom.chargeWatts, 1950);
 assert.equal(learnedHeadroom.thresholdW, 3350);
 assert.equal(learnedHeadroom.available, true);
+const enabledGuardRules = [{
+  id: "guard-50a",
+  name: "Charging Demand Guard",
+  type: "backup-demand-guard",
+  enabled: true,
+  conditions: {
+    breakerVoltage: 100,
+    breakerAmps: 50,
+    reserveAmps: 2,
+  },
+}];
+assert.deepEqual(plannerBreakerSettings(enabledGuardRules), {
+  breakerVoltage: 100,
+  breakerAmps: 50,
+  reserveAmps: 2,
+  breakerLimitW: 4800,
+  ruleId: "guard-50a",
+  ruleName: "Charging Demand Guard",
+  source: "automation-rule",
+  valid: true,
+});
+assert.equal(plannerBreakerSettings([{
+  ...enabledGuardRules[0],
+  enabled: false,
+}]).breakerLimitW, 4800);
+assert.equal(plannerBreakerSettings([]).valid, false);
+assert.equal(Number.isNaN(plannerBreakerSettings([]).breakerLimitW), true);
+assert.deepEqual(solarPlannerAvailability(plannerConfig, []), {
+  available: false,
+  reason: "Charging Demand Guard settings are unavailable",
+});
+assert.equal(solarPlannerAvailability(plannerConfig, enabledGuardRules).available, true);
+const missingGuardHeadroom = plannerLiveChargeHeadroom({
+  meter: { grid_import_power: { value: 0 } },
+}, plannerConfig);
+assert.equal(missingGuardHeadroom.available, false);
+assert.equal(Number.isNaN(missingGuardHeadroom.thresholdW), true);
+assert.equal(plannerLiveImportSafety({
+  meter: { grid_import_power: { value: 0 } },
+}).available, false);
+const guardRuleHeadroom = plannerLiveChargeHeadroom({
+  meter: { grid_import_power: { value: 2380 } },
+}, plannerConfig, {}, enabledGuardRules);
+assert.equal(guardRuleHeadroom.breakerLimitW, 4800);
+assert.equal(guardRuleHeadroom.thresholdW, 2600);
+assert.equal(guardRuleHeadroom.available, true);
+assert.equal(plannerLiveChargeHeadroom({
+  meter: { grid_import_power: { value: 2700 } },
+}, plannerConfig, {}, enabledGuardRules).available, false);
+assert.equal(plannerLiveImportSafety({
+  meter: { grid_import_power: { value: 4799 } },
+}, enabledGuardRules).available, true);
+assert.equal(plannerLiveImportSafety({
+  meter: { grid_import_power: { value: 4800 } },
+}, enabledGuardRules).available, false);
+const initialWaitState = { log: [] };
+const unavailableGuardHeadroom = plannerLiveChargeHeadroom({
+  meter: { grid_import_power: { value: 2700 } },
+}, plannerConfig, {}, enabledGuardRules);
+assert.equal(logPlannerInitialHeadroomWait(
+  initialWaitState,
+  unavailableGuardHeadroom,
+  new Date("2026-07-11T00:00:00.000Z"),
+), true);
+assert.match(initialWaitState.log[0].message, /Grid Import \(2700 W\)/);
+assert.match(initialWaitState.log[0].message, /50 A - 2 A reserve at 100 V/);
+assert.match(initialWaitState.log[0].message, /Guard limit \(4800 W\)/);
+assert.match(initialWaitState.log[0].message, /required at or below \(2600 W\)/);
+assert.equal(logPlannerInitialHeadroomWait(
+  initialWaitState,
+  unavailableGuardHeadroom,
+  new Date("2026-07-11T00:01:00.000Z"),
+), false);
+assert.equal(logPlannerInitialHeadroomWait(
+  initialWaitState,
+  unavailableGuardHeadroom,
+  new Date("2026-07-11T00:05:00.000Z"),
+), true);
 const recoveryState = {};
 beginPlannerBreakerRecovery(
   recoveryState,
-  plannerLiveChargeHeadroom({ meter: { grid_import_power: { value: 4000 } } }, plannerConfig),
+  plannerLiveChargeHeadroom({ meter: { grid_import_power: { value: 4000 } } }, plannerConfig, {}, plannerGuardRules),
   new Date("2026-07-11T00:00:00.000Z"),
 );
 const safeRecoveryHeadroom = plannerLiveChargeHeadroom({
   meter: { grid_import_power: { value: 3000 } },
-}, plannerConfig);
+}, plannerConfig, {}, plannerGuardRules);
 const recoveryCheck1 = advancePlannerBreakerRecovery(
   recoveryState,
   safeRecoveryHeadroom,
@@ -451,6 +541,7 @@ assert.equal(logPlannerBreakerWait(
 ), true);
 assert.match(recoveryState.log[0].message, /Grid Import \(3000 W\)/);
 assert.match(recoveryState.log[0].message, /required at or below \(3300 W\)/);
+assert.match(recoveryState.log[0].message, /Guard limit \(5500 W\)/);
 assert.match(recoveryState.log[0].message, /safe checks \(1\/3\)/);
 recoveryState.breakerRecovery.lastWaitLogAt = "2026-07-11T00:00:30.000Z";
 const recoveryCheck2 = advancePlannerBreakerRecovery(
@@ -475,7 +566,7 @@ const recoveryReady = advancePlannerBreakerRecovery(
 assert.equal(recoveryReady.ready, true);
 const unsafeRecovery = advancePlannerBreakerRecovery(
   recoveryState,
-  plannerLiveChargeHeadroom({ meter: { grid_import_power: { value: 4000 } } }, plannerConfig),
+  plannerLiveChargeHeadroom({ meter: { grid_import_power: { value: 4000 } } }, plannerConfig, {}, plannerGuardRules),
   new Date("2026-07-11T00:03:30.000Z"),
 );
 assert.equal(unsafeRecovery.consecutiveSafeChecks, 0);
@@ -487,13 +578,13 @@ assert.equal(advancePlannerBreakerRecovery(
 ).shouldLog, true);
 assert.equal(plannerLiveImportSafety({
   meter: { grid_import_power: { value: 5400 } },
-}, plannerConfig).available, true);
+}, plannerGuardRules).available, true);
 assert.equal(plannerLiveImportSafety({
   meter: { grid_import_power: { value: 5500 } },
-}, plannerConfig).available, false);
+}, plannerGuardRules).available, false);
 assert.equal(plannerLiveImportSafety({
   meter: { grid_import_power: { value: null } },
-}, plannerConfig).available, false);
+}, plannerGuardRules).available, false);
 assert.equal(shouldTriggerDemandGuard({
   operationMode: "charging",
   batteryChargingW: 2000,

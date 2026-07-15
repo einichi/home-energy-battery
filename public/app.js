@@ -374,6 +374,7 @@ const I18N = {
     demandHistoryModel: "Demand history model",
     recentAndSeasonalHistory: "{days} recent days + {years} seasonal years ({percent}% seasonal)",
     recentHistoryOnly: "{days} recent days",
+    plannerWaitingForHeadroom: "Waiting for breaker headroom ({current} W; must be at or below {threshold} W before charging)",
     plannerState: "Planner state",
     plannerConfidence: "Forecast confidence",
     calibratedForecast: "calibrated",
@@ -766,6 +767,7 @@ const I18N = {
     demandHistoryModel: "需要履歴モデル",
     recentAndSeasonalHistory: "直近{days}日 + 過去年同時期{years}年分 (季節データ{percent}%)",
     recentHistoryOnly: "直近{days}日",
+    plannerWaitingForHeadroom: "ブレーカー容量待機中 ({current} W、充電開始前に{threshold} W以下が必要)",
     plannerState: "プランナー状態",
     plannerConfidence: "予測信頼度",
     calibratedForecast: "学習済み",
@@ -2045,21 +2047,18 @@ function buildRateConfigBody() {
   };
 }
 
-function defaultAutomationRule(config = {}) {
+function defaultAutomationRule() {
   return {
     name: "Charging demand guard",
     type: "backup-demand-guard",
     enabled: false,
     conditions: {
       source: "gridImportW",
-      breakerAmps: config.automation?.breakerAmps ?? 40,
-      breakerVoltage: config.automation?.breakerVoltage ?? 100,
-      reserveAmps: config.automation?.reserveAmps ?? 5,
-      batteryChargingEstimateW: config.batteryCapabilities?.maximumChargeWatts ?? 1000,
-      restoreBelowAmps: Math.max(
-        1,
-        (config.automation?.breakerAmps ?? 40) - 10,
-      ),
+      breakerAmps: 40,
+      breakerVoltage: 100,
+      reserveAmps: 5,
+      batteryChargingEstimateW: state.config?.batteryCapabilities?.maximumChargeWatts ?? 1000,
+      restoreBelowAmps: 30,
       restoreDelaySeconds: 300,
     },
     action: "set-mode",
@@ -2073,7 +2072,7 @@ function defaultAutomationRule(config = {}) {
 function updateAutomationControls(rules = state.automationRules) {
   const rule =
     rules.find((item) => item.type === "backup-demand-guard") ??
-    defaultAutomationRule(state.config ?? {});
+    defaultAutomationRule();
   $("#automationEnabled").checked = rule.enabled === true;
   $("#automationBreakerAmps").value = rule.conditions?.breakerAmps ?? "";
   $("#automationReserveAmps").value = rule.conditions?.reserveAmps ?? "";
@@ -2342,10 +2341,24 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
         })
       : template("recentHistoryOnly", { days: demandHistory.recentComparableDayCount })
     : "--";
+  const waitingForHeadroom = status.lastResult?.skipped === "live grid import leaves insufficient breaker headroom";
   $("#solarPlannerState").textContent = status.owner === "planner"
     ? t("plannerCharging")
     : status.paused
       ? t("paused")
+      : waitingForHeadroom
+        ? template("plannerWaitingForHeadroom", {
+            current: status.lastResult.gridImportW !== null
+              && status.lastResult.gridImportW !== undefined
+              && Number.isFinite(Number(status.lastResult.gridImportW))
+              ? Math.round(Number(status.lastResult.gridImportW))
+              : "--",
+            threshold: status.lastResult.thresholdW !== null
+              && status.lastResult.thresholdW !== undefined
+              && Number.isFinite(Number(status.lastResult.thresholdW))
+              ? Math.round(Number(status.lastResult.thresholdW))
+              : "--",
+          })
       : status.available
         ? status.warning ? t("plannerReadyPartial") : t("plannerReady")
         : status.reason ?? "Unavailable";
@@ -4075,7 +4088,6 @@ function initForms() {
       offPeakSavingsEnabled: state.config?.offPeakSavingsEnabled,
       rateBands: state.config?.rateBands,
       historyRetentionDays: state.config?.historyRetentionDays,
-      automation: state.config?.automation,
       dashboardWidgets: state.config?.dashboardWidgets,
       circuitLabels: state.config?.circuitLabels,
       circuitSortMode: state.config?.circuitSortMode,
@@ -4432,12 +4444,12 @@ function initForms() {
       (rule) => rule.type === "backup-demand-guard",
     );
     const body = {
-      ...(existing ?? defaultAutomationRule(state.config ?? {})),
+      ...(existing ?? defaultAutomationRule()),
       enabled: $("#automationEnabled").checked,
       conditions: {
         source: "gridImportW",
         breakerAmps: $("#automationBreakerAmps").value,
-        breakerVoltage: state.config?.automation?.breakerVoltage ?? 100,
+        breakerVoltage: existing?.conditions?.breakerVoltage ?? 100,
         reserveAmps: $("#automationReserveAmps").value,
         batteryChargingEstimateW: state.config?.batteryCapabilities?.maximumChargeWatts
           ?? $("#batteryMaximumChargeWatts").value,
@@ -4450,17 +4462,6 @@ function initForms() {
       restorePayload: { mode: "auto" },
     };
     try {
-      state.config = await api("/api/config", {
-        method: "PUT",
-        body: {
-          ...(state.config ?? {}),
-          automation: {
-            ...(state.config?.automation ?? {}),
-            breakerAmps: $("#automationBreakerAmps").value,
-            reserveAmps: $("#automationReserveAmps").value,
-          },
-        },
-      });
       if (existing)
         await api(`/api/automation-rules/${existing.id}`, {
           method: "PATCH",
