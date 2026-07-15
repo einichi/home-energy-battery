@@ -105,3 +105,11 @@ export function pruneTrendPoints(points, cutoffMs) {
   retained[0] = { ...first, continuousFromPrevious: false };
   return retained;
 }
+
+export function nextHalfHourBoundary(value = new Date()) {
+  const next = new Date(value);
+  if (!Number.isFinite(next.getTime())) return null;
+  next.setSeconds(0, 0);
+  next.setMinutes(next.getMinutes() < 30 ? 30 : 60);
+  return next;
+}

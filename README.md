@@ -97,6 +97,12 @@ The Web UI has live graphs, status widgets, battery profile settings,
 osaifu-mode charge/discharge windows, discharge limit, direct charge/discharge
 actions, schedules, device discovery, and simple historical recording.
 
+Adaptive Charging includes an Away Schedule for exact From/Until periods. Future
+periods can be edited or deleted, while an active period can be ended with Back
+Home or extended. Completed periods are hidden from the management table but
+remain in SQLite so Away demand can be learned separately from normal household
+demand and reused in later charging plans.
+
 SMTP notifications are configured from the Notifications panel in Settings and
 are disabled by default. They can report Charging Demand Guard transitions,
 schedule failures, device outages and recoveries, Adaptive Charging availability,

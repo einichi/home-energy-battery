@@ -50,6 +50,8 @@ const ADAPTIVE_CHARGING_DEMAND_PROFILE_INDEX_VERSION = 1;
 const ADAPTIVE_CHARGING_SEASONAL_LOOKBACK_YEARS = 10;
 const ADAPTIVE_CHARGING_SEASONAL_DAY_RANGE = 28;
 const ADAPTIVE_CHARGING_SEASONAL_DAYS_PER_YEAR = 2;
+const AWAY_RETURN_BUFFER_MS = 30 * 60_000;
+const AWAY_LEARNED_MIN_DAYS = 3;
 
 const DEFAULT_DASHBOARD_WIDGETS = [
   { id: "solarPower", group: "trends", visible: true, priority: 10 },
@@ -60,6 +62,7 @@ const DEFAULT_DASHBOARD_WIDGETS = [
   { id: "gridImportPower", group: "trends", visible: true, priority: 60 },
   { id: "gridExportPower", group: "trends", visible: true, priority: 70 },
   { id: "adaptiveCharging", group: "status", visible: true, priority: 5 },
+  { id: "awayStatus", group: "status", visible: true, priority: 7 },
   { id: "batteryWorking", group: "status", visible: true, priority: 10 },
   { id: "operationMode", group: "status", visible: true, priority: 20 },
   { id: "vendorProfile", group: "status", visible: true, priority: 30 },
@@ -941,6 +944,7 @@ function cleanAdaptiveChargingState(value = {}) {
     lastResult: value.lastResult ?? null,
     lastForecastError: value.lastForecastError ?? null,
     historicalWeatherFetchedAt: value.historicalWeatherFetchedAt ?? null,
+    lastAwayStateKey: value.lastAwayStateKey ?? null,
     log: Array.isArray(value.log) ? value.log.slice(-200) : [],
     updatedAt: value.updatedAt ?? new Date().toISOString(),
   };
@@ -1187,6 +1191,7 @@ function adaptiveChargingView(config, state, rules = [], now = new Date()) {
         || planUnavailableReason
         || (!forecastIsFresh(state.forecast, now) ? "solar forecast is stale or unavailable" : null),
     warning: state.plan?.warning ?? null,
+    away: historyStore.isReady() ? awayPeriodsView(now) : { periods: [], active: null, next: null, state: "home" },
     paused,
     pausedUntil: state.pausedUntil,
     forecast: state.forecast ? {
@@ -1578,6 +1583,8 @@ function buildAdaptiveChargingTimelineView({
       rateLabel: rate?.label ?? null,
       yenPerKwh: finiteNumberOrNull(rate?.yenPerKwh),
       plannedChargeWh: Math.round(plannedChargeKwh * 1000),
+      away: interval.away === true,
+      awayDemandConfidence: interval.awayDemandConfidence ?? null,
     };
   });
 }
@@ -1805,12 +1812,59 @@ function halfHourIndex(date) {
   return d.getHours() * 2 + (d.getMinutes() >= 30 ? 1 : 0);
 }
 
-function aggregateDemandDays(samples) {
+function awayPeriodContains(period, timeMs) {
+  const startMs = new Date(period?.from).getTime();
+  const untilMs = new Date(period?.until).getTime();
+  return Number.isFinite(startMs) && Number.isFinite(untilMs) && timeMs >= startMs && timeMs < untilMs;
+}
+
+function awayPeriodForecastContains(period, timeMs) {
+  const startMs = new Date(period?.from).getTime();
+  const untilMs = new Date(period?.until).getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(untilMs) || untilMs <= startMs) return false;
+  const returnBufferMs = Math.min(AWAY_RETURN_BUFFER_MS, (untilMs - startMs) / 4);
+  return timeMs >= startMs && timeMs < untilMs - returnBufferMs;
+}
+
+function isAwayAt(timeMs, periods = [], { forecast = false } = {}) {
+  const contains = forecast ? awayPeriodForecastContains : awayPeriodContains;
+  return periods.some((period) => contains(period, timeMs));
+}
+
+function demandDayBucketMidpoint(day, bucket) {
+  return new Date(
+    day.date.getFullYear(),
+    day.date.getMonth(),
+    day.date.getDate(),
+    Math.floor(bucket / 2),
+    bucket % 2 ? 45 : 15,
+  ).getTime();
+}
+
+function filterDemandDaysByOccupancy(days, awayPeriods = [], occupancy = "home") {
+  if (occupancy === "all") return days;
+  return days.map((day) => {
+    const values = new Map([...day.values].filter(([bucket]) => {
+      const away = isAwayAt(demandDayBucketMidpoint(day, bucket), awayPeriods);
+      return occupancy === "away" ? away : !away;
+    }));
+    return {
+      ...day,
+      coverage: values.size / 48,
+      daytimeCoverage: [...values.keys()].filter((bucket) => bucket >= 12 && bucket < 36).length / 24,
+      values,
+    };
+  }).filter((day) => day.values.size > 0);
+}
+
+function aggregateDemandDays(samples, { awayPeriods = [], occupancy = "all" } = {}) {
   const days = new Map();
   for (const sample of samples) {
     const demand = Number(sample.houseDemandW);
     const time = new Date(sample.timestamp);
     if (!Number.isFinite(demand) || Number.isNaN(time.getTime())) continue;
+    const away = isAwayAt(time.getTime(), awayPeriods);
+    if ((occupancy === "away" && !away) || (occupancy === "home" && away)) continue;
     const key = localDayKey(time);
     if (!days.has(key)) days.set(key, { key, date: new Date(time.getFullYear(), time.getMonth(), time.getDate()), buckets: new Map() });
     const day = days.get(key);
@@ -1826,6 +1880,13 @@ function aggregateDemandDays(samples) {
     daytimeCoverage: [...day.buckets.keys()].filter((index) => index >= 12 && index < 36).length / 24,
     values: new Map([...day.buckets].map(([index, bucket]) => [index, bucket.sum / bucket.count])),
   }));
+}
+
+function percentile(values, fraction) {
+  const sorted = values.map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const index = Math.max(0, Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * fraction)));
+  return sorted[index];
 }
 
 function calendarDayDistance(left, right) {
@@ -1869,10 +1930,15 @@ function predictHouseDemand(samples, targetDate = new Date(), temperatureByDay =
   const target = targetDate instanceof Date ? targetDate : new Date(targetDate);
   const targetIsWeekend = [0, 6].includes(target.getDay());
   const targetTemperature = Number(temperatureByDay.get(localDayKey(target)));
-  const recordedDayMap = new Map(
-    (Array.isArray(options.historicalDays) ? options.historicalDays : []).map((day) => [day.key, day]),
+  const occupancy = options.occupancy ?? "home";
+  const awayPeriods = Array.isArray(options.awayPeriods) ? options.awayPeriods : [];
+  const historicalDays = filterDemandDaysByOccupancy(
+    Array.isArray(options.historicalDays) ? options.historicalDays : [],
+    awayPeriods,
+    occupancy,
   );
-  for (const day of aggregateDemandDays(samples)) recordedDayMap.set(day.key, day);
+  const recordedDayMap = new Map(historicalDays.map((day) => [day.key, day]));
+  for (const day of aggregateDemandDays(samples, { awayPeriods, occupancy })) recordedDayMap.set(day.key, day);
   const recordedDays = [...recordedDayMap.values()];
   const validDays = recordedDays.filter((day) => day.daytimeCoverage >= 0.8);
   const recentCandidates = validDays
@@ -1909,6 +1975,7 @@ function predictHouseDemand(samples, targetDate = new Date(), temperatureByDay =
   // older household pattern to outweigh the most recent six weeks.
   const seasonalBlendWeight = Math.min(0.3, seasonalYears.length * 0.1);
   const profile = new Map();
+  const lowProfile = new Map();
   for (let index = 0; index < 48; index += 1) {
     const recentValue = weightedMedian(recentCandidates
       .filter((day) => day.values.has(index))
@@ -1920,6 +1987,11 @@ function predictHouseDemand(samples, targetDate = new Date(), temperatureByDay =
       ? recentValue * (1 - seasonalBlendWeight) + seasonalValue * seasonalBlendWeight
       : recentValue;
     if (Number.isFinite(value)) profile.set(index, value);
+    const lowValue = percentile(
+      recordedDays.filter((day) => day.values.has(index)).map((day) => day.values.get(index)),
+      0.2,
+    );
+    if (Number.isFinite(lowValue)) lowProfile.set(index, lowValue);
   }
   return {
     available: validDays.length >= 7 && recentCandidates.length >= 4 && profile.size >= 39,
@@ -1942,6 +2014,74 @@ function predictHouseDemand(samples, targetDate = new Date(), temperatureByDay =
     recordedDayCount: recordedDays.length,
     validDayCount: validDays.length,
     profile,
+    lowProfile,
+  };
+}
+
+function predictAwayDemand(samples, targetDate, temperatureByDay, options = {}) {
+  const target = targetDate instanceof Date ? targetDate : new Date(targetDate);
+  const targetIsWeekend = [0, 6].includes(target.getDay());
+  const targetTemperature = Number(temperatureByDay.get(localDayKey(target)));
+  const awayPeriods = Array.isArray(options.awayPeriods) ? options.awayPeriods : [];
+  const historicalDays = filterDemandDaysByOccupancy(
+    Array.isArray(options.historicalDays) ? options.historicalDays : [],
+    awayPeriods,
+    "away",
+  );
+  const recordedDayMap = new Map(historicalDays.map((day) => [day.key, day]));
+  for (const day of aggregateDemandDays(samples, { awayPeriods, occupancy: "away" })) {
+    recordedDayMap.set(day.key, day);
+  }
+  const candidates = [...recordedDayMap.values()].map((day) => {
+    const ageDays = (target.getTime() - day.date.getTime()) / 86_400_000;
+    const sameDayType = [0, 6].includes(day.date.getDay()) === targetIsWeekend;
+    const temperature = Number(temperatureByDay.get(day.key));
+    const temperatureDistance = Number.isFinite(targetTemperature) && Number.isFinite(temperature)
+      ? Math.abs(targetTemperature - temperature)
+      : 5;
+    const calendarDistance = calendarDayDistance(day.date, target);
+    return {
+      ...day,
+      ageDays,
+      sameDayType,
+      score: calendarDistance + temperatureDistance * 2 + ageDays / 90 + (sameDayType ? 0 : 10),
+      weight: (sameDayType ? 1 : 0.4) / (1 + calendarDistance / 14 + temperatureDistance + ageDays / 365),
+    };
+  }).filter((day) => day.ageDays > 0 && day.ageDays <= ADAPTIVE_CHARGING_SEASONAL_LOOKBACK_YEARS * 366)
+    .sort((a, b) => a.score - b.score)
+    .slice(0, 24);
+  const normalPrediction = options.normalPrediction ?? { profile: new Map(), lowProfile: new Map() };
+  const profile = new Map();
+  const learnedBuckets = new Set();
+  const fallbackBuckets = new Set();
+  for (let index = 0; index < 48; index += 1) {
+    const values = candidates
+      .filter((day) => day.values.has(index))
+      .map((day) => ({ value: day.values.get(index), weight: day.weight }));
+    const learned = values.length >= AWAY_LEARNED_MIN_DAYS ? weightedMedian(values) : null;
+    if (Number.isFinite(learned)) {
+      profile.set(index, learned);
+      learnedBuckets.add(index);
+      continue;
+    }
+    const normalValue = Number(normalPrediction.profile?.get(index));
+    const lowValue = Number(normalPrediction.lowProfile?.get(index));
+    const fallback = Number.isFinite(lowValue)
+      ? Math.min(lowValue, Number.isFinite(normalValue) ? normalValue : lowValue)
+      : Number.isFinite(normalValue)
+        ? normalValue * 0.35
+        : null;
+    if (Number.isFinite(fallback)) {
+      profile.set(index, Math.max(0, fallback));
+      fallbackBuckets.add(index);
+    }
+  }
+  return {
+    profile,
+    learnedBuckets,
+    fallbackBuckets,
+    comparableDays: candidates.map((day) => day.key),
+    recordedDayCount: recordedDayMap.size,
   };
 }
 
@@ -2078,7 +2218,14 @@ function planningSunsetWithDiscountedWindow(config, forecast, now = new Date()) 
     }) ?? null;
 }
 
-function buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDays = [], now = new Date() } = {}) {
+function buildAdaptiveChargingPlan({
+  config,
+  state,
+  samples,
+  historicalDemandDays = [],
+  awayPeriods = [],
+  now = new Date(),
+} = {}) {
   const unavailable = (reason) => ({
     available: false,
     reason,
@@ -2110,13 +2257,26 @@ function buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDay
   let predictedSolarKwh = 0;
   let predictedDemandKwh = 0;
   let predictedSurplusKwh = 0;
+  let awaySlotCount = 0;
+  let awayLearnedSlotCount = 0;
+  let awayFallbackSlotCount = 0;
+  const awayComparableDays = new Set();
   for (let time = startMs; time < sunset.timestamp;) {
     const date = new Date(time);
     const dayKey = localDayKey(date);
     if (!demandByDay.has(dayKey)) {
-      const prediction = predictHouseDemand(samples, date, temperatures, { historicalDays: historicalDemandDays });
-      if (!prediction.available) return unavailable(prediction.reason);
-      demandByDay.set(dayKey, prediction);
+      const home = predictHouseDemand(samples, date, temperatures, {
+        historicalDays: historicalDemandDays,
+        awayPeriods,
+        occupancy: "home",
+      });
+      if (!home.available) return unavailable(home.reason);
+      const away = predictAwayDemand(samples, date, temperatures, {
+        historicalDays: historicalDemandDays,
+        awayPeriods,
+        normalPrediction: home,
+      });
+      demandByDay.set(dayKey, { home, away });
     }
     const demand = demandByDay.get(dayKey);
     const slotEndMs = nextPlanningBoundary(time, sunset.timestamp);
@@ -2126,7 +2286,16 @@ function buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDay
     const margin = Number(config.adaptiveCharging.forecastMarginPercent) / 100;
     const solarW = rawSolarW * (1 - margin);
     const highSolarW = Math.min(Number(config.adaptiveCharging.arrayPeakKw) * 1000, rawSolarW * (1 + margin));
-    const slotDemandW = Number(demand.profile.get(halfHourIndex(date)) ?? 0);
+    const bucket = halfHourIndex(date);
+    const away = isAwayAt((time + slotEndMs) / 2, awayPeriods, { forecast: true });
+    const awayLearned = away && demand.away.learnedBuckets.has(bucket);
+    const slotDemandW = Number((away ? demand.away.profile : demand.home.profile).get(bucket) ?? 0);
+    if (away) {
+      awaySlotCount += 1;
+      if (awayLearned) awayLearnedSlotCount += 1;
+      else awayFallbackSlotCount += 1;
+      for (const key of demand.away.comparableDays) awayComparableDays.add(key);
+    }
     const durationHours = (slotEndMs - time) / 3_600_000;
     const solarKwh = solarW * durationHours / 1000;
     const highSolarKwh = highSolarW * durationHours / 1000;
@@ -2150,10 +2319,12 @@ function buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDay
       chargeCapacityKwh: band
         ? maximumChargeWatts * durationHours / 1000
         : 0,
+      away,
+      awayDemandConfidence: away ? (awayLearned ? "learned" : "low") : null,
     });
     time = slotEndMs;
   }
-  const demandPredictions = [...demandByDay.values()];
+  const demandPredictions = [...demandByDay.values()].map((prediction) => prediction.home);
   const optimized = planChronologicalDiscountedCharging({
     timeline,
     currentStoredKwh: initialStoredKwh,
@@ -2198,6 +2369,18 @@ function buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDay
       seasonalBlendPercent: Math.round(Math.max(
         ...demandPredictions.map((prediction) => prediction.seasonalBlendWeight * 100),
       )),
+      awayComparableDayCount: awayComparableDays.size,
+      awaySlotCount,
+      awayLearnedSlotCount,
+      awayFallbackSlotCount,
+      awayConfidence: awaySlotCount === 0
+        ? "not-scheduled"
+        : awayFallbackSlotCount === 0
+          ? "learned"
+          : awayLearnedSlotCount > 0
+            ? "mixed"
+            : "low",
+      awayReturnBufferMinutes: AWAY_RETURN_BUFFER_MS / 60_000,
     },
     solarCalibration: calibration,
     batteryCapacity: capacityEstimate,
@@ -3209,6 +3392,78 @@ async function readBody(req) {
   const textBody = Buffer.concat(chunks).toString("utf8");
   if (!textBody) return {};
   return parseJsonWithContext(textBody, `${req.method} ${req.url} request body`);
+}
+
+function requestError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function awayTimestamp(value, label) {
+  const time = new Date(value);
+  if (Number.isNaN(time.getTime())) throw requestError(400, `${label} must be a valid date and time`);
+  return time;
+}
+
+function awayPeriodRange(period) {
+  return {
+    startMs: new Date(period.from).getTime(),
+    untilMs: new Date(period.until).getTime(),
+  };
+}
+
+function awayPeriodsOverlap(left, right) {
+  const leftRange = awayPeriodRange(left);
+  const rightRange = awayPeriodRange(right);
+  return leftRange.startMs < rightRange.untilMs && leftRange.untilMs > rightRange.startMs;
+}
+
+function ensureAwayPeriodDoesNotOverlap(period, excludeId = null) {
+  const conflict = historyStore.awayPeriods({ includeCompleted: true })
+    .find((candidate) => candidate.id !== excludeId && awayPeriodsOverlap(period, candidate));
+  if (conflict) {
+    throw requestError(
+      409,
+      `Away period overlaps the existing period from ${conflict.from} until ${conflict.until}`,
+    );
+  }
+}
+
+function awayPeriodsView(now = new Date()) {
+  const nowMs = now.getTime();
+  const periods = historyStore.awayPeriods({ includeCompleted: false, nowMs });
+  return {
+    periods,
+    active: periods.find((period) => period.status === "active") ?? null,
+    next: periods.find((period) => period.status === "scheduled") ?? null,
+    state: periods.some((period) => period.status === "active") ? "away" : "home",
+    returnBufferMinutes: AWAY_RETURN_BUFFER_MS / 60_000,
+  };
+}
+
+function cleanNewAwayPeriod(body, now = new Date()) {
+  const from = awayTimestamp(body.from, "From");
+  const until = awayTimestamp(body.until, "Until");
+  if (from.getTime() < now.getTime() - 60_000) throw requestError(400, "From cannot be in the past");
+  if (until.getTime() <= from.getTime()) throw requestError(400, "Until must be after From");
+  const timestamp = now.toISOString();
+  return {
+    id: randomUUID(),
+    from: from.toISOString(),
+    until: until.toISOString(),
+    source: body.source === "manual" ? "manual" : "scheduled",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+async function queueAdaptiveChargingForAwayChange(reason, now = new Date()) {
+  const state = await readAdaptiveChargingState();
+  state.pendingPlanReason = reason;
+  state.lastPlanEventKey = null;
+  appendAdaptiveChargingLog(state, `${reason}; Adaptive Charging recalculation queued`, "away", now);
+  await writeAdaptiveChargingState(state);
 }
 
 function numberInRange(value, label, min, max, step = 1) {
@@ -4559,6 +4814,14 @@ function adaptiveChargingScheduledEvent(config, now = new Date()) {
 function adaptiveChargingPlanRefreshDecision(state, config, now = new Date()) {
   const forecastFetchedAt = state.forecast?.fetchedAt ?? null;
   const scheduledEvent = adaptiveChargingScheduledEvent(config, now);
+  if (state.pendingPlanReason) {
+    return {
+      ...scheduledEvent,
+      refresh: true,
+      trigger: state.pendingPlanReason,
+      eventKey: `pending:${state.pendingPlanReason}:${state.updatedAt ?? now.toISOString()}`,
+    };
+  }
   if (!state.plan) {
     const trigger = state.pendingPlanReason || "initial plan";
     return {
@@ -4599,11 +4862,24 @@ function adaptiveChargingPlanLogMessage(plan, trigger, liveSoc) {
   const slots = (plan.slots ?? [])
     .map((slot) => `${adaptiveChargingClock(slot.start)}-${adaptiveChargingClock(slot.end)} ${slot.targetWh} Wh`)
     .join(", ") || "none";
-  return `Plan recalculated (${trigger}): SOC ${Number(liveSoc).toFixed(0)}%; ${Number(plan.predictedSolarKwh).toFixed(2)} kWh solar, ${Number(plan.predictedDemandKwh).toFixed(2)} kWh demand, ${Number(plan.plannedChargeKwh).toFixed(2)} kWh discounted charging; targets [${targets}]; slots [${slots}]${plan.warning ? `; ${plan.warning}` : ""}`;
+  const awaySummary = Number(plan.demandHistory?.awaySlotCount) > 0
+    ? `; away demand ${plan.demandHistory.awayConfidence} (${plan.demandHistory.awayComparableDayCount} comparable days, ${plan.demandHistory.awayFallbackSlotCount} fallback slots)`
+    : "";
+  return `Plan recalculated (${trigger}): SOC ${Number(liveSoc).toFixed(0)}%; ${Number(plan.predictedSolarKwh).toFixed(2)} kWh solar, ${Number(plan.predictedDemandKwh).toFixed(2)} kWh demand, ${Number(plan.plannedChargeKwh).toFixed(2)} kWh discounted charging; targets [${targets}]; slots [${slots}]${awaySummary}${plan.warning ? `; ${plan.warning}` : ""}`;
 }
 
 async function evaluateAdaptiveCharging(config, status, rules, now = new Date()) {
   let state = await readAdaptiveChargingState();
+  const awayPeriods = historyStore.awayPeriods({ includeCompleted: true, nowMs: now.getTime() });
+  const activeAway = awayPeriods.find((period) => period.status === "active") ?? null;
+  const awayStateKey = activeAway ? `away:${activeAway.id}:${activeAway.until}` : "home";
+  if (state.lastAwayStateKey === null && !activeAway) {
+    state.lastAwayStateKey = awayStateKey;
+  } else if (state.lastAwayStateKey !== awayStateKey) {
+    state.pendingPlanReason = activeAway ? "Away period started" : "Away period ended";
+    state.lastPlanEventKey = null;
+    state.lastAwayStateKey = awayStateKey;
+  }
   recordAdaptiveChargeSample(state, status, now);
   if (state.interruptedCharge
     && new Date(state.interruptedCharge.slotEnd).getTime() <= now.getTime()) {
@@ -4698,7 +4974,7 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
     });
     state = { ...state, historicalWeather: historyStore.historicalWeather() };
     const historicalDemandDays = await readAdaptiveChargingDemandProfileDays();
-    state.plan = buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDays, now });
+    state.plan = buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDays, awayPeriods, now });
     state.lastPlanEventKey = refreshDecision.eventKey;
     state.pendingPlanReason = null;
     if (activeDiscountedWindow) state.lastRebasedWindowKey = activeDiscountedWindow.key;
@@ -5676,6 +5952,67 @@ async function api(req, res, url) {
       ),
     );
   }
+  if (req.method === "GET" && url.pathname === "/api/away-periods") {
+    return json(res, 200, awayPeriodsView());
+  }
+  if (req.method === "POST" && url.pathname === "/api/away-periods") {
+    const now = new Date();
+    const period = cleanNewAwayPeriod(await readBody(req), now);
+    ensureAwayPeriodDoesNotOverlap(period);
+    const created = historyStore.createAwayPeriod(period);
+    await queueAdaptiveChargingForAwayChange("Away schedule created", now);
+    return json(res, 201, { period: created, ...awayPeriodsView(now) });
+  }
+  if (url.pathname.startsWith("/api/away-periods/")) {
+    const parts = url.pathname.split("/").filter(Boolean);
+    const id = parts[2];
+    const operation = parts[3] ?? null;
+    const now = new Date();
+    const existing = historyStore.awayPeriod(id, now.getTime());
+    if (!existing) throw requestError(404, "Away period not found");
+    if (req.method === "PATCH" && !operation) {
+      if (existing.status !== "scheduled") throw requestError(409, "Only an Away period that has not started can be edited");
+      const body = await readBody(req);
+      const from = awayTimestamp(body.from, "From");
+      const until = awayTimestamp(body.until, "Until");
+      if (from.getTime() < now.getTime() - 60_000) throw requestError(400, "From cannot be in the past");
+      if (until.getTime() <= from.getTime()) throw requestError(400, "Until must be after From");
+      const updated = {
+        ...existing,
+        from: from.toISOString(),
+        until: until.toISOString(),
+        updatedAt: now.toISOString(),
+      };
+      ensureAwayPeriodDoesNotOverlap(updated, id);
+      historyStore.updateAwayPeriod(updated);
+      await queueAdaptiveChargingForAwayChange("Away schedule edited", now);
+      return json(res, 200, awayPeriodsView(now));
+    }
+    if (req.method === "DELETE" && !operation) {
+      if (existing.status !== "scheduled") throw requestError(409, "Only an Away period that has not started can be deleted");
+      historyStore.deleteAwayPeriod(id);
+      await queueAdaptiveChargingForAwayChange("Away schedule deleted", now);
+      return json(res, 200, awayPeriodsView(now));
+    }
+    if (req.method === "POST" && operation === "extend") {
+      if (existing.status !== "active") throw requestError(409, "Only an active Away period can be extended");
+      const until = awayTimestamp((await readBody(req)).until, "Until");
+      if (until.getTime() <= new Date(existing.until).getTime()) {
+        throw requestError(400, "The extended Until time must be later than the current Until time");
+      }
+      const updated = { ...existing, until: until.toISOString(), updatedAt: now.toISOString() };
+      ensureAwayPeriodDoesNotOverlap(updated, id);
+      historyStore.updateAwayPeriod(updated);
+      await queueAdaptiveChargingForAwayChange("Active Away period extended", now);
+      return json(res, 200, awayPeriodsView(now));
+    }
+    if (req.method === "POST" && operation === "back-home") {
+      if (existing.status !== "active") throw requestError(409, "Back Home is only available during an active Away period");
+      historyStore.updateAwayPeriod({ ...existing, until: now.toISOString(), updatedAt: now.toISOString() });
+      await queueAdaptiveChargingForAwayChange("Returned home early", now);
+      return json(res, 200, awayPeriodsView(now));
+    }
+  }
   if (req.method === "GET" && url.pathname === "/api/adaptive-charging") {
     const config = await readConfig();
     const rules = await readAutomationRules();
@@ -5694,7 +6031,8 @@ async function api(req, res, url) {
     const samples = await readAdaptiveChargingHistory(now);
     state = { ...state, historicalWeather: historyStore.historicalWeather() };
     const historicalDemandDays = await readAdaptiveChargingDemandProfileDays();
-    state.plan = buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDays, now });
+    const awayPeriods = historyStore.awayPeriods({ includeCompleted: true, nowMs: now.getTime() });
+    state.plan = buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDays, awayPeriods, now });
     state.lastPlanEventKey = adaptiveChargingScheduledEvent(config, now).eventKey ?? `manual:${now.toISOString()}`;
     state.pendingPlanReason = null;
     if (state.interruptedCharge) {
@@ -5846,14 +6184,16 @@ export const server = http.createServer(async (req, res) => {
     }
     await serveStatic(res, url.pathname);
   } catch (err) {
-    logDetailedError("api", err);
-    json(res, 500, { error: err.message });
+    const status = Number.isInteger(err.statusCode) ? err.statusCode : 500;
+    if (status >= 500) logDetailedError("api", err);
+    json(res, status, { error: err.message });
   }
 });
 
 export {
   activeAdaptiveChargingSlotStopReason,
   advanceAdaptiveChargingBreakerRecovery,
+  aggregateDemandDays,
   applyInterruptedChargeCap,
   aggregateEnergyReportSamples,
   beginAdaptiveChargingBreakerRecovery,
@@ -5901,6 +6241,11 @@ export {
   adaptiveChargingSlotEndDelayMs,
   adaptiveChargingSlotEndKey,
   adaptiveChargingTimezoneError,
+  awayPeriodContains,
+  awayPeriodForecastContains,
+  awayPeriodsOverlap,
+  filterDemandDaysByOccupancy,
+  predictAwayDemand,
   rateForTimestamp,
   readRecentHistorySamples,
   readAdaptiveChargingDemandProfileDays,

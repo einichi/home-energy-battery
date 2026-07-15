@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import {
   decimateTimeSeries,
+  nextHalfHourBoundary,
   pruneTrendPoints,
   trendSamplePoints,
 } from "../public/chart-utils.js";
@@ -84,6 +85,22 @@ assert.deepEqual(
   pruneTrendPoints(rollingSegment, 0),
   rollingSegment,
   "pruning keeps an unchanged in-range series",
+);
+
+assert.equal(
+  nextHalfHourBoundary(new Date(2026, 6, 15, 16, 22, 45)).getTime(),
+  new Date(2026, 6, 15, 16, 30).getTime(),
+  "Now rounds up to the next half-hour point",
+);
+assert.equal(
+  nextHalfHourBoundary(new Date(2026, 6, 15, 16, 31)).getTime(),
+  new Date(2026, 6, 15, 17, 0).getTime(),
+  "Now advances to the following hour after a half-hour point",
+);
+assert.equal(
+  nextHalfHourBoundary(new Date(2026, 6, 15, 16, 30)).getTime(),
+  new Date(2026, 6, 15, 17, 0).getTime(),
+  "Now always selects a future boundary",
 );
 
 console.log("chart utility tests passed");

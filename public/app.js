@@ -1,5 +1,6 @@
 import {
   decimateTimeSeries,
+  nextHalfHourBoundary,
   pruneTrendPoints,
   trendSamplePoints,
 } from "./chart-utils.js";
@@ -48,6 +49,8 @@ const state = {
   automationRules: [],
   adaptiveChargingStatus: null,
   adaptiveChargingTimelineHover: null,
+  awayPeriodsView: null,
+  awayFromSetByNow: false,
   notifications: null,
   isComposing: false,
   discoveryInProgress: false,
@@ -102,6 +105,7 @@ const DASHBOARD_WIDGET_DEFAULTS = [
   { id: "gridImportPower", group: "trends", labelKey: "gridImport", visible: true, priority: 60 },
   { id: "gridExportPower", group: "trends", labelKey: "gridExport", visible: true, priority: 70 },
   { id: "adaptiveCharging", group: "status", labelKey: "adaptiveCharging", visible: true, priority: 5 },
+  { id: "awayStatus", group: "status", labelKey: "awayStatus", visible: true, priority: 7 },
   { id: "batteryWorking", group: "status", labelKey: "batteryWorkingStatus", visible: true, priority: 10 },
   { id: "operationMode", group: "status", labelKey: "operationMode", visible: true, priority: 20 },
   { id: "vendorProfile", group: "status", labelKey: "chargingProfile", visible: true, priority: 30 },
@@ -365,6 +369,41 @@ const I18N = {
     saveBatteryCapabilities: "Save Battery Capabilities",
     batteryCapabilitiesSaved: "Battery capabilities saved",
     adaptiveCharging: "Adaptive Charging",
+    awayStatus: "Away Status",
+    awayPeriods: "Away Periods",
+    awaySchedule: "Away Schedule",
+    awayScheduleHelp: "Scheduled absences improve demand forecasts while keeping completed periods available for future learning.",
+    away: "Away",
+    home: "Home",
+    now: "Now",
+    until: "Until",
+    scheduleAway: "Schedule Away",
+    saveAwayChanges: "Save Changes",
+    saveAwayExtension: "Save Extension",
+    cancel: "Cancel",
+    status: "Status",
+    scheduled: "Scheduled",
+    active: "Active",
+    edit: "Edit",
+    delete: "Delete",
+    backHome: "Back Home",
+    extend: "Extend",
+    noAwaySchedules: "No upcoming or active Away periods.",
+    homeNoAway: "Home · no Away period scheduled",
+    awayUntil: "Away until {time}",
+    nextAway: "Next Away period {from}–{until}",
+    awayPeriodSaved: "Away period scheduled",
+    awayPeriodUpdated: "Away period updated",
+    awayPeriodDeleted: "Away period deleted",
+    awayPeriodEnded: "Welcome home. Away period ended.",
+    awayPeriodExtended: "Away period extended",
+    confirmDeleteAway: "Delete this scheduled Away period?",
+    awayDemandModel: "Away demand model",
+    awayDemandNotScheduled: "No Away period in this plan",
+    awayDemandLearned: "Learned from {days} comparable Away days",
+    awayDemandMixed: "Mixed estimate · {days} comparable Away days",
+    awayDemandLow: "Low-confidence estimate · normal low-demand fallback",
+    awayTimelineDetail: "Away ({confidence})",
     chargingAutomation: "Charging Automation",
     adaptiveChargingHelp: "Automatically plans discounted charging using demand history, solar forecasts, battery state, electricity rates, and live safety limits.",
     adaptiveChargingSettingsHelp: "Configure the forecasts and limits used by charging automation.",
@@ -782,6 +821,41 @@ const I18N = {
     saveBatteryCapabilities: "蓄電池性能を保存",
     batteryCapabilitiesSaved: "蓄電池性能を保存しました",
     adaptiveCharging: "適応充電",
+    awayStatus: "外出状況",
+    awayPeriods: "外出期間",
+    awaySchedule: "外出予定",
+    awayScheduleHelp: "外出予定を需要予測に反映し、完了した期間は今後の学習に利用します。",
+    away: "外出中",
+    home: "在宅",
+    now: "現在",
+    until: "帰宅予定",
+    scheduleAway: "外出予定を追加",
+    saveAwayChanges: "変更を保存",
+    saveAwayExtension: "延長を保存",
+    cancel: "キャンセル",
+    status: "状態",
+    scheduled: "予定",
+    active: "外出中",
+    edit: "編集",
+    delete: "削除",
+    backHome: "帰宅",
+    extend: "延長",
+    noAwaySchedules: "予定中または実行中の外出はありません。",
+    homeNoAway: "在宅 · 外出予定なし",
+    awayUntil: "{time}まで外出中",
+    nextAway: "次の外出 {from}～{until}",
+    awayPeriodSaved: "外出予定を追加しました",
+    awayPeriodUpdated: "外出予定を更新しました",
+    awayPeriodDeleted: "外出予定を削除しました",
+    awayPeriodEnded: "帰宅しました。外出期間を終了しました。",
+    awayPeriodExtended: "外出期間を延長しました",
+    confirmDeleteAway: "この外出予定を削除しますか？",
+    awayDemandModel: "外出時需要モデル",
+    awayDemandNotScheduled: "この計画に外出期間はありません",
+    awayDemandLearned: "比較可能な外出日{days}日から学習",
+    awayDemandMixed: "混合予測 · 比較可能な外出日{days}日",
+    awayDemandLow: "低信頼予測 · 通常時の低需要値を使用",
+    awayTimelineDetail: "外出中 ({confidence})",
     chargingAutomation: "充電自動化",
     adaptiveChargingHelp: "需要履歴、太陽光予報、蓄電池状態、電気料金、リアルタイムの安全制限を使って割安な充電を自動計画します。",
     adaptiveChargingSettingsHelp: "充電自動化で使用する予報と制限を設定します。",
@@ -1085,6 +1159,7 @@ function setLanguage(language) {
   renderDashboardWidgetControls(state.config ?? {});
   if (state.notifications) renderNotificationView(state.notifications);
   if (state.adaptiveChargingStatus) renderAdaptiveChargingStatus(state.adaptiveChargingStatus);
+  else if (state.awayPeriodsView) renderAwayPeriods(state.awayPeriodsView);
   setPage(state.currentPage);
 }
 
@@ -2439,6 +2514,118 @@ function renderAdaptiveChargingWidget(status) {
   note.textContent = adaptiveChargingNextAction(status);
 }
 
+function formatAwayDateTime(value) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime())
+    ? date.toLocaleString(state.language === "ja" ? "ja-JP" : "en-US")
+    : "--";
+}
+
+function awaySummary(view = state.awayPeriodsView) {
+  if (view?.active) {
+    return template("awayUntil", { time: formatAwayDateTime(view.active.until) });
+  }
+  if (view?.next) {
+    return template("nextAway", {
+      from: formatAwayDateTime(view.next.from),
+      until: formatAwayDateTime(view.next.until),
+    });
+  }
+  return t("homeNoAway");
+}
+
+function resetAwayPeriodForm() {
+  const form = $("#awayPeriodForm");
+  if (!form) return;
+  form.reset();
+  form.dataset.mode = "create";
+  $("#awayPeriodId").value = "";
+  $("#awayFrom").disabled = false;
+  $("#awayNow").disabled = false;
+  $("#awaySave").textContent = t("scheduleAway");
+  $("#awayCancel").classList.add("hidden");
+  state.awayFromSetByNow = false;
+}
+
+function editAwayPeriod(period, mode = "edit") {
+  const form = $("#awayPeriodForm");
+  if (!form || !period) return;
+  form.dataset.mode = mode;
+  $("#awayPeriodId").value = period.id;
+  $("#awayFrom").value = localDateTimeValue(new Date(period.from));
+  $("#awayUntil").value = localDateTimeValue(new Date(period.until));
+  $("#awayFrom").disabled = mode === "extend";
+  $("#awayNow").disabled = mode === "extend";
+  $("#awaySave").textContent = t(mode === "extend" ? "saveAwayExtension" : "saveAwayChanges");
+  $("#awayCancel").classList.remove("hidden");
+  state.awayFromSetByNow = false;
+  form.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function renderAwayPeriods(view = state.awayPeriodsView) {
+  if (!view) return;
+  state.awayPeriodsView = view;
+  const widgetState = $("#awayStatusWidgetState");
+  const widgetNote = $("#awayStatusWidgetNote");
+  if (widgetState) widgetState.textContent = t(view.state === "away" ? "away" : "home");
+  if (widgetNote) widgetNote.textContent = awaySummary(view);
+  setText("#awayCurrentSummary", awaySummary(view));
+
+  const rows = $("#awayPeriodRows");
+  if (!rows) return;
+  rows.innerHTML = "";
+  const periods = (view.periods ?? []).filter((period) => period.status !== "completed");
+  for (const period of periods) {
+    const row = document.createElement("tr");
+    const from = document.createElement("td");
+    const until = document.createElement("td");
+    const status = document.createElement("td");
+    const actions = document.createElement("td");
+    from.textContent = formatAwayDateTime(period.from);
+    until.textContent = formatAwayDateTime(period.until);
+    status.textContent = t(period.status === "active" ? "active" : "scheduled");
+    actions.className = "away-period-actions";
+    const addAction = (action, label) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "ghost";
+      button.dataset.awayAction = action;
+      button.dataset.awayId = period.id;
+      button.textContent = t(label);
+      actions.append(button);
+    };
+    if (period.status === "active") {
+      addAction("back-home", "backHome");
+      addAction("extend", "extend");
+    } else {
+      addAction("edit", "edit");
+      addAction("delete", "delete");
+    }
+    row.append(from, until, status, actions);
+    rows.append(row);
+  }
+  if (!periods.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 4;
+    cell.className = "empty-table-cell";
+    cell.textContent = t("noAwaySchedules");
+    row.append(cell);
+    rows.append(row);
+  }
+
+  const selectedId = $("#awayPeriodId")?.value;
+  if (selectedId && !periods.some((period) => period.id === selectedId)) resetAwayPeriodForm();
+}
+
+function awayDemandDescription(demandHistory = {}) {
+  if (!Number(demandHistory.awaySlotCount)) return t("awayDemandNotScheduled");
+  const days = Number(demandHistory.awayComparableDayCount || 0);
+  if (demandHistory.awayConfidence === "learned") return template("awayDemandLearned", { days });
+  if (demandHistory.awayConfidence === "mixed") return template("awayDemandMixed", { days });
+  return t("awayDemandLow");
+}
+
 function drawAdaptiveChargingTimeline(status = state.adaptiveChargingStatus) {
   const canvas = $("#adaptiveChargingTimeline");
   if (!canvas) return;
@@ -2474,6 +2661,11 @@ function drawAdaptiveChargingTimeline(status = state.adaptiveChargingStatus) {
   const powerY = (value) => pad.top + chartHeight - Math.max(0, Number(value) || 0) / maxPower * chartHeight;
   const socY = (value) => pad.top + chartHeight - Math.max(0, Math.min(100, Number(value) || 0)) / 100 * chartHeight;
 
+  for (const item of timeline) {
+    if (!item.away) continue;
+    ctx.fillStyle = "rgba(71, 85, 105, 0.10)";
+    ctx.fillRect(xFor(item.start), pad.top, Math.max(1, xFor(item.end) - xFor(item.start)), chartHeight);
+  }
   for (const item of timeline) {
     if (!item.discounted) continue;
     ctx.fillStyle = "rgba(18, 124, 120, 0.08)";
@@ -2573,7 +2765,10 @@ function handleAdaptiveChargingTimelinePointer(event) {
   drawAdaptiveChargingTimeline();
   const tooltip = ensureTrendTooltip();
   const rate = item.yenPerKwh === null || item.yenPerKwh === undefined ? "--" : `${item.yenPerKwh} yen/kWh`;
-  tooltip.textContent = `${new Date(item.start).toLocaleString()} - ${new Date(item.end).toLocaleTimeString()} · ${Math.round(item.demandW)} W demand · ${Math.round(item.solarW)} W solar · ${formatAdaptiveChargingPercent(item.predictedSocPercent)} SOC · ${item.plannedChargeWh} Wh charge · ${item.rateLabel || "Standard"} (${rate})`;
+  const awayDetail = item.away
+    ? ` · ${template("awayTimelineDetail", { confidence: item.awayDemandConfidence || "low" })}`
+    : "";
+  tooltip.textContent = `${new Date(item.start).toLocaleString()} - ${new Date(item.end).toLocaleTimeString()} · ${Math.round(item.demandW)} W demand · ${Math.round(item.solarW)} W solar · ${formatAdaptiveChargingPercent(item.predictedSocPercent)} SOC · ${item.plannedChargeWh} Wh charge · ${item.rateLabel || "Standard"} (${rate})${awayDetail}`;
   tooltip.style.left = `${Math.min(window.innerWidth - 270, event.clientX + 12)}px`;
   tooltip.style.top = `${Math.max(8, event.clientY - 48)}px`;
   tooltip.classList.remove("hidden");
@@ -2589,6 +2784,7 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
   if (!status) return;
   state.adaptiveChargingStatus = status;
   renderAdaptiveChargingWidget(status);
+  renderAwayPeriods(status.away);
   const plan = status.plan ?? {};
   $("#adaptiveChargingForecastAge").textContent = Number.isFinite(status.forecast?.ageMs)
     ? `${Math.round(status.forecast.ageMs / 60_000)} min`
@@ -2635,6 +2831,7 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
         })
       : template("recentHistoryOnly", { days: demandHistory.recentComparableDayCount })
     : "--";
+  $("#adaptiveChargingAwayDemand").textContent = awayDemandDescription(demandHistory);
   const waitingForHeadroom = status.lastResult?.skipped === "live grid import leaves insufficient breaker headroom";
   $("#adaptiveChargingState").textContent = status.owner === "adaptiveCharging"
     ? t("adaptiveChargingCharging")
@@ -4409,12 +4606,26 @@ function initForms() {
   );
   mobileNavigation.addEventListener?.("change", closeMobileGraphMenu);
   closeMobileGraphMenu();
-  const openAdaptiveCharging = () => setPage("adaptiveCharging");
+  const openAdaptiveCharging = () => {
+    setPage("adaptiveCharging");
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  };
   $("#adaptiveChargingWidgetState")?.closest("[data-widget-id='adaptiveCharging']")?.addEventListener("click", openAdaptiveCharging);
   $("#adaptiveChargingWidgetState")?.closest("[data-widget-id='adaptiveCharging']")?.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       openAdaptiveCharging();
+    }
+  });
+  const openAwaySchedule = () => {
+    setPage("adaptiveCharging");
+    $(".away-periods-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  $("#awayStatusWidgetState")?.closest("[data-widget-id='awayStatus']")?.addEventListener("click", openAwaySchedule);
+  $("#awayStatusWidgetState")?.closest("[data-widget-id='awayStatus']")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openAwaySchedule();
     }
   });
   $("#adaptiveChargingOpen")?.addEventListener("click", openAdaptiveCharging);
@@ -4624,6 +4835,87 @@ function initForms() {
       renderAdaptiveChargingStatus(await api("/api/adaptive-charging/resume", { method: "POST", body: {} }));
       updateAdaptiveChargingAvailability();
     } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  $("#awayNow")?.addEventListener("click", () => {
+    const next = nextHalfHourBoundary(new Date());
+    if (!next) return;
+    $("#awayFrom").value = localDateTimeValue(next);
+    state.awayFromSetByNow = true;
+  });
+
+  $("#awayFrom")?.addEventListener("input", () => {
+    state.awayFromSetByNow = false;
+  });
+
+  $("#awayCancel")?.addEventListener("click", resetAwayPeriodForm);
+
+  $("#awayPeriodForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const mode = form.dataset.mode ?? "create";
+    const id = $("#awayPeriodId").value;
+    const from = new Date($("#awayFrom").value);
+    const until = new Date($("#awayUntil").value);
+    try {
+      let view;
+      let message;
+      if (mode === "extend") {
+        view = await api(`/api/away-periods/${encodeURIComponent(id)}/extend`, {
+          method: "POST",
+          body: { until: until.toISOString() },
+        });
+        message = t("awayPeriodExtended");
+      } else if (mode === "edit") {
+        view = await api(`/api/away-periods/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          body: { from: from.toISOString(), until: until.toISOString() },
+        });
+        message = t("awayPeriodUpdated");
+      } else {
+        view = await api("/api/away-periods", {
+          method: "POST",
+          body: {
+            from: from.toISOString(),
+            until: until.toISOString(),
+            source: state.awayFromSetByNow ? "manual" : "scheduled",
+          },
+        });
+        message = t("awayPeriodSaved");
+      }
+      resetAwayPeriodForm();
+      renderAwayPeriods(view);
+      toast(message);
+      await refreshAdaptiveCharging();
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  $("#awayPeriodRows")?.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-away-action]");
+    if (!button) return;
+    const period = state.awayPeriodsView?.periods?.find((value) => value.id === button.dataset.awayId);
+    if (!period) return;
+    const action = button.dataset.awayAction;
+    if (action === "edit" || action === "extend") {
+      editAwayPeriod(period, action);
+      return;
+    }
+    if (action === "delete" && !window.confirm(t("confirmDeleteAway"))) return;
+    button.disabled = true;
+    try {
+      const view = action === "back-home"
+        ? await api(`/api/away-periods/${encodeURIComponent(period.id)}/back-home`, { method: "POST", body: {} })
+        : await api(`/api/away-periods/${encodeURIComponent(period.id)}`, { method: "DELETE" });
+      resetAwayPeriodForm();
+      renderAwayPeriods(view);
+      toast(t(action === "back-home" ? "awayPeriodEnded" : "awayPeriodDeleted"));
+      await refreshAdaptiveCharging();
+    } catch (err) {
+      button.disabled = false;
       toast(err.message);
     }
   });

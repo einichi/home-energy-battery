@@ -11,6 +11,7 @@ import {
 import {
   activeAdaptiveChargingSlotStopReason,
   advanceAdaptiveChargingBreakerRecovery,
+  aggregateDemandDays,
   applyInterruptedChargeCap,
   aggregateEnergyReportSamples,
   beginAdaptiveChargingBreakerRecovery,
@@ -58,6 +59,10 @@ import {
   preserveInterruptedAdaptiveCharge,
   recordAdaptiveChargingWindowInterruption,
   adaptiveChargingTimezoneError,
+  awayPeriodContains,
+  awayPeriodForecastContains,
+  filterDemandDaysByOccupancy,
+  predictAwayDemand,
   rateForTimestamp,
   readRecentHistorySamples,
   recoverConcatenatedJsonValue,
@@ -143,9 +148,10 @@ assert.equal(simple.smartCosmoEnabled, true);
 assert.deepEqual(simple.circuitLabels, {});
 assert.equal(simple.circuitSortMode, "number");
 assert.equal(rateForTimestamp(simple.rateBands, "2026-05-31T23:30:00+09:00").yenPerKwh, 42);
-assert.equal(simple.dashboardWidgets.length, 20);
+assert.equal(simple.dashboardWidgets.length, 21);
 assert.equal(simple.dashboardWidgets[0].id, "solarPower");
 assert.equal(simple.dashboardWidgets.find((widget) => widget.id === "adaptiveCharging")?.priority, 5);
+assert.equal(simple.dashboardWidgets.find((widget) => widget.id === "awayStatus")?.priority, 7);
 assert.deepEqual(simple.batteryCapabilities, { usableCapacityKwh: null, maximumChargeWatts: null });
 assert.equal(simple.adaptiveCharging.enabled, false);
 assert.equal(simple.adaptiveCharging.systemLossPercent, 14);
@@ -212,6 +218,62 @@ assert.equal(timelineView[0].plannedChargeWh, 500);
 assert.equal(timelineView[0].discounted, true);
 assert.equal(timelineView[0].rateLabel, "Night");
 assert.ok(timelineView.every((item) => item.predictedSocPercent >= 20));
+
+const awayPeriods = [
+  { from: "2026-07-12T09:00:00.000Z", until: "2026-07-12T12:00:00.000Z" },
+  { from: "2026-07-13T09:00:00.000Z", until: "2026-07-13T12:00:00.000Z" },
+  { from: "2026-07-14T09:00:00.000Z", until: "2026-07-14T12:00:00.000Z" },
+];
+assert.equal(awayPeriodContains(awayPeriods[0], Date.parse("2026-07-12T09:30:00.000Z")), true);
+assert.equal(awayPeriodContains(awayPeriods[0], Date.parse("2026-07-12T12:00:00.000Z")), false);
+assert.equal(
+  awayPeriodForecastContains(awayPeriods[0], Date.parse("2026-07-12T11:45:00.000Z")),
+  false,
+  "future planning restores home demand during the return buffer",
+);
+const occupancySamples = [
+  { timestamp: "2026-07-12T08:30:00.000Z", houseDemandW: 1200 },
+  { timestamp: "2026-07-12T09:30:00.000Z", houseDemandW: 300 },
+];
+const homeDemandDays = aggregateDemandDays(occupancySamples, { awayPeriods, occupancy: "home" });
+const awayDemandDays = aggregateDemandDays(occupancySamples, { awayPeriods, occupancy: "away" });
+assert.deepEqual([...homeDemandDays[0].values.values()], [1200], "Away buckets are excluded from normal demand training");
+assert.deepEqual([...awayDemandDays[0].values.values()], [300], "Away buckets remain available to Away training");
+assert.equal(filterDemandDaysByOccupancy(homeDemandDays, awayPeriods, "home")[0].values.size, 1);
+
+const awayBucketDate = new Date("2026-07-12T09:30:00.000Z");
+const awayBucket = awayBucketDate.getHours() * 2 + (awayBucketDate.getMinutes() >= 30 ? 1 : 0);
+
+const learnedAway = predictAwayDemand(
+  [
+    { timestamp: "2026-07-12T09:30:00.000Z", houseDemandW: 300 },
+    { timestamp: "2026-07-13T09:30:00.000Z", houseDemandW: 400 },
+    { timestamp: "2026-07-14T09:30:00.000Z", houseDemandW: 500 },
+  ],
+  new Date("2026-07-15T09:30:00.000Z"),
+  new Map(),
+  {
+    awayPeriods,
+    normalPrediction: { profile: new Map([[awayBucket, 1400]]), lowProfile: new Map([[awayBucket, 600]]) },
+  },
+);
+assert.equal(learnedAway.learnedBuckets.has(awayBucket), true);
+assert.equal(learnedAway.profile.get(awayBucket), 400);
+const fallbackAway = predictAwayDemand(
+  [
+    { timestamp: "2026-07-12T09:30:00.000Z", houseDemandW: 300 },
+    { timestamp: "2026-07-13T09:30:00.000Z", houseDemandW: 400 },
+  ],
+  new Date("2026-07-15T09:30:00.000Z"),
+  new Map(),
+  {
+    awayPeriods,
+    normalPrediction: { profile: new Map([[awayBucket, 1400]]), lowProfile: new Map([[awayBucket, 600]]) },
+  },
+);
+assert.equal(fallbackAway.learnedBuckets.has(awayBucket), false);
+assert.equal(fallbackAway.fallbackBuckets.has(awayBucket), true);
+assert.equal(fallbackAway.profile.get(awayBucket), 600);
 
 assert.equal(solarPowerFromIrradiance(500, {
   adaptiveCharging: { arrayPeakKw: 5, systemLossPercent: 14 },
@@ -1315,7 +1377,7 @@ const normalizedWidgets = normalizeDashboardWidgets([
   { id: "houseDemandPower", visible: true, priority: "bad" },
   { id: "unknownWidget", visible: true, priority: 1 },
 ]);
-assert.equal(normalizedWidgets.length, 20);
+assert.equal(normalizedWidgets.length, 21);
 assert.deepEqual(normalizedWidgets.find((widget) => widget.id === "solarPower"), {
   id: "solarPower",
   group: "trends",

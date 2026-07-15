@@ -188,4 +188,40 @@ try {
   await rm(overlappingRollupDir, { recursive: true, force: true });
 }
 
+const awayPeriodDir = await mkdtemp(path.join(os.tmpdir(), "history-store-away-periods-"));
+try {
+  const store = createHistoryStore({ dataDir: awayPeriodDir, logger: { log() {}, warn() {} } });
+  await store.initialize();
+  const created = store.createAwayPeriod({
+    id: "holiday",
+    from: "2026-07-20T01:00:00.000Z",
+    until: "2026-07-20T09:00:00.000Z",
+    source: "scheduled",
+    createdAt: "2026-07-15T00:00:00.000Z",
+    updatedAt: "2026-07-15T00:00:00.000Z",
+  });
+  assert.equal(created.status, "scheduled");
+  assert.equal(store.awayPeriod("holiday", Date.parse("2026-07-20T02:00:00.000Z")).status, "active");
+  assert.equal(store.awayPeriod("holiday", Date.parse("2026-07-21T00:00:00.000Z")).status, "completed");
+  assert.equal(store.awayPeriods({
+    includeCompleted: false,
+    nowMs: Date.parse("2026-07-21T00:00:00.000Z"),
+  }).length, 0, "completed Away periods are hidden from management queries");
+  assert.equal(store.awayPeriods({
+    includeCompleted: true,
+    nowMs: Date.parse("2026-07-21T00:00:00.000Z"),
+  }).length, 1, "completed Away periods remain available for learning");
+  assert.equal(store.updateAwayPeriod({
+    ...created,
+    until: "2026-07-20T10:00:00.000Z",
+    updatedAt: "2026-07-15T00:01:00.000Z",
+  }).until, "2026-07-20T10:00:00.000Z");
+  assert.equal(store.awayPeriod("holiday").until, "2026-07-20T10:00:00.000Z");
+  assert.equal(store.deleteAwayPeriod("holiday"), true);
+  assert.equal(store.awayPeriod("holiday"), null);
+  store.close();
+} finally {
+  await rm(awayPeriodDir, { recursive: true, force: true });
+}
+
 console.log("history store tests passed");

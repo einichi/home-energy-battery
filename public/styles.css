@@ -1300,12 +1300,15 @@ output {
   line-height: 1.45;
 }
 
-.adaptive-charging-widget {
+.adaptive-charging-widget,
+.away-status-widget {
   cursor: pointer;
 }
 
 .adaptive-charging-widget:hover,
-.adaptive-charging-widget:focus-visible {
+.adaptive-charging-widget:focus-visible,
+.away-status-widget:hover,
+.away-status-widget:focus-visible {
   border-color: rgba(18, 124, 120, 0.55);
   outline: none;
 }
@@ -1369,6 +1372,70 @@ output {
 .timeline-swatch.solar { background: #d8872c; }
 .timeline-swatch.soc { background: #7c3aed; }
 .timeline-swatch.charging { height: 8px; background: #127c78; }
+.timeline-swatch.away { height: 8px; background: rgba(71, 85, 105, 0.5); }
+
+.away-periods-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.away-period-form {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(240px, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.away-period-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.away-period-field label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.away-period-form input {
+  width: 100%;
+  min-width: 0;
+}
+
+.away-datetime-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.away-form-actions,
+.away-period-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.away-form-actions button,
+.away-period-actions button {
+  min-height: 38px;
+  white-space: nowrap;
+}
+
+.away-period-table-wrap {
+  margin-top: 0;
+}
+
+.away-period-table-wrap th:last-child,
+.away-period-table-wrap td:last-child {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.empty-table-cell {
+  color: var(--muted);
+  text-align: center;
+}
 
 .adaptive-charging-disabled {
   opacity: 0.68;
@@ -1382,6 +1449,15 @@ output {
 
 .adaptive-charging-actions button {
   grid-column: auto;
+}
+
+.adaptive-charging-actions button:disabled {
+  border-color: var(--border);
+  color: #94a3b8;
+  background: #edf2f7;
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 
 .adaptive-charging-status-grid {
@@ -1940,6 +2016,44 @@ td code {
   .adaptive-charging-actions,
   .adaptive-charging-status-grid {
     grid-template-columns: 1fr;
+  }
+
+  .away-period-form {
+    grid-template-columns: 1fr;
+  }
+
+  .away-form-actions button {
+    flex: 1 1 140px;
+  }
+
+  .away-period-table-wrap table,
+  .away-period-table-wrap thead,
+  .away-period-table-wrap tbody,
+  .away-period-table-wrap tr,
+  .away-period-table-wrap th,
+  .away-period-table-wrap td {
+    display: block;
+  }
+
+  .away-period-table-wrap thead {
+    display: none;
+  }
+
+  .away-period-table-wrap tr {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .away-period-table-wrap td {
+    width: auto;
+    padding: 4px 0;
+    border: 0;
+    white-space: normal;
+  }
+
+  .away-period-table-wrap td:last-child {
+    width: auto;
+    padding-top: 8px;
   }
 
   .adaptive-charging-heading {

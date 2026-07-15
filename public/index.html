@@ -204,6 +204,11 @@
             <strong class="status-text" id="adaptiveChargingWidgetState">--</strong>
             <small id="adaptiveChargingWidgetNote" class="widget-note">--</small>
           </article>
+          <article class="widget away-status-widget" data-widget-id="awayStatus" data-widget-group="status" role="button" tabindex="0">
+            <span data-i18n="awayStatus">Away Status</span>
+            <strong class="status-text" id="awayStatusWidgetState">--</strong>
+            <small id="awayStatusWidgetNote" class="widget-note">--</small>
+          </article>
           <article class="widget" data-widget-id="batteryWorking" data-widget-group="status">
             <span data-i18n="batteryWorkingStatus">Battery Working Status</span>
             <strong class="status-text" id="batteryWorking">--</strong>
@@ -300,7 +305,7 @@
               </div>
               <div class="adaptive-charging-actions">
                 <button id="adaptiveChargingRecalculate" type="button" data-i18n="recalculatePlan">Recalculate</button>
-                <button id="adaptiveChargingResume" class="ghost" type="button" data-i18n="resumeAdaptiveCharging">Resume Adaptive Charging</button>
+                <button id="adaptiveChargingResume" class="ghost" type="button" data-i18n="resumeAdaptiveCharging" disabled>Resume Adaptive Charging</button>
                 <button id="adaptiveChargingConfigure" class="ghost" type="button" data-i18n="configure">Configure</button>
               </div>
             </div>
@@ -316,8 +321,49 @@
               <div><dt data-i18n="learnedChargePerformance">Learned charging performance</dt><dd id="adaptiveChargingChargePerformance">--</dd></div>
               <div><dt data-i18n="adaptiveChargingConfidence">Forecast confidence</dt><dd id="adaptiveChargingConfidence">--</dd></div>
               <div><dt data-i18n="demandHistoryModel">Demand history model</dt><dd id="adaptiveChargingDemandHistory">--</dd></div>
+              <div><dt data-i18n="awayDemandModel">Away demand model</dt><dd id="adaptiveChargingAwayDemand">--</dd></div>
               <div><dt data-i18n="adaptiveChargingState">Adaptive Charging state</dt><dd id="adaptiveChargingState">--</dd></div>
             </dl>
+          </div>
+
+          <div class="panel away-periods-panel">
+            <div class="panel-title">
+              <span class="label" data-i18n="awayPeriods">Away Periods</span>
+              <h1 data-i18n="awaySchedule">Away Schedule</h1>
+              <p data-i18n="awayScheduleHelp">Scheduled absences improve demand forecasts while keeping completed periods available for future learning.</p>
+            </div>
+            <p id="awayCurrentSummary" class="adaptive-charging-notice" aria-live="polite"></p>
+            <form id="awayPeriodForm" class="away-period-form">
+              <input id="awayPeriodId" type="hidden" />
+              <div class="away-period-field">
+                <label for="awayFrom" data-i18n="from">From</label>
+                <span class="away-datetime-control">
+                  <input id="awayFrom" type="datetime-local" required />
+                  <button id="awayNow" class="ghost" type="button" data-i18n="now">Now</button>
+                </span>
+              </div>
+              <div class="away-period-field">
+                <label for="awayUntil" data-i18n="until">Until</label>
+                <input id="awayUntil" type="datetime-local" required />
+              </div>
+              <div class="away-form-actions">
+                <button id="awaySave" type="submit" data-i18n="scheduleAway">Schedule Away</button>
+                <button id="awayCancel" class="ghost hidden" type="button" data-i18n="cancel">Cancel</button>
+              </div>
+            </form>
+            <div class="table-wrap away-period-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th data-i18n="from">From</th>
+                    <th data-i18n="until">Until</th>
+                    <th data-i18n="status">Status</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="awayPeriodRows"></tbody>
+              </table>
+            </div>
           </div>
 
           <div class="panel adaptive-charging-timeline-panel">
@@ -330,6 +376,7 @@
               <span><i class="timeline-swatch solar"></i><span data-i18n="predictedSolar">Predicted solar</span></span>
               <span><i class="timeline-swatch soc"></i><span data-i18n="stateOfCharge">State of Charge</span></span>
               <span><i class="timeline-swatch charging"></i><span data-i18n="plannedCharging">Planned charging</span></span>
+              <span><i class="timeline-swatch away"></i><span data-i18n="away">Away</span></span>
             </div>
             <canvas id="adaptiveChargingTimeline" class="adaptive-charging-timeline" width="1400" height="430"></canvas>
             <p id="adaptiveChargingTimelineEmpty" class="graph-meta" data-i18n="noChargingTimeline">A timeline will appear after a charging plan is calculated.</p>
