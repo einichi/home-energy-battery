@@ -25,6 +25,7 @@ const SOLAR_PLANNER_STATE_FILE = path.join(DATA_DIR, "solar-planner-state.json")
 const SOLAR_PLANNER_DIR = path.join(DATA_DIR, "solar-planner");
 const SOLAR_FORECAST_HISTORY_FILE = path.join(SOLAR_PLANNER_DIR, "forecast-snapshots.jsonl");
 const SOLAR_WEATHER_HISTORY_FILE = path.join(SOLAR_PLANNER_DIR, "historical-weather.jsonl");
+const SOLAR_DEMAND_PROFILE_INDEX_FILE = path.join(SOLAR_PLANNER_DIR, "demand-day-profiles.json");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
 const HISTORY_FILE = path.join(HISTORY_DIR, "samples.jsonl");
@@ -41,10 +42,15 @@ const SOLAR_BREAKER_RETRY_COOLDOWN_MS = 3 * 60_000;
 const SOLAR_BREAKER_SAFE_CHECKS = 3;
 const SOLAR_BREAKER_SAFETY_MARGIN_W = 200;
 const SOLAR_BREAKER_WAIT_LOG_MS = 5 * 60_000;
+const SOLAR_MIN_EXECUTABLE_CHARGE_WH = 50;
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
 const SOLAR_CHARGE_SESSION_LIMIT = 30;
 const SOLAR_CHARGE_SAMPLE_LIMIT = 500;
 const SOLAR_WINDOW_SUMMARY_LIMIT = 30;
+const SOLAR_DEMAND_PROFILE_INDEX_VERSION = 1;
+const SOLAR_SEASONAL_LOOKBACK_YEARS = 10;
+const SOLAR_SEASONAL_DAY_RANGE = 28;
+const SOLAR_SEASONAL_DAYS_PER_YEAR = 2;
 
 const DEFAULT_DASHBOARD_WIDGETS = [
   { id: "solarPower", group: "trends", visible: true, priority: 10 },
@@ -138,6 +144,8 @@ let cliTimingSequence = 0;
 const recentCliTimings = [];
 let lastRecordedSample = null;
 let solarPlannerHistoryCache = null;
+let solarDemandProfileIndexCache = null;
+let solarDemandProfileIndexPromise = null;
 const runningScheduleIds = new Set();
 const discoveryJobs = new Map();
 const DISCOVERY_JOB_TTL_MS = 10 * 60 * 1000;
@@ -573,6 +581,141 @@ async function readSolarPlannerHistory(now = new Date()) {
   return [...samples];
 }
 
+function emptySolarDemandProfileIndex() {
+  return {
+    version: SOLAR_DEMAND_PROFILE_INDEX_VERSION,
+    source: null,
+    days: {},
+  };
+}
+
+function cleanSolarDemandProfileIndex(value) {
+  if (value?.version !== SOLAR_DEMAND_PROFILE_INDEX_VERSION || !value.days || typeof value.days !== "object") {
+    return emptySolarDemandProfileIndex();
+  }
+  const days = {};
+  for (const [key, day] of Object.entries(value.days)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || !day || typeof day !== "object") continue;
+    const sums = Array.from({ length: 48 }, (_, bucket) => {
+      const sum = Number(day.sums?.[bucket]);
+      return Number.isFinite(sum) ? sum : 0;
+    });
+    const counts = Array.from({ length: 48 }, (_, bucket) => {
+      const count = Number(day.counts?.[bucket]);
+      return Number.isFinite(count) && count > 0 ? count : 0;
+    });
+    days[key] = { sums, counts };
+  }
+  return {
+    version: SOLAR_DEMAND_PROFILE_INDEX_VERSION,
+    source: value.source && Number.isFinite(Number(value.source.size))
+      ? { size: Number(value.source.size), ino: Number(value.source.ino) }
+      : null,
+    days,
+  };
+}
+
+function addSampleToSolarDemandProfileIndex(index, sample) {
+  const demand = Number(sample?.houseDemandW);
+  const time = new Date(sample?.timestamp);
+  if (!Number.isFinite(demand) || Number.isNaN(time.getTime())) return;
+  const key = localDayKey(time);
+  const bucket = halfHourIndex(time);
+  const day = index.days[key] ?? {
+    sums: Array(48).fill(0),
+    counts: Array(48).fill(0),
+  };
+  day.sums[bucket] = Number(day.sums[bucket] ?? 0) + demand;
+  day.counts[bucket] = Number(day.counts[bucket] ?? 0) + 1;
+  index.days[key] = day;
+}
+
+async function scanSolarDemandProfiles(index, start, end) {
+  if (end <= start) return;
+  const stream = createReadStream(HISTORY_FILE, { encoding: "utf8", start, end: end - 1 });
+  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  let lineNumber = 0;
+  try {
+    for await (const line of lines) {
+      lineNumber += 1;
+      if (!line.trim()) continue;
+      try {
+        addSampleToSolarDemandProfileIndex(
+          index,
+          parseJsonWithContext(line, `${HISTORY_FILE}:demand-index:${lineNumber}`),
+        );
+      } catch (err) {
+        logDetailedError("solar demand profile index", err);
+      }
+    }
+  } finally {
+    lines.close();
+    if (!stream.destroyed) stream.destroy();
+  }
+}
+
+function solarDemandProfileDays(index) {
+  return Object.entries(index.days).map(([key, day]) => {
+    const values = new Map();
+    for (let bucket = 0; bucket < 48; bucket += 1) {
+      const count = Number(day.counts?.[bucket] ?? 0);
+      const sum = Number(day.sums?.[bucket] ?? 0);
+      if (count > 0 && Number.isFinite(sum)) values.set(bucket, sum / count);
+    }
+    return {
+      key,
+      date: new Date(`${key}T00:00:00`),
+      coverage: values.size / 48,
+      daytimeCoverage: [...values.keys()].filter((bucket) => bucket >= 12 && bucket < 36).length / 24,
+      values,
+    };
+  }).filter((day) => !Number.isNaN(day.date.getTime()));
+}
+
+async function refreshSolarDemandProfileIndex() {
+  await ensureDataDir();
+  let historyStat;
+  try {
+    historyStat = await stat(HISTORY_FILE);
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  }
+  let index = solarDemandProfileIndexCache;
+  if (!index) {
+    try {
+      const value = parseJsonWithContext(
+        await readFile(SOLAR_DEMAND_PROFILE_INDEX_FILE, "utf8"),
+        SOLAR_DEMAND_PROFILE_INDEX_FILE,
+      );
+      index = cleanSolarDemandProfileIndex(value);
+    } catch (err) {
+      if (err.code !== "ENOENT") logDetailedError("solar demand profile index", err);
+      index = emptySolarDemandProfileIndex();
+    }
+  }
+  const sameHistoryFile = index.source
+    && Number(index.source.ino) === Number(historyStat.ino)
+    && index.source.size <= historyStat.size;
+  if (!sameHistoryFile) index = emptySolarDemandProfileIndex();
+  const start = index.source?.size ?? 0;
+  if (start < historyStat.size) {
+    await scanSolarDemandProfiles(index, start, historyStat.size);
+    index.source = { size: historyStat.size, ino: Number(historyStat.ino) };
+    await writeJsonFileAtomic(SOLAR_DEMAND_PROFILE_INDEX_FILE, index);
+  }
+  solarDemandProfileIndexCache = index;
+  return solarDemandProfileDays(index);
+}
+
+async function readSolarDemandProfileDays() {
+  if (!solarDemandProfileIndexPromise) {
+    solarDemandProfileIndexPromise = refreshSolarDemandProfileIndex()
+      .finally(() => { solarDemandProfileIndexPromise = null; });
+  }
+  return solarDemandProfileIndexPromise;
+}
+
 async function writeJsonFileAtomic(file, data) {
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`);
@@ -618,6 +761,7 @@ function cleanSolarPlannerState(value = {}) {
       && Number.isFinite(Number(value.interruptedCharge.remainingWh))
       && Number(value.interruptedCharge.remainingWh) > 0
       ? {
+        slotId: value.interruptedCharge.slotId ?? null,
         slotStart: value.interruptedCharge.slotStart ?? null,
         slotEnd: value.interruptedCharge.slotEnd ?? null,
         windowStart: value.interruptedCharge.windowStart ?? null,
@@ -1171,6 +1315,7 @@ function optimizeDiscountedChargeSlots({
     const durationMs = allocatedKwh * 1000 / maximumChargeWatts * 3_600_000;
     selected.push({
       ...slot,
+      slotId: `optimized:${slot.end}`,
       start: new Date(new Date(slot.end).getTime() - durationMs).toISOString(),
       targetWh: Math.max(1, Math.round(allocatedKwh * 1000)),
     });
@@ -1350,6 +1495,7 @@ function planChronologicalDiscountedCharging({
         const slot = timeline[index];
         const durationMs = allocatedKwh * 1000 / maximumChargeWatts * 3_600_000;
         selectedSlots.push({
+          slotId: `${window.configuredStartMs}:${window.configuredEndMs}:${slot.endMs}`,
           start: new Date(slot.endMs - durationMs).toISOString(),
           end: new Date(slot.endMs).toISOString(),
           yenPerKwh: window.yenPerKwh,
@@ -1497,13 +1643,54 @@ function aggregateDemandDays(samples) {
   }));
 }
 
-function predictHouseDemand(samples, targetDate = new Date(), temperatureByDay = new Map()) {
+function calendarDayDistance(left, right) {
+  const normalizedLeft = new Date(2000, left.getMonth(), left.getDate());
+  const normalizedRight = new Date(2000, right.getMonth(), right.getDate());
+  const distance = Math.abs(normalizedLeft.getTime() - normalizedRight.getTime()) / 86_400_000;
+  return Math.min(distance, 366 - distance);
+}
+
+function selectSeasonalDemandDays(validDays, target, targetIsWeekend, targetTemperature, temperatureByDay) {
+  const byYear = new Map();
+  for (const day of validDays) {
+    const yearsAgo = target.getFullYear() - day.date.getFullYear();
+    if (yearsAgo < 1 || yearsAgo > SOLAR_SEASONAL_LOOKBACK_YEARS) continue;
+    const calendarDistance = calendarDayDistance(day.date, target);
+    if (calendarDistance > SOLAR_SEASONAL_DAY_RANGE) continue;
+    const sameDayType = [0, 6].includes(day.date.getDay()) === targetIsWeekend;
+    const temperature = Number(temperatureByDay.get(day.key));
+    const hasTemperatureMatch = Number.isFinite(targetTemperature) && Number.isFinite(temperature);
+    const temperatureDistance = hasTemperatureMatch ? Math.abs(targetTemperature - temperature) : 0;
+    const candidate = {
+      ...day,
+      yearsAgo,
+      sameDayType,
+      calendarDistance,
+      temperatureDistance,
+      score: calendarDistance * 2 + temperatureDistance * 2 + yearsAgo * 2 + (sameDayType ? 0 : 14),
+      weight: (sameDayType ? 1 : 0.35)
+        / (1 + calendarDistance / 7 + temperatureDistance + yearsAgo / 2),
+    };
+    const candidates = byYear.get(day.date.getFullYear()) ?? [];
+    candidates.push(candidate);
+    byYear.set(day.date.getFullYear(), candidates);
+  }
+  return [...byYear.values()]
+    .flatMap((days) => days.sort((a, b) => a.score - b.score).slice(0, SOLAR_SEASONAL_DAYS_PER_YEAR))
+    .sort((a, b) => a.score - b.score);
+}
+
+function predictHouseDemand(samples, targetDate = new Date(), temperatureByDay = new Map(), options = {}) {
   const target = targetDate instanceof Date ? targetDate : new Date(targetDate);
   const targetIsWeekend = [0, 6].includes(target.getDay());
   const targetTemperature = Number(temperatureByDay.get(localDayKey(target)));
-  const recordedDays = aggregateDemandDays(samples);
+  const recordedDayMap = new Map(
+    (Array.isArray(options.historicalDays) ? options.historicalDays : []).map((day) => [day.key, day]),
+  );
+  for (const day of aggregateDemandDays(samples)) recordedDayMap.set(day.key, day);
+  const recordedDays = [...recordedDayMap.values()];
   const validDays = recordedDays.filter((day) => day.daytimeCoverage >= 0.8);
-  const candidates = validDays
+  const recentCandidates = validDays
     .map((day) => {
       const ageDays = (target.getTime() - day.date.getTime()) / 86_400_000;
       const sameDayType = [0, 6].includes(day.date.getDay()) === targetIsWeekend;
@@ -1524,25 +1711,49 @@ function predictHouseDemand(samples, targetDate = new Date(), temperatureByDay =
     .filter((day) => day.ageDays > 0 && day.ageDays <= 42)
     .sort((a, b) => a.score - b.score)
     .slice(0, 8);
+  const seasonalCandidates = selectSeasonalDemandDays(
+    validDays,
+    target,
+    targetIsWeekend,
+    targetTemperature,
+    temperatureByDay,
+  );
+  const seasonalYears = [...new Set(seasonalCandidates.map((day) => day.date.getFullYear()))]
+    .sort((a, b) => b - a);
+  // Let recurring seasonal behavior inform the forecast without allowing an
+  // older household pattern to outweigh the most recent six weeks.
+  const seasonalBlendWeight = Math.min(0.3, seasonalYears.length * 0.1);
   const profile = new Map();
   for (let index = 0; index < 48; index += 1) {
-    const value = weightedMedian(candidates
+    const recentValue = weightedMedian(recentCandidates
       .filter((day) => day.values.has(index))
       .map((day) => ({ value: day.values.get(index), weight: day.weight })));
+    const seasonalValue = weightedMedian(seasonalCandidates
+      .filter((day) => day.values.has(index))
+      .map((day) => ({ value: day.values.get(index), weight: day.weight })));
+    const value = Number.isFinite(recentValue) && Number.isFinite(seasonalValue)
+      ? recentValue * (1 - seasonalBlendWeight) + seasonalValue * seasonalBlendWeight
+      : recentValue;
     if (Number.isFinite(value)) profile.set(index, value);
   }
   return {
-    available: validDays.length >= 7 && candidates.length >= 4 && profile.size >= 39,
+    available: validDays.length >= 7 && recentCandidates.length >= 4 && profile.size >= 39,
     reason: validDays.length < 7
       ? `house-demand history has ${validDays.length} of ${recordedDays.length} days with at least 80% daytime coverage; 7 are required`
-      : candidates.length < 4
-      ? `only ${candidates.length} usable demand days were found in the previous six weeks; 4 are required`
+      : recentCandidates.length < 4
+      ? `only ${recentCandidates.length} usable demand days were found in the previous six weeks; 4 are required`
       : profile.size < 39
         ? "house-demand history coverage is below 80%"
         : null,
-    comparableDays: candidates.map((day) => day.key),
-    sameDayTypeDays: candidates.filter((day) => day.sameDayType).map((day) => day.key),
-    usedDayTypeFallback: candidates.some((day) => !day.sameDayType),
+    comparableDays: [...recentCandidates, ...seasonalCandidates].map((day) => day.key),
+    recentComparableDays: recentCandidates.map((day) => day.key),
+    seasonalComparableDays: seasonalCandidates.map((day) => day.key),
+    seasonalYears,
+    seasonalBlendWeight,
+    sameDayTypeDays: [...recentCandidates, ...seasonalCandidates]
+      .filter((day) => day.sameDayType)
+      .map((day) => day.key),
+    usedDayTypeFallback: [...recentCandidates, ...seasonalCandidates].some((day) => !day.sameDayType),
     recordedDayCount: recordedDays.length,
     validDayCount: validDays.length,
     profile,
@@ -1682,7 +1893,7 @@ function planningSunsetWithDiscountedWindow(config, forecast, now = new Date()) 
     }) ?? null;
 }
 
-function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {}) {
+function buildSolarChargingPlan({ config, state, samples, historicalDemandDays = [], now = new Date() } = {}) {
   const unavailable = (reason) => ({
     available: false,
     reason,
@@ -1715,7 +1926,7 @@ function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {
     const date = new Date(time);
     const dayKey = localDayKey(date);
     if (!demandByDay.has(dayKey)) {
-      const prediction = predictHouseDemand(samples, date, temperatures);
+      const prediction = predictHouseDemand(samples, date, temperatures, { historicalDays: historicalDemandDays });
       if (!prediction.available) return unavailable(prediction.reason);
       demandByDay.set(dayKey, prediction);
     }
@@ -1784,6 +1995,13 @@ function buildSolarChargingPlan({ config, state, samples, now = new Date() } = {
       validDayCount: Math.max(...demandPredictions.map((prediction) => prediction.validDayCount)),
       sameDayTypeDayCount: Math.max(...demandPredictions.map((prediction) => prediction.sameDayTypeDays.length)),
       usedDayTypeFallback: demandPredictions.some((prediction) => prediction.usedDayTypeFallback),
+      recentComparableDayCount: Math.max(...demandPredictions.map((prediction) => prediction.recentComparableDays.length)),
+      seasonalComparableDayCount: Math.max(...demandPredictions.map((prediction) => prediction.seasonalComparableDays.length)),
+      seasonalYears: [...new Set(demandPredictions.flatMap((prediction) => prediction.seasonalYears))]
+        .sort((a, b) => b - a),
+      seasonalBlendPercent: Math.round(Math.max(
+        ...demandPredictions.map((prediction) => prediction.seasonalBlendWeight * 100),
+      )),
     },
     solarCalibration: calibration,
     batteryCapacity: capacityEstimate,
@@ -2424,6 +2642,7 @@ async function trimHistory(retentionDays) {
   const kept = samples.filter((sample) => new Date(sample.timestamp).getTime() >= cutoff);
   await writeJsonLinesAtomic(HISTORY_FILE, kept);
   solarPlannerHistoryCache = null;
+  solarDemandProfileIndexCache = null;
   const contextualCutoff = Date.now() - Math.min(days, 365) * 24 * 60 * 60_000;
   for (const file of [SOLAR_FORECAST_HISTORY_FILE, SOLAR_WEATHER_HISTORY_FILE]) {
     const records = await readJsonLinesFile(file);
@@ -3762,7 +3981,7 @@ function capPlannerSlotToRemainingTime(slot, maximumChargeWatts, now = new Date(
     Math.max(0, Math.round(Number(slot?.targetWh) || 0)),
     Math.max(0, maximumRemainingWh),
   );
-  if (!targetWh) return null;
+  if (targetWh < SOLAR_MIN_EXECUTABLE_CHARGE_WH) return null;
   const durationMs = targetWh / maximumWatts * 3_600_000;
   return {
     ...slot,
@@ -3771,9 +3990,25 @@ function capPlannerSlotToRemainingTime(slot, maximumChargeWatts, now = new Date(
   };
 }
 
+function plannerSlotIdentity(slot) {
+  if (!slot) return null;
+  const endMs = new Date(slot.end).getTime();
+  const windowEndMs = new Date(slot.windowEnd ?? slot.end).getTime();
+  if (!Number.isFinite(endMs) || !Number.isFinite(windowEndMs)) return null;
+  return JSON.stringify([
+    Number.isFinite(new Date(slot.windowStart).getTime()) ? new Date(slot.windowStart).getTime() : null,
+    windowEndMs,
+    endMs,
+    Number(slot.yenPerKwh),
+    slot.label ?? null,
+  ]);
+}
+
 function plannerSlotsMatch(left, right) {
-  return new Date(left?.start).getTime() === new Date(right?.start).getTime()
-    && new Date(left?.end).getTime() === new Date(right?.end).getTime();
+  if (left?.slotId && right?.slotId) return left.slotId === right.slotId;
+  const leftIdentity = plannerSlotIdentity(left);
+  const rightIdentity = plannerSlotIdentity(right);
+  return leftIdentity !== null && leftIdentity === rightIdentity;
 }
 
 function consumeCompletedPlannerSlot(plan, completedSlot) {
@@ -3821,6 +4056,7 @@ function preserveInterruptedPlannerCharge(state, now = new Date()) {
     };
   }
   const interruption = remainingWh > 0 ? {
+    slotId: activeSlot.slotId ?? null,
     slotStart: activeSlot.start,
     slotEnd: activeSlot.end,
     windowStart: activeSlot.windowStart ?? activeSlot.start,
@@ -3843,7 +4079,10 @@ function applyInterruptedChargeCap(plan, interruption, maximumChargeWatts, now =
   const maximumWatts = Number(maximumChargeWatts);
   let matched = false;
   const slots = (plan.slots ?? []).map((slot) => {
-    if (new Date(slot.end).getTime() !== interruptedEnd) return slot;
+    const sameSlot = interruption.slotId && slot.slotId
+      ? interruption.slotId === slot.slotId
+      : new Date(slot.end).getTime() === interruptedEnd;
+    if (!sameSlot) return slot;
     matched = true;
     const targetWh = Math.min(Math.max(0, Math.round(Number(slot.targetWh) || 0)), remainingWh);
     if (!targetWh) return null;
@@ -4164,7 +4403,8 @@ async function evaluateSolarPlanner(config, status, rules, now = new Date()) {
       houseDemandW: liveHouseDemandW,
     });
     state = { ...state, historicalWeather: await readJsonLinesFile(SOLAR_WEATHER_HISTORY_FILE) };
-    state.plan = buildSolarChargingPlan({ config, state, samples, now });
+    const historicalDemandDays = await readSolarDemandProfileDays();
+    state.plan = buildSolarChargingPlan({ config, state, samples, historicalDemandDays, now });
     state.lastPlanEventKey = refreshDecision.eventKey;
     state.pendingPlanReason = null;
     if (activeDiscountedWindow) state.lastRebasedWindowKey = activeDiscountedWindow.key;
@@ -5115,7 +5355,8 @@ async function api(req, res, url) {
     }
     const samples = await readSolarPlannerHistory(now);
     state = { ...state, historicalWeather: await readJsonLinesFile(SOLAR_WEATHER_HISTORY_FILE) };
-    state.plan = buildSolarChargingPlan({ config, state, samples, now });
+    const historicalDemandDays = await readSolarDemandProfileDays();
+    state.plan = buildSolarChargingPlan({ config, state, samples, historicalDemandDays, now });
     state.lastPlanEventKey = solarPlanScheduledEvent(config, now).eventKey ?? `manual:${now.toISOString()}`;
     state.pendingPlanReason = null;
     if (state.interruptedCharge) {
@@ -5317,6 +5558,7 @@ export {
   plannerTimezoneError,
   rateForTimestamp,
   readRecentHistorySamples,
+  readSolarDemandProfileDays,
   recoverConcatenatedJsonValue,
   sampleFromStatus,
   shouldTriggerDemandGuard,

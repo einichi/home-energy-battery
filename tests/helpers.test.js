@@ -593,6 +593,47 @@ assert.equal(completedSlotPlan.slots.length, 1);
 assert.equal(completedSlotPlan.slots[0].targetWh, 1050);
 assert.ok(Math.abs(completedSlotPlan.plannedChargeKwh - 1.05) < 0.0001);
 assert.ok(Math.abs(completedSlotPlan.windows[0].plannedChargeKwh - 1.05) < 0.0001);
+const delayedCompletedSlotPlan = consumeCompletedPlannerSlot({
+  plannedChargeKwh: 0.75,
+  slots: [{ ...interruptedSlot, slotId: "window:slot", targetWh: 750 }],
+  windows: [{ end: interruptedSlot.windowEnd, plannedChargeKwh: 0.75, requestedChargeKwh: 0.75 }],
+}, {
+  ...interruptedSlot,
+  slotId: "window:slot",
+  start: "2026-07-11T12:10:00.000Z",
+  targetWh: 700,
+});
+assert.equal(delayedCompletedSlotPlan.slots.length, 0);
+assert.equal(delayedCompletedSlotPlan.plannedChargeKwh, 0);
+const legacyDelayedCompletedSlotPlan = consumeCompletedPlannerSlot({
+  plannedChargeKwh: 0.75,
+  slots: [{ ...interruptedSlot, targetWh: 750 }],
+  windows: [{ end: interruptedSlot.windowEnd, plannedChargeKwh: 0.75, requestedChargeKwh: 0.75 }],
+}, {
+  ...interruptedSlot,
+  start: "2026-07-11T12:10:00.000Z",
+  targetWh: 700,
+});
+assert.equal(legacyDelayedCompletedSlotPlan.slots.length, 0);
+
+const delayedInterruptedState = {
+  activeSlot: {
+    ...interruptedSlot,
+    slotId: "window:interrupted",
+    start: "2026-07-11T12:05:00.000Z",
+  },
+  activeChargedKwh: 0.3,
+  plan: {
+    slots: [{ ...interruptedSlot, slotId: "window:interrupted" }],
+  },
+};
+const delayedInterruption = preserveInterruptedPlannerCharge(
+  delayedInterruptedState,
+  new Date("2026-07-11T12:10:00.000Z"),
+);
+assert.equal(delayedInterruption.remainingWh, 750);
+assert.equal(delayedInterruptedState.plan.slots[0].targetWh, 750);
+
 const latePlannerSlot = capPlannerSlotToRemainingTime(
   { ...interruptedSlot, targetWh: 750 },
   2100,
@@ -600,6 +641,16 @@ const latePlannerSlot = capPlannerSlotToRemainingTime(
 );
 assert.equal(latePlannerSlot.targetWh, 350);
 assert.equal(latePlannerSlot.start, "2026-07-11T12:20:00.000Z");
+assert.equal(capPlannerSlotToRemainingTime(
+  { ...interruptedSlot, targetWh: 49 },
+  2100,
+  new Date("2026-07-11T12:20:00.000Z"),
+), null);
+assert.equal(capPlannerSlotToRemainingTime(
+  { ...interruptedSlot, targetWh: 50 },
+  2100,
+  new Date("2026-07-11T12:20:00.000Z"),
+)?.targetWh, 50);
 assert.equal(capPlannerSlotToRemainingTime(
   { ...interruptedSlot, targetWh: 750 },
   2100,
@@ -873,6 +924,53 @@ for (let week = 1; week <= 8; week += 1) {
 const demandPrediction = predictHouseDemand(demandSamples, new Date(2026, 6, 13));
 assert.equal(demandPrediction.available, true);
 assert.equal(demandPrediction.profile.size, 48);
+assert.equal(demandPrediction.seasonalYears.length, 0);
+assert.equal(demandPrediction.seasonalBlendWeight, 0);
+
+const multiYearDemandSamples = [...demandSamples];
+for (const year of [2023, 2024, 2025]) {
+  const day = new Date(year, 6, 13);
+  for (let bucket = 0; bucket < 48; bucket += 1) {
+    multiYearDemandSamples.push({
+      timestamp: new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(bucket / 2), bucket % 2 ? 30 : 0).toISOString(),
+      houseDemandW: 3000,
+    });
+  }
+}
+const seasonalDemandPrediction = predictHouseDemand(multiYearDemandSamples, new Date(2026, 6, 13));
+assert.equal(seasonalDemandPrediction.available, true);
+assert.deepEqual(seasonalDemandPrediction.seasonalYears, [2025, 2024, 2023]);
+assert.equal(seasonalDemandPrediction.seasonalComparableDays.length, 3);
+assert.equal(seasonalDemandPrediction.seasonalBlendWeight, 0.3);
+assert.ok(seasonalDemandPrediction.profile.get(12) > demandPrediction.profile.get(12));
+
+const indexedSeasonalDays = [2023, 2024, 2025].map((year) => ({
+  key: `${year}-07-13`,
+  date: new Date(year, 6, 13),
+  coverage: 1,
+  daytimeCoverage: 1,
+  values: new Map(Array.from({ length: 48 }, (_, bucket) => [bucket, 3000])),
+}));
+const indexedSeasonalPrediction = predictHouseDemand(
+  demandSamples,
+  new Date(2026, 6, 13),
+  new Map(),
+  { historicalDays: indexedSeasonalDays },
+);
+assert.deepEqual(indexedSeasonalPrediction.seasonalYears, [2025, 2024, 2023]);
+assert.equal(indexedSeasonalPrediction.seasonalBlendWeight, 0.3);
+assert.ok(indexedSeasonalPrediction.profile.get(12) > demandPrediction.profile.get(12));
+
+const outOfSeasonDemandSamples = [...demandSamples];
+for (let bucket = 0; bucket < 48; bucket += 1) {
+  outOfSeasonDemandSamples.push({
+    timestamp: new Date(2025, 0, 13, Math.floor(bucket / 2), bucket % 2 ? 30 : 0).toISOString(),
+    houseDemandW: 5000,
+  });
+}
+const outOfSeasonDemandPrediction = predictHouseDemand(outOfSeasonDemandSamples, new Date(2026, 6, 13));
+assert.equal(outOfSeasonDemandPrediction.seasonalComparableDays.length, 0);
+assert.equal(outOfSeasonDemandPrediction.seasonalBlendWeight, 0);
 
 const youngDemandHistory = [];
 for (let daysAgo = 1; daysAgo <= 10; daysAgo += 1) {

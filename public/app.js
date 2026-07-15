@@ -371,6 +371,9 @@ const I18N = {
     expectedSunsetSoc: "Expected sunset SOC",
     learnedCapacity: "Learned usable capacity",
     learnedChargePerformance: "Learned charging performance",
+    demandHistoryModel: "Demand history model",
+    recentAndSeasonalHistory: "{days} recent days + {years} seasonal years ({percent}% seasonal)",
+    recentHistoryOnly: "{days} recent days",
     plannerState: "Planner state",
     plannerConfidence: "Forecast confidence",
     calibratedForecast: "calibrated",
@@ -760,6 +763,9 @@ const I18N = {
     expectedSunsetSoc: "予測日没時充電率",
     learnedCapacity: "学習済み使用可能容量",
     learnedChargePerformance: "学習済み充電性能",
+    demandHistoryModel: "需要履歴モデル",
+    recentAndSeasonalHistory: "直近{days}日 + 過去年同時期{years}年分 (季節データ{percent}%)",
+    recentHistoryOnly: "直近{days}日",
     plannerState: "プランナー状態",
     plannerConfidence: "予測信頼度",
     calibratedForecast: "学習済み",
@@ -2326,6 +2332,16 @@ function renderSolarPlannerStatus(status = state.solarPlannerStatus) {
   }
   $("#solarPlannerChargePerformance").textContent = chargePerformanceParts.join(" · ") || "--";
   $("#solarPlannerConfidence").textContent = `${state.config?.solarPlanner?.forecastMarginPercent ?? 10}% · ${plan.solarCalibration?.learned ? t("calibratedForecast") : t("initialForecastModel")}`;
+  const demandHistory = plan.demandHistory ?? {};
+  $("#solarPlannerDemandHistory").textContent = Number(demandHistory.recentComparableDayCount) > 0
+    ? Number(demandHistory.seasonalYears?.length) > 0
+      ? template("recentAndSeasonalHistory", {
+          days: demandHistory.recentComparableDayCount,
+          years: demandHistory.seasonalYears.length,
+          percent: demandHistory.seasonalBlendPercent,
+        })
+      : template("recentHistoryOnly", { days: demandHistory.recentComparableDayCount })
+    : "--";
   $("#solarPlannerState").textContent = status.owner === "planner"
     ? t("plannerCharging")
     : status.paused
