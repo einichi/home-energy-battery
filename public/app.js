@@ -427,9 +427,14 @@ const I18N = {
     predictedDemand: "Predicted demand",
     predictedSurplus: "Predicted surplus",
     plannedGridCharge: "Planned grid charge",
+    expectedStoredCharge: "Expected battery storage",
     expectedSunsetSoc: "Expected sunset SOC",
     learnedCapacity: "Learned usable capacity",
     learnedChargePerformance: "Learned charging performance",
+    learnedChargePower: "Learned charge power",
+    chargeConversionUsed: "Charge conversion used",
+    learnedConversion: "{value}% · learned from {count} sessions",
+    fallbackConversion: "100% fallback · {count}/3 valid sessions",
     demandHistoryModel: "Demand history model",
     recentAndSeasonalHistory: "{days} recent days + {years} seasonal years ({percent}% seasonal)",
     recentHistoryOnly: "{days} recent days",
@@ -879,9 +884,14 @@ const I18N = {
     predictedDemand: "予測使用電力量",
     predictedSurplus: "予測余剰電力量",
     plannedGridCharge: "予定買電充電量",
+    expectedStoredCharge: "蓄電池への予測蓄電量",
     expectedSunsetSoc: "予測日没時充電率",
     learnedCapacity: "学習済み使用可能容量",
     learnedChargePerformance: "学習済み充電性能",
+    learnedChargePower: "学習済み充電電力",
+    chargeConversionUsed: "計画に使用する蓄電変換効率",
+    learnedConversion: "{value}% · {count}回の充電から学習",
+    fallbackConversion: "100%初期値 · 有効な充電実績 {count}/3回",
     demandHistoryModel: "需要履歴モデル",
     recentAndSeasonalHistory: "直近{days}日 + 過去年同時期{years}年分 (季節データ{percent}%)",
     recentHistoryOnly: "直近{days}日",
@@ -2768,7 +2778,10 @@ function handleAdaptiveChargingTimelinePointer(event) {
   const awayDetail = item.away
     ? ` · ${template("awayTimelineDetail", { confidence: item.awayDemandConfidence || "low" })}`
     : "";
-  tooltip.textContent = `${new Date(item.start).toLocaleString()} - ${new Date(item.end).toLocaleTimeString()} · ${Math.round(item.demandW)} W demand · ${Math.round(item.solarW)} W solar · ${formatAdaptiveChargingPercent(item.predictedSocPercent)} SOC · ${item.plannedChargeWh} Wh charge · ${item.rateLabel || "Standard"} (${rate})${awayDetail}`;
+  const storedCharge = Number.isFinite(Number(item.predictedStoredChargeWh))
+    ? ` / ${item.predictedStoredChargeWh} Wh stored`
+    : "";
+  tooltip.textContent = `${new Date(item.start).toLocaleString()} - ${new Date(item.end).toLocaleTimeString()} · ${Math.round(item.demandW)} W demand · ${Math.round(item.solarW)} W solar · ${formatAdaptiveChargingPercent(item.predictedSocPercent)} SOC · ${item.plannedChargeWh} Wh charge${storedCharge} · ${item.rateLabel || "Standard"} (${rate})${awayDetail}`;
   tooltip.style.left = `${Math.min(window.innerWidth - 270, event.clientX + 12)}px`;
   tooltip.style.top = `${Math.max(8, event.clientY - 48)}px`;
   tooltip.classList.remove("hidden");
@@ -2793,24 +2806,19 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
   $("#adaptiveChargingPredictedDemand").textContent = formatAdaptiveChargingKwh(plan.predictedDemandKwh);
   $("#adaptiveChargingPredictedSurplus").textContent = formatAdaptiveChargingKwh(plan.predictedSurplusKwh);
   $("#adaptiveChargingGridCharge").textContent = formatAdaptiveChargingKwh(plan.plannedChargeKwh);
+  $("#adaptiveChargingStoredCharge").textContent = formatAdaptiveChargingKwh(plan.plannedStoredChargeKwh);
   $("#adaptiveChargingSunsetSoc").textContent = Number.isFinite(Number(plan.expectedSunsetSocPercent))
     ? `${Number(plan.expectedSunsetSocPercent).toFixed(0)}%`
     : "--";
   $("#adaptiveChargingLearnedCapacity").textContent = formatAdaptiveChargingKwh(status.learnedCapacityKwh);
   const chargingPerformance = status.chargingPerformance ?? {};
+  const storageEfficiency = plan.chargePerformance?.storageEfficiency ?? {};
   const chargePerformanceParts = [];
   if (chargingPerformance.learnedChargeWatts !== null
     && chargingPerformance.learnedChargeWatts !== undefined
     && Number.isFinite(Number(chargingPerformance.learnedChargeWatts))) {
     chargePerformanceParts.push(`${Math.round(Number(chargingPerformance.learnedChargeWatts))} W`);
     chargePerformanceParts.push(template("chargeSamples", { count: chargingPerformance.sampleCount ?? 0 }));
-  }
-  if (chargingPerformance.medianStorageEfficiencyPercent !== null
-    && chargingPerformance.medianStorageEfficiencyPercent !== undefined
-    && Number.isFinite(Number(chargingPerformance.medianStorageEfficiencyPercent))) {
-    chargePerformanceParts.push(template("estimatedEfficiency", {
-      value: Math.round(Number(chargingPerformance.medianStorageEfficiencyPercent)),
-    }));
   }
   if (chargingPerformance.demandImpactWattsPerKw !== null
     && chargingPerformance.demandImpactWattsPerKw !== undefined
@@ -2820,6 +2828,12 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
     }));
   }
   $("#adaptiveChargingChargePerformance").textContent = chargePerformanceParts.join(" · ") || "--";
+  $("#adaptiveChargingChargeEfficiency").textContent = storageEfficiency.learned
+    ? template("learnedConversion", {
+        value: Math.round(Number(storageEfficiency.effectivePercent)),
+        count: storageEfficiency.sampleCount,
+      })
+    : template("fallbackConversion", { count: storageEfficiency.sampleCount ?? 0 });
   $("#adaptiveChargingConfidence").textContent = `${state.config?.adaptiveCharging?.forecastMarginPercent ?? 10}% · ${plan.solarCalibration?.learned ? t("calibratedForecast") : t("initialForecastModel")}`;
   const demandHistory = plan.demandHistory ?? {};
   $("#adaptiveChargingDemandHistory").textContent = Number(demandHistory.recentComparableDayCount) > 0
@@ -2895,6 +2909,7 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
     addMetric(t("requiredCharge"), formatAdaptiveChargingKwh(windowPlan.requestedChargeKwh));
     addMetric(t("availableCharge"), formatAdaptiveChargingKwh(windowPlan.availableChargeKwh));
     addMetric(t("plannedCharge"), formatAdaptiveChargingKwh(windowPlan.plannedChargeKwh));
+    addMetric(t("expectedStoredCharge"), formatAdaptiveChargingKwh(windowPlan.plannedStoredChargeKwh));
     addMetric(t("solarHeadroom"), formatAdaptiveChargingKwh(windowPlan.solarHeadroomKwh));
     if (Number(windowPlan.unmetChargeKwh) > 0.0001) {
       addMetric(t("remainingShortfall"), formatAdaptiveChargingKwh(windowPlan.unmetChargeKwh), true);

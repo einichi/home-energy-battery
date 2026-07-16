@@ -28,6 +28,7 @@ import {
   discountedBandOccurrence,
   discountedBandOccurrences,
   discountedPlanStatus,
+  effectiveAdaptiveChargeStorageEfficiency,
   effectiveAdaptiveChargeWatts,
   executeAdaptiveChargeStart,
   enforceAdaptiveChargingSlotEndDeadline,
@@ -208,6 +209,7 @@ const timelineView = buildAdaptiveChargingTimelineView({
   initialStoredKwh: 2,
   floorKwh: 1,
   capacityKwh: 5,
+  chargeStorageEfficiency: 0.8,
   config: {
     rateBands: [{ start: "00:00", end: "00:30", label: "Night", yenPerKwh: 12 }],
     standardRateYenPerKwh: 30,
@@ -215,6 +217,7 @@ const timelineView = buildAdaptiveChargingTimelineView({
 });
 assert.equal(timelineView.length, 2);
 assert.equal(timelineView[0].plannedChargeWh, 500);
+assert.equal(timelineView[0].predictedStoredChargeWh, 400);
 assert.equal(timelineView[0].discounted, true);
 assert.equal(timelineView[0].rateLabel, "Night");
 assert.ok(timelineView.every((item) => item.predictedSocPercent >= 20));
@@ -430,10 +433,32 @@ const learnedChargingPerformance = cleanAdaptiveChargingPerformance({
 });
 assert.equal(learnedChargingPerformance.sampleCount, 10);
 assert.equal(learnedChargingPerformance.learnedChargeWatts, 1950);
+assert.equal(learnedChargingPerformance.storageEfficiencySampleCount, 1);
 assert.ok(Math.abs(learnedChargingPerformance.demandImpactWattsPerKw + 100) < 0.001);
 assert.equal(effectiveAdaptiveChargeWatts(adaptiveChargingConfig, {
   chargingPerformance: learnedChargingPerformance,
 }).effectiveWatts, 1950);
+assert.deepEqual(effectiveAdaptiveChargeStorageEfficiency({
+  chargingPerformance: learnedChargingPerformance,
+}), {
+  measuredPercent: 100,
+  sampleCount: 1,
+  effectivePercent: 100,
+  fraction: 1,
+  learned: false,
+});
+const learnedStorageEfficiency = effectiveAdaptiveChargeStorageEfficiency({
+  chargingPerformance: cleanAdaptiveChargingPerformance({
+    sessions: [78, 80, 82].map((estimatedStorageEfficiencyPercent, index) => ({
+      startedAt: new Date(2026, 6, 8 + index, 1).toISOString(),
+      endedAt: new Date(2026, 6, 8 + index, 2).toISOString(),
+      estimatedStorageEfficiencyPercent,
+    })),
+  }),
+});
+assert.equal(learnedStorageEfficiency.learned, true);
+assert.equal(learnedStorageEfficiency.effectivePercent, 80);
+assert.equal(learnedStorageEfficiency.fraction, 0.8);
 
 const completedChargeState = {
   activeChargedKwh: 1,
@@ -1036,6 +1061,41 @@ function chronologicalSlot(hour, band, netKwh = 0, highSolarNetKwh = netKwh) {
     chargeCapacityKwh: band ? 1 : 0,
   };
 }
+
+const efficiencyAdjustedPlan = planChronologicalDiscountedCharging({
+  timeline: [0, 0.5, 1, 1.5, 2].map((hour) => chronologicalSlot(
+    hour,
+    { start: "00:00", end: "02:30", yenPerKwh: 10, label: "Discounted" },
+  )),
+  currentStoredKwh: 1,
+  capacityKwh: 5,
+  dischargeFloorKwh: 0.5,
+  maximumTargetPercent: 100,
+  maximumChargeWatts: 2000,
+  chargeStorageEfficiency: 0.8,
+});
+assert.ok(Math.abs(efficiencyAdjustedPlan.plannedChargeKwh - 5) < 0.001);
+assert.ok(Math.abs(efficiencyAdjustedPlan.plannedStoredChargeKwh - 4) < 0.001);
+assert.ok(Math.abs(efficiencyAdjustedPlan.expectedEndStoredKwh - 5) < 0.001);
+assert.ok(efficiencyAdjustedPlan.unmetChargeKwh < 0.0001);
+
+const efficiencyConstrainedPlan = planChronologicalDiscountedCharging({
+  timeline: [0, 0.5, 1, 1.5].map((hour) => chronologicalSlot(
+    hour,
+    { start: "00:00", end: "02:00", yenPerKwh: 10, label: "Discounted" },
+  )),
+  currentStoredKwh: 1,
+  capacityKwh: 5,
+  dischargeFloorKwh: 0.5,
+  maximumTargetPercent: 100,
+  maximumChargeWatts: 2000,
+  chargeStorageEfficiency: 0.8,
+});
+assert.equal(efficiencyConstrainedPlan.plannedChargeKwh, 4);
+assert.ok(Math.abs(efficiencyConstrainedPlan.plannedStoredChargeKwh - 3.2) < 0.001);
+assert.ok(Math.abs(efficiencyConstrainedPlan.unmetStoredChargeKwh - 0.8) < 0.001);
+assert.ok(Math.abs(efficiencyConstrainedPlan.unmetChargeKwh - 1) < 0.001);
+assert.ok(Math.abs(efficiencyConstrainedPlan.requiredGridChargeKwh - 5) < 0.001);
 
 const userTariffTimeline = [];
 for (let halfHour = 0; halfHour < 38; halfHour += 1) {

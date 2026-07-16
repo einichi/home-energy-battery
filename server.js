@@ -45,6 +45,9 @@ const ADAPTIVE_CHARGING_MIN_EXECUTABLE_CHARGE_WH = 50;
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
 const ADAPTIVE_CHARGE_SESSION_LIMIT = 30;
 const ADAPTIVE_CHARGE_SAMPLE_LIMIT = 500;
+const ADAPTIVE_CHARGE_EFFICIENCY_MIN_SESSIONS = 3;
+const ADAPTIVE_CHARGE_EFFICIENCY_MIN_PERCENT = 50;
+const ADAPTIVE_CHARGE_EFFICIENCY_MAX_PERCENT = 100;
 const ADAPTIVE_CHARGING_WINDOW_SUMMARY_LIMIT = 30;
 const ADAPTIVE_CHARGING_DEMAND_PROFILE_INDEX_VERSION = 1;
 const ADAPTIVE_CHARGING_SEASONAL_LOOKBACK_YEARS = 10;
@@ -1014,6 +1017,7 @@ function cleanAdaptiveChargingPerformance(value = {}) {
     sessionCount: sessions.length,
     learnedChargeWatts,
     medianStorageEfficiencyPercent: efficiencies.length ? median(efficiencies) : null,
+    storageEfficiencySampleCount: efficiencies.length,
     demandImpactWattsPerKw,
   };
 }
@@ -1030,6 +1034,27 @@ function effectiveAdaptiveChargeWatts(config, state = {}) {
     effectiveWatts: learned
       ? Math.min(configuredWatts, Math.max(configuredWatts * 0.5, learnedWatts))
       : configuredWatts,
+    learned,
+  };
+}
+
+function effectiveAdaptiveChargeStorageEfficiency(state = {}) {
+  const performance = cleanAdaptiveChargingPerformance(state.chargingPerformance);
+  const measuredPercent = finiteNumberOrNull(performance.medianStorageEfficiencyPercent);
+  const sampleCount = Number(performance.storageEfficiencySampleCount) || 0;
+  const learned = sampleCount >= ADAPTIVE_CHARGE_EFFICIENCY_MIN_SESSIONS
+    && Number.isFinite(measuredPercent);
+  const effectivePercent = learned
+    ? Math.min(
+      ADAPTIVE_CHARGE_EFFICIENCY_MAX_PERCENT,
+      Math.max(ADAPTIVE_CHARGE_EFFICIENCY_MIN_PERCENT, measuredPercent),
+    )
+    : 100;
+  return {
+    measuredPercent,
+    sampleCount,
+    effectivePercent,
+    fraction: effectivePercent / 100,
     learned,
   };
 }
@@ -1528,15 +1553,23 @@ function applyPredictedBatteryFlow(storedKwh, netKwh, floorKwh, capacityKwh) {
   return Math.max(floorKwh, Math.min(capacityKwh, storedKwh + Number(netKwh || 0)));
 }
 
-function applyAdaptiveChargingTimelineSlot(storedKwh, slot, chargeKwh, floorKwh, capacityKwh) {
+function applyAdaptiveChargingTimelineSlot(
+  storedKwh,
+  slot,
+  chargeKwh,
+  floorKwh,
+  capacityKwh,
+  chargeStorageEfficiency = 1,
+) {
   const allocatedChargeKwh = Math.max(0, Number(chargeKwh) || 0);
+  const efficiency = Math.min(1, Math.max(0.5, Number(chargeStorageEfficiency) || 1));
   const slotChargeCapacityKwh = Math.max(0, Number(slot?.chargeCapacityKwh) || 0);
   const forcedChargeFraction = slotChargeCapacityKwh > 0
     ? Math.min(1, allocatedChargeKwh / slotChargeCapacityKwh)
     : 0;
   const autoNetKwh = Number(slot?.netKwh || 0) * (1 - forcedChargeFraction);
   const afterAuto = applyPredictedBatteryFlow(storedKwh, autoNetKwh, floorKwh, capacityKwh);
-  return Math.min(capacityKwh, afterAuto + allocatedChargeKwh);
+  return Math.min(capacityKwh, afterAuto + allocatedChargeKwh * efficiency);
 }
 
 function buildAdaptiveChargingTimelineView({
@@ -1545,6 +1578,7 @@ function buildAdaptiveChargingTimelineView({
   initialStoredKwh,
   floorKwh,
   capacityKwh,
+  chargeStorageEfficiency = 1,
   config,
 } = {}) {
   let storedKwh = Math.max(floorKwh, Math.min(capacityKwh, Number(initialStoredKwh)));
@@ -1566,6 +1600,7 @@ function buildAdaptiveChargingTimelineView({
       plannedChargeKwh,
       floorKwh,
       capacityKwh,
+      chargeStorageEfficiency,
     );
     const durationHours = Math.max(0, interval.endMs - interval.startMs) / 3_600_000;
     const rate = interval.band ?? rateForTimestamp(
@@ -1583,6 +1618,7 @@ function buildAdaptiveChargingTimelineView({
       rateLabel: rate?.label ?? null,
       yenPerKwh: finiteNumberOrNull(rate?.yenPerKwh),
       plannedChargeWh: Math.round(plannedChargeKwh * 1000),
+      predictedStoredChargeWh: Math.round(plannedChargeKwh * chargeStorageEfficiency * 1000),
       away: interval.away === true,
       awayDemandConfidence: interval.awayDemandConfidence ?? null,
     };
@@ -1596,7 +1632,9 @@ function planChronologicalDiscountedCharging({
   dischargeFloorKwh,
   maximumTargetPercent = 100,
   maximumChargeWatts,
+  chargeStorageEfficiency = 1,
 } = {}) {
+  const storageEfficiency = Math.min(1, Math.max(0.5, Number(chargeStorageEfficiency) || 1));
   const windows = discountedTimelineWindows(timeline);
   const maximumTargetKwh = capacityKwh * Number(maximumTargetPercent) / 100;
   const initialStoredKwh = Math.max(dischargeFloorKwh, Math.min(capacityKwh, Number(currentStoredKwh)));
@@ -1615,6 +1653,7 @@ function planChronologicalDiscountedCharging({
           chargeByIndex.get(index),
           dischargeFloorKwh,
           capacityKwh,
+          storageEfficiency,
         );
       }
     };
@@ -1632,6 +1671,7 @@ function planChronologicalDiscountedCharging({
             chargeByIndex.get(index),
             dischargeFloorKwh,
             capacityKwh,
+            storageEfficiency,
           );
         }
         return projectedStoredKwh;
@@ -1702,9 +1742,11 @@ function planChronologicalDiscountedCharging({
 
       simulate(window.startIndex, window.endIndex, chargeByIndex);
       const predictedEndStoredKwh = storedKwh;
-      const windowUnmetKwh = Math.max(0, targetStoredKwh - predictedEndStoredKwh);
+      const windowUnmetStoredKwh = Math.max(0, targetStoredKwh - predictedEndStoredKwh);
+      const windowUnmetChargeKwh = windowUnmetStoredKwh / storageEfficiency;
       const plannedWindowChargeKwh = [...chargeByIndex.values()].reduce((sum, value) => sum + value, 0);
-      const requestedKwh = plannedWindowChargeKwh + windowUnmetKwh;
+      const plannedWindowStoredChargeKwh = plannedWindowChargeKwh * storageEfficiency;
+      const requestedKwh = plannedWindowChargeKwh + windowUnmetChargeKwh;
       const availableChargeKwh = window.slots.reduce(
         (sum, slot) => sum + Math.max(0, Number(slot.chargeCapacityKwh) || 0),
         0,
@@ -1730,19 +1772,27 @@ function planChronologicalDiscountedCharging({
         requestedChargeKwh: requestedKwh,
         availableChargeKwh,
         plannedChargeKwh: plannedWindowChargeKwh,
-        unmetChargeKwh: windowUnmetKwh,
+        plannedStoredChargeKwh: plannedWindowStoredChargeKwh,
+        unmetChargeKwh: windowUnmetChargeKwh,
+        unmetStoredChargeKwh: windowUnmetStoredKwh,
       });
       cursor = window.endIndex;
     }
     simulate(cursor, timeline.length);
     const plannedChargeKwh = selectedSlots.reduce((sum, slot) => sum + slot.targetWh / 1000, 0);
     const unmetChargeKwh = windowPlans.reduce((sum, window) => sum + window.unmetChargeKwh, 0);
+    const unmetStoredChargeKwh = windowPlans.reduce(
+      (sum, window) => sum + window.unmetStoredChargeKwh,
+      0,
+    );
     return {
       slots: selectedSlots.sort((a, b) => new Date(a.start) - new Date(b.start)),
       windows: windowPlans,
       plannedChargeKwh,
+      plannedStoredChargeKwh: plannedChargeKwh * storageEfficiency,
       requiredGridChargeKwh: plannedChargeKwh + unmetChargeKwh,
       unmetChargeKwh,
+      unmetStoredChargeKwh,
       expectedEndStoredKwh: storedKwh,
     };
   };
@@ -1752,7 +1802,7 @@ function planChronologicalDiscountedCharging({
   const maxBackfillIterations = Math.max(1, windows.length * windows.length * 4);
   for (let iteration = 0; iteration < maxBackfillIterations; iteration += 1) {
     const constrainedIndex = plan.windows.findIndex(
-      (window, index) => index > 0 && window.unmetChargeKwh > 0.0001,
+      (window, index) => index > 0 && window.unmetStoredChargeKwh > 0.0001,
     );
     if (constrainedIndex < 0) break;
     const constrained = plan.windows[constrainedIndex];
@@ -1764,7 +1814,7 @@ function planChronologicalDiscountedCharging({
     let improved = false;
     for (const candidate of candidates) {
       const roomKwh = candidate.window.maximumTargetStoredKwh - candidate.window.targetStoredKwh;
-      const addedKwh = Math.min(constrained.unmetChargeKwh, roomKwh);
+      const addedKwh = Math.min(constrained.unmetStoredChargeKwh, roomKwh);
       if (addedKwh <= 0.0001) continue;
       const previousBoost = targetBoosts[candidate.index];
       targetBoosts[candidate.index] += addedKwh;
@@ -2249,7 +2299,10 @@ function buildAdaptiveChargingPlan({
   const initialStoredKwh = capacityKwh * soc / 100;
   const dischargeFloorKwh = capacityKwh * Math.max(0, dischargeLimit) / 100;
   const calibration = learnedSolarFactor(samples, state.historicalWeather, config);
-  const chargePerformance = effectiveAdaptiveChargeWatts(config, state);
+  const chargePerformance = {
+    ...effectiveAdaptiveChargeWatts(config, state),
+    storageEfficiency: effectiveAdaptiveChargeStorageEfficiency(state),
+  };
   const maximumChargeWatts = chargePerformance.effectiveWatts;
   const startMs = now.getTime();
   const demandByDay = new Map();
@@ -2332,6 +2385,7 @@ function buildAdaptiveChargingPlan({
     dischargeFloorKwh,
     maximumTargetPercent: Number(config.adaptiveCharging.targetSocPercent),
     maximumChargeWatts,
+    chargeStorageEfficiency: chargePerformance.storageEfficiency.fraction,
   });
   const timelineView = buildAdaptiveChargingTimelineView({
     timeline,
@@ -2339,6 +2393,7 @@ function buildAdaptiveChargingPlan({
     initialStoredKwh,
     floorKwh: dischargeFloorKwh,
     capacityKwh,
+    chargeStorageEfficiency: chargePerformance.storageEfficiency.fraction,
     config,
   });
   const planStatus = discountedPlanStatus(optimized);
@@ -4486,16 +4541,33 @@ function consumeCompletedAdaptiveChargingSlot(plan, completedSlot) {
     return false;
   });
   if (!removedWh) return plan;
+  const storageEfficiency = Math.min(
+    1,
+    Math.max(0.5, Number(plan.chargePerformance?.storageEfficiency?.fraction) || 1),
+  );
+  const removedStoredKwh = removedWh / 1000 * storageEfficiency;
   const completedWindowEnd = new Date(completedSlot.windowEnd ?? completedSlot.end).getTime();
   return {
     ...plan,
     slots,
     plannedChargeKwh: Math.max(0, Number(plan.plannedChargeKwh || 0) - removedWh / 1000),
+    plannedStoredChargeKwh: Math.max(
+      0,
+      Number(plan.plannedStoredChargeKwh || 0) - removedStoredKwh,
+    ),
+    requiredGridChargeKwh: Math.max(
+      0,
+      Number(plan.requiredGridChargeKwh || 0) - removedWh / 1000,
+    ),
     windows: (plan.windows ?? []).map((window) => (
       new Date(window.end).getTime() === completedWindowEnd
         ? {
           ...window,
           plannedChargeKwh: Math.max(0, Number(window.plannedChargeKwh || 0) - removedWh / 1000),
+          plannedStoredChargeKwh: Math.max(
+            0,
+            Number(window.plannedStoredChargeKwh || 0) - removedStoredKwh,
+          ),
           requestedChargeKwh: Math.max(0, Number(window.requestedChargeKwh || 0) - removedWh / 1000),
         }
         : window
@@ -6211,6 +6283,7 @@ export {
   discountedBandOccurrence,
   discountedBandOccurrences,
   discountedPlanStatus,
+  effectiveAdaptiveChargeStorageEfficiency,
   effectiveAdaptiveChargeWatts,
   executeAdaptiveChargeStart,
   evaluateAutomationRule,
