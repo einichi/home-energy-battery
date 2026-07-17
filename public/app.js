@@ -443,6 +443,19 @@ const I18N = {
     adaptiveChargingConfidence: "Forecast confidence",
     calibratedForecast: "calibrated",
     initialForecastModel: "initial model",
+    solarForecastAccuracy: "Solar Forecast Accuracy",
+    solarForecastAccuracyHelp: "Compare each issued solar forecast with recorded generation. The planning estimate includes the configured confidence margin.",
+    forecastBiasCorrection: "Forecast bias correction",
+    completedForecastDays: "Completed forecast days",
+    meanAbsoluteForecastError: "Mean absolute error",
+    date: "Date",
+    issuedForecast: "Issued forecast",
+    planningEstimate: "Planning estimate",
+    actualGeneration: "Actual generation",
+    forecastError: "Error",
+    forecastBiasLearning: "Learning · {count}/5 valid days",
+    forecastBiasApplied: "{value}% correction · {count} valid days",
+    noSolarForecastOutcomes: "Completed forecast outcomes will appear after a full day of well-covered solar data.",
     selectedRateWindows: "Discounted window plan",
     windowTarget: "target",
     solarHeadroom: "solar headroom",
@@ -900,6 +913,19 @@ const I18N = {
     adaptiveChargingConfidence: "予測信頼度",
     calibratedForecast: "学習済み",
     initialForecastModel: "初期モデル",
+    solarForecastAccuracy: "太陽光発電予測の精度",
+    solarForecastAccuracyHelp: "発行時の太陽光発電予測と実際の発電量を比較します。計画値には設定した予測信頼余裕が含まれます。",
+    forecastBiasCorrection: "予測偏差の補正",
+    completedForecastDays: "完了した予測日数",
+    meanAbsoluteForecastError: "平均絶対誤差",
+    date: "日付",
+    issuedForecast: "発行時予測",
+    planningEstimate: "計画用予測",
+    actualGeneration: "実際の発電量",
+    forecastError: "誤差",
+    forecastBiasLearning: "学習中 · 有効日数 {count}/5日",
+    forecastBiasApplied: "{value}%補正 · 有効日数 {count}日",
+    noSolarForecastOutcomes: "十分な太陽光データが一日分記録されると、完了した予測実績が表示されます。",
     selectedRateWindows: "割安料金帯の充電計画",
     windowTarget: "目標",
     solarHeadroom: "太陽光用空き容量",
@@ -2793,11 +2819,62 @@ function clearAdaptiveChargingTimelinePointer() {
   $("#trendTooltip")?.classList.add("hidden");
 }
 
+function renderSolarForecastAccuracy(accuracy = {}) {
+  const outcomes = Array.isArray(accuracy.outcomes) ? accuracy.outcomes : [];
+  const correctionPercent = (Number(accuracy.factor) - 1) * 100;
+  $("#solarForecastBiasCorrection").textContent = accuracy.learned
+    ? template("forecastBiasApplied", {
+        value: `${correctionPercent >= 0 ? "+" : ""}${correctionPercent.toFixed(0)}`,
+        count: accuracy.sampleCount ?? outcomes.length,
+      })
+    : template("forecastBiasLearning", { count: accuracy.sampleCount ?? outcomes.length });
+  $("#solarForecastCompletedDays").textContent = String(outcomes.length);
+  $("#solarForecastMeanError").textContent = accuracy.meanAbsolutePercentageError !== null
+    && accuracy.meanAbsolutePercentageError !== undefined
+    && Number.isFinite(Number(accuracy.meanAbsolutePercentageError))
+    ? `${Number(accuracy.meanAbsolutePercentageError).toFixed(1)}%`
+    : "--";
+
+  const rows = $("#solarForecastAccuracyRows");
+  rows.innerHTML = "";
+  for (const outcome of [...outcomes].reverse()) {
+    const row = document.createElement("tr");
+    const errorKwh = Number(outcome.errorKwh);
+    const errorPercent = Number(outcome.errorPercent);
+    const values = [
+      new Date(`${outcome.targetDate}T00:00:00`).toLocaleDateString(),
+      formatAdaptiveChargingKwh(outcome.predictedKwh),
+      formatAdaptiveChargingKwh(outcome.planningKwh),
+      formatAdaptiveChargingKwh(outcome.actualKwh),
+      Number.isFinite(errorKwh)
+        ? `${errorKwh >= 0 ? "+" : ""}${errorKwh.toFixed(2)} kWh${Number.isFinite(errorPercent) ? ` (${errorPercent >= 0 ? "+" : ""}${errorPercent.toFixed(0)}%)` : ""}`
+        : "--",
+    ];
+    for (const [index, value] of values.entries()) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      cell.dataset.label = [
+        t("date"),
+        t("issuedForecast"),
+        t("planningEstimate"),
+        t("actualGeneration"),
+        t("forecastError"),
+      ][index];
+      if (index === 4 && Number.isFinite(errorKwh)) cell.className = "solar-forecast-error";
+      row.append(cell);
+    }
+    rows.append(row);
+  }
+  $("#solarForecastAccuracyEmpty").classList.toggle("hidden", outcomes.length > 0);
+  rows.closest("table").classList.toggle("hidden", outcomes.length === 0);
+}
+
 function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
   if (!status) return;
   state.adaptiveChargingStatus = status;
   renderAdaptiveChargingWidget(status);
   renderAwayPeriods(status.away);
+  renderSolarForecastAccuracy(status.solarForecastAccuracy);
   const plan = status.plan ?? {};
   $("#adaptiveChargingForecastAge").textContent = Number.isFinite(status.forecast?.ageMs)
     ? `${Math.round(status.forecast.ageMs / 60_000)} min`

@@ -12,6 +12,7 @@ import {
   activeAdaptiveChargingSlotStopReason,
   advanceAdaptiveChargingBreakerRecovery,
   aggregateDemandDays,
+  applySolarForecastBias,
   applyInterruptedChargeCap,
   aggregateEnergyReportSamples,
   beginAdaptiveChargingBreakerRecovery,
@@ -28,6 +29,7 @@ import {
   discountedBandOccurrence,
   discountedBandOccurrences,
   discountedPlanStatus,
+  dailySolarForecastIssues,
   effectiveAdaptiveChargeStorageEfficiency,
   effectiveAdaptiveChargeWatts,
   executeAdaptiveChargeStart,
@@ -284,6 +286,9 @@ assert.equal(solarPowerFromIrradiance(500, {
 assert.equal(solarPowerFromIrradiance(2000, {
   adaptiveCharging: { arrayPeakKw: 5, systemLossPercent: 14 },
 }), 5000);
+assert.equal(applySolarForecastBias(1000, 5000, { learned: false, factor: 1.2 }), 1000);
+assert.equal(applySolarForecastBias(1000, 5000, { learned: true, factor: 1.2 }), 1200);
+assert.equal(applySolarForecastBias(4800, 5000, { learned: true, factor: 1.2 }), 5000);
 assert.equal(forecastIsFresh({ fetchedAt: "2026-07-11T00:00:00.000Z" }, new Date("2026-07-11T05:59:00.000Z")), true);
 assert.equal(forecastIsFresh({ fetchedAt: "2026-07-11T00:00:00.000Z" }, new Date("2026-07-11T06:01:00.000Z")), false);
 const parsedForecast = parseOpenMeteoForecast({
@@ -300,6 +305,37 @@ const parsedForecast = parseOpenMeteoForecast({
 }, new Date("2026-07-11T00:00:00.000Z"));
 assert.equal(parsedForecast.hours[0].tiltedIrradianceWm2, 900);
 assert.equal(parsedForecast.days[0].sunset, "2026-07-11T18:58");
+const forecastIssueTimezone = process.env.TZ;
+process.env.TZ = "Asia/Tokyo";
+const forecastIssues = dailySolarForecastIssues({
+  fetchedAt: "2026-07-10T12:00:00.000Z",
+  days: [{ date: "2026-07-11" }],
+  hours: [
+    { timestamp: "2026-07-11T03:00:00.000Z", tiltedIrradianceWm2: 500 },
+    { timestamp: "2026-07-11T04:00:00.000Z", tiltedIrradianceWm2: 500 },
+  ],
+}, {
+  adaptiveCharging: {
+    arrayPeakKw: 5,
+    systemLossPercent: 14,
+    forecastMarginPercent: 10,
+  },
+}, {
+  factor: 2,
+  groupFactors: {},
+  learned: true,
+  validDays: 10,
+}, {
+  learned: true,
+  factor: 1.2,
+});
+assert.equal(forecastIssues.length, 1);
+assert.equal(forecastIssues[0].targetDate, "2026-07-11");
+assert.equal(forecastIssues[0].rawPredictedKwh, 2);
+assert.equal(forecastIssues[0].predictedKwh, 2.4);
+assert.equal(forecastIssues[0].planningKwh, 2.16);
+if (forecastIssueTimezone === undefined) delete process.env.TZ;
+else process.env.TZ = forecastIssueTimezone;
 const precedingHourForecast = {
   hours: [
     { timestamp: "2026-07-11T10:00:00.000Z", tiltedIrradianceWm2: 100 },
@@ -941,6 +977,31 @@ assert.deepEqual(suspendedActions, [{ action: "set-mode", payload: { mode: "stan
 assert.equal(suspendedState.owner, null);
 assert.match(suspendedState.log.at(-1).message, /maintaining Standby operation mode/);
 
+const heldStandbyActions = [];
+const heldStandbyState = {
+  owner: "adaptiveCharging",
+  activeSlot: interruptedSlot,
+  activePlanCreatedAt: "plan",
+  activeChargedKwh: 1.05,
+  activeLastCheckedAt: "2026-07-11T12:28:30.000Z",
+  activeChargeSession: null,
+  log: [],
+};
+await suspendAdaptiveChargeInStandby(
+  heldStandbyState,
+  "Planned charge target reached",
+  new Date("2026-07-11T12:28:30.000Z"),
+  null,
+  async (action, payload) => {
+    heldStandbyActions.push({ action, payload });
+    return { ok: true };
+  },
+  "2026-07-11T13:00:00.000Z",
+);
+assert.deepEqual(heldStandbyActions, [{ action: "set-mode", payload: { mode: "standby" } }]);
+assert.equal(heldStandbyState.standbyHoldUntil, "2026-07-11T13:00:00.000Z");
+assert.match(heldStandbyState.log.at(-1).message, /holding Standby operation mode until/);
+
 const resumedActions = [];
 await executeAdaptiveChargeStart({ targetWh: 750 }, {
   resumeFromStandby: true,
@@ -998,6 +1059,7 @@ const deadlineState = {
   activeSlot: {
     start: "2026-07-11T12:00:00.000Z",
     end: "2026-07-11T12:30:00.000Z",
+    windowEnd: "2026-07-11T12:30:00.000Z",
     targetWh: 1050,
   },
 };
@@ -1048,6 +1110,33 @@ const staleDeadline = await enforceAdaptiveChargingSlotEndDeadline(deadlineKey, 
 assert.equal(staleDeadline.stopped, false);
 assert.equal(staleDeadline.reason, "active adaptiveCharging slot changed");
 assert.equal(deadlineReleaseCount, 1);
+
+const intermediateDeadlineState = {
+  owner: "adaptiveCharging",
+  activePlanCreatedAt: "intermediate-plan",
+  activeSlot: {
+    start: "2026-07-11T12:00:00.000Z",
+    end: "2026-07-11T12:30:00.000Z",
+    windowEnd: "2026-07-11T13:00:00.000Z",
+    targetWh: 1050,
+  },
+};
+const intermediateDeadlineKey = adaptiveChargingSlotEndKey(intermediateDeadlineState);
+let intermediateSuspendCount = 0;
+await enforceAdaptiveChargingSlotEndDeadline(intermediateDeadlineKey, {
+  now: new Date("2026-07-11T12:30:00.000Z"),
+  readState: async () => intermediateDeadlineState,
+  suspend: async (state, reason, now, host, execute, holdUntil) => {
+    intermediateSuspendCount += 1;
+    state.owner = null;
+    state.activeSlot = null;
+    state.standbyHoldUntil = holdUntil;
+    return true;
+  },
+  writeState: async () => {},
+});
+assert.equal(intermediateSuspendCount, 1);
+assert.equal(intermediateDeadlineState.standbyHoldUntil, "2026-07-11T13:00:00.000Z");
 
 function chronologicalSlot(hour, band, netKwh = 0, highSolarNetKwh = netKwh) {
   const startMs = Date.parse("2026-07-12T00:00:00.000Z") + hour * 3_600_000;
@@ -1371,8 +1460,23 @@ for (let index = 1; index <= 6; index += 1) {
     batteryPowerW: 1000,
   });
 }
-const capacity = estimateEffectiveBatteryCapacity(capacitySamples, 2);
+const chargeOnlyCapacity = estimateEffectiveBatteryCapacity(capacitySamples, 2);
+assert.equal(chargeOnlyCapacity.sessionCount, 0);
+assert.equal(chargeOnlyCapacity.chargeSessionCount, 6);
+assert.equal(chargeOnlyCapacity.learnedCapacityKwh, null);
+assert.equal(chargeOnlyCapacity.capacityKwh, 2);
+
+const dischargeCapacitySamples = [{ timestamp: "2026-07-11T00:00:00.000Z", stateOfChargePercent: 80, batteryPowerW: -1000 }];
+for (let index = 1; index <= 6; index += 1) {
+  dischargeCapacitySamples.push({
+    timestamp: new Date(Date.parse("2026-07-11T00:00:00.000Z") + index * 15 * 60_000).toISOString(),
+    stateOfChargePercent: 80 - index * 10,
+    batteryPowerW: -1000,
+  });
+}
+const capacity = estimateEffectiveBatteryCapacity(dischargeCapacitySamples, 2);
 assert.equal(capacity.sessionCount, 6);
+assert.equal(capacity.dischargeSessionCount, 6);
 assert.equal(capacity.learnedCapacityKwh, 2.5);
 
 const reversingCapacity = estimateEffectiveBatteryCapacity([

@@ -224,4 +224,93 @@ try {
   await rm(awayPeriodDir, { recursive: true, force: true });
 }
 
+const solarForecastDir = await mkdtemp(path.join(os.tmpdir(), "history-store-solar-forecast-"));
+try {
+  const store = createHistoryStore({ dataDir: solarForecastDir, logger: { log() {}, warn() {} } });
+  await store.initialize();
+  const dayRange = (targetDate) => {
+    const start = new Date(`${targetDate}T00:00:00`);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+    return { start, end };
+  };
+  const issue = ({ targetDate, issuedAt, raw = 2, predicted = 2.2, planning = 1.98 }) => {
+    const range = dayRange(targetDate);
+    return {
+      targetDate,
+      issuedAt,
+      periodStart: range.start.toISOString(),
+      periodEnd: range.end.toISOString(),
+      rawPredictedKwh: raw,
+      biasFactor: predicted / raw,
+      predictedKwh: predicted,
+      planningKwh: planning,
+      marginPercent: 10,
+      calibration: { learned: true, validDays: 10, factor: 2 },
+    };
+  };
+  store.recordSolarForecastIssues([
+    issue({ targetDate: "2026-07-01", issuedAt: "2026-06-30T06:00:00.000Z", predicted: 2 }),
+    issue({ targetDate: "2026-07-01", issuedAt: "2026-06-30T12:00:00.000Z" }),
+    issue({ targetDate: "2026-07-01", issuedAt: "2026-06-30T18:00:00.000Z", predicted: 2.4 }),
+  ]);
+  const firstDayStart = dayRange("2026-07-01").start.getTime();
+  for (let hour = 0; hour < 24; hour += 1) {
+    store.appendSample(sample(new Date(firstDayStart + hour * 3_600_000).toISOString(), {
+      solarGenerationKwh: 0.1,
+    }));
+  }
+  assert.equal(store.settleSolarForecastOutcomes(dayRange("2026-07-02").start), 3);
+  let outcomes = store.solarForecastOutcomes();
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0].issuedAt, "2026-06-30T12:00:00.000Z", "latest pre-day forecast is canonical");
+  assert.ok(Math.abs(outcomes[0].actualKwh - 2.4) < 0.000001);
+  assert.ok(Math.abs(outcomes[0].errorKwh - 0.2) < 0.000001);
+  assert.equal(store.solarForecastAccuracy().learned, false, "one outcome does not change future forecasts");
+
+  for (let day = 2; day <= 6; day += 1) {
+    const targetDate = `2026-07-${String(day).padStart(2, "0")}`;
+    const startMs = dayRange(targetDate).start.getTime();
+    store.recordSolarForecastIssues([issue({
+      targetDate,
+      issuedAt: new Date(startMs - 6 * 3_600_000).toISOString(),
+      predicted: 2,
+      planning: 1.8,
+    })]);
+    for (let hour = 0; hour < 24; hour += 1) {
+      store.appendSample(sample(new Date(startMs + hour * 3_600_000).toISOString(), {
+        solarGenerationKwh: 0.1,
+      }));
+    }
+  }
+  store.settleSolarForecastOutcomes(dayRange("2026-07-07").start);
+  const accuracy = store.solarForecastAccuracy();
+  assert.equal(accuracy.learned, true);
+  assert.equal(accuracy.sampleCount, 6);
+  assert.ok(
+    Math.abs(accuracy.factor - 1.2) < 0.000001,
+    `expected a 1.2 forecast correction, received ${JSON.stringify(accuracy)}`,
+  );
+
+  store.recordSolarForecastIssues([issue({
+    targetDate: "2026-07-08",
+    issuedAt: new Date(dayRange("2026-07-08").start.getTime() - 6 * 3_600_000).toISOString(),
+  })]);
+  const incompleteStart = dayRange("2026-07-08").start.getTime();
+  for (let hour = 0; hour < 2; hour += 1) {
+    store.appendSample(sample(new Date(incompleteStart + hour * 3_600_000).toISOString(), {
+      solarGenerationKwh: 0.1,
+    }));
+  }
+  assert.equal(store.settleSolarForecastOutcomes(dayRange("2026-07-09").start), 0);
+  outcomes = store.solarForecastOutcomes();
+  assert.equal(outcomes.some((outcome) => outcome.targetDate === "2026-07-08"), false);
+  assert.ok((await store.stats()).solarForecastIssues > 0);
+  await store.applyRetention({ adaptiveChargingHistoryDays: 1 }, dayRange("2026-07-12").start);
+  assert.equal((await store.stats()).solarForecastIssues, 0);
+  store.close();
+} finally {
+  await rm(solarForecastDir, { recursive: true, force: true });
+}
+
 console.log("history store tests passed");

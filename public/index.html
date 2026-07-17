@@ -328,6 +328,33 @@
             </dl>
           </div>
 
+          <div class="panel solar-forecast-accuracy-panel">
+            <div class="panel-title">
+              <h1 data-i18n="solarForecastAccuracy">Solar Forecast Accuracy</h1>
+              <p data-i18n="solarForecastAccuracyHelp">Compare each issued solar forecast with recorded generation. The planning estimate includes the configured confidence margin.</p>
+            </div>
+            <dl class="adaptive-charging-status-grid solar-forecast-accuracy-summary">
+              <div><dt data-i18n="forecastBiasCorrection">Forecast bias correction</dt><dd id="solarForecastBiasCorrection">--</dd></div>
+              <div><dt data-i18n="completedForecastDays">Completed forecast days</dt><dd id="solarForecastCompletedDays">--</dd></div>
+              <div><dt data-i18n="meanAbsoluteForecastError">Mean absolute error</dt><dd id="solarForecastMeanError">--</dd></div>
+            </dl>
+            <div class="table-wrap solar-forecast-accuracy-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th data-i18n="date">Date</th>
+                    <th data-i18n="issuedForecast">Issued forecast</th>
+                    <th data-i18n="planningEstimate">Planning estimate</th>
+                    <th data-i18n="actualGeneration">Actual generation</th>
+                    <th data-i18n="forecastError">Error</th>
+                  </tr>
+                </thead>
+                <tbody id="solarForecastAccuracyRows"></tbody>
+              </table>
+            </div>
+            <p id="solarForecastAccuracyEmpty" class="graph-meta hidden" data-i18n="noSolarForecastOutcomes">Completed forecast outcomes will appear after a full day of well-covered solar data.</p>
+          </div>
+
           <div class="panel away-periods-panel">
             <div class="panel-title">
               <span class="label" data-i18n="awayPeriods">Away Periods</span>

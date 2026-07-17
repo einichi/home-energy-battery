@@ -1490,6 +1490,24 @@ output {
   font-weight: 800;
 }
 
+.solar-forecast-accuracy-summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.solar-forecast-accuracy-table-wrap table {
+  min-width: 680px;
+}
+
+.solar-forecast-accuracy-table-wrap th:not(:first-child),
+.solar-forecast-accuracy-table-wrap td:not(:first-child) {
+  text-align: right;
+}
+
+.solar-forecast-error {
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+
 .adaptive-charging-windows {
   display: grid;
   gap: 10px;

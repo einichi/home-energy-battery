@@ -866,6 +866,7 @@ function cleanAdaptiveChargingState(value = {}) {
     activePlanCreatedAt: value.activePlanCreatedAt ?? null,
     activeChargedKwh: Math.max(0, Number(value.activeChargedKwh) || 0),
     activeLastCheckedAt: value.activeLastCheckedAt ?? null,
+    standbyHoldUntil: value.standbyHoldUntil ?? null,
     activeChargeSession: value.activeChargeSession ? {
       startedAt: value.activeChargeSession.startedAt ?? null,
       requestedWh: Math.max(0, Math.round(Number(value.activeChargeSession.requestedWh) || 0)),
@@ -1192,10 +1193,41 @@ async function refreshAdaptiveChargingForecast(config, { fetchImpl = fetch, now 
       appendAdaptiveChargingLog(state, `Historical weather refresh failed; using demand recency fallback: ${err.message}`, "warning", now);
     }
   }
+  if (historyStore.isReady() && state.forecast) {
+    try {
+      historyStore.settleSolarForecastOutcomes(now);
+      const samples = await readAdaptiveChargingHistory(now);
+      const calibration = learnedSolarFactor(samples, historyStore.historicalWeather(), config);
+      const accuracy = historyStore.solarForecastAccuracy();
+      historyStore.recordSolarForecastIssues(
+        dailySolarForecastIssues(state.forecast, config, calibration, accuracy),
+      );
+    } catch (err) {
+      appendAdaptiveChargingLog(
+        state,
+        `Solar forecast outcome recording failed: ${err.message}`,
+        "warning",
+        now,
+      );
+    }
+  }
   return writeAdaptiveChargingState(state);
 }
 
+function adaptiveChargingSolarForecastAccuracy(now = new Date()) {
+  const fallback = { learned: false, sampleCount: 0, factor: 1, outcomes: [] };
+  if (!historyStore.isReady()) return fallback;
+  try {
+    historyStore.settleSolarForecastOutcomes(now);
+    return historyStore.solarForecastAccuracy();
+  } catch (err) {
+    logDetailedError("solar-forecast-accuracy", err);
+    return { ...fallback, error: err.message };
+  }
+}
+
 function adaptiveChargingView(config, state, rules = [], now = new Date()) {
+  const solarForecastAccuracy = adaptiveChargingSolarForecastAccuracy(now);
   const availability = adaptiveChargingAvailability(config, rules);
   const forecastAgeMs = state.forecast?.fetchedAt
     ? now.getTime() - new Date(state.forecast.fetchedAt).getTime()
@@ -1225,11 +1257,13 @@ function adaptiveChargingView(config, state, rules = [], now = new Date()) {
       timezone: state.forecast.timezone,
       stale: !forecastIsFresh(state.forecast, now),
     } : null,
+    solarForecastAccuracy,
     plan: state.plan,
     owner: state.owner,
     activeSlot: state.activeSlot,
     interruptedCharge: state.interruptedCharge,
     breakerRecovery: state.breakerRecovery,
+    standbyHoldUntil: state.standbyHoldUntil,
     activeWindowExecution: state.activeWindowExecution,
     windowSummaries: state.windowSummaries ?? [],
     chargingPerformance: state.chargingPerformance,
@@ -1359,6 +1393,15 @@ function solarPowerFromIrradiance(irradianceWm2, config, learnedFactor = null) {
   return Math.min(peakW, irradiance * factor);
 }
 
+function applySolarForecastBias(solarW, peakW, accuracy = {}) {
+  const value = Math.max(0, Number(solarW) || 0);
+  const maximum = Math.max(0, Number(peakW) || 0);
+  const factor = accuracy.learned && Number.isFinite(Number(accuracy.factor))
+    ? Number(accuracy.factor)
+    : 1;
+  return Math.min(maximum, value * factor);
+}
+
 function adaptiveChargingBaseAvailability(config) {
   if (config.solarEnabled === false) return { available: false, reason: "solar generation is disabled" };
   if (!config.adaptiveCharging?.enabled) return { available: false, reason: "adaptive charging is disabled" };
@@ -1426,7 +1469,10 @@ function estimateEffectiveBatteryCapacity(samples, configuredCapacityKwh) {
     }
     const deltaSoc = direction ? (soc - anchor.soc) * direction : 0;
     if (deltaSoc >= 10 && energyKwh > 0) {
-      estimates.push(energyKwh / (deltaSoc / 100));
+      estimates.push({
+        capacityKwh: energyKwh / (deltaSoc / 100),
+        direction,
+      });
       anchor = { soc, time };
       direction = 0;
       energyKwh = 0;
@@ -1434,15 +1480,28 @@ function estimateEffectiveBatteryCapacity(samples, configuredCapacityKwh) {
     previous = { soc, time };
   }
   const configured = Number(configuredCapacityKwh);
-  const filtered = estimates.filter((value) => Number.isFinite(value) && value > 0);
-  const estimate = median(filtered);
-  if (filtered.length < 5 || !Number.isFinite(estimate) || !Number.isFinite(configured)) {
-    return { capacityKwh: configured || null, learnedCapacityKwh: null, sessionCount: filtered.length };
+  const chargeSessionCount = estimates.filter((item) => item.direction > 0).length;
+  const dischargeEstimates = estimates
+    .filter((item) => item.direction < 0)
+    .map((item) => item.capacityKwh)
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const plausible = Number.isFinite(configured) && configured > 0
+    ? dischargeEstimates.filter((value) => value >= configured * 0.7 && value <= configured * 1.3)
+    : dischargeEstimates;
+  const estimate = median(plausible);
+  const details = {
+    sessionCount: plausible.length,
+    chargeSessionCount,
+    dischargeSessionCount: dischargeEstimates.length,
+    rejectedDischargeSessionCount: dischargeEstimates.length - plausible.length,
+  };
+  if (plausible.length < 5 || !Number.isFinite(estimate) || !Number.isFinite(configured)) {
+    return { capacityKwh: configured || null, learnedCapacityKwh: null, ...details };
   }
   return {
-    capacityKwh: Math.max(configured * 0.7, Math.min(configured * 1.3, estimate)),
+    capacityKwh: estimate,
     learnedCapacityKwh: estimate,
-    sessionCount: filtered.length,
+    ...details,
   };
 }
 
@@ -2221,6 +2280,64 @@ function learnedSolarFactor(samples, historicalWeather, config) {
   };
 }
 
+function localDayRange(dayKey) {
+  const start = new Date(`${dayKey}T00:00:00`);
+  if (Number.isNaN(start.getTime())) return null;
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return { start, end };
+}
+
+function dailySolarForecastIssues(forecast, config, calibration, accuracy = {}) {
+  const issuedAt = forecast?.fetchedAt;
+  if (!issuedAt || Number.isNaN(new Date(issuedAt).getTime())) return [];
+  const biasFactor = accuracy.learned && Number.isFinite(Number(accuracy.factor))
+    ? Number(accuracy.factor)
+    : 1;
+  const marginPercent = Math.max(0, Number(config.adaptiveCharging?.forecastMarginPercent) || 0);
+  const marginFactor = Math.max(0, 1 - marginPercent / 100);
+  const peakW = Math.max(0, Number(config.adaptiveCharging?.arrayPeakKw) || 0) * 1000;
+  const targetDates = new Set([
+    ...(forecast.days ?? []).map((day) => day.date),
+    ...(forecast.hours ?? []).map((hour) => localDayKey(hour.timestamp ?? hour.time)),
+  ].filter(Boolean));
+  const issues = [];
+  for (const targetDate of [...targetDates].sort()) {
+    const range = localDayRange(targetDate);
+    if (!range) continue;
+    let rawPredictedKwh = 0;
+    let predictedKwh = 0;
+    for (const hour of forecast.hours ?? []) {
+      const timestamp = new Date(hour.timestamp ?? hour.time);
+      if (Number.isNaN(timestamp.getTime()) || localDayKey(timestamp) !== targetDate) continue;
+      const factor = calibration.groupFactors?.[solarCalibrationGroup(timestamp)] ?? calibration.factor;
+      const rawW = solarPowerFromIrradiance(hour.tiltedIrradianceWm2, config, factor);
+      rawPredictedKwh += rawW / 1000;
+      predictedKwh += applySolarForecastBias(rawW, peakW, {
+        learned: accuracy.learned,
+        factor: biasFactor,
+      }) / 1000;
+    }
+    issues.push({
+      targetDate,
+      issuedAt,
+      periodStart: range.start.toISOString(),
+      periodEnd: range.end.toISOString(),
+      rawPredictedKwh,
+      biasFactor,
+      predictedKwh,
+      planningKwh: predictedKwh * marginFactor,
+      marginPercent,
+      calibration: {
+        learned: calibration.learned,
+        validDays: calibration.validDays,
+        factor: calibration.factor,
+      },
+    });
+  }
+  return issues;
+}
+
 function forecastHourForInterval(forecast, start, end) {
   const midpoint = (new Date(start).getTime() + new Date(end).getTime()) / 2;
   const target = Math.ceil(midpoint / 3_600_000) * 3_600_000;
@@ -2299,6 +2416,15 @@ function buildAdaptiveChargingPlan({
   const initialStoredKwh = capacityKwh * soc / 100;
   const dischargeFloorKwh = capacityKwh * Math.max(0, dischargeLimit) / 100;
   const calibration = learnedSolarFactor(samples, state.historicalWeather, config);
+  const forecastAccuracy = state.solarForecastAccuracy ?? {
+    learned: false,
+    sampleCount: 0,
+    factor: 1,
+  };
+  const forecastBiasFactor = forecastAccuracy.learned
+    && Number.isFinite(Number(forecastAccuracy.factor))
+    ? Number(forecastAccuracy.factor)
+    : 1;
   const chargePerformance = {
     ...effectiveAdaptiveChargeWatts(config, state),
     storageEfficiency: effectiveAdaptiveChargeStorageEfficiency(state),
@@ -2308,6 +2434,7 @@ function buildAdaptiveChargingPlan({
   const demandByDay = new Map();
   const timeline = [];
   let predictedSolarKwh = 0;
+  let forecastSolarKwh = 0;
   let predictedDemandKwh = 0;
   let predictedSurplusKwh = 0;
   let awaySlotCount = 0;
@@ -2335,7 +2462,12 @@ function buildAdaptiveChargingPlan({
     const slotEndMs = nextPlanningBoundary(time, sunset.timestamp);
     const hour = forecastHourForInterval(state.forecast, time, slotEndMs);
     const factor = calibration.groupFactors?.[solarCalibrationGroup(date)] ?? calibration.factor;
-    const rawSolarW = solarPowerFromIrradiance(hour?.tiltedIrradianceWm2, config, factor);
+    const uncorrectedSolarW = solarPowerFromIrradiance(hour?.tiltedIrradianceWm2, config, factor);
+    const rawSolarW = applySolarForecastBias(
+      uncorrectedSolarW,
+      Number(config.adaptiveCharging.arrayPeakKw) * 1000,
+      forecastAccuracy,
+    );
     const margin = Number(config.adaptiveCharging.forecastMarginPercent) / 100;
     const solarW = rawSolarW * (1 - margin);
     const highSolarW = Math.min(Number(config.adaptiveCharging.arrayPeakKw) * 1000, rawSolarW * (1 + margin));
@@ -2351,6 +2483,7 @@ function buildAdaptiveChargingPlan({
     }
     const durationHours = (slotEndMs - time) / 3_600_000;
     const solarKwh = solarW * durationHours / 1000;
+    forecastSolarKwh += rawSolarW * durationHours / 1000;
     const highSolarKwh = highSolarW * durationHours / 1000;
     const demandKwh = slotDemandW * durationHours / 1000;
     predictedSolarKwh += solarKwh;
@@ -2407,6 +2540,7 @@ function buildAdaptiveChargingPlan({
     targetSocPercent: Number(config.adaptiveCharging.targetSocPercent),
     expectedSunsetSocPercent: capacityKwh ? Math.min(100, optimized.expectedEndStoredKwh / capacityKwh * 100) : null,
     predictedSolarKwh,
+    forecastSolarKwh,
     predictedDemandKwh,
     predictedSurplusKwh,
     chargePerformance,
@@ -2438,6 +2572,12 @@ function buildAdaptiveChargingPlan({
       awayReturnBufferMinutes: AWAY_RETURN_BUFFER_MS / 60_000,
     },
     solarCalibration: calibration,
+    solarForecastBias: {
+      learned: forecastAccuracy.learned === true,
+      sampleCount: Number(forecastAccuracy.sampleCount) || 0,
+      factor: forecastBiasFactor,
+      measuredFactor: finiteNumberOrNull(forecastAccuracy.measuredFactor),
+    },
     batteryCapacity: capacityEstimate,
     slots: optimized.slots,
     timeline: timelineView,
@@ -3289,6 +3429,15 @@ async function writeConfig(config) {
         ? "Adaptive Charging configuration changed"
         : "Adaptive Charging was disabled";
       await releaseAdaptiveCharge(state, reason, changedAt, previous.batteryHost);
+    } else if (state.standbyHoldUntil) {
+      await executeAction("set-mode", { mode: "auto", host: previous.batteryHost });
+      appendAdaptiveChargingLog(
+        state,
+        "Adaptive Charging configuration changed; releasing Standby hold and restoring operation mode to Auto",
+        "stop",
+        changedAt,
+      );
+      state.standbyHoldUntil = null;
     }
     if (state.activeWindowExecution) {
       finalizeAdaptiveChargingWindowExecution(
@@ -4149,8 +4298,18 @@ async function pauseAdaptiveChargingForManualAction(action, now = new Date()) {
   if (!adaptiveChargingConfiguredActive(config)) return null;
   const state = await readAdaptiveChargingState();
   if (state.owner === "adaptiveCharging") await releaseAdaptiveCharge(state, "Manual battery action received", now);
+  else if (state.standbyHoldUntil) {
+    await executeAction("set-mode", { mode: "auto" });
+    appendAdaptiveChargingLog(
+      state,
+      "Manual battery action received; releasing Adaptive Charging Standby hold",
+      "stop",
+      now,
+    );
+  }
   state.interruptedCharge = null;
   state.breakerRecovery = null;
+  state.standbyHoldUntil = null;
   state.pausedUntil = nextLocalMidnight(now);
   appendAdaptiveChargingLog(state, `Manual ${action} action paused Adaptive Charging until ${state.pausedUntil}`, "pause", now);
   return writeAdaptiveChargingState(state);
@@ -4163,6 +4322,10 @@ async function resumeAdaptiveCharging(now = new Date()) {
   state.interruptedCharge = null;
   state.breakerRecovery = null;
   state.solarHeadroomHoldUntil = null;
+  if (state.standbyHoldUntil) {
+    await executeAction("set-mode", { mode: "auto" });
+    state.standbyHoldUntil = null;
+  }
   state.lastPlanEventKey = null;
   state.pendingPlanReason = "manual resume";
   appendAdaptiveChargingLog(state, "Adaptive Charging resumed manually", "resume", now);
@@ -4363,6 +4526,7 @@ async function releaseAdaptiveCharge(state, reason, now = new Date(), batteryHos
   state.activePlanCreatedAt = null;
   state.activeChargedKwh = 0;
   state.activeLastCheckedAt = null;
+  state.standbyHoldUntil = null;
   return true;
 }
 
@@ -4372,11 +4536,23 @@ async function suspendAdaptiveChargeInStandby(
   now = new Date(),
   batteryHost = null,
   execute = executeAction,
+  holdUntil = null,
 ) {
   if (state.owner !== "adaptiveCharging") return false;
   await execute("set-mode", { mode: "standby", ...(batteryHost ? { host: batteryHost } : {}) });
   finalizeAdaptiveChargeSession(state, reason, now);
-  appendAdaptiveChargingLog(state, `${reason}; maintaining Standby operation mode`, "guard", now);
+  const holdUntilMs = new Date(holdUntil).getTime();
+  state.standbyHoldUntil = Number.isFinite(holdUntilMs) && holdUntilMs > now.getTime()
+    ? new Date(holdUntilMs).toISOString()
+    : null;
+  appendAdaptiveChargingLog(
+    state,
+    state.standbyHoldUntil
+      ? `${reason}; holding Standby operation mode until ${state.standbyHoldUntil}`
+      : `${reason}; maintaining Standby operation mode`,
+    "guard",
+    now,
+  );
   state.owner = null;
   state.activeSlot = null;
   state.activePlanCreatedAt = null;
@@ -4424,6 +4600,7 @@ async function enforceAdaptiveChargingSlotEndDeadline(expectedKey, {
   now = new Date(),
   readState = readAdaptiveChargingState,
   release = releaseAdaptiveCharge,
+  suspend = suspendAdaptiveChargeInStandby,
   writeState = writeAdaptiveChargingState,
 } = {}) {
   const state = await readState();
@@ -4436,7 +4613,8 @@ async function enforceAdaptiveChargingSlotEndDeadline(expectedKey, {
   const slotEndMs = new Date(state.activeSlot?.end).getTime();
   const windowEnded = Number.isFinite(windowEndMs) && Number.isFinite(slotEndMs) && slotEndMs >= windowEndMs;
   const reason = windowEnded ? "Planned discounted window ended" : "Planned charging slot ended";
-  await release(state, reason, now);
+  if (windowEnded) await release(state, reason, now);
+  else await suspend(state, reason, now, null, undefined, state.activeSlot?.windowEnd);
   finalizeExpiredAdaptiveChargingWindow(state, state.activeWindowExecution?.latestSocPercent, now);
   state.lastResult = {
     ok: true,
@@ -4960,6 +5138,19 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
   }
   const paused = state.pausedUntil && new Date(state.pausedUntil).getTime() > now.getTime();
   const guardActive = rules.some((rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore);
+  const standbyHoldUntilMs = new Date(state.standbyHoldUntil).getTime();
+  if (state.standbyHoldUntil
+    && (!Number.isFinite(standbyHoldUntilMs) || standbyHoldUntilMs <= now.getTime())
+    && !guardActive) {
+    await executeAction("set-mode", { mode: "auto" });
+    appendAdaptiveChargingLog(
+      state,
+      "Discounted charging hold ended; restoring operation mode to Auto",
+      "stop",
+      now,
+    );
+    state.standbyHoldUntil = null;
+  }
   const guardSettings = adaptiveChargingBreakerSettings(rules);
   const base = adaptiveChargingBaseAvailability(config);
   const forecastError = state.lastForecastError?.error;
@@ -5044,7 +5235,11 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
       solarPowerW: numericMetric(status.energy?.solar?.instant_power),
       houseDemandW: liveHouseDemandW,
     });
-    state = { ...state, historicalWeather: historyStore.historicalWeather() };
+    state = {
+      ...state,
+      historicalWeather: historyStore.historicalWeather(),
+      solarForecastAccuracy: adaptiveChargingSolarForecastAccuracy(now),
+    };
     const historicalDemandDays = await readAdaptiveChargingDemandProfileDays();
     state.plan = buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDays, awayPeriods, now });
     state.lastPlanEventKey = refreshDecision.eventKey;
@@ -5081,6 +5276,16 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
   else finalizeExpiredAdaptiveChargingWindow(state, soc, now);
   const gridExportW = numericMetric(status.meter?.grid_export_power);
   const liveExportNeedsHeadroom = Number.isFinite(gridExportW) && gridExportW > 50;
+  if (liveExportNeedsHeadroom && state.standbyHoldUntil) {
+    await executeAction("set-mode", { mode: "auto" });
+    appendAdaptiveChargingLog(
+      state,
+      "Live grid export indicates solar needs battery headroom; releasing Standby hold and restoring operation mode to Auto",
+      "stop",
+      now,
+    );
+    state.standbyHoldUntil = null;
+  }
   if (state.solarHeadroomHoldUntil && new Date(state.solarHeadroomHoldUntil).getTime() <= now.getTime()) {
     state.solarHeadroomHoldUntil = null;
   }
@@ -5132,8 +5337,24 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
     if (liveExportNeedsHeadroom && state.activeSlot?.windowEnd) {
       state.solarHeadroomHoldUntil = state.activeSlot.windowEnd;
     }
+    const completedWindowEndMs = new Date(completedSlot?.windowEnd).getTime();
+    const holdStandbyUntilWindowEnd = Boolean(
+      activeDiscountedWindow
+      && !liveExportNeedsHeadroom
+      && Number.isFinite(completedWindowEndMs)
+      && completedWindowEndMs > now.getTime(),
+    );
     if (breakerReserveInterrupted) {
       await suspendAdaptiveChargeInStandby(state, stopReason, now);
+    } else if (holdStandbyUntilWindowEnd) {
+      await suspendAdaptiveChargeInStandby(
+        state,
+        stopReason,
+        now,
+        null,
+        executeAction,
+        completedSlot.windowEnd,
+      );
     } else {
       await releaseAdaptiveCharge(state, stopReason, now);
     }
@@ -5162,11 +5383,14 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
   const solarHeadroomHoldActive = Boolean(
     state.solarHeadroomHoldUntil && new Date(state.solarHeadroomHoldUntil).getTime() > now.getTime(),
   );
+  const standbyHoldActive = Boolean(
+    state.standbyHoldUntil && new Date(state.standbyHoldUntil).getTime() > now.getTime(),
+  );
   const slotTargetReached = slot
     && Number.isFinite(soc)
     && soc >= Number(slot.targetSocPercent ?? config.adaptiveCharging.targetSocPercent);
   if (slot && state.owner !== "adaptiveCharging" && !solarHeadroomHoldActive && !slotTargetReached) {
-    const resumeFromStandby = Boolean(state.breakerRecovery || state.interruptedCharge);
+    const resumeFromStandby = Boolean(state.breakerRecovery || state.interruptedCharge || standbyHoldActive);
     const headroom = adaptiveChargingLiveChargeHeadroom(status, config, state, rules);
     if (!headroom.available) {
       if (!state.breakerRecovery) logAdaptiveChargingInitialHeadroomWait(state, headroom, now);
@@ -5220,6 +5444,7 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
     startAdaptiveChargeSession(state, slot, soc, now);
     state.interruptedCharge = null;
     state.breakerRecovery = null;
+    state.standbyHoldUntil = null;
     state.lastHeadroomWaitLogAt = null;
     state.lastResult = { ok: true, at: now.toISOString(), kind: "charge", slot, result };
     const startImportText = Number.isFinite(headroom.gridImportW) ? `${Math.round(headroom.gridImportW)} W` : "unavailable";
@@ -6101,7 +6326,11 @@ async function api(req, res, url) {
       return json(res, 503, adaptiveChargingView(config, state, rules));
     }
     const samples = await readAdaptiveChargingHistory(now);
-    state = { ...state, historicalWeather: historyStore.historicalWeather() };
+    state = {
+      ...state,
+      historicalWeather: historyStore.historicalWeather(),
+      solarForecastAccuracy: adaptiveChargingSolarForecastAccuracy(now),
+    };
     const historicalDemandDays = await readAdaptiveChargingDemandProfileDays();
     const awayPeriods = historyStore.awayPeriods({ includeCompleted: true, nowMs: now.getTime() });
     state.plan = buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDays, awayPeriods, now });
@@ -6266,6 +6495,7 @@ export {
   activeAdaptiveChargingSlotStopReason,
   advanceAdaptiveChargingBreakerRecovery,
   aggregateDemandDays,
+  applySolarForecastBias,
   applyInterruptedChargeCap,
   aggregateEnergyReportSamples,
   beginAdaptiveChargingBreakerRecovery,
@@ -6283,6 +6513,7 @@ export {
   discountedBandOccurrence,
   discountedBandOccurrences,
   discountedPlanStatus,
+  dailySolarForecastIssues,
   effectiveAdaptiveChargeStorageEfficiency,
   effectiveAdaptiveChargeWatts,
   executeAdaptiveChargeStart,
