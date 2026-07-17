@@ -2812,6 +2812,24 @@ function drawAdaptiveChargingTimeline(status = state.adaptiveChargingStatus) {
       ctx.moveTo(x, pad.top);
       ctx.lineTo(x, pad.top + chartHeight);
       ctx.stroke();
+
+      const startSoc = finiteSoc(item.predictedStartSocPercent);
+      const endSoc = finiteSoc(item.predictedEndSocPercent ?? item.predictedSocPercent);
+      const pointSoc = startSoc !== null && endSoc !== null
+        ? (startSoc + endSoc) / 2
+        : (endSoc ?? startSoc);
+      const drawHoverMarker = (y, color) => {
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      };
+      drawHoverMarker(powerY(item.demandW), "#dc2626");
+      drawHoverMarker(powerY(item.solarW), "#d8872c");
+      if (pointSoc !== null) drawHoverMarker(socY(pointSoc), "#7c3aed");
     }
   }
 }
@@ -2823,7 +2841,19 @@ function handleAdaptiveChargingTimelinePointer(event) {
   const rect = canvas.getBoundingClientRect();
   const pad = { right: 58, left: 58 };
   const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left - pad.left) / Math.max(1, rect.width - pad.left - pad.right)));
-  const index = Math.min(timeline.length - 1, Math.floor(ratio * timeline.length));
+  const timelineStartMs = new Date(timeline[0].start).getTime();
+  const timelineEndMs = new Date(timeline.at(-1).end).getTime();
+  const pointerMs = timelineStartMs + ratio * Math.max(1, timelineEndMs - timelineStartMs);
+  let index = 0;
+  let nearestDistance = Infinity;
+  timeline.forEach((candidate, candidateIndex) => {
+    const midpointMs = (new Date(candidate.start).getTime() + new Date(candidate.end).getTime()) / 2;
+    const distance = Math.abs(pointerMs - midpointMs);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      index = candidateIndex;
+    }
+  });
   const item = timeline[index];
   state.adaptiveChargingTimelineHover = { index };
   drawAdaptiveChargingTimeline();
@@ -2837,9 +2867,14 @@ function handleAdaptiveChargingTimelinePointer(event) {
     : "";
   const startSoc = item.predictedStartSocPercent;
   const endSoc = item.predictedEndSocPercent ?? item.predictedSocPercent;
-  const socDetail = startSoc === null || startSoc === undefined
-    ? `${formatAdaptiveChargingPercent(endSoc)} SOC`
-    : `${formatAdaptiveChargingPercent(startSoc)} → ${formatAdaptiveChargingPercent(endSoc)} SOC`;
+  const numericStartSoc = startSoc === null || startSoc === undefined ? null : Number(startSoc);
+  const numericEndSoc = endSoc === null || endSoc === undefined ? null : Number(endSoc);
+  const pointSoc = Number.isFinite(numericStartSoc) && Number.isFinite(numericEndSoc)
+    ? (numericStartSoc + numericEndSoc) / 2
+    : numericEndSoc;
+  const socDetail = Number.isFinite(numericStartSoc) && Number.isFinite(numericEndSoc)
+    ? `${formatAdaptiveChargingPercent(pointSoc)} SOC (${formatAdaptiveChargingPercent(numericStartSoc)} → ${formatAdaptiveChargingPercent(numericEndSoc)} during interval)`
+    : `${formatAdaptiveChargingPercent(endSoc)} SOC`;
   tooltip.textContent = `${new Date(item.start).toLocaleString()} - ${new Date(item.end).toLocaleTimeString()} · ${Math.round(item.demandW)} W demand · ${Math.round(item.solarW)} W solar · ${socDetail} · ${item.plannedChargeWh} Wh charge${storedCharge} · ${item.rateLabel || "Standard"} (${rate})${awayDetail}`;
   tooltip.style.left = `${Math.min(window.innerWidth - 270, event.clientX + 12)}px`;
   tooltip.style.top = `${Math.max(8, event.clientY - 48)}px`;
