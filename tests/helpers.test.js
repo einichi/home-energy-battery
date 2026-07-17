@@ -223,6 +223,10 @@ assert.equal(timelineView[0].predictedStoredChargeWh, 400);
 assert.equal(timelineView[0].discounted, true);
 assert.equal(timelineView[0].rateLabel, "Night");
 assert.ok(timelineView.every((item) => item.predictedSocPercent >= 20));
+assert.ok(Math.abs(timelineView[0].predictedStartSocPercent - 40) < 1e-9);
+assert.ok(Math.abs(timelineView[0].predictedEndSocPercent - 44) < 1e-9);
+assert.equal(timelineView[1].predictedStartSocPercent, timelineView[0].predictedEndSocPercent);
+assert.ok(Math.abs(timelineView[1].predictedEndSocPercent - 48) < 1e-9);
 
 const awayPeriods = [
   { from: "2026-07-12T09:00:00.000Z", until: "2026-07-12T12:00:00.000Z" },

@@ -1642,6 +1642,7 @@ function buildAdaptiveChargingTimelineView({
 } = {}) {
   let storedKwh = Math.max(floorKwh, Math.min(capacityKwh, Number(initialStoredKwh)));
   return timeline.map((interval) => {
+    const startingStoredKwh = storedKwh;
     const intervalSlots = slots.filter((slot) => {
       const startMs = new Date(slot.start).getTime();
       const endMs = new Date(slot.end).getTime();
@@ -1672,6 +1673,8 @@ function buildAdaptiveChargingTimelineView({
       end: new Date(interval.endMs).toISOString(),
       solarW: durationHours > 0 ? Number(interval.solarKwh || 0) * 1000 / durationHours : 0,
       demandW: Number(interval.demandW) || 0,
+      predictedStartSocPercent: capacityKwh > 0 ? startingStoredKwh / capacityKwh * 100 : null,
+      predictedEndSocPercent: capacityKwh > 0 ? storedKwh / capacityKwh * 100 : null,
       predictedSocPercent: capacityKwh > 0 ? storedKwh / capacityKwh * 100 : null,
       discounted: Boolean(interval.band),
       rateLabel: rate?.label ?? null,

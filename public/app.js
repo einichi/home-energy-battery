@@ -2738,7 +2738,35 @@ function drawAdaptiveChargingTimeline(status = state.adaptiveChargingStatus) {
   };
   drawLine("demandW", "#dc2626", powerY);
   drawLine("solarW", "#d8872c", powerY);
-  drawLine("predictedSocPercent", "#7c3aed", socY);
+
+  const finiteSoc = (value) => value === null || value === undefined
+    ? null
+    : (Number.isFinite(Number(value)) ? Number(value) : null);
+  ctx.beginPath();
+  let socLineStarted = false;
+  timeline.forEach((item) => {
+    const startSoc = finiteSoc(item.predictedStartSocPercent);
+    const endSoc = finiteSoc(item.predictedEndSocPercent ?? item.predictedSocPercent);
+    if (startSoc !== null) {
+      const startX = xFor(item.start);
+      if (!socLineStarted) ctx.moveTo(startX, socY(startSoc));
+      else ctx.lineTo(startX, socY(startSoc));
+      socLineStarted = true;
+    }
+    if (endSoc !== null) {
+      const endX = xFor(item.end);
+      if (!socLineStarted) ctx.moveTo(endX, socY(endSoc));
+      else ctx.lineTo(endX, socY(endSoc));
+      socLineStarted = true;
+    }
+  });
+  if (socLineStarted) {
+    ctx.strokeStyle = "#7c3aed";
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.stroke();
+  }
 
   for (const item of timeline) {
     if (!(Number(item.plannedChargeWh) > 0)) continue;
@@ -2807,7 +2835,12 @@ function handleAdaptiveChargingTimelinePointer(event) {
   const storedCharge = Number.isFinite(Number(item.predictedStoredChargeWh))
     ? ` / ${item.predictedStoredChargeWh} Wh stored`
     : "";
-  tooltip.textContent = `${new Date(item.start).toLocaleString()} - ${new Date(item.end).toLocaleTimeString()} · ${Math.round(item.demandW)} W demand · ${Math.round(item.solarW)} W solar · ${formatAdaptiveChargingPercent(item.predictedSocPercent)} SOC · ${item.plannedChargeWh} Wh charge${storedCharge} · ${item.rateLabel || "Standard"} (${rate})${awayDetail}`;
+  const startSoc = item.predictedStartSocPercent;
+  const endSoc = item.predictedEndSocPercent ?? item.predictedSocPercent;
+  const socDetail = startSoc === null || startSoc === undefined
+    ? `${formatAdaptiveChargingPercent(endSoc)} SOC`
+    : `${formatAdaptiveChargingPercent(startSoc)} → ${formatAdaptiveChargingPercent(endSoc)} SOC`;
+  tooltip.textContent = `${new Date(item.start).toLocaleString()} - ${new Date(item.end).toLocaleTimeString()} · ${Math.round(item.demandW)} W demand · ${Math.round(item.solarW)} W solar · ${socDetail} · ${item.plannedChargeWh} Wh charge${storedCharge} · ${item.rateLabel || "Standard"} (${rate})${awayDetail}`;
   tooltip.style.left = `${Math.min(window.innerWidth - 270, event.clientX + 12)}px`;
   tooltip.style.top = `${Math.max(8, event.clientY - 48)}px`;
   tooltip.classList.remove("hidden");
