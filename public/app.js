@@ -429,12 +429,38 @@ const I18N = {
     plannedGridCharge: "Planned grid charge",
     expectedStoredCharge: "Expected battery storage",
     expectedSunsetSoc: "Expected sunset SOC",
-    learnedCapacity: "Learned usable capacity",
-    learnedChargePerformance: "Learned charging performance",
-    learnedChargePower: "Learned charge power",
-    chargeConversionUsed: "Charge conversion used",
-    learnedConversion: "{value}% · learned from {count} sessions",
-    fallbackConversion: "100% fallback · {count}/3 valid sessions",
+    batteryModelStatus: "Battery model",
+    chargeEnergyModel: "Charge energy model",
+    dischargeEnergyModel: "Discharge energy model",
+    chargePowerModel: "Charge power model",
+    batteryModelLearning: "Learning",
+    batteryModelValidating: "Validating",
+    batteryModelActive: "Learned model active",
+    batteryModelDegraded: "Configured fallback after drift",
+    configuredModelValue: "Configured {value}",
+    activeConfiguredModelValue: "Active configured {value}",
+    learnedModelValue: "Active learned {value}",
+    candidateModelValue: "candidate {value} (not used)",
+    validatedCandidateModelValue: "validated candidate {value}",
+    batteryModelProgress: "{count} observations · {days} days · {points} SOC points",
+    batteryModelValidation: "validation MAE {value} SOC points",
+    batteryModelActivatedAt: "activated {value}",
+    batteryModelDemotedAt: "demoted {value}",
+    postMigrationChargeSamples: "{count} post-migration samples",
+    batteryBlockerObservations: "{count} more eligible observations required",
+    batteryBlockerDays: "{count} more distinct days required",
+    batteryBlockerSocPoints: "{count} more SOC points required",
+    batteryBlockerDispersion: "dispersion {value}% exceeds {limit}%",
+    batteryBlockerStability: "rolling stability must be within {limit}%",
+    batteryBlockerAcceptance: "valid observation acceptance {value}% is below 60%",
+    batteryBlockerValidations: "{count} more forward validations required",
+    batteryBlockerMeanError: "validation mean error exceeds 3 SOC points",
+    batteryBlockerBias: "validation bias exceeds 2 SOC points",
+    batteryBlockerMaximumError: "validation maximum error exceeds 6 SOC points",
+    batteryBlockerPowerSamples: "{count} more post-migration steady samples required",
+    batteryBlockerPowerSessions: "{count} more charging sessions required",
+    batteryBlockerPowerDays: "{count} more distinct days required",
+    batteryBlockerPowerDispersion: "charge-power dispersion must be within 3%",
     demandHistoryModel: "Demand history model",
     recentAndSeasonalHistory: "{days} recent days + {years} seasonal years ({percent}% seasonal)",
     recentHistoryOnly: "{days} recent days",
@@ -899,12 +925,38 @@ const I18N = {
     plannedGridCharge: "予定買電充電量",
     expectedStoredCharge: "蓄電池への予測蓄電量",
     expectedSunsetSoc: "予測日没時充電率",
-    learnedCapacity: "学習済み使用可能容量",
-    learnedChargePerformance: "学習済み充電性能",
-    learnedChargePower: "学習済み充電電力",
-    chargeConversionUsed: "計画に使用する蓄電変換効率",
-    learnedConversion: "{value}% · {count}回の充電から学習",
-    fallbackConversion: "100%初期値 · 有効な充電実績 {count}/3回",
+    batteryModelStatus: "蓄電池モデル",
+    chargeEnergyModel: "充電エネルギーモデル",
+    dischargeEnergyModel: "放電エネルギーモデル",
+    chargePowerModel: "充電電力モデル",
+    batteryModelLearning: "学習中",
+    batteryModelValidating: "検証中",
+    batteryModelActive: "学習済みモデルを使用中",
+    batteryModelDegraded: "精度低下のため設定値に復帰",
+    configuredModelValue: "設定値 {value}",
+    activeConfiguredModelValue: "使用中の設定値 {value}",
+    learnedModelValue: "使用中の学習値 {value}",
+    candidateModelValue: "候補 {value} (計画には未使用)",
+    validatedCandidateModelValue: "検証済み候補 {value}",
+    batteryModelProgress: "観測{count}件 · {days}日 · SOC変化{points}ポイント",
+    batteryModelValidation: "検証MAE {value} SOCポイント",
+    batteryModelActivatedAt: "有効化 {value}",
+    batteryModelDemotedAt: "設定値へ復帰 {value}",
+    postMigrationChargeSamples: "移行後{count}件の測定",
+    batteryBlockerObservations: "有効な観測があと{count}件必要",
+    batteryBlockerDays: "異なる日付の観測があと{count}日必要",
+    batteryBlockerSocPoints: "SOC変化があと{count}ポイント必要",
+    batteryBlockerDispersion: "ばらつき{value}%が上限{limit}%を超過",
+    batteryBlockerStability: "直近の安定性を{limit}%以内にする必要あり",
+    batteryBlockerAcceptance: "有効観測率{value}%が60%未満",
+    batteryBlockerValidations: "将来データによる検証があと{count}件必要",
+    batteryBlockerMeanError: "検証平均誤差がSOC 3ポイントを超過",
+    batteryBlockerBias: "検証バイアスがSOC 2ポイントを超過",
+    batteryBlockerMaximumError: "検証最大誤差がSOC 6ポイントを超過",
+    batteryBlockerPowerSamples: "移行後の安定測定があと{count}件必要",
+    batteryBlockerPowerSessions: "充電セッションがあと{count}回必要",
+    batteryBlockerPowerDays: "異なる日付の測定があと{count}日必要",
+    batteryBlockerPowerDispersion: "充電電力のばらつきを3%以内にする必要あり",
     demandHistoryModel: "需要履歴モデル",
     recentAndSeasonalHistory: "直近{days}日 + 過去年同時期{years}年分 (季節データ{percent}%)",
     recentHistoryOnly: "直近{days}日",
@@ -2951,6 +3003,31 @@ function renderSolarForecastAccuracy(accuracy = {}) {
   rows.closest("table").classList.toggle("hidden", outcomes.length === 0);
 }
 
+function batteryModelBlockerText(blocker) {
+  const value = String(blocker ?? "");
+  const patterns = [
+    [/^(\d+) more eligible observations required$/, "batteryBlockerObservations", ["count"]],
+    [/^(\d+) more distinct days required$/, "batteryBlockerDays", ["count"]],
+    [/^(\d+) more SOC points required$/, "batteryBlockerSocPoints", ["count"]],
+    [/^dispersion ([\d.]+)% exceeds ([\d.]+)%$/, "batteryBlockerDispersion", ["value", "limit"]],
+    [/^rolling stability must be within ([\d.]+)%$/, "batteryBlockerStability", ["limit"]],
+    [/^valid observation acceptance ([\d.]+)% is below 60%$/, "batteryBlockerAcceptance", ["value"]],
+    [/^(\d+) more forward validations required$/, "batteryBlockerValidations", ["count"]],
+    [/^validation mean error exceeds 3 SOC points$/, "batteryBlockerMeanError", []],
+    [/^validation bias exceeds 2 SOC points$/, "batteryBlockerBias", []],
+    [/^validation maximum error exceeds 6 SOC points$/, "batteryBlockerMaximumError", []],
+    [/^(\d+) more post-migration steady samples required$/, "batteryBlockerPowerSamples", ["count"]],
+    [/^(\d+) more charging sessions required$/, "batteryBlockerPowerSessions", ["count"]],
+    [/^charge-power dispersion must be within 3%$/, "batteryBlockerPowerDispersion", []],
+  ];
+  for (const [pattern, key, names] of patterns) {
+    const match = value.match(pattern);
+    if (!match) continue;
+    return template(key, Object.fromEntries(names.map((name, index) => [name, match[index + 1]])));
+  }
+  return value;
+}
+
 function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
   if (!status) return;
   state.adaptiveChargingStatus = status;
@@ -2969,30 +3046,89 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
   $("#adaptiveChargingSunsetSoc").textContent = Number.isFinite(Number(plan.expectedSunsetSocPercent))
     ? `${Number(plan.expectedSunsetSocPercent).toFixed(0)}%`
     : "--";
-  $("#adaptiveChargingLearnedCapacity").textContent = formatAdaptiveChargingKwh(status.learnedCapacityKwh);
-  const chargingPerformance = status.chargingPerformance ?? {};
-  const storageEfficiency = plan.chargePerformance?.storageEfficiency ?? {};
-  const chargePerformanceParts = [];
-  if (chargingPerformance.learnedChargeWatts !== null
-    && chargingPerformance.learnedChargeWatts !== undefined
-    && Number.isFinite(Number(chargingPerformance.learnedChargeWatts))) {
-    chargePerformanceParts.push(`${Math.round(Number(chargingPerformance.learnedChargeWatts))} W`);
-    chargePerformanceParts.push(template("chargeSamples", { count: chargingPerformance.sampleCount ?? 0 }));
-  }
-  if (chargingPerformance.demandImpactWattsPerKw !== null
-    && chargingPerformance.demandImpactWattsPerKw !== undefined
-    && Number.isFinite(Number(chargingPerformance.demandImpactWattsPerKw))) {
-    chargePerformanceParts.push(template("demandImpact", {
-      value: Math.round(Number(chargingPerformance.demandImpactWattsPerKw)),
+  const batteryModel = status.batteryModel ?? {};
+  const statusKey = {
+    learning: "batteryModelLearning",
+    validating: "batteryModelValidating",
+    active: "batteryModelActive",
+    degraded: "batteryModelDegraded",
+  }[batteryModel.status] ?? "batteryModelLearning";
+  $("#adaptiveChargingBatteryModelStatus").textContent = `${t(statusKey)} · v${batteryModel.version ?? 2}`;
+  const optionalNumber = (value) => value === null || value === undefined || value === ""
+    ? Number.NaN
+    : Number(value);
+  const coefficientText = (model = {}) => {
+    const configured = optionalNumber(model.configuredWhPerSocPoint);
+    const active = optionalNumber(model.activeWhPerSocPoint);
+    const candidate = optionalNumber(model.candidateWhPerSocPoint);
+    const parts = [];
+    if (Number.isFinite(configured)) {
+      parts.push(template("configuredModelValue", { value: `${configured.toFixed(1)} Wh/SOC` }));
+    }
+    if (Number.isFinite(candidate)) {
+      parts.push(template(
+        model.source === "learned" ? "validatedCandidateModelValue" : "candidateModelValue",
+        { value: `${candidate.toFixed(1)} Wh/SOC` },
+      ));
+    }
+    if (Number.isFinite(active)) {
+      parts.push(template(
+        model.source === "learned" ? "learnedModelValue" : "activeConfiguredModelValue",
+        { value: `${active.toFixed(1)} Wh/SOC` },
+      ));
+    }
+    parts.push(template("batteryModelProgress", {
+      count: model.acceptedObservationCount ?? 0,
+      days: model.distinctDays ?? 0,
+      points: Math.round(Number(model.totalSocPoints) || 0),
     }));
+    const validationMae = optionalNumber(model.validation?.meanAbsoluteErrorSoc);
+    if (Number.isFinite(validationMae)) {
+      parts.push(template("batteryModelValidation", {
+        value: validationMae.toFixed(1),
+      }));
+    }
+    if (model.activatedAt) {
+      parts.push(template("batteryModelActivatedAt", { value: new Date(model.activatedAt).toLocaleString() }));
+    }
+    if (model.demotedAt && model.source !== "learned") {
+      parts.push(template("batteryModelDemotedAt", { value: new Date(model.demotedAt).toLocaleString() }));
+    }
+    if (model.blockers?.length) parts.push(model.blockers.map(batteryModelBlockerText).join("; "));
+    return parts.join(" · ") || "--";
+  };
+  $("#adaptiveChargingChargeModel").textContent = coefficientText(batteryModel.charge);
+  $("#adaptiveChargingDischargeModel").textContent = coefficientText(batteryModel.discharge);
+  const power = batteryModel.power ?? {};
+  const configuredPower = optionalNumber(power.configuredWatts);
+  const activePower = optionalNumber(power.activeWatts);
+  const candidatePower = optionalNumber(power.candidateWatts);
+  const powerParts = [];
+  if (Number.isFinite(configuredPower)) {
+    powerParts.push(template("configuredModelValue", { value: `${Math.round(configuredPower)} W` }));
   }
-  $("#adaptiveChargingChargePerformance").textContent = chargePerformanceParts.join(" · ") || "--";
-  $("#adaptiveChargingChargeEfficiency").textContent = storageEfficiency.learned
-    ? template("learnedConversion", {
-        value: Math.round(Number(storageEfficiency.effectivePercent)),
-        count: storageEfficiency.sampleCount,
-      })
-    : template("fallbackConversion", { count: storageEfficiency.sampleCount ?? 0 });
+  if (Number.isFinite(candidatePower)) {
+    powerParts.push(template(
+      power.source === "learned" ? "validatedCandidateModelValue" : "candidateModelValue",
+      { value: `${Math.round(candidatePower)} W` },
+    ));
+  }
+  if (Number.isFinite(activePower)) {
+    powerParts.push(template(
+      power.source === "learned" ? "learnedModelValue" : "activeConfiguredModelValue",
+      { value: `${Math.round(activePower)} W` },
+    ));
+  }
+  powerParts.push(template("chargeSamples", { count: power.sampleCount ?? 0 }));
+  powerParts.push(template("postMigrationChargeSamples", { count: power.postMigrationSampleCount ?? 0 }));
+  if (power.activatedAt) {
+    powerParts.push(template("batteryModelActivatedAt", { value: new Date(power.activatedAt).toLocaleString() }));
+  }
+  if (power.demotedAt && power.source !== "learned") {
+    powerParts.push(template("batteryModelDemotedAt", { value: new Date(power.demotedAt).toLocaleString() }));
+  }
+  if (power.blockers?.length) powerParts.push(power.blockers.map(batteryModelBlockerText).join("; "));
+  $("#adaptiveChargingPowerModel").textContent = powerParts.join(" · ") || "--";
   $("#adaptiveChargingConfidence").textContent = `${state.config?.adaptiveCharging?.forecastMarginPercent ?? 10}% · ${plan.solarCalibration?.learned ? t("calibratedForecast") : t("initialForecastModel")}`;
   const demandHistory = plan.demandHistory ?? {};
   $("#adaptiveChargingDemandHistory").textContent = Number(demandHistory.recentComparableDayCount) > 0

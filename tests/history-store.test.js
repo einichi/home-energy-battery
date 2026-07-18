@@ -91,6 +91,29 @@ try {
     category: "adaptiveCharging",
     type: "plan",
   });
+  store.recordEvent({
+    eventKey: "adaptiveCharging:manual",
+    at: "2024-01-01T00:15:00.000Z",
+    category: "adaptiveCharging",
+    type: "pause",
+    message: "Manual set-mode action paused Adaptive Charging",
+  });
+  assert.equal(store.eventsBetween(
+    "adaptiveCharging",
+    Date.parse("2024-01-01T00:10:00.000Z"),
+    Date.parse("2024-01-01T00:20:00.000Z"),
+    ["pause"],
+  ).length, 1);
+  assert.equal(store.tagEventsBefore(
+    "adaptiveCharging",
+    "2025-01-01T00:00:00.000Z",
+    { modelVersion: 1 },
+  ), 2);
+  assert.ok(store.eventsBetween(
+    "adaptiveCharging",
+    Date.parse("2024-01-01T00:00:00.000Z"),
+    Date.parse("2024-01-02T00:00:00.000Z"),
+  ).every((event) => event.payload.modelVersion === 1));
   await store.applyRetention({
     rawTelemetryDays: 365,
     intervalAggregatesDays: null,
@@ -104,7 +127,7 @@ try {
   assert.equal(stats.rollups.interval, 3);
   assert.equal(stats.rollups.daily, 1);
   assert.equal(stats.events.notification ?? 0, 0);
-  assert.equal(stats.events.adaptiveCharging, 1);
+  assert.equal(stats.events.adaptiveCharging, 2);
   store.close();
 
   store = createHistoryStore({ dataDir, logger: { log() {}, warn() {} } });
