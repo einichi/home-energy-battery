@@ -2707,6 +2707,18 @@ function drawAdaptiveChargingTimeline(status = state.adaptiveChargingStatus) {
     ctx.fillStyle = "rgba(18, 124, 120, 0.08)";
     ctx.fillRect(xFor(item.start), pad.top, Math.max(1, xFor(item.end) - xFor(item.start)), chartHeight);
   }
+  const hoveredItem = state.adaptiveChargingTimelineHover
+    ? timeline[state.adaptiveChargingTimelineHover.index]
+    : null;
+  if (hoveredItem) {
+    ctx.fillStyle = "rgba(15, 23, 42, 0.08)";
+    ctx.fillRect(
+      xFor(hoveredItem.start),
+      pad.top,
+      Math.max(1, xFor(hoveredItem.end) - xFor(hoveredItem.start)),
+      chartHeight,
+    );
+  }
   ctx.strokeStyle = "#dbe5ef";
   ctx.fillStyle = "#64748b";
   ctx.font = "11px system-ui";
@@ -2806,30 +2818,26 @@ function drawAdaptiveChargingTimeline(status = state.adaptiveChargingStatus) {
   if (hover) {
     const item = timeline[hover.index];
     if (item) {
-      const x = xFor((new Date(item.start).getTime() + new Date(item.end).getTime()) / 2);
+      const startX = xFor(item.start);
+      const endX = xFor(item.end);
       ctx.strokeStyle = "rgba(15, 23, 42, 0.5)";
       ctx.beginPath();
-      ctx.moveTo(x, pad.top);
-      ctx.lineTo(x, pad.top + chartHeight);
+      ctx.moveTo(startX, pad.top);
+      ctx.lineTo(startX, pad.top + chartHeight);
+      ctx.moveTo(endX, pad.top);
+      ctx.lineTo(endX, pad.top + chartHeight);
       ctx.stroke();
 
-      const startSoc = finiteSoc(item.predictedStartSocPercent);
       const endSoc = finiteSoc(item.predictedEndSocPercent ?? item.predictedSocPercent);
-      const pointSoc = startSoc !== null && endSoc !== null
-        ? (startSoc + endSoc) / 2
-        : (endSoc ?? startSoc);
-      const drawHoverMarker = (y, color) => {
+      if (endSoc !== null) {
         ctx.beginPath();
-        ctx.arc(x, y, 4, 0, Math.PI * 2);
-        ctx.fillStyle = color;
+        ctx.arc(endX, socY(endSoc), 4, 0, Math.PI * 2);
+        ctx.fillStyle = "#7c3aed";
         ctx.fill();
         ctx.strokeStyle = "#ffffff";
         ctx.lineWidth = 1.5;
         ctx.stroke();
-      };
-      drawHoverMarker(powerY(item.demandW), "#dc2626");
-      drawHoverMarker(powerY(item.solarW), "#d8872c");
-      if (pointSoc !== null) drawHoverMarker(socY(pointSoc), "#7c3aed");
+      }
     }
   }
 }
@@ -2844,16 +2852,27 @@ function handleAdaptiveChargingTimelinePointer(event) {
   const timelineStartMs = new Date(timeline[0].start).getTime();
   const timelineEndMs = new Date(timeline.at(-1).end).getTime();
   const pointerMs = timelineStartMs + ratio * Math.max(1, timelineEndMs - timelineStartMs);
-  let index = 0;
-  let nearestDistance = Infinity;
-  timeline.forEach((candidate, candidateIndex) => {
-    const midpointMs = (new Date(candidate.start).getTime() + new Date(candidate.end).getTime()) / 2;
-    const distance = Math.abs(pointerMs - midpointMs);
-    if (distance < nearestDistance) {
-      nearestDistance = distance;
-      index = candidateIndex;
-    }
+  let index = timeline.findIndex((candidate, candidateIndex) => {
+    const candidateStartMs = new Date(candidate.start).getTime();
+    const candidateEndMs = new Date(candidate.end).getTime();
+    return pointerMs >= candidateStartMs
+      && (pointerMs < candidateEndMs || (candidateIndex === timeline.length - 1 && pointerMs <= candidateEndMs));
   });
+  if (index < 0) {
+    index = timeline.reduce((nearestIndex, candidate, candidateIndex) => {
+      const candidateStartMs = new Date(candidate.start).getTime();
+      const candidateEndMs = new Date(candidate.end).getTime();
+      const distance = Math.min(Math.abs(pointerMs - candidateStartMs), Math.abs(pointerMs - candidateEndMs));
+      const nearest = timeline[nearestIndex];
+      const nearestStartMs = new Date(nearest.start).getTime();
+      const nearestEndMs = new Date(nearest.end).getTime();
+      const nearestCandidateDistance = Math.min(
+        Math.abs(pointerMs - nearestStartMs),
+        Math.abs(pointerMs - nearestEndMs),
+      );
+      return distance < nearestCandidateDistance ? candidateIndex : nearestIndex;
+    }, 0);
+  }
   const item = timeline[index];
   state.adaptiveChargingTimelineHover = { index };
   drawAdaptiveChargingTimeline();
@@ -2867,15 +2886,10 @@ function handleAdaptiveChargingTimelinePointer(event) {
     : "";
   const startSoc = item.predictedStartSocPercent;
   const endSoc = item.predictedEndSocPercent ?? item.predictedSocPercent;
-  const numericStartSoc = startSoc === null || startSoc === undefined ? null : Number(startSoc);
-  const numericEndSoc = endSoc === null || endSoc === undefined ? null : Number(endSoc);
-  const pointSoc = Number.isFinite(numericStartSoc) && Number.isFinite(numericEndSoc)
-    ? (numericStartSoc + numericEndSoc) / 2
-    : numericEndSoc;
-  const socDetail = Number.isFinite(numericStartSoc) && Number.isFinite(numericEndSoc)
-    ? `${formatAdaptiveChargingPercent(pointSoc)} SOC (${formatAdaptiveChargingPercent(numericStartSoc)} → ${formatAdaptiveChargingPercent(numericEndSoc)} during interval)`
-    : `${formatAdaptiveChargingPercent(endSoc)} SOC`;
-  tooltip.textContent = `${new Date(item.start).toLocaleString()} - ${new Date(item.end).toLocaleTimeString()} · ${Math.round(item.demandW)} W demand · ${Math.round(item.solarW)} W solar · ${socDetail} · ${item.plannedChargeWh} Wh charge${storedCharge} · ${item.rateLabel || "Standard"} (${rate})${awayDetail}`;
+  const socDetail = startSoc === null || startSoc === undefined
+    ? `End SOC ${formatAdaptiveChargingPercent(endSoc)}`
+    : `End SOC ${formatAdaptiveChargingPercent(endSoc)} (from ${formatAdaptiveChargingPercent(startSoc)})`;
+  tooltip.textContent = `${new Date(item.start).toLocaleString()} - ${new Date(item.end).toLocaleTimeString()} · ${Math.round(item.demandW)} W average demand · ${Math.round(item.solarW)} W average solar · ${socDetail} · ${item.plannedChargeWh} Wh charge${storedCharge} · ${item.rateLabel || "Standard"} (${rate})${awayDetail}`;
   tooltip.style.left = `${Math.min(window.innerWidth - 270, event.clientX + 12)}px`;
   tooltip.style.top = `${Math.max(8, event.clientY - 48)}px`;
   tooltip.classList.remove("hidden");

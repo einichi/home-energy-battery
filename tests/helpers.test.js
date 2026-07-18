@@ -217,16 +217,23 @@ const timelineView = buildAdaptiveChargingTimelineView({
     standardRateYenPerKwh: 30,
   },
 });
-assert.equal(timelineView.length, 2);
-assert.equal(timelineView[0].plannedChargeWh, 500);
-assert.equal(timelineView[0].predictedStoredChargeWh, 400);
+assert.equal(timelineView.length, 3);
+assert.equal(timelineView[0].start, new Date(0).toISOString());
+assert.equal(timelineView[0].end, new Date(900_000).toISOString());
+assert.equal(timelineView[0].plannedChargeWh, 0);
+assert.equal(timelineView[1].start, new Date(900_000).toISOString());
+assert.equal(timelineView[1].end, new Date(1_800_000).toISOString());
+assert.equal(timelineView[1].plannedChargeWh, 500);
+assert.equal(timelineView[1].predictedStoredChargeWh, 400);
 assert.equal(timelineView[0].discounted, true);
 assert.equal(timelineView[0].rateLabel, "Night");
 assert.ok(timelineView.every((item) => item.predictedSocPercent >= 20));
 assert.ok(Math.abs(timelineView[0].predictedStartSocPercent - 40) < 1e-9);
-assert.ok(Math.abs(timelineView[0].predictedEndSocPercent - 44) < 1e-9);
+assert.ok(Math.abs(timelineView[0].predictedEndSocPercent - 36) < 1e-9);
 assert.equal(timelineView[1].predictedStartSocPercent, timelineView[0].predictedEndSocPercent);
-assert.ok(Math.abs(timelineView[1].predictedEndSocPercent - 48) < 1e-9);
+assert.ok(Math.abs(timelineView[1].predictedEndSocPercent - 44) < 1e-9);
+assert.equal(timelineView[2].predictedStartSocPercent, timelineView[1].predictedEndSocPercent);
+assert.ok(Math.abs(timelineView[2].predictedEndSocPercent - 48) < 1e-9);
 
 const awayPeriods = [
   { from: "2026-07-12T09:00:00.000Z", until: "2026-07-12T12:00:00.000Z" },

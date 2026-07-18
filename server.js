@@ -1641,50 +1641,86 @@ function buildAdaptiveChargingTimelineView({
   config,
 } = {}) {
   let storedKwh = Math.max(floorKwh, Math.min(capacityKwh, Number(initialStoredKwh)));
-  return timeline.map((interval) => {
-    const startingStoredKwh = storedKwh;
-    const intervalSlots = slots.filter((slot) => {
-      const startMs = new Date(slot.start).getTime();
-      const endMs = new Date(slot.end).getTime();
-      return Number.isFinite(startMs) && Number.isFinite(endMs)
-        && startMs >= interval.startMs
-        && endMs <= interval.endMs;
-    });
-    const plannedChargeKwh = intervalSlots.reduce(
-      (sum, slot) => sum + Math.max(0, Number(slot.targetWh) || 0) / 1000,
-      0,
+  const normalizedSlots = slots.map((slot) => ({
+    ...slot,
+    startMs: new Date(slot.start).getTime(),
+    endMs: new Date(slot.end).getTime(),
+    targetKwh: Math.max(0, Number(slot.targetWh) || 0) / 1000,
+  })).filter((slot) => Number.isFinite(slot.startMs)
+    && Number.isFinite(slot.endMs)
+    && slot.endMs > slot.startMs);
+  const view = [];
+
+  for (const interval of timeline) {
+    const intervalDurationMs = Math.max(0, interval.endMs - interval.startMs);
+    if (!(intervalDurationMs > 0)) continue;
+    const intervalSlots = normalizedSlots.filter(
+      (slot) => slot.startMs < interval.endMs && slot.endMs > interval.startMs,
     );
-    storedKwh = applyAdaptiveChargingTimelineSlot(
-      storedKwh,
-      interval,
-      plannedChargeKwh,
-      floorKwh,
-      capacityKwh,
-      chargeStorageEfficiency,
-    );
-    const durationHours = Math.max(0, interval.endMs - interval.startMs) / 3_600_000;
-    const rate = interval.band ?? rateForTimestamp(
-      config.rateBands,
-      new Date(interval.startMs),
-      config.standardRateYenPerKwh,
-    );
-    return {
-      start: new Date(interval.startMs).toISOString(),
-      end: new Date(interval.endMs).toISOString(),
-      solarW: durationHours > 0 ? Number(interval.solarKwh || 0) * 1000 / durationHours : 0,
-      demandW: Number(interval.demandW) || 0,
-      predictedStartSocPercent: capacityKwh > 0 ? startingStoredKwh / capacityKwh * 100 : null,
-      predictedEndSocPercent: capacityKwh > 0 ? storedKwh / capacityKwh * 100 : null,
-      predictedSocPercent: capacityKwh > 0 ? storedKwh / capacityKwh * 100 : null,
-      discounted: Boolean(interval.band),
-      rateLabel: rate?.label ?? null,
-      yenPerKwh: finiteNumberOrNull(rate?.yenPerKwh),
-      plannedChargeWh: Math.round(plannedChargeKwh * 1000),
-      predictedStoredChargeWh: Math.round(plannedChargeKwh * chargeStorageEfficiency * 1000),
-      away: interval.away === true,
-      awayDemandConfidence: interval.awayDemandConfidence ?? null,
-    };
-  });
+    const boundaries = [...new Set([
+      interval.startMs,
+      interval.endMs,
+      ...intervalSlots.flatMap((slot) => [
+        Math.max(interval.startMs, slot.startMs),
+        Math.min(interval.endMs, slot.endMs),
+      ]),
+    ])].sort((left, right) => left - right);
+
+    for (let index = 0; index < boundaries.length - 1; index += 1) {
+      const segmentStartMs = boundaries[index];
+      const segmentEndMs = boundaries[index + 1];
+      const segmentDurationMs = segmentEndMs - segmentStartMs;
+      if (!(segmentDurationMs > 0)) continue;
+      const intervalFraction = segmentDurationMs / intervalDurationMs;
+      const plannedChargeKwh = intervalSlots.reduce((sum, slot) => {
+        const overlapMs = Math.max(
+          0,
+          Math.min(segmentEndMs, slot.endMs) - Math.max(segmentStartMs, slot.startMs),
+        );
+        return sum + slot.targetKwh * overlapMs / (slot.endMs - slot.startMs);
+      }, 0);
+      const segment = {
+        ...interval,
+        startMs: segmentStartMs,
+        endMs: segmentEndMs,
+        solarKwh: Number(interval.solarKwh || 0) * intervalFraction,
+        netKwh: Number(interval.netKwh || 0) * intervalFraction,
+        chargeCapacityKwh: Number(interval.chargeCapacityKwh || 0) * intervalFraction,
+      };
+      const startingStoredKwh = storedKwh;
+      storedKwh = applyAdaptiveChargingTimelineSlot(
+        storedKwh,
+        segment,
+        plannedChargeKwh,
+        floorKwh,
+        capacityKwh,
+        chargeStorageEfficiency,
+      );
+      const durationHours = segmentDurationMs / 3_600_000;
+      const rate = interval.band ?? rateForTimestamp(
+        config.rateBands,
+        new Date(segmentStartMs),
+        config.standardRateYenPerKwh,
+      );
+      view.push({
+        start: new Date(segmentStartMs).toISOString(),
+        end: new Date(segmentEndMs).toISOString(),
+        solarW: durationHours > 0 ? Number(segment.solarKwh || 0) * 1000 / durationHours : 0,
+        demandW: Number(interval.demandW) || 0,
+        predictedStartSocPercent: capacityKwh > 0 ? startingStoredKwh / capacityKwh * 100 : null,
+        predictedEndSocPercent: capacityKwh > 0 ? storedKwh / capacityKwh * 100 : null,
+        predictedSocPercent: capacityKwh > 0 ? storedKwh / capacityKwh * 100 : null,
+        discounted: Boolean(interval.band),
+        rateLabel: rate?.label ?? null,
+        yenPerKwh: finiteNumberOrNull(rate?.yenPerKwh),
+        plannedChargeWh: Math.round(plannedChargeKwh * 1000),
+        predictedStoredChargeWh: Math.round(plannedChargeKwh * chargeStorageEfficiency * 1000),
+        away: interval.away === true,
+        awayDemandConfidence: interval.awayDemandConfidence ?? null,
+      });
+    }
+  }
+  return view;
 }
 
 function planChronologicalDiscountedCharging({
