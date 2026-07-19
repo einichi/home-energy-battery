@@ -134,8 +134,6 @@ const DEFAULT_CONFIG = {
       plan: "enefarm",
       equipmentDiscount: "",
       meterReadingDay: 1,
-      expectedWinterMonthlyM3: null,
-      expectedOtherMonthlyM3: null,
       automaticUpdates: false,
       marginalRateOverrideYenPerM3: null,
     },
@@ -3857,7 +3855,37 @@ function billingPeriodKey(value, readingDay) {
   return localMonthKey(periodStart);
 }
 
-function estimatedGasCost(config, gasM3, start, end) {
+function billingPeriodBounds(billingMonth, readingDay) {
+  const [year, month] = String(billingMonth).split("-").map(Number);
+  return {
+    start: clampedReadingDate(year, month - 1, readingDay),
+    end: clampedReadingDate(year, month, readingDay),
+  };
+}
+
+function fuelCellGasUsageByBillingPeriod(samples, readingDay) {
+  const usage = new Map();
+  for (const sample of samples) {
+    const gasM3 = finiteNumberOrNull(sample.fuelCellGasM3);
+    if (gasM3 === null) continue;
+    const billingMonth = billingPeriodKey(sample.timestamp, readingDay);
+    usage.set(billingMonth, Number(usage.get(billingMonth) ?? 0) + Math.max(0, gasM3));
+  }
+  return usage;
+}
+
+async function measuredFuelCellGasByBillingPeriod(start, end, readingDay) {
+  const startMonth = billingPeriodKey(start, readingDay);
+  const endMs = new Date(end).getTime();
+  const finalInstant = Number.isFinite(endMs) ? new Date(Math.max(new Date(start).getTime(), endMs - 1)) : end;
+  const endMonth = billingPeriodKey(finalInstant, readingDay);
+  const first = billingPeriodBounds(startMonth, readingDay);
+  const last = billingPeriodBounds(endMonth, readingDay);
+  const samples = await readHistorySamplesInRange(first.start.getTime(), last.end.getTime());
+  return fuelCellGasUsageByBillingPeriod(samples, readingDay);
+}
+
+function estimatedGasCost(config, gasM3, start, end, billingPeriodGasM3 = gasM3) {
   const settings = config.fuelCell?.tariff ?? {};
   const readingDay = settings.meterReadingDay ?? 1;
   const billingMonth = billingPeriodKey(start, readingDay);
@@ -3870,7 +3898,7 @@ function estimatedGasCost(config, gasM3, start, end) {
       available: false,
       billingMonth: null,
       reason: "The selected range crosses billing periods; review the per-period estimates instead",
-      methodology: "Each billing period must use its own immutable tariff snapshot or manual override",
+      methodology: "Each billing period must use its own immutable tariff snapshot",
     };
   }
   const tariff = gasTariffForMonth(config, billingMonth);
@@ -3879,21 +3907,20 @@ function estimatedGasCost(config, gasM3, start, end) {
       estimated: true,
       available: false,
       billingMonth,
-      reason: !tariff ? "No tariff snapshot or override is available for this billing month" : "No exact Ene-Farm gas counter data is available",
+      reason: !tariff ? "No tariff snapshot is available for this billing month" : "No exact Ene-Farm gas counter data is available",
       methodology: "Ene-Farm gas volume multiplied by the configured monthly gas tariff",
     };
   }
-  const expectedUsage = tariff.season === "winter" ? settings.expectedWinterMonthlyM3 : settings.expectedOtherMonthlyM3;
-  if (!Number.isFinite(expectedUsage)) {
+  if (!Number.isFinite(billingPeriodGasM3)) {
     return {
       estimated: true,
       available: false,
       billingMonth,
-      reason: "Expected total household gas usage is required because Ene-Farm measures only its own gas consumption",
-      methodology: "The household billing band cannot be inferred from the Ene-Farm gas counter alone",
+      reason: "No exact Ene-Farm gas counter data is available for this billing period",
+      methodology: "Measured Ene-Farm gas is assumed to be the household's entire gas consumption",
     };
   }
-  const band = applicableGasTariffBand(tariff, expectedUsage);
+  const band = applicableGasTariffBand(tariff, billingPeriodGasM3);
   const discount = applicableGasDiscount(tariff, settings.equipmentDiscount);
   const configuredRate = finiteNumberOrNull(settings.marginalRateOverrideYenPerM3);
   const baseRate = configuredRate ?? band?.yenPerM3 ?? null;
@@ -3915,8 +3942,9 @@ function estimatedGasCost(config, gasM3, start, end) {
     billingMonth,
     source: tariff.source,
     sourceUrl: tariff.sourceUrl ?? tariff.providerPlanUrl ?? null,
-    methodology: "Measured Ene-Farm gas volume with the selected monthly usage band and configured equipment discount",
-    expectedMonthlyUsageM3: expectedUsage,
+    methodology: "Measured Ene-Farm gas is assumed to be the household's entire gas consumption; other gas appliances are excluded",
+    assumedBillingPeriodUsageM3: billingPeriodGasM3,
+    assumption: "Ene-Farm is the household's only gas consumer; gas used by other appliances is not included",
     band,
     discount,
     marginalRateYenPerM3,
@@ -3927,7 +3955,7 @@ function estimatedGasCost(config, gasM3, start, end) {
       standingChargeYen,
       totalYen: allocatedTotalYen,
       allocatedYenPerM3: allocatedTotalYen !== null && gasM3 > 0 ? allocatedTotalYen / gasM3 : null,
-      methodology: "The full household standing charge is allocated to measured Ene-Farm gas; this is not a reconstructed provider bill",
+      methodology: "The full household standing charge is allocated to measured Ene-Farm gas under the assumption that Ene-Farm is the only gas consumer; this is not a reconstructed provider bill",
     },
   };
 }
@@ -3946,7 +3974,7 @@ async function updateCurrentGasTariff(config, now = new Date()) {
   return historyStore.recordGasTariffSnapshot({ ...imported, fetchedAt: now.toISOString() });
 }
 
-function summarizeEneFarmSamples(samples, config, { start, end } = {}) {
+function summarizeEneFarmSamples(samples, config, { start, end, billingPeriodGasM3 } = {}) {
   let generatedKwh = 0;
   let gasM3 = 0;
   let hasGas = false;
@@ -4052,7 +4080,7 @@ function summarizeEneFarmSamples(samples, config, { start, end } = {}) {
     sourceHost: samples.at(-1)?.fuelCellSourceHost ?? null,
     counterSourceHost: samples.at(-1)?.fuelCellCounterSourceHost ?? null,
     dataQuality: qualities.size > 1 ? "mixed" : qualities.values().next().value ?? null,
-    estimatedGasCost: rangeStart && rangeEnd ? estimatedGasCost(config, gasValue, rangeStart, rangeEnd) : null,
+    estimatedGasCost: rangeStart && rangeEnd ? estimatedGasCost(config, gasValue, rangeStart, rangeEnd, billingPeriodGasM3) : null,
     carbon: {
       estimated: true,
       directGasCo2Kg: gasCo2Kg,
@@ -4065,6 +4093,8 @@ function summarizeEneFarmSamples(samples, config, { start, end } = {}) {
 
 async function eneFarmReport(start, end, bucket, config) {
   const samples = await readHistorySamplesInRange(new Date(start).getTime(), new Date(end).getTime());
+  const readingDay = config.fuelCell?.tariff?.meterReadingDay ?? 1;
+  const billingPeriodUsage = await measuredFuelCellGasByBillingPeriod(start, end, readingDay);
   const energy = aggregateEnergyReportSamples(samples, { start, end, bucket, config });
   let sampleIndex = 0;
   const buckets = energy.buckets.map((row) => {
@@ -4076,13 +4106,21 @@ async function eneFarmReport(start, end, bucket, config) {
       bucketSamples.push(samples[sampleIndex]);
       sampleIndex += 1;
     }
-    const summary = summarizeEneFarmSamples(bucketSamples, config, { start: row.start, end: row.end });
+    const summary = summarizeEneFarmSamples(bucketSamples, config, {
+      start: row.start,
+      end: row.end,
+      billingPeriodGasM3: billingPeriodUsage.get(billingPeriodKey(row.start, readingDay)) ?? null,
+    });
     summary.generationCoveragePercent = Number.isFinite(row.houseDemandKwh) && row.houseDemandKwh > 0 && Number.isFinite(summary.onSiteKwh)
       ? summary.onSiteKwh / row.houseDemandKwh * 100
       : null;
     return { key: row.key, label: row.label, ...summary };
   });
-  const totals = summarizeEneFarmSamples(samples, config, { start, end });
+  const totals = summarizeEneFarmSamples(samples, config, {
+    start,
+    end,
+    billingPeriodGasM3: billingPeriodUsage.get(billingPeriodKey(start, readingDay)) ?? null,
+  });
   totals.generationCoveragePercent = Number.isFinite(energy.totals.houseDemandKwh) && energy.totals.houseDemandKwh > 0 && Number.isFinite(totals.onSiteKwh)
     ? totals.onSiteKwh / energy.totals.houseDemandKwh * 100
     : null;
@@ -4322,8 +4360,6 @@ function normalizeFuelCellConfig(value = {}) {
       plan: "enefarm",
       equipmentDiscount: ["bath", "floor", "set"].includes(discount) ? discount : "",
       meterReadingDay: configNumber(tariff.meterReadingDay, 1, 1, 31),
-      expectedWinterMonthlyM3: optionalConfigNumber(tariff.expectedWinterMonthlyM3, 0, 100000),
-      expectedOtherMonthlyM3: optionalConfigNumber(tariff.expectedOtherMonthlyM3, 0, 100000),
       automaticUpdates: configBool(tariff.automaticUpdates, false),
       marginalRateOverrideYenPerM3: optionalConfigNumber(tariff.marginalRateOverrideYenPerM3, 0, 100000),
     },
@@ -7493,7 +7529,13 @@ async function api(req, res, url) {
       .filter((event) => event.type === "state-transition");
     const latestStateTransition = allTransitions.at(-1) ?? null;
     const lastStopTransition = allTransitions.findLast((event) => event.payload?.to === "stopped") ?? null;
-    const summary = summarizeEneFarmSamples(samples, config, { start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString() });
+    const readingDay = config.fuelCell?.tariff?.meterReadingDay ?? 1;
+    const billingPeriodUsage = await measuredFuelCellGasByBillingPeriod(start, end, readingDay);
+    const summary = summarizeEneFarmSamples(samples, config, {
+      start: new Date(startMs).toISOString(),
+      end: new Date(endMs).toISOString(),
+      billingPeriodGasM3: billingPeriodUsage.get(billingPeriodKey(start, readingDay)) ?? null,
+    });
     if (latestStateTransition?.at) {
       summary.stateSince = latestStateTransition.at;
       summary.timeInStateSeconds = Math.max(0, (endMs - new Date(latestStateTransition.at).getTime()) / 1000);
@@ -7969,6 +8011,7 @@ export {
   finalizeAdaptiveChargingWindowExecution,
   forecastHourForInterval,
   forecastIsFresh,
+  fuelCellGasUsageByBillingPeriod,
   learnedSolarFactor,
   extractBatteryLearningObservations,
   migrateLegacyAdaptiveChargingData,

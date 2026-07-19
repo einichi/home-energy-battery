@@ -42,6 +42,7 @@ import {
   extractBatteryLearningObservations,
   forecastHourForInterval,
   forecastIsFresh,
+  fuelCellGasUsageByBillingPeriod,
   finalizeAdaptiveChargeSession,
   finalizeAdaptiveChargingWindowExecution,
   learnedSolarFactor,
@@ -122,17 +123,34 @@ const proxyOnlyFuelCell = cleanConfig({ meterHost: "10.0.0.135", fuelCellHosts: 
 assert.equal(proxyOnlyFuelCell.fuelCellPrimaryHost, "");
 assert.deepEqual(proxyOnlyFuelCell.fuelCellProxyHosts, ["10.0.0.135"]);
 const normalizedFuelCellTariff = cleanConfig({
-  fuelCell: { tariff: { region: "gunma", plan: "enefarm", equipmentDiscount: "floor" } },
+  fuelCell: { tariff: {
+    region: "gunma",
+    plan: "enefarm",
+    equipmentDiscount: "floor",
+    expectedWinterMonthlyM3: 80,
+    expectedOtherMonthlyM3: 35,
+  } },
 });
 assert.equal(normalizedFuelCellTariff.fuelCell.tariff.region, "gunma");
 assert.equal(normalizedFuelCellTariff.fuelCell.tariff.plan, "enefarm");
 assert.equal(normalizedFuelCellTariff.fuelCell.tariff.equipmentDiscount, "floor");
+assert.equal("expectedWinterMonthlyM3" in normalizedFuelCellTariff.fuelCell.tariff, false);
+assert.equal("expectedOtherMonthlyM3" in normalizedFuelCellTariff.fuelCell.tariff, false);
 const invalidFuelCellTariff = cleanConfig({
   fuelCell: { tariff: { region: "unknown", plan: "other", equipmentDiscount: "enefarm" } },
 });
 assert.equal(invalidFuelCellTariff.fuelCell.tariff.region, "tokyo");
 assert.equal(invalidFuelCellTariff.fuelCell.tariff.plan, "enefarm");
 assert.equal(invalidFuelCellTariff.fuelCell.tariff.equipmentDiscount, "");
+
+const billingPeriodGas = fuelCellGasUsageByBillingPeriod([
+  { timestamp: "2026-07-09T00:00:00", fuelCellGasM3: 1.25 },
+  { timestamp: "2026-08-07T23:59:00", fuelCellGasM3: 0.75 },
+  { timestamp: "2026-08-08T00:00:00", fuelCellGasM3: 2 },
+  { timestamp: "2026-08-09T00:00:00", fuelCellGasM3: null },
+], 8);
+assert.equal(billingPeriodGas.get("2026-07"), 2);
+assert.equal(billingPeriodGas.get("2026-08"), 2);
 
 const fuelCellSamples = [];
 for (let day = 1; day <= 8; day += 1) {

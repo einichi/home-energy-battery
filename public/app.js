@@ -651,8 +651,6 @@ const I18N = {
     gasRegion: "Gas region",
     gasPlan: "Gas plan",
     meterReadingDay: "Meter reading day",
-    winterUsage: "Expected total household gas in winter (m³/month)",
-    otherSeasonUsage: "Expected total household gas outside winter (m³/month)",
     equipmentDiscount: "Optional equipment discount",
     tokyoGasTokyoRegion: "Tokyo district and surrounding areas",
     tokyoGasGunmaRegion: "Gunma district",
@@ -661,7 +659,7 @@ const I18N = {
     eneFarmBathDiscount: "Ene-Farm + Bath heating discount",
     eneFarmFloorDiscount: "Ene-Farm + Floor heating discount (winter only)",
     eneFarmCombinedDiscount: "Ene-Farm + Combined bath/floor discount",
-    householdGasUsageHelp: "Ene-Farm reports only its own gas use. Total household usage is needed to select the correct Tokyo Gas usage band.",
+    eneFarmOnlyGasAssumption: "Cost estimates treat recorded Ene-Farm gas as the household's total gas use for the billing period. Gas used by cooktops, heaters, boilers, or other appliances is not included.",
     gasSeasonAutomaticHelp: "Tokyo Gas winter rates are selected automatically for December through April billing months.",
     generationModelDeviceHelp: "ECHONET reports whether the Ene-Farm is generating, but not its configured mode or schedule. These settings describe the configuration selected on the Ene-Farm itself.",
     marginalRateOverride: "Marginal rate override (yen/m³)",
@@ -1253,8 +1251,6 @@ const I18N = {
     gasRegion: "供給地域",
     gasPlan: "ガス料金プラン",
     meterReadingDay: "検針日",
-    winterUsage: "冬期の想定家庭総ガス使用量 (m³/月)",
-    otherSeasonUsage: "冬期以外の想定家庭総ガス使用量 (m³/月)",
     equipmentDiscount: "追加機器割引",
     tokyoGasTokyoRegion: "東京地区等",
     tokyoGasGunmaRegion: "群馬地区",
@@ -1263,7 +1259,7 @@ const I18N = {
     eneFarmBathDiscount: "エネファーム + バス暖割",
     eneFarmFloorDiscount: "エネファーム + 床暖割（冬期のみ）",
     eneFarmCombinedDiscount: "エネファーム + セット割",
-    householdGasUsageHelp: "エネファームから取得できるのは本体のガス使用量だけです。東京ガスの料金表を選ぶには家庭全体の使用量が必要です。",
+    eneFarmOnlyGasAssumption: "料金推定では、請求期間中に記録したエネファームのガス使用量を家庭全体の使用量として扱います。ガスコンロ、暖房、給湯器など他の機器が使用するガスは含まれません。",
     gasSeasonAutomaticHelp: "東京ガスの冬期料金は12月〜4月検針分に自動適用されます。",
     generationModelDeviceHelp: "ECHONETから取得できるのは発電動作の状態で、設定済みの発電モードや時間帯は取得できません。ここではエネファーム本体で選択した設定を記録します。",
     marginalRateOverride: "従量単価の上書き (円/m³)",
@@ -4174,8 +4170,6 @@ function updateConfigControls(config) {
   const tariffSource = $("#fuelCellTariffSource");
   if (tariffSource) tariffSource.href = `https://reception.tokyo-gas.co.jp/ryokin/?tik=${fuelCell.tariff?.region === "gunma" ? 6 : 1}`;
   $("#fuelCellReadingDay").value = fuelCell.tariff?.meterReadingDay ?? 1;
-  $("#fuelCellWinterUsage").value = fuelCell.tariff?.expectedWinterMonthlyM3 ?? "";
-  $("#fuelCellOtherUsage").value = fuelCell.tariff?.expectedOtherMonthlyM3 ?? "";
   $("#fuelCellDiscount").value = fuelCell.tariff?.equipmentDiscount ?? "";
   $("#fuelCellMarginalRate").value = fuelCell.tariff?.marginalRateOverrideYenPerM3 ?? "";
   $("#fuelCellTariffAutomatic").checked = fuelCell.tariff?.automaticUpdates === true;
@@ -5710,8 +5704,6 @@ function initForms() {
             plan: $("#fuelCellTariffPlan").value,
             equipmentDiscount: $("#fuelCellDiscount").value,
             meterReadingDay: $("#fuelCellReadingDay").value,
-            expectedWinterMonthlyM3: optional("#fuelCellWinterUsage"),
-            expectedOtherMonthlyM3: optional("#fuelCellOtherUsage"),
             automaticUpdates: $("#fuelCellTariffAutomatic").checked,
             marginalRateOverrideYenPerM3: optional("#fuelCellMarginalRate"),
           },

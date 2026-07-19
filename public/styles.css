@@ -696,6 +696,11 @@ label {
   line-height: 1.45;
 }
 
+.assumption-notice {
+  padding-left: 10px;
+  border-left: 3px solid #d78a20;
+}
+
 .widget-note {
   color: var(--muted);
   font-size: 12px;

@@ -655,7 +655,7 @@
             </div>
           </div>
           <div class="panel report-table-panel hidden" data-report-domain="ene-farm">
-            <div class="panel-title"><h1 data-i18n="eneFarmByPeriod">Ene-Farm by Period</h1><p data-i18n="estimateNotice">All costs and savings are estimates. Check your provider statement for accurate billing information.</p></div>
+            <div class="panel-title"><h1 data-i18n="eneFarmByPeriod">Ene-Farm by Period</h1><p data-i18n="estimateNotice">All costs and savings are estimates. Check your provider statement for accurate billing information.</p><p data-i18n="eneFarmOnlyGasAssumption">Cost estimates treat recorded Ene-Farm gas as the household's total gas use for the billing period. Gas used by cooktops, heaters, boilers, or other appliances is not included.</p></div>
             <div class="table-scroll"><table><thead><tr>
               <th data-i18n="period">Period</th><th data-i18n="generatedElectricity">Generated electricity</th><th data-i18n="gasConsumed">Gas consumed</th><th data-i18n="electricalYield">Electrical yield</th><th data-i18n="operatingTime">Operating time</th><th data-i18n="starts">Starts</th><th data-i18n="estimatedMarginalGasCost">Estimated marginal gas cost</th><th data-i18n="allocatedGasCost">Estimated allocated gas cost</th><th data-i18n="carbonBalance">Carbon balance</th>
             </tr></thead><tbody id="eneFarmReportRows"><tr><td colspan="9" data-i18n="noReportData">No report data loaded yet.</td></tr></tbody></table></div>
@@ -1235,12 +1235,10 @@
                 <label class="wide-field"><span data-i18n="gasPlan">Gas plan</span><select id="fuelCellTariffPlan"><option value="enefarm" data-i18n="tokyoGasEneFarmPlan">Ene-Farm generation eco plan</option></select></label>
                 <label><span data-i18n="gasCo2Factor">City gas emissions (kg-CO2/m³)</span><input id="fuelCellGasCo2" type="number" min="0" step="0.01" inputmode="decimal" /></label>
                 <label><span data-i18n="meterReadingDay">Meter reading day</span><input id="fuelCellReadingDay" type="number" min="1" max="31" step="1" /></label>
-                <label class="wide-field"><span data-i18n="winterUsage">Expected total household gas in winter (m³/month)</span><input id="fuelCellWinterUsage" type="number" min="0" step="0.1" /></label>
-                <label class="wide-field"><span data-i18n="otherSeasonUsage">Expected total household gas outside winter (m³/month)</span><input id="fuelCellOtherUsage" type="number" min="0" step="0.1" /></label>
                 <label class="wide-field"><span data-i18n="equipmentDiscount">Optional equipment discount</span><select id="fuelCellDiscount"><option value="" data-i18n="noOptionalDiscount">No optional discount</option><option value="bath" data-i18n="eneFarmBathDiscount">Ene-Farm + Bath heating discount</option><option value="floor" data-i18n="eneFarmFloorDiscount">Ene-Farm + Floor heating discount (winter only)</option><option value="set" data-i18n="eneFarmCombinedDiscount">Ene-Farm + Combined bath/floor discount</option></select></label>
                 <label><span data-i18n="marginalRateOverride">Marginal rate override (yen/m³)</span><input id="fuelCellMarginalRate" type="number" min="0" step="0.01" /></label>
               </div>
-              <p class="field-help" data-i18n="householdGasUsageHelp">Ene-Farm reports only its own gas use. Total household usage is needed to select the correct Tokyo Gas usage band.</p>
+              <p class="field-help assumption-notice" data-i18n="eneFarmOnlyGasAssumption">Cost estimates treat recorded Ene-Farm gas as the household's total gas use for the billing period. Gas used by cooktops, heaters, boilers, or other appliances is not included.</p>
               <label class="check-row"><input id="fuelCellTariffAutomatic" type="checkbox" /><span data-i18n="automaticTariffUpdates">Automatically import monthly Tokyo Gas tariffs</span></label>
               <fieldset id="fuelCellFixedSchedule" class="feature-options hidden"><legend data-i18n="fixedGenerationWindows">Fixed generation windows</legend><div id="fuelCellFixedWindows" class="fixed-window-list"></div><button id="addFuelCellWindow" type="button" class="ghost" data-i18n="addWindow">Add Window</button></fieldset>
               <p class="field-help" data-i18n="generationModelDeviceHelp">ECHONET reports whether the Ene-Farm is generating, but not its configured mode or schedule. These settings describe the configuration selected on the Ene-Farm itself.</p>
