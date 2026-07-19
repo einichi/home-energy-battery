@@ -310,8 +310,6 @@
           <div class="panel adaptive-charging-overview">
             <div class="adaptive-charging-heading">
               <div class="panel-title">
-                <span class="label" data-i18n="chargingAutomation">Charging Automation</span>
-                <h1 data-i18n="adaptiveCharging">Adaptive Charging</h1>
                 <p data-i18n="adaptiveChargingHelp">Automatically plans discounted charging using demand history, solar forecasts, battery state, electricity rates, and live safety limits.</p>
               </div>
               <div class="adaptive-charging-actions">
@@ -321,6 +319,82 @@
               </div>
             </div>
             <p id="adaptiveChargingAvailability" class="adaptive-charging-notice" aria-live="polite"></p>
+            <dl class="adaptive-charging-operational-grid">
+              <div class="adaptive-charging-primary-state"><dt data-i18n="adaptiveChargingState">Adaptive Charging state</dt><dd id="adaptiveChargingState">--</dd></div>
+              <div class="adaptive-charging-next-action"><dt data-i18n="nextAction">Next action</dt><dd id="adaptiveChargingNextAction">--</dd></div>
+              <div><dt data-i18n="currentSoc">Current SOC</dt><dd id="adaptiveChargingCurrentSoc">--</dd></div>
+              <div><dt data-i18n="nextTargetSoc">Next target SOC</dt><dd id="adaptiveChargingNextTarget">--</dd></div>
+              <div><dt data-i18n="planHorizon">Plan horizon</dt><dd id="adaptiveChargingPlanHorizon">--</dd></div>
+            </dl>
+          </div>
+
+          <div class="panel adaptive-charging-timeline-panel">
+            <div class="panel-title">
+              <h1 data-i18n="chargingTimeline">Charging Timeline</h1>
+              <p data-i18n="chargingTimelineHelp">Forecast demand, solar generation, battery state, rates, and planned charging.</p>
+            </div>
+            <div class="adaptive-charging-legend" aria-label="Timeline series">
+              <span><i class="timeline-swatch demand"></i><span data-i18n="predictedDemand">Predicted demand</span></span>
+              <span><i class="timeline-swatch solar"></i><span data-i18n="predictedSolar">Predicted solar</span></span>
+              <span data-feature="fuel-cell"><i class="timeline-swatch fuel-cell"></i><span data-i18n="predictedFuelCell">Predicted Ene-Farm</span></span>
+              <span><i class="timeline-swatch soc"></i><span data-i18n="stateOfCharge">State of Charge</span></span>
+              <span><i class="timeline-swatch charging"></i><span data-i18n="plannedCharging">Planned charging</span></span>
+              <span><i class="timeline-swatch away"></i><span data-i18n="away">Away</span></span>
+            </div>
+            <canvas id="adaptiveChargingTimeline" class="adaptive-charging-timeline" width="1400" height="430"></canvas>
+            <p id="adaptiveChargingTimelineEmpty" class="graph-meta" data-i18n="noChargingTimeline">A timeline will appear after a charging plan is calculated.</p>
+          </div>
+
+          <div class="panel adaptive-charging-plan-panel">
+            <h2 class="guard-log-title" data-i18n="selectedRateWindows">Discounted window plan</h2>
+            <div id="adaptiveChargingWindows" class="adaptive-charging-windows"></div>
+          </div>
+
+          <div class="panel away-periods-panel">
+            <div class="panel-title">
+              <span class="label" data-i18n="awayPeriods">Away Periods</span>
+              <h1 data-i18n="awaySchedule">Away Schedule</h1>
+              <p data-i18n="awayScheduleHelp">Scheduled absences improve demand forecasts while keeping completed periods available for future learning.</p>
+            </div>
+            <p id="awayCurrentSummary" class="adaptive-charging-notice" aria-live="polite"></p>
+            <form id="awayPeriodForm" class="away-period-form">
+              <input id="awayPeriodId" type="hidden" />
+              <div class="away-period-field">
+                <label for="awayFrom" data-i18n="from">From</label>
+                <span class="away-datetime-control">
+                  <input id="awayFrom" type="datetime-local" required />
+                  <button id="awayNow" class="ghost" type="button" data-i18n="now">Now</button>
+                </span>
+              </div>
+              <div class="away-period-field">
+                <label for="awayUntil" data-i18n="until">Until</label>
+                <input id="awayUntil" type="datetime-local" required />
+              </div>
+              <div class="away-form-actions">
+                <button id="awaySave" type="submit" data-i18n="scheduleAway">Schedule Away</button>
+                <button id="awayCancel" class="ghost hidden" type="button" data-i18n="cancel">Cancel</button>
+              </div>
+            </form>
+            <div class="table-wrap away-period-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th data-i18n="from">From</th>
+                    <th data-i18n="until">Until</th>
+                    <th data-i18n="status">Status</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="awayPeriodRows"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="panel adaptive-charging-diagnostics">
+            <div class="panel-title">
+              <h1 data-i18n="planInputs">Plan Inputs</h1>
+              <p id="adaptiveChargingForecastHorizon" data-i18n="forecastHorizonUnavailable">Forecast horizon will appear after a plan is calculated.</p>
+            </div>
             <dl class="adaptive-charging-status-grid">
               <div><dt data-i18n="forecastAge">Forecast age</dt><dd id="adaptiveChargingForecastAge">--</dd></div>
               <div><dt data-i18n="predictedSolar">Predicted solar</dt><dd id="adaptiveChargingPredictedSolar">--</dd></div>
@@ -329,17 +403,21 @@
               <div><dt data-i18n="plannedGridCharge">Planned grid charge</dt><dd id="adaptiveChargingGridCharge">--</dd></div>
               <div><dt data-i18n="expectedStoredCharge">Expected battery storage</dt><dd id="adaptiveChargingStoredCharge">--</dd></div>
               <div><dt data-i18n="expectedSunsetSoc">Expected sunset SOC</dt><dd id="adaptiveChargingSunsetSoc">--</dd></div>
-              <div><dt data-i18n="batteryModelStatus">Battery model</dt><dd id="adaptiveChargingBatteryModelStatus">--</dd></div>
-              <div><dt data-i18n="chargeEnergyModel">Charge energy model</dt><dd id="adaptiveChargingChargeModel">--</dd></div>
-              <div><dt data-i18n="dischargeEnergyModel">Discharge energy model</dt><dd id="adaptiveChargingDischargeModel">--</dd></div>
-              <div><dt data-i18n="chargePowerModel">Charge power model</dt><dd id="adaptiveChargingPowerModel">--</dd></div>
               <div><dt data-i18n="adaptiveChargingConfidence">Forecast confidence</dt><dd id="adaptiveChargingConfidence">--</dd></div>
               <div data-feature="fuel-cell"><dt data-i18n="predictedFuelCell">Predicted Ene-Farm</dt><dd id="adaptiveChargingPredictedFuelCell">--</dd></div>
               <div data-feature="fuel-cell"><dt data-i18n="fuelCellForecastModel">Ene-Farm forecast model</dt><dd id="adaptiveChargingFuelCellModel">--</dd></div>
               <div><dt data-i18n="demandHistoryModel">Demand history model</dt><dd id="adaptiveChargingDemandHistory">--</dd></div>
               <div><dt data-i18n="awayDemandModel">Away demand model</dt><dd id="adaptiveChargingAwayDemand">--</dd></div>
-              <div><dt data-i18n="adaptiveChargingState">Adaptive Charging state</dt><dd id="adaptiveChargingState">--</dd></div>
             </dl>
+            <details class="adaptive-charging-model-details">
+              <summary><span data-i18n="batteryModelDetails">Battery model details</span><strong id="adaptiveChargingBatteryModelStatus">--</strong></summary>
+              <p class="adaptive-charging-model-note" data-i18n="batteryModelCandidateNote">Candidate values remain informational until validation is complete.</p>
+              <dl class="adaptive-charging-model-grid">
+                <div><dt data-i18n="chargeEnergyModel">Charge energy model</dt><dd id="adaptiveChargingChargeModel">--</dd></div>
+                <div><dt data-i18n="dischargeEnergyModel">Discharge energy model</dt><dd id="adaptiveChargingDischargeModel">--</dd></div>
+                <div><dt data-i18n="chargePowerModel">Charge power model</dt><dd id="adaptiveChargingPowerModel">--</dd></div>
+              </dl>
+            </details>
           </div>
 
           <div class="panel solar-forecast-accuracy-panel">
@@ -352,6 +430,7 @@
               <div><dt data-i18n="completedForecastDays">Completed forecast days</dt><dd id="solarForecastCompletedDays">--</dd></div>
               <div><dt data-i18n="meanAbsoluteForecastError">Mean absolute error</dt><dd id="solarForecastMeanError">--</dd></div>
             </dl>
+            <p id="solarForecastAccuracyConfidence" class="adaptive-charging-notice hidden"></p>
             <div class="table-wrap solar-forecast-accuracy-table-wrap">
               <table>
                 <thead>
@@ -397,66 +476,7 @@
             <p id="fuelCellForecastOutcomeEmpty" class="graph-meta hidden" data-i18n="noFuelCellForecastOutcomes">Completed Ene-Farm forecast outcomes will appear after recorded generation covers a forecast interval.</p>
           </div>
 
-          <div class="panel away-periods-panel">
-            <div class="panel-title">
-              <span class="label" data-i18n="awayPeriods">Away Periods</span>
-              <h1 data-i18n="awaySchedule">Away Schedule</h1>
-              <p data-i18n="awayScheduleHelp">Scheduled absences improve demand forecasts while keeping completed periods available for future learning.</p>
-            </div>
-            <p id="awayCurrentSummary" class="adaptive-charging-notice" aria-live="polite"></p>
-            <form id="awayPeriodForm" class="away-period-form">
-              <input id="awayPeriodId" type="hidden" />
-              <div class="away-period-field">
-                <label for="awayFrom" data-i18n="from">From</label>
-                <span class="away-datetime-control">
-                  <input id="awayFrom" type="datetime-local" required />
-                  <button id="awayNow" class="ghost" type="button" data-i18n="now">Now</button>
-                </span>
-              </div>
-              <div class="away-period-field">
-                <label for="awayUntil" data-i18n="until">Until</label>
-                <input id="awayUntil" type="datetime-local" required />
-              </div>
-              <div class="away-form-actions">
-                <button id="awaySave" type="submit" data-i18n="scheduleAway">Schedule Away</button>
-                <button id="awayCancel" class="ghost hidden" type="button" data-i18n="cancel">Cancel</button>
-              </div>
-            </form>
-            <div class="table-wrap away-period-table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th data-i18n="from">From</th>
-                    <th data-i18n="until">Until</th>
-                    <th data-i18n="status">Status</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody id="awayPeriodRows"></tbody>
-              </table>
-            </div>
-          </div>
-
-          <div class="panel adaptive-charging-timeline-panel">
-            <div class="panel-title">
-              <h1 data-i18n="chargingTimeline">Charging Timeline</h1>
-              <p data-i18n="chargingTimelineHelp">Forecast demand, solar generation, battery state, rates, and planned charging.</p>
-            </div>
-            <div class="adaptive-charging-legend" aria-label="Timeline series">
-              <span><i class="timeline-swatch demand"></i><span data-i18n="predictedDemand">Predicted demand</span></span>
-              <span><i class="timeline-swatch solar"></i><span data-i18n="predictedSolar">Predicted solar</span></span>
-              <span data-feature="fuel-cell"><i class="timeline-swatch fuel-cell"></i><span data-i18n="predictedFuelCell">Predicted Ene-Farm</span></span>
-              <span><i class="timeline-swatch soc"></i><span data-i18n="stateOfCharge">State of Charge</span></span>
-              <span><i class="timeline-swatch charging"></i><span data-i18n="plannedCharging">Planned charging</span></span>
-              <span><i class="timeline-swatch away"></i><span data-i18n="away">Away</span></span>
-            </div>
-            <canvas id="adaptiveChargingTimeline" class="adaptive-charging-timeline" width="1400" height="430"></canvas>
-            <p id="adaptiveChargingTimelineEmpty" class="graph-meta" data-i18n="noChargingTimeline">A timeline will appear after a charging plan is calculated.</p>
-          </div>
-
           <div class="panel adaptive-charging-details">
-            <h2 class="guard-log-title" data-i18n="selectedRateWindows">Discounted window plan</h2>
-            <div id="adaptiveChargingWindows" class="adaptive-charging-windows"></div>
             <h2 class="guard-log-title" data-i18n="recentWindowResults">Recent window results</h2>
             <div id="adaptiveChargingWindowSummaries" class="adaptive-charging-windows adaptive-charging-window-results"></div>
             <h2 class="guard-log-title" data-i18n="decisionLog">Decision log</h2>

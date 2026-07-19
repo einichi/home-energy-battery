@@ -452,6 +452,13 @@ const I18N = {
     recalculatePlan: "Recalculate",
     resumeAdaptiveCharging: "Resume Adaptive Charging",
     configure: "Configure",
+    nextAction: "Next action",
+    currentSoc: "Current SOC",
+    nextTargetSoc: "Next target SOC",
+    planHorizon: "Plan horizon",
+    planInputs: "Plan inputs",
+    forecastThrough: "Forecast totals through {time}",
+    forecastHorizonUnavailable: "Forecast horizon will appear after a plan is calculated.",
     forecastAge: "Forecast age",
     predictedSolar: "Predicted solar",
     predictedFuelCell: "Predicted Ene-Farm",
@@ -462,6 +469,8 @@ const I18N = {
     expectedStoredCharge: "Expected battery storage",
     expectedSunsetSoc: "Expected sunset SOC",
     batteryModelStatus: "Battery model",
+    batteryModelDetails: "Battery model details",
+    batteryModelCandidateNote: "Candidate values remain informational until validation is complete.",
     chargeEnergyModel: "Charge energy model",
     dischargeEnergyModel: "Discharge energy model",
     chargePowerModel: "Charge power model",
@@ -513,6 +522,8 @@ const I18N = {
     forecastError: "Error",
     forecastBiasLearning: "Learning · {count}/5 valid days",
     forecastBiasApplied: "{value}% correction · {count} valid days",
+    forecastAccuracyEarly: "Early estimate based on {count}/5 valid days. Percentage accuracy is withheld until calibration has enough observations.",
+    forecastAccuracyEstablished: "Accuracy is based on {count} valid days and now informs forecast calibration.",
     noSolarForecastOutcomes: "Completed forecast outcomes will appear after a full day of well-covered solar data.",
     fuelCellForecastAccuracy: "Ene-Farm Forecast Outcomes",
     fuelCellForecastAccuracyHelp: "Compare completed 30-minute forecasts with recorded generation. Observe-mode forecasts remain informational and never change charging plans.",
@@ -723,7 +734,7 @@ const I18N = {
     databaseSize: "Database size",
     daysRecorded: "Days recorded",
     samplesRecorded: "Samples recorded",
-    now: "now",
+    now: "Now",
     minAgo: "30m ago",
     timeAxis: "Time",
     wattsAxis: "Power (W)",
@@ -1025,6 +1036,13 @@ const I18N = {
     recalculatePlan: "再計算",
     resumeAdaptiveCharging: "適応充電を再開",
     configure: "設定",
+    nextAction: "次の動作",
+    currentSoc: "現在の充電率",
+    nextTargetSoc: "次の目標充電率",
+    planHorizon: "計画期間",
+    planInputs: "計画入力",
+    forecastThrough: "{time}までの予測合計",
+    forecastHorizonUnavailable: "計画が計算されると予測期間が表示されます。",
     forecastAge: "予報の経過時間",
     predictedSolar: "予測太陽光発電量",
     predictedFuelCell: "予測エネファーム発電",
@@ -1035,6 +1053,8 @@ const I18N = {
     expectedStoredCharge: "蓄電池への予測蓄電量",
     expectedSunsetSoc: "予測日没時充電率",
     batteryModelStatus: "蓄電池モデル",
+    batteryModelDetails: "蓄電池モデルの詳細",
+    batteryModelCandidateNote: "候補値は検証が完了するまで情報表示のみで、計画には使用されません。",
     chargeEnergyModel: "充電エネルギーモデル",
     dischargeEnergyModel: "放電エネルギーモデル",
     chargePowerModel: "充電電力モデル",
@@ -1086,6 +1106,8 @@ const I18N = {
     forecastError: "誤差",
     forecastBiasLearning: "学習中 · 有効日数 {count}/5日",
     forecastBiasApplied: "{value}%補正 · 有効日数 {count}日",
+    forecastAccuracyEarly: "初期推定です。有効日数は{count}/5日で、十分な観測が集まるまで精度の割合は表示しません。",
+    forecastAccuracyEstablished: "有効日数{count}日に基づく精度で、予測補正に反映されています。",
     noSolarForecastOutcomes: "十分な太陽光データが一日分記録されると、完了した予測実績が表示されます。",
     fuelCellForecastAccuracy: "エネファーム予測結果",
     fuelCellForecastAccuracyHelp: "完了した30分予測と実測発電量を比較します。観察モードの予測は情報表示のみで、充電計画には影響しません。",
@@ -2798,6 +2820,59 @@ function formatAdaptiveChargingPercent(value) {
     : "--";
 }
 
+function adaptiveChargingLocale() {
+  return state.language === "ja" ? "ja-JP" : "en-GB";
+}
+
+function formatAdaptiveChargingDateTime(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "--";
+  return new Intl.DateTimeFormat(adaptiveChargingLocale(), {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(date);
+}
+
+function formatAdaptiveChargingTime(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "--";
+  return new Intl.DateTimeFormat(adaptiveChargingLocale(), {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(date);
+}
+
+function formatAdaptiveChargingDate(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "--";
+  return new Intl.DateTimeFormat(adaptiveChargingLocale(), {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}
+
+function formatAdaptiveChargingRange(start, end) {
+  const startDate = new Date(start);
+  const endDate = new Date(end);
+  if (!Number.isFinite(startDate.getTime()) || !Number.isFinite(endDate.getTime())) return "--";
+  const sameDay = startDate.getFullYear() === endDate.getFullYear()
+    && startDate.getMonth() === endDate.getMonth()
+    && startDate.getDate() === endDate.getDate();
+  return sameDay
+    ? `${formatAdaptiveChargingDateTime(start)}–${formatAdaptiveChargingTime(end)}`
+    : `${formatAdaptiveChargingDateTime(start)}–${formatAdaptiveChargingDateTime(end)}`;
+}
+
+function nextAdaptiveChargingSlot(status, now = Date.now()) {
+  if (status?.owner === "adaptiveCharging" && status.activeSlot) return status.activeSlot;
+  return (status?.plan?.slots ?? []).find((slot) => new Date(slot.end).getTime() > now) ?? null;
+}
+
 function adaptiveChargingDisplayState(status) {
   if (!status?.enabled) return t("adaptiveChargingDisabled");
   if (status.owner === "adaptiveCharging") return t("adaptiveChargingCharging");
@@ -2809,13 +2884,12 @@ function adaptiveChargingDisplayState(status) {
 function adaptiveChargingNextAction(status) {
   if (!status?.enabled) return t("enableAdaptiveCharging");
   if (status.owner === "adaptiveCharging" && status.activeSlot?.end) {
-    return template("chargingUntil", { time: new Date(status.activeSlot.end).toLocaleTimeString() });
+    return template("chargingUntil", { time: formatAdaptiveChargingTime(status.activeSlot.end) });
   }
-  const now = Date.now();
-  const next = (status.plan?.slots ?? []).find((slot) => new Date(slot.end).getTime() > now);
+  const next = nextAdaptiveChargingSlot(status);
   if (next) {
     return template("nextAdaptiveCharge", {
-      time: new Date(next.start).toLocaleString(),
+      time: formatAdaptiveChargingDateTime(next.start),
       energy: Math.round(Number(next.targetWh) || 0),
     });
   }
@@ -2831,10 +2905,7 @@ function renderAdaptiveChargingWidget(status) {
 }
 
 function formatAwayDateTime(value) {
-  const date = new Date(value);
-  return Number.isFinite(date.getTime())
-    ? date.toLocaleString(state.language === "ja" ? "ja-JP" : "en-US")
-    : "--";
+  return formatAdaptiveChargingDateTime(value);
 }
 
 function awaySummary(view = state.awayPeriodsView) {
@@ -2891,6 +2962,7 @@ function renderAwayPeriods(view = state.awayPeriodsView) {
   if (!rows) return;
   rows.innerHTML = "";
   const periods = (view.periods ?? []).filter((period) => period.status !== "completed");
+  rows.closest(".away-period-table-wrap")?.classList.toggle("hidden", periods.length === 0);
   for (const period of periods) {
     const row = document.createElement("tr");
     const from = document.createElement("td");
@@ -2920,16 +2992,6 @@ function renderAwayPeriods(view = state.awayPeriodsView) {
     row.append(from, until, status, actions);
     rows.append(row);
   }
-  if (!periods.length) {
-    const row = document.createElement("tr");
-    const cell = document.createElement("td");
-    cell.colSpan = 4;
-    cell.className = "empty-table-cell";
-    cell.textContent = t("noAwaySchedules");
-    row.append(cell);
-    rows.append(row);
-  }
-
   const selectedId = $("#awayPeriodId")?.value;
   if (selectedId && !periods.some((period) => period.id === selectedId)) resetAwayPeriodForm();
 }
@@ -3173,7 +3235,7 @@ function handleAdaptiveChargingTimelinePointer(event) {
   const fuelCellDetail = Number(item.fuelCellMedianW) > 0 || Number(item.fuelCellSampleCount) > 0
     ? ` · ${Math.round(item.fuelCellMedianW)} W Ene-Farm median (P20 ${Math.round(item.fuelCellP20W)} W, P80 ${Math.round(item.fuelCellP80W)} W)`
     : "";
-  tooltip.textContent = `${new Date(item.start).toLocaleString()} - ${new Date(item.end).toLocaleTimeString()} · ${Math.round(item.demandW)} W average demand · ${Math.round(item.solarW)} W average solar${fuelCellDetail} · ${socDetail} · ${item.plannedChargeWh} Wh charge${storedCharge} · ${item.rateLabel || "Standard"} (${rate})${awayDetail}`;
+  tooltip.textContent = `${formatAdaptiveChargingRange(item.start, item.end)} · ${Math.round(item.demandW)} W average demand · ${Math.round(item.solarW)} W average solar${fuelCellDetail} · ${socDetail} · ${item.plannedChargeWh} Wh charge${storedCharge} · ${item.rateLabel || "Standard"} (${rate})${awayDetail}`;
   tooltip.style.left = `${Math.min(window.innerWidth - 270, event.clientX + 12)}px`;
   tooltip.style.top = `${Math.max(8, event.clientY - 48)}px`;
   tooltip.classList.remove("hidden");
@@ -3187,19 +3249,32 @@ function clearAdaptiveChargingTimelinePointer() {
 
 function renderSolarForecastAccuracy(accuracy = {}) {
   const outcomes = Array.isArray(accuracy.outcomes) ? accuracy.outcomes : [];
+  const sampleCount = Number(accuracy.sampleCount ?? outcomes.length) || 0;
   const correctionPercent = (Number(accuracy.factor) - 1) * 100;
   $("#solarForecastBiasCorrection").textContent = accuracy.learned
     ? template("forecastBiasApplied", {
         value: `${correctionPercent >= 0 ? "+" : ""}${correctionPercent.toFixed(0)}`,
-        count: accuracy.sampleCount ?? outcomes.length,
+        count: sampleCount,
       })
-    : template("forecastBiasLearning", { count: accuracy.sampleCount ?? outcomes.length });
+    : template("forecastBiasLearning", { count: sampleCount });
   $("#solarForecastCompletedDays").textContent = String(outcomes.length);
-  $("#solarForecastMeanError").textContent = accuracy.meanAbsolutePercentageError !== null
-    && accuracy.meanAbsolutePercentageError !== undefined
+  const absoluteErrorsKwh = outcomes
+    .map((outcome) => Math.abs(Number(outcome.errorKwh)))
+    .filter(Number.isFinite);
+  const meanAbsoluteErrorKwh = absoluteErrorsKwh.length
+    ? absoluteErrorsKwh.reduce((sum, value) => sum + value, 0) / absoluteErrorsKwh.length
+    : null;
+  $("#solarForecastMeanError").textContent = accuracy.learned
     && Number.isFinite(Number(accuracy.meanAbsolutePercentageError))
     ? `${Number(accuracy.meanAbsolutePercentageError).toFixed(1)}%`
-    : "--";
+    : Number.isFinite(meanAbsoluteErrorKwh)
+      ? formatAdaptiveChargingKwh(meanAbsoluteErrorKwh)
+      : "--";
+  const confidence = $("#solarForecastAccuracyConfidence");
+  confidence.textContent = sampleCount > 0
+    ? template(accuracy.learned ? "forecastAccuracyEstablished" : "forecastAccuracyEarly", { count: sampleCount })
+    : "";
+  confidence.classList.toggle("hidden", sampleCount === 0);
 
   const rows = $("#solarForecastAccuracyRows");
   rows.innerHTML = "";
@@ -3208,7 +3283,7 @@ function renderSolarForecastAccuracy(accuracy = {}) {
     const errorKwh = Number(outcome.errorKwh);
     const errorPercent = Number(outcome.errorPercent);
     const values = [
-      new Date(`${outcome.targetDate}T00:00:00`).toLocaleDateString(),
+      formatAdaptiveChargingDate(`${outcome.targetDate}T00:00:00`),
       formatAdaptiveChargingKwh(outcome.predictedKwh),
       formatAdaptiveChargingKwh(outcome.planningKwh),
       formatAdaptiveChargingKwh(outcome.actualKwh),
@@ -3304,7 +3379,7 @@ function renderFuelCellForecastOutcomes(outcomes = []) {
     const p80Kwh = Number(outcome.p80W) * outcome.durationHours / 1000;
     const row = document.createElement("tr");
     const values = [
-      `${outcome.start.toLocaleString()}–${outcome.end.toLocaleTimeString()}`,
+      formatAdaptiveChargingRange(outcome.start, outcome.end),
       `${energyKwh(p20Kwh)}–${energyKwh(p80Kwh)}`,
       energyKwh(outcome.medianKwh),
       energyKwh(outcome.actualKwh),
@@ -3329,6 +3404,16 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
   renderSolarForecastAccuracy(status.solarForecastAccuracy);
   renderFuelCellForecastOutcomes(status.fuelCellForecastOutcomes);
   const plan = status.plan ?? {};
+  const nextSlot = nextAdaptiveChargingSlot(status);
+  $("#adaptiveChargingNextAction").textContent = adaptiveChargingNextAction(status);
+  $("#adaptiveChargingCurrentSoc").textContent = formatAdaptiveChargingPercent(plan.currentSocPercent);
+  $("#adaptiveChargingNextTarget").textContent = formatAdaptiveChargingPercent(nextSlot?.targetSocPercent);
+  $("#adaptiveChargingPlanHorizon").textContent = plan.targetSunset
+    ? formatAdaptiveChargingDateTime(plan.targetSunset)
+    : "--";
+  $("#adaptiveChargingForecastHorizon").textContent = plan.targetSunset
+    ? template("forecastThrough", { time: formatAdaptiveChargingDateTime(plan.targetSunset) })
+    : t("forecastHorizonUnavailable");
   $("#adaptiveChargingForecastAge").textContent = Number.isFinite(status.forecast?.ageMs)
     ? `${Math.round(status.forecast.ageMs / 60_000)} min`
     : "--";
@@ -3384,10 +3469,10 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
       }));
     }
     if (model.activatedAt) {
-      parts.push(template("batteryModelActivatedAt", { value: new Date(model.activatedAt).toLocaleString() }));
+      parts.push(template("batteryModelActivatedAt", { value: formatAdaptiveChargingDateTime(model.activatedAt) }));
     }
     if (model.demotedAt && model.source !== "learned") {
-      parts.push(template("batteryModelDemotedAt", { value: new Date(model.demotedAt).toLocaleString() }));
+      parts.push(template("batteryModelDemotedAt", { value: formatAdaptiveChargingDateTime(model.demotedAt) }));
     }
     if (model.blockers?.length) parts.push(model.blockers.map(batteryModelBlockerText).join("; "));
     return parts.join(" · ") || "--";
@@ -3417,10 +3502,10 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
   powerParts.push(template("chargeSamples", { count: power.sampleCount ?? 0 }));
   powerParts.push(template("postMigrationChargeSamples", { count: power.postMigrationSampleCount ?? 0 }));
   if (power.activatedAt) {
-    powerParts.push(template("batteryModelActivatedAt", { value: new Date(power.activatedAt).toLocaleString() }));
+    powerParts.push(template("batteryModelActivatedAt", { value: formatAdaptiveChargingDateTime(power.activatedAt) }));
   }
   if (power.demotedAt && power.source !== "learned") {
-    powerParts.push(template("batteryModelDemotedAt", { value: new Date(power.demotedAt).toLocaleString() }));
+    powerParts.push(template("batteryModelDemotedAt", { value: formatAdaptiveChargingDateTime(power.demotedAt) }));
   }
   if (power.blockers?.length) powerParts.push(power.blockers.map(batteryModelBlockerText).join("; "));
   $("#adaptiveChargingPowerModel").textContent = powerParts.join(" · ") || "--";
@@ -3472,7 +3557,7 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
     const heading = document.createElement("div");
     heading.className = "adaptive-charging-window-heading";
     const title = document.createElement("h3");
-    title.textContent = `${windowPlan.label} · ${new Date(windowPlan.start).toLocaleTimeString()}–${new Date(windowPlan.end).toLocaleTimeString()}`;
+    title.textContent = `${windowPlan.label} · ${formatAdaptiveChargingTime(windowPlan.start)}–${formatAdaptiveChargingTime(windowPlan.end)}`;
     const rate = document.createElement("span");
     rate.textContent = `${windowPlan.yenPerKwh} yen/kWh`;
     heading.append(title, rate);
@@ -3481,7 +3566,7 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
     const plannedRange = document.createElement("p");
     plannedRange.className = "adaptive-charging-window-range";
     plannedRange.textContent = slotRows.length
-      ? `${t("plannedChargingRange")} · ${new Date(slotRows[0].start).toLocaleTimeString()}–${new Date(slotRows.at(-1).end).toLocaleTimeString()}`
+      ? `${t("plannedChargingRange")} · ${formatAdaptiveChargingTime(slotRows[0].start)}–${formatAdaptiveChargingTime(slotRows.at(-1).end)}`
       : t("noChargingPlanned");
     card.append(plannedRange);
 
@@ -3525,7 +3610,7 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
     for (const slot of slotRows) {
       const row = document.createElement("div");
       row.className = "adaptive-charging-slot-summary";
-      row.textContent = `${new Date(slot.start).toLocaleString()} - ${new Date(slot.end).toLocaleTimeString()} · ${slot.targetWh} Wh`;
+      row.textContent = `${formatAdaptiveChargingRange(slot.start, slot.end)} · ${slot.targetWh} Wh`;
       card.append(row);
     }
     windows.append(card);
@@ -3549,11 +3634,11 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
     const heading = document.createElement("div");
     heading.className = "adaptive-charging-window-heading";
     const title = document.createElement("h3");
-    title.textContent = `${execution.label || "Discounted"} · ${new Date(execution.windowStart).toLocaleTimeString()}–${new Date(execution.windowEnd).toLocaleTimeString()}`;
+    title.textContent = `${execution.label || "Discounted"} · ${formatAdaptiveChargingTime(execution.windowStart)}–${formatAdaptiveChargingTime(execution.windowEnd)}`;
     const stateLabel = document.createElement("span");
     stateLabel.textContent = execution.active
       ? t("inProgress")
-      : new Date(execution.windowStart).toLocaleDateString();
+      : formatAdaptiveChargingDate(execution.windowStart);
     heading.append(title, stateLabel);
     card.append(heading);
     const metrics = document.createElement("dl");
@@ -3583,7 +3668,7 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
   log.innerHTML = "";
   for (const entry of [...(status.log ?? [])].reverse()) {
     const row = document.createElement("div");
-    row.innerHTML = `<time>${new Date(entry.at).toLocaleString()}</time><span></span>`;
+    row.innerHTML = `<time>${formatAdaptiveChargingDateTime(entry.at)}</time><span></span>`;
     row.querySelector("span").textContent = entry.message;
     log.append(row);
   }

@@ -6,7 +6,7 @@ import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/p
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   DEFAULT_NOTIFICATION_CONFIG,
   createNotificationService,
@@ -248,6 +248,36 @@ function runCli(command, args = {}, positional = []) {
   });
 }
 
+let deviceCommandExecutor = runCli;
+
+function setDeviceCommandExecutor(executor) {
+  if (typeof executor !== "function") throw new TypeError("device command executor must be a function");
+  const previous = deviceCommandExecutor;
+  deviceCommandExecutor = executor;
+  return () => {
+    deviceCommandExecutor = previous;
+  };
+}
+
+async function configureDeviceCommandAdapter() {
+  const modulePath = process.env.DEVICE_COMMAND_ADAPTER_MODULE;
+  if (!modulePath) return;
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("DEVICE_COMMAND_ADAPTER_MODULE may only be used when NODE_ENV=test");
+  }
+  const resolvedPath = path.isAbsolute(modulePath) ? modulePath : path.resolve(__dirname, modulePath);
+  const adapterModule = await import(pathToFileURL(resolvedPath).href);
+  if (typeof adapterModule.createDeviceCommandAdapter !== "function") {
+    throw new Error(`${resolvedPath} must export createDeviceCommandAdapter()`);
+  }
+  const adapter = await adapterModule.createDeviceCommandAdapter({ environment: process.env });
+  const execute = typeof adapter === "function" ? adapter : adapter?.execute?.bind(adapter);
+  if (typeof execute !== "function") {
+    throw new Error(`${resolvedPath} createDeviceCommandAdapter() must return a function or an object with execute()`);
+  }
+  setDeviceCommandExecutor(execute);
+}
+
 function runCliQueued(command, args = {}, positional = []) {
   const task = cliQueue.then(async () => {
     const startedMs = Date.now();
@@ -258,7 +288,7 @@ function runCliQueued(command, args = {}, positional = []) {
     };
     activeCliContext = context;
     try {
-      return await runCli(command, args, positional);
+      return await deviceCommandExecutor(command, args, positional);
     } finally {
       recentCliTimings.push({
         ...context,
@@ -704,7 +734,7 @@ async function readAdaptiveChargingDemandProfileDays() {
 }
 
 async function writeJsonFileAtomic(file, data) {
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  const tmp = `${file}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`);
   await rename(tmp, file);
 }
@@ -860,6 +890,8 @@ async function migrateBatteryLearningState(dataDir = DATA_DIR, logger = console)
     ...parsed,
     plan: ownerActive ? parsed.plan ?? null : null,
     pendingPlanReason: deferModelSwitch ? null : "battery model migration",
+    pendingPlanRequestId: deferModelSwitch ? null : `battery-model-migration:${migratedAt}`,
+    pendingPlanRequestedAt: deferModelSwitch ? null : migratedAt,
     chargingPerformance,
     windowSummaries: (parsed.windowSummaries ?? []).map((summary) => ({ ...summary, modelVersion: 1 })),
     batteryLearning: cleanBatteryLearningModel({ migratedAt, switchAfterSlotEnd }),
@@ -951,6 +983,8 @@ function cleanBatteryLearningModel(value = {}) {
       ? value.status
       : "learning",
     switchAfterSlotEnd: value.switchAfterSlotEnd ?? null,
+    consumedSwitchAfterSlotEnd: value.consumedSwitchAfterSlotEnd ?? null,
+    switchConsumedAt: value.switchConsumedAt ?? null,
     charge: cleanBatteryLearningCoefficient(value.charge),
     discharge: cleanBatteryLearningCoefficient(value.discharge),
     power: cleanBatteryLearningPower(value.power),
@@ -986,6 +1020,9 @@ function cleanAdaptiveChargingState(value = {}) {
     batteryLearning: cleanBatteryLearningModel(value.batteryLearning),
     lastPlanEventKey: value.lastPlanEventKey ?? null,
     pendingPlanReason: value.pendingPlanReason ?? null,
+    pendingPlanRequestId: value.pendingPlanRequestId
+      ?? (value.pendingPlanReason ? `legacy:${value.pendingPlanReason}` : null),
+    pendingPlanRequestedAt: value.pendingPlanRequestedAt ?? null,
     interruptedCharge: value.interruptedCharge
       && Number.isFinite(Number(value.interruptedCharge.remainingWh))
       && Number(value.interruptedCharge.remainingWh) > 0
@@ -4434,7 +4471,7 @@ async function writeConfig(config) {
     state.interruptedCharge = null;
     state.breakerRecovery = null;
     state.lastPlanEventKey = null;
-    state.pendingPlanReason = "configuration changed";
+    queueAdaptiveChargingPlanRefresh(state, "configuration changed", changedAt);
     const forecastInputsChanged = JSON.stringify({
       latitude: previous.adaptiveCharging.latitude,
       longitude: previous.adaptiveCharging.longitude,
@@ -4690,7 +4727,7 @@ function cleanNewAwayPeriod(body, now = new Date()) {
 
 async function queueAdaptiveChargingForAwayChange(reason, now = new Date()) {
   const state = await readAdaptiveChargingState();
-  state.pendingPlanReason = reason;
+  queueAdaptiveChargingPlanRefresh(state, reason, now);
   state.lastPlanEventKey = null;
   appendAdaptiveChargingLog(state, `${reason}; Adaptive Charging recalculation queued`, "away", now);
   await writeAdaptiveChargingState(state);
@@ -5358,7 +5395,7 @@ async function resumeAdaptiveCharging(now = new Date()) {
     state.standbyHoldUntil = null;
   }
   state.lastPlanEventKey = null;
-  state.pendingPlanReason = "manual resume";
+  queueAdaptiveChargingPlanRefresh(state, "manual resume", now);
   appendAdaptiveChargingLog(state, "Adaptive Charging resumed manually", "resume", now);
   return writeAdaptiveChargingState(state);
 }
@@ -6085,6 +6122,13 @@ function adaptiveChargingScheduledEvent(config, now = new Date()) {
   };
 }
 
+function queueAdaptiveChargingPlanRefresh(state, reason, now = new Date(), requestId = randomUUID()) {
+  state.pendingPlanReason = reason;
+  state.pendingPlanRequestId = String(requestId);
+  state.pendingPlanRequestedAt = now.toISOString();
+  return state.pendingPlanRequestId;
+}
+
 function adaptiveChargingPlanRefreshDecision(state, config, now = new Date()) {
   const forecastFetchedAt = state.forecast?.fetchedAt ?? null;
   const scheduledEvent = adaptiveChargingScheduledEvent(config, now);
@@ -6093,7 +6137,7 @@ function adaptiveChargingPlanRefreshDecision(state, config, now = new Date()) {
       ...scheduledEvent,
       refresh: true,
       trigger: state.pendingPlanReason,
-      eventKey: `pending:${state.pendingPlanReason}:${state.updatedAt ?? now.toISOString()}`,
+      eventKey: `pending:${state.pendingPlanRequestId ?? `legacy:${state.pendingPlanReason}`}`,
     };
   }
   if (!state.plan) {
@@ -6127,6 +6171,22 @@ function batteryLearningModelSwitchDue(state, now = new Date()) {
   if (!switchAfterSlotEnd) return false;
   const switchAt = new Date(switchAfterSlotEnd).getTime();
   return Number.isFinite(switchAt) && switchAt <= now.getTime();
+}
+
+function consumeBatteryLearningModelSwitch(state, now = new Date()) {
+  const switchAfterSlotEnd = state.batteryLearning?.switchAfterSlotEnd;
+  if (!switchAfterSlotEnd || !batteryLearningModelSwitchDue(state, now)) return false;
+  state.batteryLearning.switchAfterSlotEnd = null;
+  if (state.batteryLearning.consumedSwitchAfterSlotEnd === switchAfterSlotEnd) return false;
+  state.batteryLearning.consumedSwitchAfterSlotEnd = switchAfterSlotEnd;
+  state.batteryLearning.switchConsumedAt = now.toISOString();
+  queueAdaptiveChargingPlanRefresh(
+    state,
+    "battery model migration after active slot",
+    now,
+    `battery-model-switch:${switchAfterSlotEnd}`,
+  );
+  return true;
 }
 
 function updateAdaptiveChargingSolarHeadroomHold(state, liveExportNeedsHeadroom, now = new Date()) {
@@ -6188,9 +6248,10 @@ function adaptiveChargingPlanLogMessage(plan, trigger, liveSoc) {
 
 async function evaluateAdaptiveCharging(config, status, rules, now = new Date()) {
   let state = await readAdaptiveChargingState();
-  if (batteryLearningModelSwitchDue(state, now)) {
-    state.pendingPlanReason = "battery model migration after active slot";
-    state.batteryLearning.switchAfterSlotEnd = null;
+  if (consumeBatteryLearningModelSwitch(state, now)) {
+    // Persist the one-shot transition before history/model work so a failed or
+    // overlapping evaluation can retry the queued plan without re-arming it.
+    state = await writeAdaptiveChargingState(state);
   }
   const awayPeriods = historyStore.awayPeriods({ includeCompleted: true, nowMs: now.getTime() });
   const activeAway = awayPeriods.find((period) => period.status === "active") ?? null;
@@ -6198,7 +6259,11 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
   if (state.lastAwayStateKey === null && !activeAway) {
     state.lastAwayStateKey = awayStateKey;
   } else if (state.lastAwayStateKey !== awayStateKey) {
-    state.pendingPlanReason = activeAway ? "Away period started" : "Away period ended";
+    queueAdaptiveChargingPlanRefresh(
+      state,
+      activeAway ? "Away period started" : "Away period ended",
+      now,
+    );
     state.lastPlanEventKey = null;
     state.lastAwayStateKey = awayStateKey;
   }
@@ -6318,6 +6383,8 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
     recordFuelCellPlanForecast(state.plan, now);
     state.lastPlanEventKey = refreshDecision.eventKey;
     state.pendingPlanReason = null;
+    state.pendingPlanRequestId = null;
+    state.pendingPlanRequestedAt = null;
     if (state.interruptedCharge) {
       const capped = applyInterruptedChargeCap(
         state.plan,
@@ -7518,6 +7585,8 @@ async function api(req, res, url) {
     recordFuelCellPlanForecast(state.plan, now);
     state.lastPlanEventKey = adaptiveChargingScheduledEvent(config, now).eventKey ?? `manual:${now.toISOString()}`;
     state.pendingPlanReason = null;
+    state.pendingPlanRequestId = null;
+    state.pendingPlanRequestedAt = null;
     if (state.interruptedCharge) {
       const capped = applyInterruptedChargeCap(
         state.plan,
@@ -7858,6 +7927,7 @@ export {
   buildAdaptiveChargingPlan,
   buildAdaptiveChargingTimelineView,
   batteryLearningModelSwitchDue,
+  consumeBatteryLearningModelSwitch,
   capAdaptiveChargingSlotToRemainingTime,
   clearStaleScheduleRuns,
   cleanAutomationRule,
@@ -7914,6 +7984,7 @@ export {
   readAdaptiveChargingDemandProfileDays,
   recoverConcatenatedJsonValue,
   sampleFromStatus,
+  setDeviceCommandExecutor,
   shouldTriggerDemandGuard,
   shouldHoldGuardStandbyForAdaptiveCharging,
   adaptiveChargingPlanRefreshDecision,
@@ -7932,6 +8003,7 @@ export {
 };
 
 async function main() {
+  await configureDeviceCommandAdapter();
   await ensureDataDir();
   const inspection = await inspectHistoryDatabase(DATA_DIR);
   databaseUpgrade = {

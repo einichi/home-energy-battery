@@ -20,6 +20,7 @@ import {
   buildFuelCellGenerationModel,
   buildAdaptiveChargingTimelineView,
   batteryLearningModelSwitchDue,
+  consumeBatteryLearningModelSwitch,
   capAdaptiveChargingSlotToRemainingTime,
   clearStaleScheduleRuns,
   cleanAutomationRule,
@@ -586,8 +587,17 @@ const initialRefresh = adaptiveChargingPlanRefreshDecision({
   forecast: waitingAdaptiveChargingState.forecast,
   plan: null,
   pendingPlanReason: "configuration changed",
+  pendingPlanRequestId: "config-save-1",
 }, adaptiveChargingConfig, new Date(2026, 6, 11, 12, 0));
 assert.equal(initialRefresh.trigger, "configuration changed");
+assert.equal(initialRefresh.eventKey, "pending:config-save-1");
+assert.equal(adaptiveChargingPlanRefreshDecision({
+  forecast: waitingAdaptiveChargingState.forecast,
+  plan: null,
+  pendingPlanReason: "configuration changed",
+  pendingPlanRequestId: "config-save-1",
+  updatedAt: "2026-07-11T12:00:30.000Z",
+}, adaptiveChargingConfig, new Date(2026, 6, 11, 12, 0, 30)).eventKey, initialRefresh.eventKey);
 const recalculationLog = adaptiveChargingPlanLogMessage({
   available: true,
   predictedSolarKwh: 5.65,
@@ -616,6 +626,35 @@ const modelSwitchNow = new Date("2026-07-19T04:00:00.000Z");
 assert.equal(batteryLearningModelSwitchDue({ batteryLearning: { switchAfterSlotEnd: null } }, modelSwitchNow), false);
 assert.equal(batteryLearningModelSwitchDue({ batteryLearning: { switchAfterSlotEnd: "2026-07-19T03:59:59.000Z" } }, modelSwitchNow), true);
 assert.equal(batteryLearningModelSwitchDue({ batteryLearning: { switchAfterSlotEnd: "2026-07-19T04:00:01.000Z" } }, modelSwitchNow), false);
+const deferredModelSwitchState = cleanAdaptiveChargingState({
+  batteryLearning: { switchAfterSlotEnd: "2026-07-19T03:59:59.000Z" },
+});
+assert.equal(consumeBatteryLearningModelSwitch(deferredModelSwitchState, modelSwitchNow), true);
+assert.equal(deferredModelSwitchState.batteryLearning.switchAfterSlotEnd, null);
+assert.equal(
+  deferredModelSwitchState.batteryLearning.consumedSwitchAfterSlotEnd,
+  "2026-07-19T03:59:59.000Z",
+);
+assert.equal(deferredModelSwitchState.pendingPlanReason, "battery model migration after active slot");
+assert.equal(
+  deferredModelSwitchState.pendingPlanRequestId,
+  "battery-model-switch:2026-07-19T03:59:59.000Z",
+);
+deferredModelSwitchState.batteryLearning = buildBatteryLearningModel(
+  adaptiveChargingConfig,
+  [],
+  deferredModelSwitchState.batteryLearning,
+  modelSwitchNow,
+);
+assert.equal(deferredModelSwitchState.batteryLearning.switchAfterSlotEnd, null);
+assert.equal(
+  deferredModelSwitchState.batteryLearning.consumedSwitchAfterSlotEnd,
+  "2026-07-19T03:59:59.000Z",
+);
+const persistedModelSwitchState = cleanAdaptiveChargingState(deferredModelSwitchState);
+persistedModelSwitchState.batteryLearning.switchAfterSlotEnd = "2026-07-19T03:59:59.000Z";
+assert.equal(consumeBatteryLearningModelSwitch(persistedModelSwitchState, new Date("2026-07-19T04:00:30.000Z")), false);
+assert.equal(persistedModelSwitchState.batteryLearning.switchAfterSlotEnd, null);
 
 const solarHeadroomState = {
   solarHeadroomHoldUntil: "2026-07-19T05:00:00.000Z",

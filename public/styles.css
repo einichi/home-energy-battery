@@ -1398,10 +1398,101 @@ output {
   flex: none;
 }
 
+.adaptive-charging-heading .panel-title {
+  max-width: 780px;
+}
+
 .adaptive-charging-timeline-panel,
-.adaptive-charging-details {
+.adaptive-charging-details,
+.adaptive-charging-plan-panel,
+.adaptive-charging-diagnostics {
   display: grid;
   gap: 10px;
+}
+
+.adaptive-charging-operational-grid {
+  display: grid;
+  grid-template-columns: 1.1fr 2.2fr 0.8fr 0.9fr 1.2fr;
+  gap: 1px;
+  margin: 14px 0 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--border);
+}
+
+.adaptive-charging-operational-grid div {
+  min-width: 0;
+  padding: 12px;
+  background: #fff;
+}
+
+.adaptive-charging-operational-grid dt,
+.adaptive-charging-model-grid dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.adaptive-charging-operational-grid dd,
+.adaptive-charging-model-grid dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.adaptive-charging-operational-grid .adaptive-charging-primary-state dd,
+.adaptive-charging-operational-grid .adaptive-charging-next-action dd {
+  color: #0f766e;
+  font-size: 15px;
+}
+
+.adaptive-charging-model-details {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.adaptive-charging-model-details summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 12px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  list-style-position: inside;
+}
+
+.adaptive-charging-model-details summary strong {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.adaptive-charging-model-note {
+  margin: 0;
+  padding: 0 12px 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.adaptive-charging-model-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  border-top: 1px solid var(--border);
+  background: var(--border);
+}
+
+.adaptive-charging-model-grid div {
+  min-width: 0;
+  padding: 12px;
+  background: #fff;
 }
 
 .adaptive-charging-timeline {
@@ -2127,6 +2218,26 @@ td code {
   .adaptive-charging-actions,
   .adaptive-charging-status-grid {
     grid-template-columns: 1fr;
+  }
+
+  .adaptive-charging-operational-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .adaptive-charging-operational-grid .adaptive-charging-primary-state,
+  .adaptive-charging-operational-grid .adaptive-charging-next-action,
+  .adaptive-charging-operational-grid div:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .adaptive-charging-model-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .adaptive-charging-model-details summary {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
   }
 
   .away-period-form {

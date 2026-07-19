@@ -8,7 +8,7 @@
     "node:help": "node home-energy-battery-node.js --help",
     "start": "node server.js",
     "check": "node --check home-energy-battery-node.js && node --check server.js && node --check public/app.js",
-    "test": "node tests/helpers.test.js && node tests/history-store.test.js && node tests/database-upgrade.test.js && node tests/database-upgrade-server.test.js && node tests/adaptive-charging-isolation.test.js && node tests/ene-farm.test.js && node tests/gas-tariffs.test.js && node tests/chart-utils.test.js"
+    "test": "node tests/helpers.test.js && node tests/history-store.test.js && node tests/database-upgrade.test.js && node tests/database-upgrade-server.test.js && node tests/device-simulator.test.js && node tests/device-adapter-integration.test.js && node tests/adaptive-charging-isolation.test.js && node tests/ene-farm.test.js && node tests/gas-tariffs.test.js && node tests/chart-utils.test.js"
   },
   "engines": {
     "node": ">=24.15.0"
