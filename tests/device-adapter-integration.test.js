@@ -93,6 +93,17 @@ try {
   assert.equal(initial.payload.energy.fuel_cells[0].hot_water_level.value, 4);
   assert.equal(initial.payload.energy.fuel_cells[1].source_role, "proxy");
 
+  const manualGeneration = await request(baseUrl, "/api/actions/fuel-cell-start", {
+    method: "POST",
+    body: { host: "10.250.0.10" },
+  });
+  assert.equal(manualGeneration.response.status, 200);
+  assert.equal(manualGeneration.payload.host, "10.250.0.30");
+  assert.equal(manualGeneration.payload.epc, "0xCA");
+  assert.equal(manualGeneration.payload.requested, "on");
+  const startingFuelCell = await request(baseUrl, "/api/status");
+  assert.equal(startingFuelCell.payload.energy.fuel_cells[0].generation_status.value, "starting");
+
   const charge = await request(baseUrl, "/api/actions/charge", {
     method: "POST",
     body: { targetWh: 500 },

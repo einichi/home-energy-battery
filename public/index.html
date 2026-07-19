@@ -265,16 +265,13 @@
           <article class="widget fuel-cell-hot-water-widget" data-widget-id="fuelCellHotWater" data-widget-group="status" data-feature="fuel-cell">
             <span data-i18n="fuelCellHotWater">Ene-Farm Hot Water</span>
             <div class="fuel-cell-tank-display">
-              <div class="fuel-cell-tank" id="fuelCellHotWaterTank" role="meter" aria-valuemin="0" aria-valuemax="5" aria-valuenow="0" aria-label="Hot water level">
-                <i data-tank-level="5"></i>
-                <i data-tank-level="4"></i>
-                <i data-tank-level="3"></i>
-                <i data-tank-level="2"></i>
-                <i data-tank-level="1"></i>
+              <div class="fuel-cell-tank" id="fuelCellHotWaterTank" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Hot water level">
+                <i class="fuel-cell-tank-water" aria-hidden="true"></i>
               </div>
               <div class="fuel-cell-tank-copy">
-                <strong id="fuelCellHotWaterLevel">-- / 5</strong>
+                <strong id="fuelCellHotWaterLevel">--</strong>
                 <small data-i18n="hotWaterLevelHelp">Water at approximately 45°C or hotter</small>
+                <button id="fuelCellManualStart" type="button" class="ghost fuel-cell-manual-start" data-i18n="startManualFuelCellGeneration" disabled>Start Manual Generation</button>
               </div>
             </div>
           </article>
@@ -1234,35 +1231,29 @@
                 <label><span data-i18n="generationModel">Generation model</span><select id="fuelCellGenerationModel"><option value="automatic" data-i18n="automaticOmakase">Automatic / Omakase</option><option value="fixed" data-i18n="fixedSchedule">Fixed schedule</option><option value="off" data-i18n="off">Off</option></select></label>
                 <label><span data-i18n="plannerInfluence">Planner influence</span><select id="fuelCellPlannerInfluence"><option value="observe" data-i18n="observeOnly">Observe only</option><option value="active" data-i18n="active">Active</option></select></label>
                 <label><span data-i18n="gasProvider">Gas provider</span><select id="fuelCellTariffProvider"><option value="tokyo-gas">Tokyo Gas</option></select></label>
-                <label><span data-i18n="gasRegion">Gas region</span><input id="fuelCellTariffRegion" value="tokyo" /></label>
-                <label><span data-i18n="gasPlan">Gas plan</span><input id="fuelCellTariffPlan" value="enefarm" /></label>
+                <label class="wide-field"><span data-i18n="gasRegion">Gas region</span><select id="fuelCellTariffRegion"><option value="tokyo" data-i18n="tokyoGasTokyoRegion">Tokyo district and surrounding areas</option><option value="gunma" data-i18n="tokyoGasGunmaRegion">Gunma district</option></select></label>
+                <label class="wide-field"><span data-i18n="gasPlan">Gas plan</span><select id="fuelCellTariffPlan"><option value="enefarm" data-i18n="tokyoGasEneFarmPlan">Ene-Farm generation eco plan</option></select></label>
                 <label><span data-i18n="gasCo2Factor">City gas emissions (kg-CO2/m³)</span><input id="fuelCellGasCo2" type="number" min="0" step="0.01" inputmode="decimal" /></label>
                 <label><span data-i18n="meterReadingDay">Meter reading day</span><input id="fuelCellReadingDay" type="number" min="1" max="31" step="1" /></label>
-                <label><span data-i18n="winterUsage">Expected winter household gas (m³/month)</span><input id="fuelCellWinterUsage" type="number" min="0" step="0.1" /></label>
-                <label><span data-i18n="otherSeasonUsage">Expected non-winter household gas (m³/month)</span><input id="fuelCellOtherUsage" type="number" min="0" step="0.1" /></label>
-                <label><span data-i18n="equipmentDiscount">Equipment discount</span><select id="fuelCellDiscount"><option value="">None</option><option value="enefarm">Ene-Farm</option><option value="bath">Bath heating</option><option value="floor">Floor heating</option><option value="set">Combined equipment</option></select></label>
+                <label class="wide-field"><span data-i18n="winterUsage">Expected total household gas in winter (m³/month)</span><input id="fuelCellWinterUsage" type="number" min="0" step="0.1" /></label>
+                <label class="wide-field"><span data-i18n="otherSeasonUsage">Expected total household gas outside winter (m³/month)</span><input id="fuelCellOtherUsage" type="number" min="0" step="0.1" /></label>
+                <label class="wide-field"><span data-i18n="equipmentDiscount">Optional equipment discount</span><select id="fuelCellDiscount"><option value="" data-i18n="noOptionalDiscount">No optional discount</option><option value="bath" data-i18n="eneFarmBathDiscount">Ene-Farm + Bath heating discount</option><option value="floor" data-i18n="eneFarmFloorDiscount">Ene-Farm + Floor heating discount (winter only)</option><option value="set" data-i18n="eneFarmCombinedDiscount">Ene-Farm + Combined bath/floor discount</option></select></label>
                 <label><span data-i18n="marginalRateOverride">Marginal rate override (yen/m³)</span><input id="fuelCellMarginalRate" type="number" min="0" step="0.01" /></label>
               </div>
+              <p class="field-help" data-i18n="householdGasUsageHelp">Ene-Farm reports only its own gas use. Total household usage is needed to select the correct Tokyo Gas usage band.</p>
               <label class="check-row"><input id="fuelCellTariffAutomatic" type="checkbox" /><span data-i18n="automaticTariffUpdates">Automatically import monthly Tokyo Gas tariffs</span></label>
               <fieldset id="fuelCellFixedSchedule" class="feature-options hidden"><legend data-i18n="fixedGenerationWindows">Fixed generation windows</legend><div id="fuelCellFixedWindows" class="fixed-window-list"></div><button id="addFuelCellWindow" type="button" class="ghost" data-i18n="addWindow">Add Window</button></fieldset>
+              <p class="field-help" data-i18n="generationModelDeviceHelp">ECHONET reports whether the Ene-Farm is generating, but not its configured mode or schedule. These settings describe the configuration selected on the Ene-Farm itself.</p>
               <p id="fuelCellInfluenceStatus" class="adaptive-charging-notice"></p>
               <button data-i18n="saveFuelCellSettings">Save Ene-Farm Settings</button>
             </form>
             <form id="fuelCellTariffImportForm" class="config-form section-box">
               <h2 data-i18n="gasTariffData">Gas Tariff Data</h2>
-              <div class="compact-field-grid"><label><span data-i18n="billingMonth">Billing month</span><input id="fuelCellTariffMonth" type="month" /></label><label><span data-i18n="season">Season</span><select id="fuelCellTariffSeason"><option value="other" data-i18n="otherSeason">Other season</option><option value="winter" data-i18n="winter">Winter</option></select></label></div>
+              <div class="compact-field-grid"><label><span data-i18n="billingMonth">Billing month</span><input id="fuelCellTariffMonth" type="month" /></label></div>
+              <p class="field-help" data-i18n="gasSeasonAutomaticHelp">Tokyo Gas winter rates are selected automatically for December through April billing months.</p>
               <button data-i18n="importPublishedTariff">Import Published Tariff</button>
               <p id="fuelCellTariffStatus" class="adaptive-charging-notice"></p>
-              <p class="data-attribution"><a href="https://reception.tokyo-gas.co.jp/ryokin?tik=1" target="_blank" rel="noreferrer" data-i18n="tokyoGasTariffSource">Tokyo Gas tariff source</a></p>
-              <div class="tariff-override section-box">
-                <h3 data-i18n="manualMonthlyOverride">Manual monthly override</h3>
-                <p data-i18n="manualMonthlyOverrideHelp">Use the base charge and variable rate for the expected household usage band in this billing month.</p>
-                <div class="compact-field-grid">
-                  <label><span data-i18n="baseCharge">Base charge (yen)</span><input id="fuelCellTariffBaseCharge" type="number" min="0" step="0.01" /></label>
-                  <label><span data-i18n="variableGasRate">Variable rate (yen/m³)</span><input id="fuelCellTariffYenPerM3" type="number" min="0" step="0.01" /></label>
-                </div>
-                <div class="inline-actions"><button id="saveFuelCellTariffOverride" type="button" class="ghost" data-i18n="saveOverride">Save override</button><button id="deleteFuelCellTariffOverride" type="button" class="ghost danger" data-i18n="deleteOverride">Delete override</button></div>
-              </div>
+              <p class="data-attribution"><a id="fuelCellTariffSource" href="https://reception.tokyo-gas.co.jp/ryokin/?tik=1" target="_blank" rel="noreferrer" data-i18n="tokyoGasTariffSource">Tokyo Gas tariff source</a></p>
             </form>
             <p class="estimate-notice" data-i18n="estimateNotice">All costs and savings are estimates. Check your provider statement for accurate billing information.</p>
           </div>

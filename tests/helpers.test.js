@@ -121,6 +121,18 @@ assert.deepEqual(migratedFuelCellHosts.fuelCellProxyHosts, ["10.0.0.135"]);
 const proxyOnlyFuelCell = cleanConfig({ meterHost: "10.0.0.135", fuelCellHosts: ["10.0.0.135"] });
 assert.equal(proxyOnlyFuelCell.fuelCellPrimaryHost, "");
 assert.deepEqual(proxyOnlyFuelCell.fuelCellProxyHosts, ["10.0.0.135"]);
+const normalizedFuelCellTariff = cleanConfig({
+  fuelCell: { tariff: { region: "gunma", plan: "enefarm", equipmentDiscount: "floor" } },
+});
+assert.equal(normalizedFuelCellTariff.fuelCell.tariff.region, "gunma");
+assert.equal(normalizedFuelCellTariff.fuelCell.tariff.plan, "enefarm");
+assert.equal(normalizedFuelCellTariff.fuelCell.tariff.equipmentDiscount, "floor");
+const invalidFuelCellTariff = cleanConfig({
+  fuelCell: { tariff: { region: "unknown", plan: "other", equipmentDiscount: "enefarm" } },
+});
+assert.equal(invalidFuelCellTariff.fuelCell.tariff.region, "tokyo");
+assert.equal(invalidFuelCellTariff.fuelCell.tariff.plan, "enefarm");
+assert.equal(invalidFuelCellTariff.fuelCell.tariff.equipmentDiscount, "");
 
 const fuelCellSamples = [];
 for (let day = 1; day <= 8; day += 1) {

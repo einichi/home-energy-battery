@@ -377,6 +377,20 @@ export function createDeviceSimulator(options = {}) {
         state.battery.targetWh = args["target-wh"] === undefined ? null : Number(args["target-wh"]);
         return { host: args.host ?? state.battery.host, eoj: BATTERY_EOJ, results: [{ epc: charging ? "0xD8" : "0xD6", ok: true, esv: "Set_Res" }, { epc: "0xDA", ok: true, esv: "Set_Res" }] };
       }
+      case "fuel-cell-generation": {
+        const requested = String(positional[0]);
+        state.fuelCell.generationStatus = requested === "on" ? "starting" : "stopping";
+        state.fuelCell.instantPowerW = 0;
+        return {
+          ok: true,
+          esv: "Set_Res",
+          host: args.host ?? state.fuelCell.primaryHost,
+          eoj: FUEL_CELL_EOJ,
+          epc: "0xCA",
+          requested,
+          edt: requested === "on" ? "0x41" : "0x42",
+        };
+      }
       case "raw-get": return clone(rawGet(args, positional));
       case "raw-set": return { ok: true, esv: "Set_Res", host: args.host, eoj: args.eoj ?? BATTERY_EOJ, epc: positional[0], raw: positional[1] };
       case "discover": return clone(discoveryResult());

@@ -311,7 +311,11 @@ const I18N = {
     fuelCellOperation: "Ene-Farm Operation",
     fuelCellHotWater: "Ene-Farm Hot Water",
     hotWaterLevel: "Hot water level",
+    hotWaterPercent: "Approx. {percent}% full",
     hotWaterLevelHelp: "Water at approximately 45°C or hotter",
+    startManualFuelCellGeneration: "Start Manual Generation",
+    confirmManualFuelCellGeneration: "Start manual Ene-Farm generation? Startup may take approximately 40 minutes and will consume gas.",
+    manualFuelCellGenerationRequested: "Manual Ene-Farm generation requested",
     electricityToday: "Electricity today",
     gasToday: "Gas today",
     operatingTime: "Operating time",
@@ -647,9 +651,19 @@ const I18N = {
     gasRegion: "Gas region",
     gasPlan: "Gas plan",
     meterReadingDay: "Meter reading day",
-    winterUsage: "Expected winter household gas (m³/month)",
-    otherSeasonUsage: "Expected non-winter household gas (m³/month)",
-    equipmentDiscount: "Equipment discount",
+    winterUsage: "Expected total household gas in winter (m³/month)",
+    otherSeasonUsage: "Expected total household gas outside winter (m³/month)",
+    equipmentDiscount: "Optional equipment discount",
+    tokyoGasTokyoRegion: "Tokyo district and surrounding areas",
+    tokyoGasGunmaRegion: "Gunma district",
+    tokyoGasEneFarmPlan: "Ene-Farm generation eco plan",
+    noOptionalDiscount: "No optional discount",
+    eneFarmBathDiscount: "Ene-Farm + Bath heating discount",
+    eneFarmFloorDiscount: "Ene-Farm + Floor heating discount (winter only)",
+    eneFarmCombinedDiscount: "Ene-Farm + Combined bath/floor discount",
+    householdGasUsageHelp: "Ene-Farm reports only its own gas use. Total household usage is needed to select the correct Tokyo Gas usage band.",
+    gasSeasonAutomaticHelp: "Tokyo Gas winter rates are selected automatically for December through April billing months.",
+    generationModelDeviceHelp: "ECHONET reports whether the Ene-Farm is generating, but not its configured mode or schedule. These settings describe the configuration selected on the Ene-Farm itself.",
     marginalRateOverride: "Marginal rate override (yen/m³)",
     automaticTariffUpdates: "Automatically import monthly Tokyo Gas tariffs",
     fixedGenerationWindows: "Fixed generation windows",
@@ -661,12 +675,6 @@ const I18N = {
     otherSeason: "Other season",
     winter: "Winter",
     importPublishedTariff: "Import Published Tariff",
-    manualMonthlyOverride: "Manual monthly override",
-    manualMonthlyOverrideHelp: "Use the base charge and variable rate for the expected household usage band in this billing month.",
-    baseCharge: "Base charge (yen)",
-    variableGasRate: "Variable rate (yen/m³)",
-    saveOverride: "Save override",
-    deleteOverride: "Delete override",
     tokyoGasTariffSource: "Tokyo Gas tariff source",
     exactCounter: "Exact counter",
     integratedEstimate: "Integrated estimate",
@@ -907,7 +915,11 @@ const I18N = {
     fuelCellOperation: "エネファーム運転状況",
     fuelCellHotWater: "エネファーム残湯量",
     hotWaterLevel: "残湯量",
+    hotWaterPercent: "約{percent}%",
     hotWaterLevelHelp: "約45℃以上のお湯の目安",
+    startManualFuelCellGeneration: "手動発電を開始",
+    confirmManualFuelCellGeneration: "エネファームの手動発電を開始しますか？ 起動には約40分かかる場合があり、ガスを使用します。",
+    manualFuelCellGenerationRequested: "エネファームの手動発電を要求しました",
     electricityToday: "本日の発電量",
     gasToday: "本日のガス使用量",
     operatingTime: "運転時間",
@@ -1241,9 +1253,19 @@ const I18N = {
     gasRegion: "供給地域",
     gasPlan: "ガス料金プラン",
     meterReadingDay: "検針日",
-    winterUsage: "冬期の想定家庭ガス使用量 (m³/月)",
-    otherSeasonUsage: "冬期以外の想定家庭ガス使用量 (m³/月)",
-    equipmentDiscount: "機器割引",
+    winterUsage: "冬期の想定家庭総ガス使用量 (m³/月)",
+    otherSeasonUsage: "冬期以外の想定家庭総ガス使用量 (m³/月)",
+    equipmentDiscount: "追加機器割引",
+    tokyoGasTokyoRegion: "東京地区等",
+    tokyoGasGunmaRegion: "群馬地区",
+    tokyoGasEneFarmPlan: "エネファームで発電エコぷらん",
+    noOptionalDiscount: "追加割引なし",
+    eneFarmBathDiscount: "エネファーム + バス暖割",
+    eneFarmFloorDiscount: "エネファーム + 床暖割（冬期のみ）",
+    eneFarmCombinedDiscount: "エネファーム + セット割",
+    householdGasUsageHelp: "エネファームから取得できるのは本体のガス使用量だけです。東京ガスの料金表を選ぶには家庭全体の使用量が必要です。",
+    gasSeasonAutomaticHelp: "東京ガスの冬期料金は12月〜4月検針分に自動適用されます。",
+    generationModelDeviceHelp: "ECHONETから取得できるのは発電動作の状態で、設定済みの発電モードや時間帯は取得できません。ここではエネファーム本体で選択した設定を記録します。",
     marginalRateOverride: "従量単価の上書き (円/m³)",
     automaticTariffUpdates: "東京ガスの月別料金を自動取得",
     fixedGenerationWindows: "固定発電時間帯",
@@ -1255,12 +1277,6 @@ const I18N = {
     otherSeason: "その他期",
     winter: "冬期",
     importPublishedTariff: "公開料金を取得",
-    manualMonthlyOverride: "月別手動上書き",
-    manualMonthlyOverrideHelp: "この請求月の想定家庭使用量帯に対応する基本料金と従量単価を入力します。",
-    baseCharge: "基本料金 (円)",
-    variableGasRate: "従量単価 (円/m³)",
-    saveOverride: "上書きを保存",
-    deleteOverride: "上書きを削除",
     tokyoGasTariffSource: "東京ガス料金データ",
     exactCounter: "積算値",
     integratedEstimate: "積算推定",
@@ -4118,19 +4134,9 @@ async function loadFuelCellTariffMonth() {
   if (!month) return;
   try {
     const result = await api(`/api/gas-tariffs?month=${encodeURIComponent(month)}`);
-    const tariff = result.override ?? result.snapshots?.[0] ?? null;
-    const season = tariff?.season ?? $("#fuelCellTariffSeason").value;
-    if (tariff?.season) $("#fuelCellTariffSeason").value = tariff.season;
-    const expectedUsage = season === "winter"
-      ? Number(state.config?.fuelCell?.tariff?.expectedWinterMonthlyM3)
-      : Number(state.config?.fuelCell?.tariff?.expectedOtherMonthlyM3);
-    const band = tariff?.bands?.find((item) => Number.isFinite(expectedUsage)
-      && expectedUsage >= Number(item.minM3 ?? 0)
-      && (item.maxM3 == null || expectedUsage < Number(item.maxM3))) ?? tariff?.bands?.[0];
-    $("#fuelCellTariffBaseCharge").value = band?.baseChargeYen ?? "";
-    $("#fuelCellTariffYenPerM3").value = band?.yenPerM3 ?? "";
+    const tariff = result.snapshots?.[0] ?? null;
     setText("#fuelCellTariffStatus", tariff
-      ? `${month} · ${result.override ? t("manualMonthlyOverride") : `v${tariff.version}`}`
+      ? `${month} · v${tariff.version} · ${t(tariff.season === "winter" ? "winter" : "otherSeason")}`
       : "");
   } catch (error) {
     setText("#fuelCellTariffStatus", error.message);
@@ -4165,6 +4171,8 @@ function updateConfigControls(config) {
   $("#fuelCellTariffProvider").value = fuelCell.tariff?.provider ?? "tokyo-gas";
   $("#fuelCellTariffRegion").value = fuelCell.tariff?.region ?? "tokyo";
   $("#fuelCellTariffPlan").value = fuelCell.tariff?.plan ?? "enefarm";
+  const tariffSource = $("#fuelCellTariffSource");
+  if (tariffSource) tariffSource.href = `https://reception.tokyo-gas.co.jp/ryokin/?tik=${fuelCell.tariff?.region === "gunma" ? 6 : 1}`;
   $("#fuelCellReadingDay").value = fuelCell.tariff?.meterReadingDay ?? 1;
   $("#fuelCellWinterUsage").value = fuelCell.tariff?.expectedWinterMonthlyM3 ?? "";
   $("#fuelCellOtherUsage").value = fuelCell.tariff?.expectedOtherMonthlyM3 ?? "";
@@ -4266,16 +4274,28 @@ function renderFuelCellHotWater(fuelCells = []) {
   const level = Number.isInteger(numericLevel) && numericLevel >= 0 && numericLevel <= 5
     ? numericLevel
     : null;
-  setText("#fuelCellHotWaterLevel", level === null ? "-- / 5" : `${level} / 5`);
+  const percent = level === null ? null : level * 20;
+  const levelText = percent === null ? t("unavailable") : template("hotWaterPercent", { percent });
+  setText("#fuelCellHotWaterLevel", levelText);
   const tank = $("#fuelCellHotWaterTank");
   if (!tank) return;
   tank.setAttribute("aria-label", t("hotWaterLevel"));
-  tank.setAttribute("aria-valuenow", level === null ? "0" : String(level));
-  tank.setAttribute("aria-valuetext", level === null ? t("unavailable") : `${level} / 5`);
-  tank.classList.toggle("is-unavailable", level === null);
-  tank.querySelectorAll("[data-tank-level]").forEach((segment) => {
-    segment.classList.toggle("is-filled", level !== null && Number(segment.dataset.tankLevel) <= level);
-  });
+  tank.setAttribute("aria-valuenow", percent === null ? "0" : String(percent));
+  tank.setAttribute("aria-valuetext", levelText);
+  tank.style.setProperty("--tank-fill", `${percent ?? 0}%`);
+  tank.classList.toggle("is-unavailable", percent === null);
+  const startButton = $("#fuelCellManualStart");
+  if (!startButton) return;
+  const generationState = primary?.generation_status?.value ?? null;
+  const canStart = generationState === "stopped" || generationState === "idling";
+  startButton.disabled = !canStart;
+  startButton.textContent = generationState === "starting"
+    ? t("fuelCellStateStarting")
+    : generationState === "generating"
+      ? t("fuelCellStateGenerating")
+      : generationState === "stopping"
+        ? t("fuelCellStateStopping")
+        : t("startManualFuelCellGeneration");
 }
 
 function renderCircuitWidgets(data) {
@@ -5447,6 +5467,19 @@ function initForms() {
   $("#settingsPage")?.addEventListener("compositionend", () => {
     state.isComposing = false;
   });
+  $("#fuelCellManualStart")?.addEventListener("click", async (event) => {
+    if (!window.confirm(t("confirmManualFuelCellGeneration"))) return;
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      await api("/api/actions/fuel-cell-start", { method: "POST", body: {} });
+      toast(t("manualFuelCellGenerationRequested"));
+      await refreshAll();
+    } catch (err) {
+      toast(err.message);
+      if (state.status) renderDashboard(state.status, { recordTrend: false });
+    }
+  });
   ["#chargeStart", "#chargeEnd", "#dischargeStart", "#dischargeEnd"].forEach(
     (selector) => selectHourOptions($(selector)),
   );
@@ -5695,36 +5728,12 @@ function initForms() {
       const result = await api("/api/gas-tariffs/import", { method: "POST", body: {
         provider: $("#fuelCellTariffProvider").value,
         billingMonth: $("#fuelCellTariffMonth").value,
-        season: $("#fuelCellTariffSeason").value,
       }});
       setText("#fuelCellTariffStatus", `${result.billingMonth} · v${result.version}`);
       await loadFuelCellTariffMonth();
     } catch (err) { setText("#fuelCellTariffStatus", err.message); }
   });
   $("#fuelCellTariffMonth")?.addEventListener("change", () => void loadFuelCellTariffMonth());
-  $("#saveFuelCellTariffOverride")?.addEventListener("click", async () => {
-    const month = $("#fuelCellTariffMonth").value;
-    setText("#fuelCellTariffStatus", t("loading"));
-    try {
-      const result = await api(`/api/gas-tariffs/${encodeURIComponent(month)}/override`, { method: "PUT", body: {
-        season: $("#fuelCellTariffSeason").value,
-        baseChargeYen: $("#fuelCellTariffBaseCharge").value,
-        yenPerM3: $("#fuelCellTariffYenPerM3").value,
-      }});
-      setText("#fuelCellTariffStatus", `${result.billingMonth} · ${t("saved")}`);
-      await loadFuelCellTariffMonth();
-    } catch (err) { setText("#fuelCellTariffStatus", err.message); }
-  });
-  $("#deleteFuelCellTariffOverride")?.addEventListener("click", async () => {
-    const month = $("#fuelCellTariffMonth").value;
-    setText("#fuelCellTariffStatus", t("loading"));
-    try {
-      await api(`/api/gas-tariffs/${encodeURIComponent(month)}/override`, { method: "DELETE" });
-      $("#fuelCellTariffBaseCharge").value = "";
-      $("#fuelCellTariffYenPerM3").value = "";
-      setText("#fuelCellTariffStatus", t("saved"));
-    } catch (err) { setText("#fuelCellTariffStatus", err.message); }
-  });
   $("#circuitLabelsForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {

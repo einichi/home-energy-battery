@@ -29,6 +29,7 @@ const EPC = {
   FUEL_CELL_RATED_POWER_W: 0xc2,
   FUEL_CELL_CUMULATIVE_GENERATION: 0xc5,
   FUEL_CELL_CUMULATIVE_GAS: 0xc8,
+  FUEL_CELL_GENERATION_SETTING: 0xca,
   FUEL_CELL_GENERATION_STATUS: 0xcb,
   FUEL_CELL_INTERCONNECTION_STATUS: 0xd0,
   FUEL_CELL_HOT_WATER_LEVEL: 0xf4,
@@ -118,6 +119,7 @@ function usage() {
   node home-energy-battery-node.js status --host IP [--instance 1]
   node home-energy-battery-node.js energy-status [--no-solar] [--no-fuel-cell]
   node home-energy-battery-node.js meter-status --host IP [--eoj 0x028701]
+  node home-energy-battery-node.js fuel-cell-generation --host IP [on|off] [--dry-run]
   node home-energy-battery-node.js set-mode --host IP MODE [--instance 1] [--dry-run]
   node home-energy-battery-node.js vendor-profile --host IP [osaifu|eco|backup] [--instance 1] [--dry-run]
   node home-energy-battery-node.js osaifu-charge-window --host IP [START_HOUR END_HOUR] [--instance 1] [--dry-run]
@@ -725,6 +727,30 @@ async function cmdRawSet(opts) {
   });
 }
 
+async function cmdFuelCellGeneration(opts) {
+  const host = required(opts.host, "--host");
+  const eoj = parseEoj(opts.eoj ?? FUEL_CELL_EOJ);
+  const requested = String(required(opts._[1], "on or off")).toLowerCase();
+  const edtValue = requested === "on" ? 0x41 : requested === "off" ? 0x42 : null;
+  if (edtValue === null) throw new Error("fuel-cell-generation must be on or off");
+  const edt = Buffer.from([edtValue]);
+  const out = {
+    host,
+    eoj: eojHex(eoj),
+    epc: "0xCA",
+    name: "fuel_cell_generation_setting",
+    requested,
+    edt: rawHex(edt),
+  };
+  if (opts["dry-run"]) return out;
+  return withClient(opts, async (client) => {
+    const res = await client.set(host, eoj, EPC.FUEL_CELL_GENERATION_SETTING, edt);
+    const esv = res.message.esv;
+    if (esv !== ESV_SET_RES) throw new Error(`Ene-Farm rejected the generation ${requested} request (${esv})`);
+    return { ok: true, esv, ...out };
+  });
+}
+
 async function cmdStatus(opts) {
   const host = required(opts.host, "--host");
   const instance = Number(opts.instance ?? 1);
@@ -1263,6 +1289,7 @@ async function main() {
     status: cmdStatus,
     "energy-status": cmdEnergyStatus,
     "meter-status": cmdMeterStatus,
+    "fuel-cell-generation": cmdFuelCellGeneration,
     "set-mode": cmdSetMode,
     "vendor-profile": cmdVendorProfile,
     "osaifu-charge-window": (o) => cmdOsaifuWindow(o, "charge"),

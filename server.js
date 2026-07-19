@@ -3826,8 +3826,6 @@ function aggregateEnergyReportSamples(samples, options = {}) {
 
 function gasTariffForMonth(config, billingMonth) {
   const provider = config.fuelCell?.tariff?.provider ?? "tokyo-gas";
-  const override = historyStore.gasTariffOverride(provider, billingMonth);
-  if (override) return { ...override, source: "override" };
   const snapshot = historyStore.gasTariffSnapshots({ provider, billingMonth })[0] ?? null;
   return snapshot ? { ...snapshot, source: "snapshot" } : null;
 }
@@ -3886,7 +3884,16 @@ function estimatedGasCost(config, gasM3, start, end) {
     };
   }
   const expectedUsage = tariff.season === "winter" ? settings.expectedWinterMonthlyM3 : settings.expectedOtherMonthlyM3;
-  const band = applicableGasTariffBand(tariff, expectedUsage ?? gasM3);
+  if (!Number.isFinite(expectedUsage)) {
+    return {
+      estimated: true,
+      available: false,
+      billingMonth,
+      reason: "Expected total household gas usage is required because Ene-Farm measures only its own gas consumption",
+      methodology: "The household billing band cannot be inferred from the Ene-Farm gas counter alone",
+    };
+  }
+  const band = applicableGasTariffBand(tariff, expectedUsage);
   const discount = applicableGasDiscount(tariff, settings.equipmentDiscount);
   const configuredRate = finiteNumberOrNull(settings.marginalRateOverrideYenPerM3);
   const baseRate = configuredRate ?? band?.yenPerM3 ?? null;
@@ -3930,11 +3937,11 @@ async function updateCurrentGasTariff(config, now = new Date()) {
   const provider = config.fuelCell.tariff.provider;
   if (provider !== "tokyo-gas") return null;
   const billingMonth = billingPeriodKey(now, config.fuelCell.tariff.meterReadingDay ?? 1);
-  const month = now.getMonth() + 1;
   const imported = await importGasTariff(provider, {
     billingMonth,
     readingDay: config.fuelCell.tariff.meterReadingDay,
-    season: month === 12 || month <= 4 ? "winter" : "other",
+    region: config.fuelCell.tariff.region,
+    plan: config.fuelCell.tariff.plan,
   });
   return historyStore.recordGasTariffSnapshot({ ...imported, fetchedAt: now.toISOString() });
 }
@@ -4302,6 +4309,8 @@ function normalizeFuelCellConfig(value = {}) {
     }))
     .filter((window) => window.days.length && window.start !== window.end);
   const tariff = value.tariff ?? {};
+  const region = String(tariff.region ?? "tokyo").trim();
+  const discount = String(tariff.equipmentDiscount ?? "").trim();
   return {
     generationModel: ["automatic", "fixed", "off"].includes(value.generationModel) ? value.generationModel : "automatic",
     plannerInfluence: value.plannerInfluence === "active" ? "active" : "observe",
@@ -4309,9 +4318,9 @@ function normalizeFuelCellConfig(value = {}) {
     gasCo2KgPerM3: configNumber(value.gasCo2KgPerM3, 2.21, 0, 100),
     tariff: {
       provider: String(tariff.provider ?? "tokyo-gas").trim() || "tokyo-gas",
-      region: String(tariff.region ?? "tokyo").trim() || "tokyo",
-      plan: String(tariff.plan ?? "enefarm").trim() || "enefarm",
-      equipmentDiscount: String(tariff.equipmentDiscount ?? "").trim(),
+      region: ["tokyo", "gunma"].includes(region) ? region : "tokyo",
+      plan: "enefarm",
+      equipmentDiscount: ["bath", "floor", "set"].includes(discount) ? discount : "",
       meterReadingDay: configNumber(tariff.meterReadingDay, 1, 1, 31),
       expectedWinterMonthlyM3: optionalConfigNumber(tariff.expectedWinterMonthlyM3, 0, 100000),
       expectedOtherMonthlyM3: optionalConfigNumber(tariff.expectedOtherMonthlyM3, 0, 100000),
@@ -4993,6 +5002,24 @@ async function executeAction(action, payload = {}) {
   // Settings and direct actions share this path so scheduled jobs exercise the
   // same validation and CLI writes as button clicks in the UI.
   const config = await readConfig();
+  if (action === "fuel-cell-start") {
+    if (config.fuelCellEnabled === false) throw new Error("Ene-Farm is disabled");
+    const fuelCellHost = String(config.fuelCellPrimaryHost ?? "").trim();
+    if (!fuelCellHost) throw new Error("Ene-Farm primary device is not configured");
+    const result = await runCliQueued("fuel-cell-generation", { host: fuelCellHost }, ["on"]);
+    if (historyStore.isReady()) {
+      const at = new Date().toISOString();
+      historyStore.recordEvent({
+        eventKey: `fuelCell:manual-generation-request:${at}`,
+        at,
+        category: "fuelCell",
+        type: "manual-generation-request",
+        message: "Manual Ene-Farm generation requested",
+        payload: { host: fuelCellHost },
+      });
+    }
+    return result;
+  }
   const host = hostFrom(payload, config);
   switch (action) {
     case "vendor-profile":
@@ -7377,7 +7404,6 @@ async function api(req, res, url) {
       provider,
       billingMonth,
       snapshots: historyStore.gasTariffSnapshots({ provider, billingMonth }),
-      override: billingMonth ? historyStore.gasTariffOverride(provider, billingMonth) : null,
     });
   }
   if (req.method === "POST" && url.pathname === "/api/gas-tariffs/import") {
@@ -7400,31 +7426,11 @@ async function api(req, res, url) {
       imported = await importGasTariff(provider, {
         billingMonth,
         readingDay: config.fuelCell?.tariff?.meterReadingDay ?? 1,
-        season: body.season,
+        region: config.fuelCell?.tariff?.region ?? "tokyo",
+        plan: config.fuelCell?.tariff?.plan ?? "enefarm",
       });
     }
     return json(res, 201, historyStore.recordGasTariffSnapshot({ ...imported, fetchedAt: new Date().toISOString() }));
-  }
-  if (url.pathname.startsWith("/api/gas-tariffs/") && url.pathname.endsWith("/override")) {
-    const parts = url.pathname.split("/").filter(Boolean);
-    const billingMonth = decodeURIComponent(parts[2] ?? "");
-    if (!validBillingMonth(billingMonth)) return json(res, 400, { error: "month must be YYYY-MM" });
-    const config = await readConfig();
-    const provider = url.searchParams.get("provider") ?? config.fuelCell?.tariff?.provider ?? "tokyo-gas";
-    if (req.method === "PUT") {
-      const body = await readBody(req);
-      const payload = body.bands || body.tariff ? normalizeGasTariffPayload(body.tariff ?? body) : {
-        season: body.season === "winter" ? "winter" : "other",
-        bands: [{ minM3: 0, maxM3: null, baseChargeYen: Number(body.baseChargeYen) || 0, yenPerM3: Number(body.yenPerM3) }],
-        discounts: [],
-        notes: String(body.notes ?? "Manual override"),
-      };
-      if (!Number.isFinite(payload.bands?.[0]?.yenPerM3)) return json(res, 400, { error: "A valid yenPerM3 rate is required" });
-      return json(res, 200, historyStore.setGasTariffOverride(provider, billingMonth, payload));
-    }
-    if (req.method === "DELETE") {
-      return json(res, 200, { ok: historyStore.deleteGasTariffOverride(provider, billingMonth) });
-    }
   }
   if (req.method === "POST" && url.pathname === "/api/discovery") {
     const body = await readBody(req);
@@ -7632,7 +7638,7 @@ async function api(req, res, url) {
   if (req.method === "POST" && url.pathname.startsWith("/api/actions/")) {
     const body = await readBody(req);
     const action = url.pathname.replace("/api/actions/", "");
-    await pauseAdaptiveChargingForManualAction(action);
+    if (action !== "fuel-cell-start") await pauseAdaptiveChargingForManualAction(action);
     return json(res, 200, await executeAction(action, body));
   }
   if (req.method === "GET" && url.pathname === "/api/schedules") {
