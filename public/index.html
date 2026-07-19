@@ -265,8 +265,14 @@
           <article class="widget fuel-cell-hot-water-widget" data-widget-id="fuelCellHotWater" data-widget-group="status" data-feature="fuel-cell">
             <span data-i18n="fuelCellHotWater">Ene-Farm Hot Water</span>
             <div class="fuel-cell-tank-display">
-              <div class="fuel-cell-tank" id="fuelCellHotWaterTank" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Hot water level">
-                <i class="fuel-cell-tank-water" aria-hidden="true"></i>
+              <div class="fuel-cell-tank-gauge">
+                <div class="fuel-cell-tank" id="fuelCellHotWaterTank" role="meter" aria-valuemin="0" aria-valuemax="5" aria-valuenow="0" aria-label="Hot water level">
+                  <i class="fuel-cell-tank-water" aria-hidden="true"></i>
+                  <i class="fuel-cell-tank-ticks" aria-hidden="true"></i>
+                </div>
+                <div class="fuel-cell-tank-scale" aria-hidden="true">
+                  <span>5</span><span>4</span><span>3</span><span>2</span><span>1</span><span>0</span>
+                </div>
               </div>
               <div class="fuel-cell-tank-copy">
                 <strong id="fuelCellHotWaterLevel">--</strong>

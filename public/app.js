@@ -311,7 +311,7 @@ const I18N = {
     fuelCellOperation: "Ene-Farm Operation",
     fuelCellHotWater: "Ene-Farm Hot Water",
     hotWaterLevel: "Hot water level",
-    hotWaterPercent: "Approx. {percent}% full",
+    hotWaterPercent: "{percent}% full (approx)",
     hotWaterLevelHelp: "Water at approximately 45°C or hotter",
     startManualFuelCellGeneration: "Start Manual Generation",
     confirmManualFuelCellGeneration: "Start manual Ene-Farm generation? Startup may take approximately 40 minutes and will consume gas.",
@@ -913,7 +913,7 @@ const I18N = {
     fuelCellOperation: "エネファーム運転状況",
     fuelCellHotWater: "エネファーム残湯量",
     hotWaterLevel: "残湯量",
-    hotWaterPercent: "約{percent}%",
+    hotWaterPercent: "{percent}%（目安）",
     hotWaterLevelHelp: "約45℃以上のお湯の目安",
     startManualFuelCellGeneration: "手動発電を開始",
     confirmManualFuelCellGeneration: "エネファームの手動発電を開始しますか？ 起動には約40分かかる場合があり、ガスを使用します。",
@@ -4274,7 +4274,7 @@ function renderFuelCellHotWater(fuelCells = []) {
   const tank = $("#fuelCellHotWaterTank");
   if (!tank) return;
   tank.setAttribute("aria-label", t("hotWaterLevel"));
-  tank.setAttribute("aria-valuenow", percent === null ? "0" : String(percent));
+  tank.setAttribute("aria-valuenow", level === null ? "0" : String(level));
   tank.setAttribute("aria-valuetext", levelText);
   tank.style.setProperty("--tank-fill", `${percent ?? 0}%`);
   tank.classList.toggle("is-unavailable", percent === null);

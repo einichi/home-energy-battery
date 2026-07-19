@@ -482,9 +482,17 @@ label {
 
 .fuel-cell-tank-display {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
+  grid-template-columns: 86px minmax(0, 1fr);
   align-items: center;
-  gap: 14px;
+  gap: 10px;
+}
+
+.fuel-cell-tank-gauge {
+  display: grid;
+  grid-template-columns: 64px 16px;
+  align-items: stretch;
+  gap: 6px;
+  height: 78px;
 }
 
 .fuel-cell-tank {
@@ -547,6 +555,33 @@ label {
   background: #32b4aa;
 }
 
+.fuel-cell-tank-ticks {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(20% - 1px),
+    rgba(67, 84, 101, 0.52) calc(20% - 1px),
+    rgba(67, 84, 101, 0.52) 20%
+  );
+}
+
+.fuel-cell-tank-scale {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 0;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
 .fuel-cell-tank.is-unavailable .fuel-cell-tank-water {
   display: none;
 }
@@ -558,9 +593,9 @@ label {
 }
 
 .fuel-cell-tank-copy strong {
-  font-size: 20px;
-  line-height: 1.1;
-  white-space: nowrap;
+  font-size: 16px;
+  line-height: 1.15;
+  white-space: normal;
   font-variant-numeric: tabular-nums;
 }
 
