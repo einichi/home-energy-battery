@@ -442,6 +442,40 @@ label {
   font-size: 13px;
 }
 
+.fuel-cell-operation-widget,
+.fuel-cell-state-widget {
+  grid-column: span 2;
+}
+
+.fuel-cell-operation-widget {
+  width: 100%;
+  height: 134px;
+  min-height: 134px;
+  max-height: 134px;
+  grid-template-columns: minmax(130px, 0.55fr) minmax(0, 1.45fr);
+  grid-template-rows: auto 1fr;
+  align-content: stretch;
+  overflow: hidden;
+}
+
+.fuel-cell-operation-widget > span {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.fuel-cell-operation-widget > .status-text {
+  grid-column: 1;
+  grid-row: 2;
+  align-self: end;
+}
+
+.fuel-cell-operation-widget .fuel-cell-widget-metrics {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-content: center;
+}
+
 .fuel-cell-state-strip {
   display: flex;
   width: 100%;
@@ -459,7 +493,6 @@ label {
 .fuel-cell-state-strip [data-state="stopped"] { background: #cbd5df; }
 
 .fuel-cell-state-widget {
-  grid-column: 1 / -1;
   min-height: 150px;
   align-content: stretch;
 }
@@ -1595,7 +1628,7 @@ output {
 
 .timeline-swatch.demand { background: #dc2626; }
 .timeline-swatch.solar { background: #d8872c; }
-.timeline-swatch.fuel-cell { background: #2563eb; }
+.timeline-swatch.fuel-cell { background: #db2777; }
 .timeline-swatch.soc { background: #7c3aed; }
 .timeline-swatch.charging { height: 8px; background: #127c78; }
 .timeline-swatch.away { height: 8px; background: rgba(71, 85, 105, 0.5); }
@@ -2393,6 +2426,27 @@ td code {
   .payload-grid {
     grid-column: span 1;
     width: 100%;
+  }
+
+  .fuel-cell-operation-widget,
+  .fuel-cell-state-widget {
+    grid-column: span 1;
+  }
+
+  .fuel-cell-operation-widget {
+    grid-template-columns: minmax(92px, 0.45fr) minmax(0, 1.55fr);
+    gap: 8px 10px;
+    padding: 14px;
+  }
+
+  .fuel-cell-operation-widget .fuel-cell-widget-metrics {
+    gap: 5px 8px;
+  }
+
+  .fuel-cell-operation-widget .fuel-cell-widget-metrics span,
+  .fuel-cell-operation-widget .fuel-cell-widget-metrics b {
+    font-size: 11px;
+    line-height: 1.15;
   }
 
   .energy-source-metrics {

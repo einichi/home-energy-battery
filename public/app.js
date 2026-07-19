@@ -3129,7 +3129,7 @@ function drawAdaptiveChargingTimeline(status = state.adaptiveChargingStatus) {
   };
   drawLine("demandW", "#dc2626", powerY);
   drawLine("solarW", "#d8872c", powerY);
-  drawLine("fuelCellMedianW", "#2563eb", powerY);
+  drawLine("fuelCellMedianW", "#db2777", powerY);
 
   const finiteSoc = (value) => value === null || value === undefined
     ? null
