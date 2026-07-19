@@ -1878,6 +1878,39 @@ output {
   opacity: 0.65;
 }
 
+.adaptive-charging-actions button.is-recalculating,
+.adaptive-charging-actions button.is-recalculating:disabled {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #fff;
+  background: var(--accent);
+  cursor: progress;
+  opacity: 0.82;
+}
+
+.adaptive-charging-actions button.is-recalculating::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  border: 2px solid rgba(255, 255, 255, 0.42);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: adaptive-charging-button-spin 700ms linear infinite;
+}
+
+@keyframes adaptive-charging-button-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .adaptive-charging-actions button.is-recalculating::before {
+    animation: none;
+  }
+}
+
 .adaptive-charging-status-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

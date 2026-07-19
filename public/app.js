@@ -53,6 +53,7 @@ const state = {
   fuelCellSummary: null,
   automationRules: [],
   adaptiveChargingStatus: null,
+  adaptiveChargingRecalculating: false,
   adaptiveChargingTimelineHover: null,
   awayPeriodsView: null,
   awayFromSetByNow: false,
@@ -468,6 +469,7 @@ const I18N = {
     adaptiveChargingSaved: "Adaptive Charging settings saved",
     openAdaptiveCharging: "Open Adaptive Charging",
     recalculatePlan: "Recalculate",
+    recalculatingPlan: "Recalculating...",
     resumeAdaptiveCharging: "Resume Adaptive Charging",
     configure: "Configure",
     nextAction: "Next action",
@@ -1068,6 +1070,7 @@ const I18N = {
     adaptiveChargingSaved: "適応充電設定を保存しました",
     openAdaptiveCharging: "適応充電を開く",
     recalculatePlan: "再計算",
+    recalculatingPlan: "再計算中...",
     resumeAdaptiveCharging: "適応充電を再開",
     configure: "設定",
     nextAction: "次の動作",
@@ -1466,6 +1469,7 @@ function setLanguage(language) {
   if (state.adaptiveChargingStatus) renderAdaptiveChargingStatus(state.adaptiveChargingStatus);
   else if (state.awayPeriodsView) renderAwayPeriods(state.awayPeriodsView);
   setPage(state.currentPage);
+  if (state.config) updateAdaptiveChargingAvailability(state.config);
 }
 
 function displayValue(value) {
@@ -3761,7 +3765,12 @@ function updateAdaptiveChargingAvailability(config = state.config ?? {}) {
   const enabled = enable.checked;
   const configuredEnabled = config.adaptiveCharging?.enabled === true;
   enable.disabled = reasons.length > 0 && !enabled;
-  $("#adaptiveChargingRecalculate").disabled = !enabled || !configuredEnabled || reasons.length > 0;
+  const recalculateButton = $("#adaptiveChargingRecalculate");
+  const recalculating = state.adaptiveChargingRecalculating === true;
+  recalculateButton.disabled = recalculating || !enabled || !configuredEnabled || reasons.length > 0;
+  recalculateButton.classList.toggle("is-recalculating", recalculating);
+  recalculateButton.setAttribute("aria-busy", String(recalculating));
+  recalculateButton.textContent = t(recalculating ? "recalculatingPlan" : "recalculatePlan");
   $("#adaptiveChargingResume").disabled = !configuredEnabled || !state.adaptiveChargingStatus?.paused || reasons.length > 0;
   const runtimeReason = configuredEnabled
     ? state.adaptiveChargingStatus?.available
@@ -5858,11 +5867,16 @@ function initForms() {
   });
 
   $("#adaptiveChargingRecalculate").addEventListener("click", async () => {
+    if (state.adaptiveChargingRecalculating) return;
+    state.adaptiveChargingRecalculating = true;
+    updateAdaptiveChargingAvailability();
     try {
       renderAdaptiveChargingStatus(await api("/api/adaptive-charging/recalculate", { method: "POST", body: {} }));
-      updateAdaptiveChargingAvailability();
     } catch (err) {
       toast(err.message);
+    } finally {
+      state.adaptiveChargingRecalculating = false;
+      updateAdaptiveChargingAvailability();
     }
   });
 
