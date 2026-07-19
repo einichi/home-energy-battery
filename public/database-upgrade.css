@@ -1,0 +1,31 @@
+:root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif; color: #17212b; background: #eef3f7; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+main { width: min(720px, 100%); }
+header { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+.mark { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 7px; color: white; background: #13877f; font-size: 22px; }
+header small { color: #66758a; font-weight: 800; }
+h1 { margin: 2px 0 0; font-size: 28px; letter-spacing: 0; }
+.upgrade-panel { background: white; border: 1px solid #cbd8e5; border-radius: 8px; padding: 28px; box-shadow: 0 12px 35px rgb(40 57 75 / 8%); }
+.lead { margin-top: 0; color: #53657b; font-size: 17px; }
+dl { display: grid; grid-template-columns: repeat(2, 1fr); border: 1px solid #d8e2ec; border-radius: 6px; overflow: hidden; }
+dl div { padding: 14px; border-bottom: 1px solid #d8e2ec; }
+dl div:nth-child(odd) { border-right: 1px solid #d8e2ec; }
+dl div:nth-last-child(-n+2) { border-bottom: 0; }
+dt { color: #64748b; font-size: 12px; font-weight: 800; text-transform: uppercase; }
+dd { margin: 5px 0 0; font-weight: 750; overflow-wrap: anywhere; }
+.notice { border-left: 4px solid #13877f; background: #eff9f8; padding: 13px 15px; margin: 20px 0; }
+.notice p { margin: 4px 0 0; color: #53657b; }
+.actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
+button { min-height: 44px; border: 0; border-radius: 6px; padding: 0 18px; font: inherit; font-weight: 800; cursor: pointer; }
+button:disabled { cursor: wait; opacity: .55; }
+.primary { background: #13877f; color: white; }
+.secondary { background: #e8f3f3; color: #116d68; }
+.phase { margin: 0 0 14px; font-size: 20px; font-weight: 800; }
+.progress-track { height: 14px; background: #dfe8ef; border-radius: 4px; overflow: hidden; }
+#progressBar { width: 0; height: 100%; background: #13877f; transition: width .25s ease; }
+.progress-meta { display: flex; justify-content: space-between; margin-top: 9px; color: #64748b; }
+.error { border-left: 4px solid #c53030; padding-left: 18px; }
+.error h2 { margin-top: 0; }
+.blocked { text-align: center; color: #64748b; font-size: 13px; }
+@media (max-width: 560px) { body { padding: 14px; } .upgrade-panel { padding: 20px; } dl { grid-template-columns: 1fr; } dl div:nth-child(odd) { border-right: 0; } dl div:nth-last-child(2) { border-bottom: 1px solid #d8e2ec; } .actions button { width: 100%; } }

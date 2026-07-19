@@ -17,7 +17,9 @@ import {
   aggregateEnergyReportSamples,
   beginAdaptiveChargingBreakerRecovery,
   buildBatteryLearningModel,
+  buildFuelCellGenerationModel,
   buildAdaptiveChargingTimelineView,
+  batteryLearningModelSwitchDue,
   capAdaptiveChargingSlotToRemainingTime,
   clearStaleScheduleRuns,
   cleanAutomationRule,
@@ -82,6 +84,7 @@ import {
   summarizeSamples,
   suspendAdaptiveChargeInStandby,
   syncAdaptiveChargingWindowExecution,
+  updateAdaptiveChargingSolarHeadroomHold,
 } from "../server.js";
 
 const staleSchedules = [
@@ -108,6 +111,59 @@ assert.equal(migrated.rateMode, "offPeak");
 assert.equal(migrated.rateBands.length, 2);
 assert.equal(migrated.offPeakSavingsEnabled, true);
 assert.equal(Math.max(...migrated.rateBands.map((band) => band.yenPerKwh)), 36);
+const migratedFuelCellHosts = cleanConfig({
+  meterHost: "10.0.0.135",
+  fuelCellHosts: ["10.0.0.135", "10.0.0.150"],
+});
+assert.equal(migratedFuelCellHosts.fuelCellPrimaryHost, "10.0.0.150");
+assert.deepEqual(migratedFuelCellHosts.fuelCellProxyHosts, ["10.0.0.135"]);
+const proxyOnlyFuelCell = cleanConfig({ meterHost: "10.0.0.135", fuelCellHosts: ["10.0.0.135"] });
+assert.equal(proxyOnlyFuelCell.fuelCellPrimaryHost, "");
+assert.deepEqual(proxyOnlyFuelCell.fuelCellProxyHosts, ["10.0.0.135"]);
+
+const fuelCellSamples = [];
+for (let day = 1; day <= 8; day += 1) {
+  for (let bucket = 0; bucket < 20; bucket += 1) {
+    fuelCellSamples.push({
+      timestamp: new Date(2026, 6, day, 8 + Math.floor(bucket / 2), bucket % 2 ? 30 : 0).toISOString(),
+      fuelCellPowerW: 650 + day * 2,
+      fuelCellGenerationState: "generating",
+    });
+  }
+}
+const fixedFuelCellModel = buildFuelCellGenerationModel(cleanConfig({
+  fuelCell: {
+    generationModel: "fixed",
+    plannerInfluence: "active",
+    fixedWindows: [{ days: [0, 1, 2, 3, 4, 5, 6], start: "08:00", end: "18:00" }],
+  },
+}), fuelCellSamples, new Date(2026, 6, 9, 9));
+assert.equal(fixedFuelCellModel.influence, "active");
+assert.ok(fixedFuelCellModel.forecastAt(new Date(2026, 6, 9, 10)).medianW > 600);
+assert.equal(fixedFuelCellModel.forecastAt(new Date(2026, 6, 9, 20)).medianW, 0);
+const observedFuelCellModel = buildFuelCellGenerationModel(cleanConfig({
+  fuelCell: { generationModel: "automatic", plannerInfluence: "observe" },
+}), fuelCellSamples, new Date(2026, 6, 9, 9));
+assert.equal(observedFuelCellModel.ready, true);
+assert.equal(observedFuelCellModel.influence, "observe");
+const immatureFuelCellModel = buildFuelCellGenerationModel(cleanConfig({
+  fuelCell: { generationModel: "automatic", plannerInfluence: "active" },
+}), fuelCellSamples.filter((sample) => new Date(sample.timestamp).getDate() <= 3), new Date(2026, 6, 9, 9));
+assert.equal(immatureFuelCellModel.ready, false);
+assert.equal(immatureFuelCellModel.influence, "observe");
+assert.match(immatureFuelCellModel.blockers.join("; "), /valid observation days required/);
+const denseFuelCellSamples = fuelCellSamples.flatMap((sample) => [
+  sample,
+  { ...sample, timestamp: new Date(new Date(sample.timestamp).getTime() + 5 * 60_000).toISOString() },
+  { ...sample, timestamp: new Date(new Date(sample.timestamp).getTime() + 10 * 60_000).toISOString() },
+]);
+const denseFuelCellModel = buildFuelCellGenerationModel(cleanConfig({
+  fuelCell: { generationModel: "automatic", plannerInfluence: "observe" },
+}), denseFuelCellSamples, new Date(2026, 6, 9, 9));
+assert.equal(
+  denseFuelCellModel.forecastAt(new Date(2026, 6, 9, 10)).medianW,
+  observedFuelCellModel.forecastAt(new Date(2026, 6, 9, 10)).medianW,
+);
 assert.equal(migrated.settingCache.discharge_limit.lastKnown.decoded.percent, 30);
 
 const simple = cleanConfig({ standardRateYenPerKwh: 42 });
@@ -556,6 +612,30 @@ assert.equal(adaptiveChargingPlanRefreshDecision({
   ...waitingAdaptiveChargingState,
   plan: { ...waitingAdaptiveChargingState.plan, createdAt: "2026-07-01T00:00:00.000Z" },
 }, adaptiveChargingConfig, new Date(2026, 6, 11, 12, 0)).refresh, false);
+const modelSwitchNow = new Date("2026-07-19T04:00:00.000Z");
+assert.equal(batteryLearningModelSwitchDue({ batteryLearning: { switchAfterSlotEnd: null } }, modelSwitchNow), false);
+assert.equal(batteryLearningModelSwitchDue({ batteryLearning: { switchAfterSlotEnd: "2026-07-19T03:59:59.000Z" } }, modelSwitchNow), true);
+assert.equal(batteryLearningModelSwitchDue({ batteryLearning: { switchAfterSlotEnd: "2026-07-19T04:00:01.000Z" } }, modelSwitchNow), false);
+
+const solarHeadroomState = {
+  solarHeadroomHoldUntil: "2026-07-19T05:00:00.000Z",
+  solarHeadroomClearChecks: 4,
+};
+assert.deepEqual(updateAdaptiveChargingSolarHeadroomHold(solarHeadroomState, true, modelSwitchNow), {
+  active: true,
+  released: false,
+  expired: false,
+});
+assert.equal(solarHeadroomState.solarHeadroomClearChecks, 0);
+assert.equal(updateAdaptiveChargingSolarHeadroomHold(solarHeadroomState, false, modelSwitchNow).active, true);
+assert.equal(solarHeadroomState.solarHeadroomClearChecks, 1);
+assert.deepEqual(updateAdaptiveChargingSolarHeadroomHold(solarHeadroomState, false, modelSwitchNow), {
+  active: false,
+  released: true,
+  expired: false,
+});
+assert.equal(solarHeadroomState.solarHeadroomHoldUntil, null);
+assert.equal(solarHeadroomState.solarHeadroomClearChecks, 0);
 assert.ok(discountedBandOccurrences(adaptiveChargingConfig, prewindowNow).length >= 2);
 
 const learnedChargingPerformance = cleanAdaptiveChargingPerformance({
@@ -1887,6 +1967,67 @@ assert.equal(sample.circuitPowerW["1"], 120);
 assert.equal(sample.circuitCumulativeKwh["2"], 20.25);
 assert.equal(sample.circuitEnergyKwh["1"], 0.5);
 assert.equal(sample.circuitEnergyKwh["2"], 0.25);
+
+const primaryFuelCellSample = sampleFromStatus({
+  read_at: "2026-05-31T12:30:00+09:00",
+  energy: { fuel_cells: [
+    { host: "10.0.0.135", source_role: "proxy", instant_power: { value: 700 }, generation_status: { value: "generating", human: "generating" } },
+    {
+      host: "10.0.0.150",
+      source_role: "primary",
+      instant_power: { value: 650 },
+      generation_status: { value: "generating", human: "generating" },
+      cumulative_generation: { value: 100.25 },
+      cumulative_gas: { value: 50.125 },
+      interconnection_status: { value: "grid_connected_reverse_flow_prohibited", human: "grid_connected_reverse_flow_prohibited" },
+    },
+  ] },
+}, { ...migratedFuelCellHosts, fuelCellEnabled: true }, {
+  timestamp: "2026-05-31T12:15:00+09:00",
+  fuelCellCumulativeGenerationKwh: 100,
+  fuelCellCumulativeGasM3: 50,
+  fuelCellGenerationState: "stopped",
+  fuelCellCounterSourceHost: "10.0.0.150",
+});
+assert.equal(primaryFuelCellSample.fuelCellPowerW, 650);
+assert.equal(primaryFuelCellSample.fuelCellKwh, 0.25);
+assert.equal(primaryFuelCellSample.fuelCellGasM3, 0.125);
+assert.equal(primaryFuelCellSample.fuelCellSourceHost, "10.0.0.150");
+assert.equal(primaryFuelCellSample.fuelCellDataQuality, "counter");
+assert.equal(primaryFuelCellSample.fuelCellStartCount, 1);
+
+const proxyFuelCellSample = sampleFromStatus({
+  read_at: "2026-05-31T12:45:00+09:00",
+  energy: { fuel_cells: [
+    { host: "10.0.0.135", source_role: "proxy", instant_power: { value: 710 }, generation_status: { value: "generating", human: "generating" } },
+  ] },
+}, { ...proxyOnlyFuelCell, fuelCellEnabled: true }, primaryFuelCellSample);
+assert.equal(proxyFuelCellSample.fuelCellPowerW, 710);
+assert.equal(proxyFuelCellSample.fuelCellKwh, undefined);
+assert.equal(proxyFuelCellSample.fuelCellGasM3, undefined);
+assert.equal(proxyFuelCellSample.fuelCellDataQuality, "integrated");
+assert.equal(proxyFuelCellSample.fuelCellCounterSourceHost, null);
+
+const resetFuelCellSample = sampleFromStatus({
+  read_at: "2026-05-31T13:00:00+09:00",
+  energy: { fuel_cells: [{
+    host: "10.0.0.150",
+    source_role: "primary",
+    instant_power: { value: 650 },
+    cumulative_generation: { value: 1 },
+    cumulative_gas: { value: 2 },
+  }] },
+}, { ...migratedFuelCellHosts, fuelCellEnabled: true }, {
+  timestamp: "2026-05-31T12:45:00+09:00",
+  fuelCellCumulativeGenerationKwh: 100,
+  fuelCellCumulativeGasM3: 50,
+  fuelCellCounterSourceHost: "10.0.0.150",
+});
+assert.equal(resetFuelCellSample.fuelCellKwh, undefined);
+assert.deepEqual(resetFuelCellSample.fuelCellCounterIssues, [
+  { counter: "electricity", issue: "reset" },
+  { counter: "gas", issue: "reset" },
+]);
 
 const offPeakTimestamp = new Date(2026, 4, 31, 1, 0).toISOString();
 const previousOffPeakTimestamp = new Date(2026, 4, 31, 0, 30).toISOString();

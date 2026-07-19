@@ -128,6 +128,7 @@
               width="260"
               height="78"
             ></canvas>
+            <div id="fuelCellDashboardStateStrip" class="fuel-cell-state-strip" aria-label="Ene-Farm operating states"></div>
           </article>
           <article class="widget" data-widget-id="houseDemandPower" data-widget-group="trends" data-feature="smart-cosmo">
             <span data-i18n="houseDemand">House Demand</span>
@@ -229,8 +230,18 @@
             </div>
           </article>
           <article class="widget" data-widget-id="fuelCellStatus" data-widget-group="status" data-feature="fuel-cell">
-            <span data-i18n="fuelCellStatus">Ene-Farm Status</span>
+            <span data-i18n="fuelCellOperation">Ene-Farm Operation</span>
             <strong class="status-text" id="fuelCellStatus">--</strong>
+            <div class="fuel-cell-widget-metrics">
+              <small><span data-i18n="electricityToday">Electricity today</span><b id="fuelCellElectricityToday">--</b></small>
+              <small><span data-i18n="gasToday">Gas today</span><b id="fuelCellGasToday">--</b></small>
+              <small><span data-i18n="operatingTime">Operating time</span><b id="fuelCellOperatingToday">--</b></small>
+              <small><span data-i18n="starts">Starts</span><b id="fuelCellStartsToday">--</b></small>
+              <small><span data-i18n="timeInState">Time in state</span><b id="fuelCellTimeInState">--</b></small>
+              <small><span data-i18n="lastStop">Last stop</span><b id="fuelCellLastStop">--</b></small>
+            </div>
+            <div id="fuelCellStatusStateStrip" class="fuel-cell-state-strip" aria-label="Ene-Farm operating states"></div>
+            <small id="fuelCellStatusQuality" class="widget-note">--</small>
           </article>
           <article class="widget" data-widget-id="solarSavings" data-widget-group="status" data-feature="solar">
             <span data-i18n="solarSavings">Solar Savings</span>
@@ -323,6 +334,8 @@
               <div><dt data-i18n="dischargeEnergyModel">Discharge energy model</dt><dd id="adaptiveChargingDischargeModel">--</dd></div>
               <div><dt data-i18n="chargePowerModel">Charge power model</dt><dd id="adaptiveChargingPowerModel">--</dd></div>
               <div><dt data-i18n="adaptiveChargingConfidence">Forecast confidence</dt><dd id="adaptiveChargingConfidence">--</dd></div>
+              <div data-feature="fuel-cell"><dt data-i18n="predictedFuelCell">Predicted Ene-Farm</dt><dd id="adaptiveChargingPredictedFuelCell">--</dd></div>
+              <div data-feature="fuel-cell"><dt data-i18n="fuelCellForecastModel">Ene-Farm forecast model</dt><dd id="adaptiveChargingFuelCellModel">--</dd></div>
               <div><dt data-i18n="demandHistoryModel">Demand history model</dt><dd id="adaptiveChargingDemandHistory">--</dd></div>
               <div><dt data-i18n="awayDemandModel">Away demand model</dt><dd id="adaptiveChargingAwayDemand">--</dd></div>
               <div><dt data-i18n="adaptiveChargingState">Adaptive Charging state</dt><dd id="adaptiveChargingState">--</dd></div>
@@ -354,6 +367,34 @@
               </table>
             </div>
             <p id="solarForecastAccuracyEmpty" class="graph-meta hidden" data-i18n="noSolarForecastOutcomes">Completed forecast outcomes will appear after a full day of well-covered solar data.</p>
+          </div>
+
+          <div class="panel fuel-cell-forecast-accuracy-panel" data-feature="fuel-cell">
+            <div class="panel-title">
+              <h1 data-i18n="fuelCellForecastAccuracy">Ene-Farm Forecast Outcomes</h1>
+              <p data-i18n="fuelCellForecastAccuracyHelp">Compare completed 30-minute forecasts with recorded generation. Observe-mode forecasts remain informational and never change charging plans.</p>
+            </div>
+            <dl class="adaptive-charging-status-grid fuel-cell-forecast-summary">
+              <div><dt data-i18n="completedForecastIntervals">Completed forecast intervals</dt><dd id="fuelCellForecastCompletedIntervals">--</dd></div>
+              <div><dt data-i18n="meanAbsoluteForecastError">Mean absolute error</dt><dd id="fuelCellForecastMeanError">--</dd></div>
+              <div><dt data-i18n="forecastBias">Forecast bias</dt><dd id="fuelCellForecastBias">--</dd></div>
+            </dl>
+            <div class="table-wrap fuel-cell-forecast-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th data-i18n="period">Period</th>
+                    <th data-i18n="forecastRange">Forecast range</th>
+                    <th data-i18n="medianForecast">Median forecast</th>
+                    <th data-i18n="actualGeneration">Actual generation</th>
+                    <th data-i18n="forecastError">Error</th>
+                    <th data-i18n="plannerInfluence">Planner influence</th>
+                  </tr>
+                </thead>
+                <tbody id="fuelCellForecastOutcomeRows"></tbody>
+              </table>
+            </div>
+            <p id="fuelCellForecastOutcomeEmpty" class="graph-meta hidden" data-i18n="noFuelCellForecastOutcomes">Completed Ene-Farm forecast outcomes will appear after recorded generation covers a forecast interval.</p>
           </div>
 
           <div class="panel away-periods-panel">
@@ -404,6 +445,7 @@
             <div class="adaptive-charging-legend" aria-label="Timeline series">
               <span><i class="timeline-swatch demand"></i><span data-i18n="predictedDemand">Predicted demand</span></span>
               <span><i class="timeline-swatch solar"></i><span data-i18n="predictedSolar">Predicted solar</span></span>
+              <span data-feature="fuel-cell"><i class="timeline-swatch fuel-cell"></i><span data-i18n="predictedFuelCell">Predicted Ene-Farm</span></span>
               <span><i class="timeline-swatch soc"></i><span data-i18n="stateOfCharge">State of Charge</span></span>
               <span><i class="timeline-swatch charging"></i><span data-i18n="plannedCharging">Planned charging</span></span>
               <span><i class="timeline-swatch away"></i><span data-i18n="away">Away</span></span>
@@ -428,11 +470,16 @@
         <section class="reports-workspace">
           <div class="panel reports-panel">
             <div class="panel-title">
-              <span class="label" data-i18n="energyReports">Energy Reports</span>
-              <h1 data-i18n="exactUsageReports">Energy Usage</h1>
-              <p data-i18n="reportsHelp">Compare exact usage totals by day, week, or month.</p>
+              <span id="reportEyebrow" class="label" data-i18n="energyReports">Energy Reports</span>
+              <h1 id="reportHeading" data-i18n="exactUsageReports">Energy Usage</h1>
+              <p id="reportHelp" data-i18n="reportsHelp">Compare exact usage totals by day, week, or month.</p>
             </div>
             <form id="reportsForm" class="history-form reports-form">
+              <fieldset class="segmented report-domain-picker" data-feature="fuel-cell">
+                <legend data-i18n="reportType">Report type</legend>
+                <label><input type="radio" name="reportDomain" value="energy" checked /><span data-i18n="energyUsage">Energy Usage</span></label>
+                <label><input type="radio" name="reportDomain" value="ene-farm" /><span data-i18n="fuelCell">Ene-Farm</span></label>
+              </fieldset>
               <fieldset class="segmented report-mode-picker">
                 <legend data-i18n="reportMode">Report mode</legend>
                 <label>
@@ -472,7 +519,7 @@
             </form>
           </div>
 
-          <section class="report-summary-grid" aria-label="Report Summary">
+          <section class="report-summary-grid" data-report-domain="energy" aria-label="Report Summary">
             <article class="widget report-card" data-report-feature="smart-cosmo">
               <span data-i18n="usageKwh">Usage</span>
               <strong id="reportUsageTotal">--</strong>
@@ -505,6 +552,17 @@
             </article>
           </section>
 
+          <section class="report-summary-grid hidden" data-report-domain="ene-farm" aria-label="Ene-Farm Report Summary">
+            <article class="widget report-card"><span data-i18n="generatedElectricity">Generated electricity</span><strong id="eneFarmReportGeneration">--</strong><small id="eneFarmReportQuality" class="widget-note">--</small></article>
+            <article class="widget report-card"><span data-i18n="gasConsumed">Gas consumed</span><strong id="eneFarmReportGas">--</strong><small class="widget-note" data-i18n="exactCounterOnly">Exact counter data only</small></article>
+            <article class="widget report-card"><span data-i18n="electricalYield">Electrical yield</span><strong id="eneFarmReportYield">--</strong><small class="widget-note">kWh/m³</small></article>
+            <article class="widget report-card"><span data-i18n="generationCoverage">Generation coverage</span><strong id="eneFarmReportCoverage">--</strong><small class="widget-note" data-i18n="houseDemand">House Demand</small></article>
+            <article class="widget report-card"><span data-i18n="operatingTime">Operating time</span><strong id="eneFarmReportOperating">--</strong><small id="eneFarmReportStarts" class="widget-note">--</small></article>
+            <article class="widget report-card"><span data-i18n="estimatedMarginalGasCost">Estimated marginal gas cost</span><strong id="eneFarmReportMarginalCost">--</strong><small class="widget-note" data-i18n="verifyProviderBill">Verify with your provider</small></article>
+            <article class="widget report-card"><span data-i18n="allocatedGasCost">Estimated allocated gas cost</span><strong id="eneFarmReportAllocatedCost">--</strong><small id="eneFarmReportAllocatedCostNote" class="widget-note" data-i18n="standingChargeScenario">Includes allocated standing charge for complete billing periods</small></article>
+            <article class="widget report-card"><span data-i18n="electricityCarbonBalance">Electricity-only carbon balance</span><strong id="eneFarmReportCarbon">--</strong><small class="widget-note" data-i18n="heatNotMeasured">Recovered heat is not measured</small></article>
+          </section>
+
           <div class="panel report-chart-panel">
             <div class="panel-title">
               <h1 data-i18n="usageTrend">Usage Trend</h1>
@@ -514,7 +572,7 @@
             <canvas id="reportTrendChart" class="report-chart" width="1200" height="360"></canvas>
           </div>
 
-          <div class="panel report-table-panel">
+          <div class="panel report-table-panel" data-report-domain="energy">
             <div class="panel-title">
               <h1 data-i18n="exactKwhTable">Exact kWh by Period</h1>
             </div>
@@ -537,6 +595,12 @@
                 </tbody>
               </table>
             </div>
+          </div>
+          <div class="panel report-table-panel hidden" data-report-domain="ene-farm">
+            <div class="panel-title"><h1 data-i18n="eneFarmByPeriod">Ene-Farm by Period</h1><p data-i18n="estimateNotice">All costs and savings are estimates. Check your provider statement for accurate billing information.</p></div>
+            <div class="table-scroll"><table><thead><tr>
+              <th data-i18n="period">Period</th><th data-i18n="generatedElectricity">Generated electricity</th><th data-i18n="gasConsumed">Gas consumed</th><th data-i18n="electricalYield">Electrical yield</th><th data-i18n="operatingTime">Operating time</th><th data-i18n="starts">Starts</th><th data-i18n="estimatedMarginalGasCost">Estimated marginal gas cost</th><th data-i18n="allocatedGasCost">Estimated allocated gas cost</th><th data-i18n="carbonBalance">Carbon balance</th>
+            </tr></thead><tbody id="eneFarmReportRows"><tr><td colspan="9" data-i18n="noReportData">No report data loaded yet.</td></tr></tbody></table></div>
           </div>
         </section>
       </section>
@@ -609,6 +673,7 @@
               width="980"
               height="360"
             ></canvas>
+            <div id="graphFuelCellStateStrip" class="fuel-cell-state-strip graph-state-strip hidden" data-feature="fuel-cell" aria-label="Ene-Farm operating states"></div>
             <div id="graphMeta" class="graph-meta"></div>
           </div>
         </section>
@@ -1030,13 +1095,17 @@
                     placeholder="192.0.2.10"
                   />
                 </label>
-                <label>
-                  <span data-i18n="fuelCell">Ene-Farm</span>
+                <label data-feature="fuel-cell">
+                  <span data-i18n="fuelCellPrimaryHost">Ene-Farm primary device</span>
                   <input
-                    id="configFuelCellHosts"
+                    id="configFuelCellPrimaryHost"
                     inputmode="decimal"
                     placeholder="192.0.2.30"
                   />
+                </label>
+                <label data-feature="fuel-cell">
+                  <span data-i18n="fuelCellProxyHosts">Smart Cosmo fallback proxies</span>
+                  <input id="configFuelCellProxyHosts" inputmode="decimal" placeholder="192.0.2.20" />
                 </label>
                 <label>
                   <span data-i18n="discoverySubnets">Discovery subnets</span>
@@ -1095,6 +1164,46 @@
               </div>
             </div>
             <div id="discoveryResults" class="discovery-results"></div>
+          </div>
+
+          <div class="panel fuel-cell-panel" data-feature="fuel-cell">
+            <div class="panel-title"><h1 data-i18n="fuelCellSettings">Ene-Farm</h1><p data-i18n="fuelCellSettingsHelp">Configure reporting, gas estimates, and read-only generation forecasts.</p></div>
+            <form id="fuelCellConfigForm" class="config-form">
+              <div class="compact-field-grid">
+                <label><span data-i18n="generationModel">Generation model</span><select id="fuelCellGenerationModel"><option value="automatic" data-i18n="automaticOmakase">Automatic / Omakase</option><option value="fixed" data-i18n="fixedSchedule">Fixed schedule</option><option value="off" data-i18n="off">Off</option></select></label>
+                <label><span data-i18n="plannerInfluence">Planner influence</span><select id="fuelCellPlannerInfluence"><option value="observe" data-i18n="observeOnly">Observe only</option><option value="active" data-i18n="active">Active</option></select></label>
+                <label><span data-i18n="gasProvider">Gas provider</span><select id="fuelCellTariffProvider"><option value="tokyo-gas">Tokyo Gas</option></select></label>
+                <label><span data-i18n="gasRegion">Gas region</span><input id="fuelCellTariffRegion" value="tokyo" /></label>
+                <label><span data-i18n="gasPlan">Gas plan</span><input id="fuelCellTariffPlan" value="enefarm" /></label>
+                <label><span data-i18n="gasCo2Factor">City gas emissions (kg-CO2/m³)</span><input id="fuelCellGasCo2" type="number" min="0" step="0.01" inputmode="decimal" /></label>
+                <label><span data-i18n="meterReadingDay">Meter reading day</span><input id="fuelCellReadingDay" type="number" min="1" max="31" step="1" /></label>
+                <label><span data-i18n="winterUsage">Expected winter household gas (m³/month)</span><input id="fuelCellWinterUsage" type="number" min="0" step="0.1" /></label>
+                <label><span data-i18n="otherSeasonUsage">Expected non-winter household gas (m³/month)</span><input id="fuelCellOtherUsage" type="number" min="0" step="0.1" /></label>
+                <label><span data-i18n="equipmentDiscount">Equipment discount</span><select id="fuelCellDiscount"><option value="">None</option><option value="enefarm">Ene-Farm</option><option value="bath">Bath heating</option><option value="floor">Floor heating</option><option value="set">Combined equipment</option></select></label>
+                <label><span data-i18n="marginalRateOverride">Marginal rate override (yen/m³)</span><input id="fuelCellMarginalRate" type="number" min="0" step="0.01" /></label>
+              </div>
+              <label class="check-row"><input id="fuelCellTariffAutomatic" type="checkbox" /><span data-i18n="automaticTariffUpdates">Automatically import monthly Tokyo Gas tariffs</span></label>
+              <fieldset id="fuelCellFixedSchedule" class="feature-options hidden"><legend data-i18n="fixedGenerationWindows">Fixed generation windows</legend><div id="fuelCellFixedWindows" class="fixed-window-list"></div><button id="addFuelCellWindow" type="button" class="ghost" data-i18n="addWindow">Add Window</button></fieldset>
+              <p id="fuelCellInfluenceStatus" class="adaptive-charging-notice"></p>
+              <button data-i18n="saveFuelCellSettings">Save Ene-Farm Settings</button>
+            </form>
+            <form id="fuelCellTariffImportForm" class="config-form section-box">
+              <h2 data-i18n="gasTariffData">Gas Tariff Data</h2>
+              <div class="compact-field-grid"><label><span data-i18n="billingMonth">Billing month</span><input id="fuelCellTariffMonth" type="month" /></label><label><span data-i18n="season">Season</span><select id="fuelCellTariffSeason"><option value="other" data-i18n="otherSeason">Other season</option><option value="winter" data-i18n="winter">Winter</option></select></label></div>
+              <button data-i18n="importPublishedTariff">Import Published Tariff</button>
+              <p id="fuelCellTariffStatus" class="adaptive-charging-notice"></p>
+              <p class="data-attribution"><a href="https://reception.tokyo-gas.co.jp/ryokin?tik=1" target="_blank" rel="noreferrer" data-i18n="tokyoGasTariffSource">Tokyo Gas tariff source</a></p>
+              <div class="tariff-override section-box">
+                <h3 data-i18n="manualMonthlyOverride">Manual monthly override</h3>
+                <p data-i18n="manualMonthlyOverrideHelp">Use the base charge and variable rate for the expected household usage band in this billing month.</p>
+                <div class="compact-field-grid">
+                  <label><span data-i18n="baseCharge">Base charge (yen)</span><input id="fuelCellTariffBaseCharge" type="number" min="0" step="0.01" /></label>
+                  <label><span data-i18n="variableGasRate">Variable rate (yen/m³)</span><input id="fuelCellTariffYenPerM3" type="number" min="0" step="0.01" /></label>
+                </div>
+                <div class="inline-actions"><button id="saveFuelCellTariffOverride" type="button" class="ghost" data-i18n="saveOverride">Save override</button><button id="deleteFuelCellTariffOverride" type="button" class="ghost danger" data-i18n="deleteOverride">Delete override</button></div>
+              </div>
+            </form>
+            <p class="estimate-notice" data-i18n="estimateNotice">All costs and savings are estimates. Check your provider statement for accurate billing information.</p>
           </div>
 
           <div class="panel circuit-label-panel" data-feature="smart-cosmo">

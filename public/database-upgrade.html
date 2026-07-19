@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Database Upgrade · Home Energy &amp; Battery</title>
+    <link rel="stylesheet" href="/database-upgrade.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <span class="mark">↯</span>
+        <div><small>HOME ENERGY &amp; BATTERY</small><h1>Database upgrade</h1></div>
+      </header>
+      <section class="upgrade-panel">
+        <div id="decisionContent">
+          <p class="lead">Recorded energy data must be upgraded before the application can start.</p>
+          <dl>
+            <div><dt>Current database</dt><dd id="sourceVersion">--</dd></div>
+            <div><dt>New database</dt><dd id="targetVersion">--</dd></div>
+            <div><dt>Database size</dt><dd id="databaseSize">--</dd></div>
+            <div><dt>Backup directory</dt><dd id="backupDirectory">--</dd></div>
+          </dl>
+          <div class="notice"><strong>Local backup recommended</strong><p>A consistent copy will be compressed with Zstandard before any database changes are made.</p></div>
+          <div class="actions">
+            <button id="backupButton" class="primary">Back up and upgrade</button>
+            <button id="skipButton" class="secondary">Upgrade without backup</button>
+          </div>
+        </div>
+        <div id="progressContent" hidden>
+          <p class="phase" id="phaseLabel">Preparing</p>
+          <div class="progress-track"><div id="progressBar"></div></div>
+          <div class="progress-meta"><strong id="progressPercent">0%</strong><span id="progressCounts"></span></div>
+          <p id="progressDetail"></p>
+        </div>
+        <div id="errorContent" class="error" hidden>
+          <h2>Upgrade could not continue</h2><p id="errorMessage"></p>
+          <div class="actions"><button id="retryButton" class="primary">Retry backup</button><button id="skipAfterFailureButton" class="secondary">Upgrade without backup</button></div>
+        </div>
+      </section>
+      <p class="blocked">Device polling, schedules, automation, and recording remain stopped until this process finishes.</p>
+    </main>
+    <script src="/database-upgrade.js" defer></script>
+  </body>
+</html>

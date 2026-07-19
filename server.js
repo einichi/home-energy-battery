@@ -12,7 +12,22 @@ import {
   createNotificationService,
   normalizeNotificationConfig,
 } from "./lib/notifications.js";
-import { createHistoryStore, normalizeRetentionPolicy } from "./lib/history-store.js";
+import {
+  SCHEMA_VERSION,
+  createHistoryStore,
+  inspectHistoryDatabase,
+  migrateHistoryDatabase,
+  normalizeRetentionPolicy,
+} from "./lib/history-store.js";
+import { backupDatabaseBeforeUpgrade } from "./lib/database-upgrade.js";
+import {
+  applicableGasDiscount,
+  applicableGasTariffBand,
+  gasTariffHash,
+  importGasTariff,
+  normalizeGasTariffPayload,
+  validBillingMonth,
+} from "./lib/gas-tariffs.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 8787);
@@ -23,8 +38,10 @@ const AUTOMATION_RULE_STATE_FILE = path.join(DATA_DIR, "automation-rule-state.js
 const ADAPTIVE_CHARGING_STATE_FILE = path.join(DATA_DIR, "adaptive-charging-state.json");
 const ADAPTIVE_CHARGING_DIR = path.join(DATA_DIR, "adaptive-charging");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
+const DATABASE_BACKUP_DIR = path.join(DATA_DIR, "backups");
 const CLI_TIMEOUT_MS = Number(process.env.CLI_TIMEOUT_MS ?? 15000);
 const CLI_FILE = "home-energy-battery-node.js";
+const SCHEDULE_CHECK_INTERVAL_MS = Number(process.env.SCHEDULE_CHECK_INTERVAL_MS ?? 15_000);
 const AUTOMATION_CHECK_INTERVAL_MS = 30_000;
 const SOLAR_FORECAST_REFRESH_MS = 3 * 60 * 60_000;
 const SOLAR_FORECAST_MAX_AGE_MS = 6 * 60 * 60_000;
@@ -34,6 +51,7 @@ const ADAPTIVE_CHARGING_HISTORY_CACHE_MS = 30 * 60_000;
 const ADAPTIVE_CHARGING_SLOT_END_RETRY_MS = 5_000;
 const ADAPTIVE_CHARGING_BREAKER_RETRY_COOLDOWN_MS = 3 * 60_000;
 const ADAPTIVE_CHARGING_BREAKER_SAFE_CHECKS = 3;
+const ADAPTIVE_CHARGING_SOLAR_HEADROOM_CLEAR_CHECKS = 2;
 const ADAPTIVE_CHARGING_BREAKER_SAFETY_MARGIN_W = 200;
 const ADAPTIVE_CHARGING_BREAKER_WAIT_LOG_MS = 5 * 60_000;
 const ADAPTIVE_CHARGING_MIN_EXECUTABLE_CHARGE_WH = 50;
@@ -100,7 +118,26 @@ const DEFAULT_CONFIG = {
   solarHost: "192.0.2.10",
   solarEnabled: true,
   fuelCellHosts: ["192.0.2.30"],
+  fuelCellPrimaryHost: "192.0.2.30",
+  fuelCellProxyHosts: [],
   fuelCellEnabled: true,
+  fuelCell: {
+    generationModel: "automatic",
+    plannerInfluence: "observe",
+    fixedWindows: [],
+    gasCo2KgPerM3: 2.21,
+    tariff: {
+      provider: "tokyo-gas",
+      region: "tokyo",
+      plan: "enefarm",
+      equipmentDiscount: "",
+      meterReadingDay: 1,
+      expectedWinterMonthlyM3: null,
+      expectedOtherMonthlyM3: null,
+      automaticUpdates: false,
+      marginalRateOverrideYenPerM3: null,
+    },
+  },
   rateMode: "simple",
   standardRateYenPerKwh: 35,
   offPeakRateYenPerKwh: 25,
@@ -140,6 +177,25 @@ let recorderTimer = null;
 let retentionTimer = null;
 let adaptiveChargingSlotEndTimer = null;
 let adaptiveChargingSlotEndTimerKey = null;
+let applicationStarted = false;
+let serverListening = false;
+let startupPromise = null;
+let databaseUpgrade = {
+  required: false,
+  state: "checking",
+  phase: "checking",
+  percent: 0,
+  processed: 0,
+  total: 0,
+  unit: null,
+  sourceVersion: null,
+  targetVersion: SCHEMA_VERSION,
+  databaseBytes: null,
+  backupDirectory: DATABASE_BACKUP_DIR,
+  backup: null,
+  decision: null,
+  error: null,
+};
 let automationRunInProgress = false;
 let automationRunContext = null;
 let discoveryRunContext = null;
@@ -231,6 +287,31 @@ function numericMetric(item) {
 function strongestFuelCellWatts(fuelCells = []) {
   const values = fuelCells.map((cell) => numericMetric(cell.instant_power)).filter((value) => value !== null);
   return values.length ? Math.max(...values) : null;
+}
+
+function primaryFuelCell(fuelCells = []) {
+  return fuelCells.find((cell) => cell.source_role === "primary") ?? null;
+}
+
+function selectedFuelCellReading(fuelCells = []) {
+  const primary = primaryFuelCell(fuelCells);
+  if (numericMetric(primary?.instant_power) !== null || primary?.generation_status?.value) return primary;
+  return fuelCells.find((cell) => cell.source_role === "proxy" && (numericMetric(cell.instant_power) !== null || cell.generation_status?.value)) ?? primary;
+}
+
+function cumulativeCounterDeltaResult(current, previous, maximum = 1_000_000, maxDelta = 10) {
+  const now = Number(current);
+  const before = Number(previous);
+  if (!Number.isFinite(now) || !Number.isFinite(before)) return { delta: null, issue: null };
+  if (now >= before) {
+    const delta = now - before;
+    return delta <= maxDelta ? { delta, issue: null } : { delta: null, issue: "invalid-jump" };
+  }
+  if (before > maximum * 0.9 && now < maximum * 0.1) {
+    const delta = maximum - before + now;
+    return delta <= maxDelta ? { delta, issue: "rollover" } : { delta: null, issue: "invalid-jump" };
+  }
+  return { delta: null, issue: "reset" };
 }
 
 function circuitLabelFor(channel, labels = {}) {
@@ -458,7 +539,10 @@ async function readHistorySamplesInRange(startMs, endMs) {
 function adaptiveChargingHistorySample(sample) {
   const compact = { timestamp: sample.timestamp };
   let hasAdaptiveChargingMetric = false;
-  for (const key of ["stateOfChargePercent", "batteryPowerW", "solarPowerW", "houseDemandW"]) {
+  for (const key of [
+    "stateOfChargePercent", "batteryPowerW", "solarPowerW", "houseDemandW",
+    "fuelCellPowerW", "fuelCellGenerationState", "fuelCellDataQuality",
+  ]) {
     if (sample[key] === undefined) continue;
     compact[key] = sample[key];
     if (sample[key] !== null) hasAdaptiveChargingMetric = true;
@@ -967,6 +1051,7 @@ function cleanAdaptiveChargingState(value = {}) {
       .slice(-ADAPTIVE_CHARGING_WINDOW_SUMMARY_LIMIT),
     pausedUntil: value.pausedUntil ?? null,
     solarHeadroomHoldUntil: value.solarHeadroomHoldUntil ?? null,
+    solarHeadroomClearChecks: Math.max(0, Math.round(Number(value.solarHeadroomClearChecks) || 0)),
     lastResult: value.lastResult ?? null,
     lastForecastError: value.lastForecastError ?? null,
     historicalWeatherFetchedAt: value.historicalWeatherFetchedAt ?? null,
@@ -1238,6 +1323,7 @@ function adaptiveChargingView(config, state, rules = [], now = new Date()) {
       stale: !forecastIsFresh(state.forecast, now),
     } : null,
     solarForecastAccuracy,
+    fuelCellForecastOutcomes: historyStore.isReady() ? historyStore.fuelCellForecastOutcomes(100) : [],
     plan: state.plan,
     owner: state.owner,
     activeSlot: state.activeSlot,
@@ -1252,6 +1338,21 @@ function adaptiveChargingView(config, state, rules = [], now = new Date()) {
     lastForecastError: state.lastForecastError,
     log: state.log ?? [],
   };
+}
+
+function recordFuelCellPlanForecast(plan, now = new Date()) {
+  if (!historyStore.isReady() || !plan?.fuelCellModel || plan.fuelCellModel.method === "off") return 0;
+  historyStore.settleFuelCellForecastOutcomes(now);
+  return historyStore.recordFuelCellForecasts((plan.timeline ?? []).map((interval) => ({
+    start: interval.start,
+    end: interval.end,
+    p20W: interval.fuelCellP20W,
+    medianW: interval.fuelCellMedianW,
+    p80W: interval.fuelCellP80W,
+    sampleCount: interval.fuelCellSampleCount,
+    method: plan.fuelCellModel.method,
+    influence: plan.fuelCellModel.influence,
+  })), plan.createdAt ?? now.toISOString());
 }
 
 function rateForTimestamp(rateBands = DEFAULT_CONFIG.rateBands, timestamp = new Date(), fallbackRate = null) {
@@ -1600,6 +1701,9 @@ function buildAdaptiveChargingTimelineView({
         startMs: segmentStartMs,
         endMs: segmentEndMs,
         solarKwh: Number(interval.solarKwh || 0) * intervalFraction,
+        fuelCellP20Kwh: Number(interval.fuelCellP20Kwh || 0) * intervalFraction,
+        fuelCellMedianKwh: Number(interval.fuelCellMedianKwh || 0) * intervalFraction,
+        fuelCellP80Kwh: Number(interval.fuelCellP80Kwh || 0) * intervalFraction,
         netKwh: Number(interval.netKwh || 0) * intervalFraction,
         chargeCapacityKwh: Number(interval.chargeCapacityKwh || 0) * intervalFraction,
       };
@@ -1622,6 +1726,10 @@ function buildAdaptiveChargingTimelineView({
         start: new Date(segmentStartMs).toISOString(),
         end: new Date(segmentEndMs).toISOString(),
         solarW: durationHours > 0 ? Number(segment.solarKwh || 0) * 1000 / durationHours : 0,
+        fuelCellP20W: durationHours > 0 ? Number(segment.fuelCellP20Kwh || 0) * 1000 / durationHours : 0,
+        fuelCellMedianW: durationHours > 0 ? Number(segment.fuelCellMedianKwh || 0) * 1000 / durationHours : 0,
+        fuelCellP80W: durationHours > 0 ? Number(segment.fuelCellP80Kwh || 0) * 1000 / durationHours : 0,
+        fuelCellSampleCount: interval.fuelCellSampleCount ?? 0,
         demandW: Number(interval.demandW) || 0,
         predictedStartSocPercent: capacityKwh > 0 ? startingStoredKwh / capacityKwh * 100 : null,
         predictedEndSocPercent: capacityKwh > 0 ? storedKwh / capacityKwh * 100 : null,
@@ -1951,6 +2059,138 @@ function percentile(values, fraction) {
   if (!sorted.length) return null;
   const index = Math.max(0, Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * fraction)));
   return sorted[index];
+}
+
+function fixedFuelCellWindowAt(config, date) {
+  const windows = config.fuelCell?.fixedWindows ?? [];
+  const minute = date.getHours() * 60 + date.getMinutes();
+  const index = windows.findIndex((window) => {
+    if (!window.days?.includes(date.getDay())) return false;
+    const start = minutesOfDay(window.start);
+    const end = minutesOfDay(window.end);
+    if (start === null || end === null || start === end) return false;
+    return start < end ? minute >= start && minute < end : minute >= start || minute < end;
+  });
+  return index >= 0 ? { ...windows[index], index } : null;
+}
+
+function monthDistance(left, right) {
+  const raw = Math.abs(left.getMonth() - right.getMonth());
+  return Math.min(raw, 12 - raw);
+}
+
+function buildFuelCellGenerationModel(config, samples = [], now = new Date(), options = {}) {
+  const method = config.fuelCell?.generationModel ?? "automatic";
+  const requestedInfluence = config.fuelCell?.plannerInfluence ?? "observe";
+  const temperatureByDay = options.temperatureByDay instanceof Map ? options.temperatureByDay : new Map();
+  const awayPeriods = Array.isArray(options.awayPeriods) ? options.awayPeriods : [];
+  const powerSamples = samples.map((sample) => ({
+    date: new Date(sample.timestamp),
+    watts: finiteNumberOrNull(sample.fuelCellPowerW),
+    state: sample.fuelCellGenerationState ?? null,
+  })).filter((sample) => !Number.isNaN(sample.date.getTime()) && sample.watts !== null);
+  const days = new Map();
+  for (const sample of powerSamples) {
+    const key = localDayKey(sample.date);
+    const day = days.get(key) ?? {
+      key,
+      date: new Date(sample.date.getFullYear(), sample.date.getMonth(), sample.date.getDate()),
+      buckets: new Map(),
+    };
+    const bucketIndex = halfHourIndex(sample.date);
+    const bucket = day.buckets.get(bucketIndex) ?? { sum: 0, count: 0, states: new Map() };
+    bucket.sum += Math.max(0, sample.watts);
+    bucket.count += 1;
+    if (sample.state) bucket.states.set(sample.state, Number(bucket.states.get(sample.state) ?? 0) + 1);
+    day.buckets.set(bucketIndex, bucket);
+    if (sample.watts > 25 || sample.state === "generating") day.generating = true;
+    days.set(key, day);
+  }
+  const dailyBuckets = [...days.values()].map((day) => ({
+    ...day,
+    temperatureC: finiteNumberOrNull(temperatureByDay.get(day.key)),
+    away: isAwayAt(new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate(), 12).getTime(), awayPeriods),
+    values: new Map([...day.buckets].map(([index, bucket]) => [index, {
+      watts: bucket.sum / bucket.count,
+      state: [...bucket.states].sort((left, right) => right[1] - left[1])[0]?.[0] ?? null,
+    }])),
+  }));
+  const validDays = dailyBuckets.filter((day) => day.buckets.size >= 16);
+  const completedFixedRunKeys = new Set();
+  for (const day of dailyBuckets) {
+    for (const [windowIndex] of (config.fuelCell?.fixedWindows ?? []).entries()) {
+      const expectedBuckets = [];
+      for (let bucket = 0; bucket < 48; bucket += 1) {
+        const bucketDate = new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate(), Math.floor(bucket / 2), bucket % 2 ? 30 : 0);
+        if (fixedFuelCellWindowAt(config, bucketDate)?.index === windowIndex) expectedBuckets.push(bucket);
+      }
+      const generatedBuckets = expectedBuckets.filter((bucket) => Number(day.values.get(bucket)?.watts) > 25).length;
+      if (expectedBuckets.length >= 2 && generatedBuckets / expectedBuckets.length >= 0.8) {
+        completedFixedRunKeys.add(`${day.key}:${windowIndex}`);
+      }
+    }
+  }
+  const completedFixedRuns = completedFixedRunKeys.size;
+  const currentDayType = now.getDay() === 0 || now.getDay() === 6;
+  const currentAway = isAwayAt(now.getTime(), awayPeriods, { forecast: true });
+  const currentTemperature = finiteNumberOrNull(temperatureByDay.get(localDayKey(now)));
+  const comparableDays = validDays.filter((day) => {
+    const weekend = day.date.getDay() === 0 || day.date.getDay() === 6;
+    const temperatureMatches = currentTemperature === null || day.temperatureC === null || Math.abs(day.temperatureC - currentTemperature) <= 6;
+    return weekend === currentDayType && day.away === currentAway && monthDistance(day.date, now) <= 2 && temperatureMatches;
+  });
+  const blockers = [];
+  if (method === "fixed" && completedFixedRuns < 3) blockers.push(`${3 - completedFixedRuns} more comparable fixed generation runs required`);
+  if (method === "automatic" && validDays.length < 7) blockers.push(`${7 - validDays.length} more valid observation days required`);
+  if (method === "automatic" && comparableDays.length < 4) blockers.push(`${4 - comparableDays.length} more comparable observation days required`);
+  if (method === "off") blockers.push("Ene-Farm generation model is off");
+  const ready = blockers.length === 0;
+  const influencesPlanner = requestedInfluence === "active" && ready;
+  const latest = powerSamples.at(-1) ?? null;
+
+  const forecastAt = (date) => {
+    if (method === "off") return { p20W: 0, medianW: 0, p80W: 0, sampleCount: 0 };
+    const fixedWindow = method === "fixed" ? fixedFuelCellWindowAt(config, date) : null;
+    if (method === "fixed" && !fixedWindow) return { p20W: 0, medianW: 0, p80W: 0, sampleCount: 0 };
+    const bucket = halfHourIndex(date);
+    const targetWeekend = date.getDay() === 0 || date.getDay() === 6;
+    const targetAway = isAwayAt(date.getTime(), awayPeriods, { forecast: true });
+    const targetTemperature = finiteNumberOrNull(temperatureByDay.get(localDayKey(date)));
+    let candidates = dailyBuckets.filter((day) => day.values.has(bucket));
+    if (method === "fixed") {
+      candidates = candidates.filter((day) => fixedFuelCellWindowAt(config, new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate(), date.getHours(), date.getMinutes())));
+    } else {
+      const comparable = candidates.filter((day) => {
+        const weekend = day.date.getDay() === 0 || day.date.getDay() === 6;
+        const temperatureMatches = targetTemperature === null || day.temperatureC === null || Math.abs(day.temperatureC - targetTemperature) <= 6;
+        return weekend === targetWeekend && day.away === targetAway && monthDistance(day.date, date) <= 2 && temperatureMatches;
+      });
+      if (comparable.length >= 4) candidates = comparable;
+    }
+    if (method === "automatic" && latest?.state && Math.abs(date.getTime() - now.getTime()) <= 2 * 60 * 60_000) {
+      const sameRecentState = candidates.filter((day) => day.values.get(bucket)?.state === latest.state);
+      if (sameRecentState.length >= 4) candidates = sameRecentState;
+    }
+    const values = candidates.map((day) => day.values.get(bucket)?.watts).filter(Number.isFinite);
+    return {
+      p20W: percentile(values, 0.2) ?? 0,
+      medianW: percentile(values, 0.5) ?? 0,
+      p80W: percentile(values, 0.8) ?? 0,
+      sampleCount: values.length,
+    };
+  };
+  return {
+    method,
+    requestedInfluence,
+    influence: influencesPlanner ? "active" : "observe",
+    ready,
+    blockers,
+    validObservationDays: validDays.length,
+    comparableDays: comparableDays.length,
+    completedFixedRuns,
+    recentState: latest?.state ?? null,
+    forecastAt,
+  };
 }
 
 function batteryLearningRollupInterval(sample) {
@@ -2774,11 +3014,16 @@ function buildAdaptiveChargingPlan({
   const maximumChargeWatts = chargePerformance.effectiveWatts;
   const startMs = now.getTime();
   const demandByDay = new Map();
+  const fuelCellModel = buildFuelCellGenerationModel(config, samples, now, {
+    temperatureByDay: temperatures,
+    awayPeriods,
+  });
   const timeline = [];
   let predictedSolarKwh = 0;
   let forecastSolarKwh = 0;
   let predictedDemandKwh = 0;
   let predictedSurplusKwh = 0;
+  let predictedFuelCellKwh = 0;
   let awaySlotCount = 0;
   let awayLearnedSlotCount = 0;
   let awayFallbackSlotCount = 0;
@@ -2828,9 +3073,18 @@ function buildAdaptiveChargingPlan({
     forecastSolarKwh += rawSolarW * durationHours / 1000;
     const highSolarKwh = highSolarW * durationHours / 1000;
     const demandKwh = slotDemandW * durationHours / 1000;
+    const fuelCellForecast = fuelCellModel.forecastAt(date);
+    const fuelCellPlanningKwh = fuelCellModel.influence === "active"
+      ? fuelCellForecast.p20W * durationHours / 1000
+      : 0;
+    const highFuelCellKwh = fuelCellModel.influence === "active"
+      ? fuelCellForecast.p80W * durationHours / 1000
+      : 0;
+    const medianFuelCellKwh = fuelCellForecast.medianW * durationHours / 1000;
     predictedSolarKwh += solarKwh;
     predictedDemandKwh += demandKwh;
-    predictedSurplusKwh += Math.max(0, solarKwh - demandKwh);
+    predictedFuelCellKwh += medianFuelCellKwh;
+    predictedSurplusKwh += Math.max(0, solarKwh + medianFuelCellKwh - demandKwh);
     const band = explicitDiscountedBand(config, date);
     const bandOccurrence = band ? discountedBandOccurrence(config, date) : null;
     timeline.push({
@@ -2838,9 +3092,13 @@ function buildAdaptiveChargingPlan({
       endMs: slotEndMs,
       demandW: slotDemandW,
       solarKwh,
+      fuelCellP20Kwh: fuelCellForecast.p20W * durationHours / 1000,
+      fuelCellMedianKwh: medianFuelCellKwh,
+      fuelCellP80Kwh: fuelCellForecast.p80W * durationHours / 1000,
+      fuelCellSampleCount: fuelCellForecast.sampleCount,
       demandKwh,
-      netKwh: solarKwh - demandKwh,
-      highSolarNetKwh: highSolarKwh - demandKwh,
+      netKwh: solarKwh + fuelCellPlanningKwh - demandKwh,
+      highSolarNetKwh: highSolarKwh + highFuelCellKwh - demandKwh,
       band,
       rateWindowStartMs: bandOccurrence ? new Date(bandOccurrence.start).getTime() : null,
       rateWindowEndMs: bandOccurrence ? new Date(bandOccurrence.end).getTime() : null,
@@ -2884,7 +3142,18 @@ function buildAdaptiveChargingPlan({
     predictedSolarKwh,
     forecastSolarKwh,
     predictedDemandKwh,
+    predictedFuelCellKwh,
     predictedSurplusKwh,
+    fuelCellModel: {
+      method: fuelCellModel.method,
+      requestedInfluence: fuelCellModel.requestedInfluence,
+      influence: fuelCellModel.influence,
+      ready: fuelCellModel.ready,
+      blockers: fuelCellModel.blockers,
+      validObservationDays: fuelCellModel.validObservationDays,
+      comparableDays: fuelCellModel.comparableDays,
+      completedFixedRuns: fuelCellModel.completedFixedRuns,
+    },
     chargePerformance,
     batteryModel,
     ...optimized,
@@ -2932,7 +3201,28 @@ function sampleFromStatus(status, config, previousSample) {
   const timestamp = status.read_at ?? new Date().toISOString();
   const batteryPowerW = numericMetric(status.energy?.battery?.instant_power);
   const solarPowerW = config.solarEnabled === false ? null : numericMetric(status.energy?.solar?.instant_power);
-  const fuelCellPowerW = config.fuelCellEnabled === false ? null : strongestFuelCellWatts(status.energy?.fuel_cells);
+  const fuelCells = config.fuelCellEnabled === false ? [] : (status.energy?.fuel_cells ?? []);
+  const fuelCellReading = selectedFuelCellReading(fuelCells);
+  const fuelCellPrimary = primaryFuelCell(fuelCells);
+  const fuelCellPowerW = numericMetric(fuelCellReading?.instant_power);
+  const fuelCellGenerationState = fuelCellReading?.generation_status?.value ?? null;
+  const fuelCellRatedPowerW = numericMetric(fuelCellPrimary?.rated_power);
+  const fuelCellCumulativeGenerationKwh = numericMetric(fuelCellPrimary?.cumulative_generation);
+  const fuelCellCumulativeGasM3 = numericMetric(fuelCellPrimary?.cumulative_gas);
+  const counterSourceHost = fuelCellCumulativeGenerationKwh !== null || fuelCellCumulativeGasM3 !== null
+    ? fuelCellPrimary?.host ?? null
+    : null;
+  const sameCounterSource = counterSourceHost && counterSourceHost === previousSample?.fuelCellCounterSourceHost;
+  const cumulativeMaximum = 0xffff_ffff / 1000;
+  const electricityCounter = sameCounterSource
+    ? cumulativeCounterDeltaResult(fuelCellCumulativeGenerationKwh, previousSample?.fuelCellCumulativeGenerationKwh, cumulativeMaximum, 10)
+    : { delta: null, issue: null };
+  const gasCounter = sameCounterSource
+    ? cumulativeCounterDeltaResult(fuelCellCumulativeGasM3, previousSample?.fuelCellCumulativeGasM3, cumulativeMaximum, 5)
+    : { delta: null, issue: null };
+  const fuelCellKwh = electricityCounter.delta;
+  const fuelCellGasM3 = gasCounter.delta;
+  const fuelCellInterconnection = fuelCellPrimary?.interconnection_status?.value ?? null;
   const houseDemandW = config.smartCosmoEnabled === false ? null : numericMetric(status.meter?.house_demand_power);
   const gridImportW = config.smartCosmoEnabled === false ? null : numericMetric(status.meter?.grid_import_power);
   const gridExportW = config.smartCosmoEnabled === false ? null : numericMetric(status.meter?.grid_export_power);
@@ -2960,6 +3250,11 @@ function sampleFromStatus(status, config, previousSample) {
   const deltaHours = previousSample
     ? Math.max(0, Math.min(1, (new Date(timestamp).getTime() - new Date(previousSample.timestamp).getTime()) / 3_600_000))
     : 0;
+  const intervalSeconds = deltaHours * 3600;
+  const fuelCellOperatingSeconds = ["generating", "starting", "stopping", "idling"].includes(previousSample?.fuelCellGenerationState)
+    ? intervalSeconds
+    : 0;
+  const fuelCellStartCount = fuelCellGenerationState === "generating" && previousSample?.fuelCellGenerationState !== "generating" ? 1 : 0;
   const offPeakSavingsEnabled = config.rateMode !== "simple" || config.offPeakSavingsEnabled === true;
   // Grid import is already net of on-site generation, so it is the best cap on
   // how much of the battery's charging power can be attributed to bought energy.
@@ -2980,6 +3275,29 @@ function sampleFromStatus(status, config, previousSample) {
     solarPowerW,
     houseDemandW,
     fuelCellPowerW,
+    fuelCellRatedPowerW,
+    ...(fuelCellKwh !== null ? { fuelCellKwh } : {}),
+    ...(fuelCellGasM3 !== null ? { fuelCellGasM3 } : {}),
+    fuelCellCumulativeGenerationKwh,
+    fuelCellCumulativeGasM3,
+    fuelCellGenerationState,
+    fuelCellInterconnection,
+    fuelCellSourceHost: fuelCellReading?.host ?? null,
+    fuelCellCounterSourceHost: counterSourceHost,
+    fuelCellDataQuality: fuelCellKwh !== null
+      ? "counter"
+      : fuelCellPowerW !== null && fuelCellGasM3 !== null
+        ? "mixed"
+        : fuelCellPowerW !== null
+          ? "integrated"
+          : null,
+    fuelCellGasDataQuality: fuelCellGasM3 !== null ? "counter" : null,
+    fuelCellCounterIssues: [
+      ...(electricityCounter.issue ? [{ counter: "electricity", issue: electricityCounter.issue }] : []),
+      ...(gasCounter.issue ? [{ counter: "gas", issue: gasCounter.issue }] : []),
+    ],
+    fuelCellOperatingSeconds,
+    fuelCellStartCount,
     gridExportW,
     gridImportW,
     circuitPowerW,
@@ -2997,6 +3315,54 @@ function sampleFromStatus(status, config, previousSample) {
 
 async function recordStatusSample(status, config) {
   const sample = sampleFromStatus(status, config, lastRecordedSample);
+  if (sample.fuelCellGenerationState && sample.fuelCellGenerationState !== lastRecordedSample?.fuelCellGenerationState) {
+    historyStore.recordEvent({
+      eventKey: `fuelCell:state:${sample.timestamp}:${sample.fuelCellGenerationState}`,
+      at: sample.timestamp,
+      category: "fuelCell",
+      type: "state-transition",
+      message: `Ene-Farm state changed from ${lastRecordedSample?.fuelCellGenerationState ?? "unknown"} to ${sample.fuelCellGenerationState}`,
+      payload: {
+        from: lastRecordedSample?.fuelCellGenerationState ?? null,
+        to: sample.fuelCellGenerationState,
+        sourceHost: sample.fuelCellSourceHost,
+        quality: sample.fuelCellDataQuality,
+      },
+    });
+  }
+  if (sample.fuelCellCounterSourceHost !== lastRecordedSample?.fuelCellCounterSourceHost) {
+    historyStore.recordEvent({
+      eventKey: `fuelCell:counter-source:${sample.timestamp}:${sample.fuelCellCounterSourceHost ?? "unavailable"}`,
+      at: sample.timestamp,
+      category: "fuelCell",
+      type: "counter-source-transition",
+      message: sample.fuelCellCounterSourceHost
+        ? `Ene-Farm exact counters are now supplied by ${sample.fuelCellCounterSourceHost}`
+        : "Ene-Farm exact counters are unavailable; estimated watt integration may continue",
+      payload: {
+        from: lastRecordedSample?.fuelCellCounterSourceHost ?? null,
+        to: sample.fuelCellCounterSourceHost ?? null,
+        instantaneousSourceHost: sample.fuelCellSourceHost,
+        quality: sample.fuelCellDataQuality,
+      },
+    });
+  }
+  for (const counterIssue of sample.fuelCellCounterIssues ?? []) {
+    historyStore.recordEvent({
+      eventKey: `fuelCell:counter:${counterIssue.counter}:${counterIssue.issue}:${sample.timestamp}`,
+      at: sample.timestamp,
+      category: "fuelCell",
+      type: `counter-${counterIssue.issue}`,
+      message: counterIssue.issue === "rollover"
+        ? `Ene-Farm ${counterIssue.counter} counter rollover detected and validated`
+        : `Ene-Farm ${counterIssue.counter} counter ${counterIssue.issue.replace("-", " ")} detected; this interval was excluded`,
+      payload: {
+        counter: counterIssue.counter,
+        issue: counterIssue.issue,
+        sourceHost: sample.fuelCellCounterSourceHost,
+      },
+    });
+  }
   lastRecordedSample = historyStore.appendSample(sample);
   if (adaptiveChargingHistoryCache) {
     const adaptiveChargingSample = adaptiveChargingHistorySample(sample);
@@ -3409,6 +3775,271 @@ function aggregateEnergyReportSamples(samples, options = {}) {
   return accumulator.finish();
 }
 
+function gasTariffForMonth(config, billingMonth) {
+  const provider = config.fuelCell?.tariff?.provider ?? "tokyo-gas";
+  const override = historyStore.gasTariffOverride(provider, billingMonth);
+  if (override) return { ...override, source: "override" };
+  const snapshot = historyStore.gasTariffSnapshots({ provider, billingMonth })[0] ?? null;
+  return snapshot ? { ...snapshot, source: "snapshot" } : null;
+}
+
+function localMonthKey(value) {
+  const date = new Date(value);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function clampedReadingDate(year, month, readingDay) {
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  return new Date(year, month, Math.min(readingDay, lastDay));
+}
+
+function completeBillingPeriod(start, end, readingDay) {
+  const startDate = new Date(start);
+  const endDate = new Date(end);
+  const expectedStart = clampedReadingDate(startDate.getFullYear(), startDate.getMonth(), readingDay);
+  const expectedEnd = clampedReadingDate(startDate.getFullYear(), startDate.getMonth() + 1, readingDay);
+  return startDate.getTime() === expectedStart.getTime() && endDate.getTime() === expectedEnd.getTime();
+}
+
+function billingPeriodKey(value, readingDay) {
+  const date = new Date(value);
+  const boundary = clampedReadingDate(date.getFullYear(), date.getMonth(), readingDay);
+  const periodStart = date.getTime() < boundary.getTime()
+    ? clampedReadingDate(date.getFullYear(), date.getMonth() - 1, readingDay)
+    : boundary;
+  return localMonthKey(periodStart);
+}
+
+function estimatedGasCost(config, gasM3, start, end) {
+  const settings = config.fuelCell?.tariff ?? {};
+  const readingDay = settings.meterReadingDay ?? 1;
+  const billingMonth = billingPeriodKey(start, readingDay);
+  const rangeEndMs = new Date(end).getTime();
+  const finalInstant = Number.isFinite(rangeEndMs) ? new Date(Math.max(new Date(start).getTime(), rangeEndMs - 1)) : end;
+  const endBillingMonth = billingPeriodKey(finalInstant, readingDay);
+  if (billingMonth !== endBillingMonth) {
+    return {
+      estimated: true,
+      available: false,
+      billingMonth: null,
+      reason: "The selected range crosses billing periods; review the per-period estimates instead",
+      methodology: "Each billing period must use its own immutable tariff snapshot or manual override",
+    };
+  }
+  const tariff = gasTariffForMonth(config, billingMonth);
+  if (!Number.isFinite(gasM3) || !tariff) {
+    return {
+      estimated: true,
+      available: false,
+      billingMonth,
+      reason: !tariff ? "No tariff snapshot or override is available for this billing month" : "No exact Ene-Farm gas counter data is available",
+      methodology: "Ene-Farm gas volume multiplied by the configured monthly gas tariff",
+    };
+  }
+  const expectedUsage = tariff.season === "winter" ? settings.expectedWinterMonthlyM3 : settings.expectedOtherMonthlyM3;
+  const band = applicableGasTariffBand(tariff, expectedUsage ?? gasM3);
+  const discount = applicableGasDiscount(tariff, settings.equipmentDiscount);
+  const configuredRate = finiteNumberOrNull(settings.marginalRateOverrideYenPerM3);
+  const baseRate = configuredRate ?? band?.yenPerM3 ?? null;
+  if (!Number.isFinite(baseRate)) {
+    return { estimated: true, available: false, billingMonth, reason: "No applicable variable gas rate is configured", methodology: "Ene-Farm gas volume multiplied by the configured monthly gas tariff" };
+  }
+  const discountRatio = (discount?.percent ?? 0) / 100;
+  const marginalRateYenPerM3 = baseRate * (1 - discountRatio);
+  const variableCostYen = gasM3 * baseRate;
+  const uncappedDiscountYen = variableCostYen * discountRatio;
+  const discountYen = Math.min(uncappedDiscountYen, discount?.capYen ?? Number.POSITIVE_INFINITY);
+  const marginalCostYen = variableCostYen - discountYen;
+  const fullPeriod = completeBillingPeriod(start, end, readingDay);
+  const standingChargeYen = band?.baseChargeYen ?? null;
+  const allocatedTotalYen = fullPeriod && Number.isFinite(standingChargeYen) ? standingChargeYen + marginalCostYen : null;
+  return {
+    estimated: true,
+    available: true,
+    billingMonth,
+    source: tariff.source,
+    sourceUrl: tariff.sourceUrl ?? tariff.providerPlanUrl ?? null,
+    methodology: "Measured Ene-Farm gas volume with the selected monthly usage band and configured equipment discount",
+    expectedMonthlyUsageM3: expectedUsage,
+    band,
+    discount,
+    marginalRateYenPerM3,
+    marginalCostYen,
+    standingChargeInclusive: {
+      available: allocatedTotalYen !== null && gasM3 > 0,
+      reason: fullPeriod ? (gasM3 > 0 ? null : "No Ene-Farm gas was measured") : "Available only for a complete configured billing period",
+      standingChargeYen,
+      totalYen: allocatedTotalYen,
+      allocatedYenPerM3: allocatedTotalYen !== null && gasM3 > 0 ? allocatedTotalYen / gasM3 : null,
+      methodology: "The full household standing charge is allocated to measured Ene-Farm gas; this is not a reconstructed provider bill",
+    },
+  };
+}
+
+async function updateCurrentGasTariff(config, now = new Date()) {
+  if (config.fuelCellEnabled === false || config.fuelCell?.tariff?.automaticUpdates !== true) return null;
+  const provider = config.fuelCell.tariff.provider;
+  if (provider !== "tokyo-gas") return null;
+  const billingMonth = billingPeriodKey(now, config.fuelCell.tariff.meterReadingDay ?? 1);
+  const month = now.getMonth() + 1;
+  const imported = await importGasTariff(provider, {
+    billingMonth,
+    readingDay: config.fuelCell.tariff.meterReadingDay,
+    season: month === 12 || month <= 4 ? "winter" : "other",
+  });
+  return historyStore.recordGasTariffSnapshot({ ...imported, fetchedAt: now.toISOString() });
+}
+
+function summarizeEneFarmSamples(samples, config, { start, end } = {}) {
+  let generatedKwh = 0;
+  let gasM3 = 0;
+  let hasGas = false;
+  let onSiteKwh = 0;
+  let onSiteKnown = true;
+  let operatingSeconds = 0;
+  let startCount = 0;
+  const qualities = new Set();
+  const states = {};
+  let previousState = null;
+  let stateSince = null;
+  let lastStopAt = null;
+  for (let index = 0; index < samples.length; index += 1) {
+    const sample = samples[index];
+    const previous = samples[index - 1];
+    const energy = samplePowerKwh(sample, "fuelCellKwh", "fuelCellPowerW", previous);
+    generatedKwh += energy;
+    const gas = finiteNumberOrNull(sample.fuelCellGasM3);
+    if (Number.isFinite(gas)) { gasM3 += Math.max(0, gas); hasGas = true; }
+    const demand = samplePowerKwh(sample, "houseDemandKwh", "houseDemandW", previous);
+    if (sample.fuelCellInterconnection === "grid_connected_reverse_flow_prohibited") {
+      onSiteKwh += energy;
+    } else if (Number.isFinite(demand)) {
+      onSiteKwh += Math.min(energy, Math.max(0, demand));
+    } else if (energy > 0) {
+      onSiteKnown = false;
+    }
+    const seconds = Math.max(0, finiteNumberOrNull(sample.fuelCellOperatingSeconds) ?? 0);
+    operatingSeconds += seconds;
+    startCount += Math.max(0, finiteNumberOrNull(sample.fuelCellStartCount) ?? 0);
+    if (sample.fuelCellGenerationState) {
+      states[sample.fuelCellGenerationState] = Number(states[sample.fuelCellGenerationState] ?? 0) + seconds;
+      if (sample.fuelCellGenerationState !== previousState) {
+        stateSince = sample.timestamp;
+        if (sample.fuelCellGenerationState === "stopped") lastStopAt = sample.timestamp;
+        previousState = sample.fuelCellGenerationState;
+      }
+    }
+    if (sample.fuelCellDataQuality) qualities.add(sample.fuelCellDataQuality);
+  }
+  const gasValue = hasGas ? gasM3 : null;
+  const gasCo2Kg = gasValue === null ? null : gasValue * Number(config.fuelCell?.gasCo2KgPerM3 ?? 2.21);
+  const onSiteValue = onSiteKnown ? onSiteKwh : null;
+  const avoidedGridCo2Kg = onSiteValue === null
+    ? null
+    : onSiteValue * Number(config.co2TonnesPerKwh ?? DEFAULT_CONFIG.co2TonnesPerKwh) * 1000;
+  const rangeStart = start ?? samples[0]?.timestamp ?? null;
+  const rangeEnd = end ?? samples.at(-1)?.timestamp ?? null;
+  const stateIntervals = [];
+  for (let index = 0; index < samples.length; index += 1) {
+    const sample = samples[index];
+    const sampleState = sample.fuelCellGenerationState ?? "unknown";
+    let interval = stateIntervals.at(-1);
+    if (!interval || interval.state !== sampleState || interval.sourceHost !== (sample.fuelCellSourceHost ?? null)) {
+      interval = {
+        start: index === 0 ? rangeStart ?? sample.timestamp : sample.timestamp,
+        end: sample.timestamp,
+        state: sampleState,
+        generatedKwh: 0,
+        gasM3: 0,
+        hasGas: false,
+        sourceHost: sample.fuelCellSourceHost ?? null,
+        qualities: new Set(),
+      };
+      stateIntervals.push(interval);
+    }
+    interval.end = samples[index + 1]?.timestamp ?? rangeEnd ?? sample.timestamp;
+    interval.generatedKwh += samplePowerKwh(sample, "fuelCellKwh", "fuelCellPowerW", samples[index - 1]);
+    const intervalGas = finiteNumberOrNull(sample.fuelCellGasM3);
+    if (intervalGas !== null) { interval.gasM3 += Math.max(0, intervalGas); interval.hasGas = true; }
+    if (sample.fuelCellDataQuality) interval.qualities.add(sample.fuelCellDataQuality);
+  }
+  return {
+    sampleCount: samples.length,
+    start: rangeStart,
+    end: rangeEnd,
+    generatedKwh: samples.length ? generatedKwh : null,
+    gasM3: gasValue,
+    electricalYieldKwhPerM3: gasValue > 0 ? generatedKwh / gasValue : null,
+    onSiteKwh: onSiteValue,
+    generationCoveragePercent: null,
+    operatingSeconds,
+    startCount,
+    averageGeneratingW: operatingSeconds > 0 ? generatedKwh / (operatingSeconds / 3600) * 1000 : null,
+    ratedPowerW: samples.findLast((sample) => Number.isFinite(Number(sample.fuelCellRatedPowerW)))?.fuelCellRatedPowerW ?? null,
+    stateDurations: states,
+    currentState: samples.at(-1)?.fuelCellGenerationState ?? null,
+    stateSince,
+    timeInStateSeconds: stateSince && rangeEnd
+      ? Math.max(0, (new Date(rangeEnd).getTime() - new Date(stateSince).getTime()) / 1000)
+      : null,
+    lastStopAt,
+    stateIntervals: stateIntervals.map((interval) => ({
+      start: interval.start,
+      end: interval.end,
+      state: interval.state,
+      durationSeconds: Math.max(0, (new Date(interval.end).getTime() - new Date(interval.start).getTime()) / 1000),
+      generatedKwh: interval.generatedKwh,
+      gasM3: interval.hasGas ? interval.gasM3 : null,
+      sourceHost: interval.sourceHost,
+      quality: interval.qualities.size > 1 ? "mixed" : interval.qualities.values().next().value ?? null,
+    })),
+    sourceHost: samples.at(-1)?.fuelCellSourceHost ?? null,
+    counterSourceHost: samples.at(-1)?.fuelCellCounterSourceHost ?? null,
+    dataQuality: qualities.size > 1 ? "mixed" : qualities.values().next().value ?? null,
+    estimatedGasCost: rangeStart && rangeEnd ? estimatedGasCost(config, gasValue, rangeStart, rangeEnd) : null,
+    carbon: {
+      estimated: true,
+      directGasCo2Kg: gasCo2Kg,
+      avoidedGridCo2Kg,
+      electricityOnlyBalanceKg: gasCo2Kg === null || avoidedGridCo2Kg === null ? null : avoidedGridCo2Kg - gasCo2Kg,
+      methodology: "Avoided grid emissions minus direct gas emissions; recovered heat is not measured",
+    },
+  };
+}
+
+async function eneFarmReport(start, end, bucket, config) {
+  const samples = await readHistorySamplesInRange(new Date(start).getTime(), new Date(end).getTime());
+  const energy = aggregateEnergyReportSamples(samples, { start, end, bucket, config });
+  let sampleIndex = 0;
+  const buckets = energy.buckets.map((row) => {
+    const rowStartMs = new Date(row.start).getTime();
+    const rowEndMs = new Date(row.end).getTime();
+    while (sampleIndex < samples.length && new Date(samples[sampleIndex].timestamp).getTime() < rowStartMs) sampleIndex += 1;
+    const bucketSamples = [];
+    while (sampleIndex < samples.length && new Date(samples[sampleIndex].timestamp).getTime() < rowEndMs) {
+      bucketSamples.push(samples[sampleIndex]);
+      sampleIndex += 1;
+    }
+    const summary = summarizeEneFarmSamples(bucketSamples, config, { start: row.start, end: row.end });
+    summary.generationCoveragePercent = Number.isFinite(row.houseDemandKwh) && row.houseDemandKwh > 0 && Number.isFinite(summary.onSiteKwh)
+      ? summary.onSiteKwh / row.houseDemandKwh * 100
+      : null;
+    return { key: row.key, label: row.label, ...summary };
+  });
+  const totals = summarizeEneFarmSamples(samples, config, { start, end });
+  totals.generationCoveragePercent = Number.isFinite(energy.totals.houseDemandKwh) && energy.totals.houseDemandKwh > 0 && Number.isFinite(totals.onSiteKwh)
+    ? totals.onSiteKwh / energy.totals.houseDemandKwh * 100
+    : null;
+  return {
+    start: new Date(start).toISOString(),
+    end: new Date(end).toISOString(),
+    bucket,
+    totals,
+    buckets,
+    estimateNotice: "All costs and savings are estimates. Check your provider statement for accurate billing information.",
+  };
+}
+
 function isGuardTriggerLog(entry) {
   return entry?.kind === "guard" ||
     String(entry?.message ?? "").includes("exceeds Charge Demand Guard limit");
@@ -3612,6 +4243,52 @@ function normalizeAdaptiveCharging(value = {}) {
   };
 }
 
+function normalizeFuelCellConfig(value = {}) {
+  const fixedWindows = (Array.isArray(value.fixedWindows) ? value.fixedWindows : [])
+    .map((window) => ({
+      days: [...new Set((Array.isArray(window.days) ? window.days : []).map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))].sort(),
+      start: isValidTime(window.start) ? window.start : "00:00",
+      end: isValidTime(window.end) ? window.end : "00:00",
+      label: String(window.label ?? "").trim().slice(0, 80),
+    }))
+    .filter((window) => window.days.length && window.start !== window.end);
+  const tariff = value.tariff ?? {};
+  return {
+    generationModel: ["automatic", "fixed", "off"].includes(value.generationModel) ? value.generationModel : "automatic",
+    plannerInfluence: value.plannerInfluence === "active" ? "active" : "observe",
+    fixedWindows,
+    gasCo2KgPerM3: configNumber(value.gasCo2KgPerM3, 2.21, 0, 100),
+    tariff: {
+      provider: String(tariff.provider ?? "tokyo-gas").trim() || "tokyo-gas",
+      region: String(tariff.region ?? "tokyo").trim() || "tokyo",
+      plan: String(tariff.plan ?? "enefarm").trim() || "enefarm",
+      equipmentDiscount: String(tariff.equipmentDiscount ?? "").trim(),
+      meterReadingDay: configNumber(tariff.meterReadingDay, 1, 1, 31),
+      expectedWinterMonthlyM3: optionalConfigNumber(tariff.expectedWinterMonthlyM3, 0, 100000),
+      expectedOtherMonthlyM3: optionalConfigNumber(tariff.expectedOtherMonthlyM3, 0, 100000),
+      automaticUpdates: configBool(tariff.automaticUpdates, false),
+      marginalRateOverrideYenPerM3: optionalConfigNumber(tariff.marginalRateOverrideYenPerM3, 0, 100000),
+    },
+  };
+}
+
+function normalizeFuelCellHosts(input = {}) {
+  const legacy = normalizeHostList(input.fuelCellHosts ?? DEFAULT_CONFIG.fuelCellHosts);
+  const configuredPrimary = String(input.fuelCellPrimaryHost ?? "").trim();
+  const primary = configuredPrimary && configuredPrimary !== input.meterHost
+    ? configuredPrimary
+    : legacy.find((host) => host !== input.meterHost) ?? "";
+  const configuredProxies = input.fuelCellProxyHosts === undefined
+    ? legacy.filter((host) => host !== primary)
+    : normalizeHostList(input.fuelCellProxyHosts);
+  const proxies = [...new Set([
+    ...configuredProxies,
+    ...(configuredPrimary === input.meterHost ? [configuredPrimary] : []),
+    ...legacy.filter((host) => host === input.meterHost && host !== primary),
+  ])].filter((host) => host && host !== primary);
+  return { primary, proxies, all: [...new Set([primary, ...proxies].filter(Boolean))] };
+}
+
 function normalizeDashboardWidgets(value = []) {
   const inputById = new Map(
     (Array.isArray(value) ? value : [])
@@ -3664,6 +4341,7 @@ function cleanConfig(input = {}) {
   const rateBands = normalizeRateBands({ ...input, rateMode });
   const standardRate = configNumber(input.standardRateYenPerKwh, Math.max(...rateBands.map((band) => band.yenPerKwh)));
   const offPeakRate = configNumber(input.offPeakRateYenPerKwh, Math.min(...rateBands.map((band) => band.yenPerKwh)));
+  const fuelCellHosts = normalizeFuelCellHosts(input);
   return {
     batteryHost: String(input.batteryHost ?? DEFAULT_CONFIG.batteryHost).trim(),
     meterHost: String(input.meterHost ?? DEFAULT_CONFIG.meterHost).trim(),
@@ -3673,8 +4351,11 @@ function cleanConfig(input = {}) {
     circuitSortMode: normalizeCircuitSortMode(input.circuitSortMode),
     solarHost: String(input.solarHost ?? input.batteryHost ?? DEFAULT_CONFIG.solarHost).trim(),
     solarEnabled: configBool(input.solarEnabled, DEFAULT_CONFIG.solarEnabled),
-    fuelCellHosts: normalizeHostList(input.fuelCellHosts ?? DEFAULT_CONFIG.fuelCellHosts),
+    fuelCellHosts: fuelCellHosts.all,
+    fuelCellPrimaryHost: fuelCellHosts.primary,
+    fuelCellProxyHosts: fuelCellHosts.proxies,
     fuelCellEnabled: configBool(input.fuelCellEnabled, DEFAULT_CONFIG.fuelCellEnabled),
+    fuelCell: normalizeFuelCellConfig(input.fuelCell ?? {}),
     rateMode,
     standardRateYenPerKwh: standardRate,
     offPeakRateYenPerKwh: offPeakRate,
@@ -3729,6 +4410,8 @@ async function writeConfig(config) {
     standardRateYenPerKwh: previous.standardRateYenPerKwh,
     batteryCapabilities: previous.batteryCapabilities,
     adaptiveCharging: previous.adaptiveCharging,
+    fuelCellEnabled: previous.fuelCellEnabled,
+    fuelCell: previous.fuelCell,
   }) !== JSON.stringify({
     batteryHost: cleaned.batteryHost,
     meterHost: cleaned.meterHost,
@@ -3741,6 +4424,8 @@ async function writeConfig(config) {
     standardRateYenPerKwh: cleaned.standardRateYenPerKwh,
     batteryCapabilities: cleaned.batteryCapabilities,
     adaptiveCharging: cleaned.adaptiveCharging,
+    fuelCellEnabled: cleaned.fuelCellEnabled,
+    fuelCell: cleaned.fuelCell,
   });
   if (adaptiveChargingInputsChanged) {
     const state = await readAdaptiveChargingState();
@@ -4023,8 +4708,11 @@ function hostFrom(body, config) {
   return body.host || config.batteryHost;
 }
 
-function fuelCellArgs(hosts = []) {
-  return hosts.length ? { "fuel-cell-host": hosts } : {};
+function fuelCellArgs(config = {}) {
+  return {
+    ...(config.fuelCellPrimaryHost ? { "fuel-cell-primary-host": config.fuelCellPrimaryHost } : {}),
+    ...(config.fuelCellProxyHosts?.length ? { "fuel-cell-proxy-host": config.fuelCellProxyHosts } : {}),
+  };
 }
 
 function parseRawHex(raw) {
@@ -4095,7 +4783,7 @@ async function readAllStatus(onProbeComplete = () => {}) {
   const energyArgs = {
     "battery-host": config.batteryHost,
     ...(config.solarEnabled ? { "solar-host": config.solarHost } : { "no-solar": true }),
-    ...(config.fuelCellEnabled ? fuelCellArgs(config.fuelCellHosts) : { "no-fuel-cell": true }),
+    ...(config.fuelCellEnabled ? fuelCellArgs(config) : { "no-fuel-cell": true }),
   };
   const batteryConfigured = config.batteryHost && !isDocumentationHost(config.batteryHost);
   const skippedSetting = { available: false, error: "battery host is not configured", lastKnown: null, lastReadAt: null };
@@ -4121,7 +4809,7 @@ async function readAllStatus(onProbeComplete = () => {}) {
     // Some profile/window helpers may return null decoded data if a device is in
     // a mode where that property is unavailable. A raw-get retry gives the UI the
     // best chance to populate selectors without inventing fallback values.
-    if (windowData?.raw) return windowData;
+    if (!batteryConfigured || windowData?.raw) return windowData;
     try {
       const rawRead = await safeCli("raw-get", { host: config.batteryHost, eoj: "0x027D01" }, [epcHex]);
       if (rawRead?.raw) {
@@ -4144,6 +4832,8 @@ async function readAllStatus(onProbeComplete = () => {}) {
       meter: config.smartCosmoEnabled ? config.meterHost || null : null,
       solar: config.solarEnabled ? config.solarHost : null,
       fuel_cells: config.fuelCellEnabled ? config.fuelCellHosts : [],
+      fuel_cell_primary: config.fuelCellEnabled ? config.fuelCellPrimaryHost : null,
+      fuel_cell_proxies: config.fuelCellEnabled ? config.fuelCellProxyHosts : [],
     },
     features: {
       smartCosmoEnabled: config.smartCosmoEnabled,
@@ -5432,6 +6122,42 @@ function adaptiveChargingPlanRefreshDecision(state, config, now = new Date()) {
   return { refresh: false, ...scheduledEvent };
 }
 
+function batteryLearningModelSwitchDue(state, now = new Date()) {
+  const switchAfterSlotEnd = state.batteryLearning?.switchAfterSlotEnd;
+  if (!switchAfterSlotEnd) return false;
+  const switchAt = new Date(switchAfterSlotEnd).getTime();
+  return Number.isFinite(switchAt) && switchAt <= now.getTime();
+}
+
+function updateAdaptiveChargingSolarHeadroomHold(state, liveExportNeedsHeadroom, now = new Date()) {
+  const holdUntil = state.solarHeadroomHoldUntil;
+  if (!holdUntil) {
+    state.solarHeadroomClearChecks = 0;
+    return { active: false, released: false, expired: false };
+  }
+
+  const holdUntilMs = new Date(holdUntil).getTime();
+  if (!Number.isFinite(holdUntilMs) || holdUntilMs <= now.getTime()) {
+    state.solarHeadroomHoldUntil = null;
+    state.solarHeadroomClearChecks = 0;
+    return { active: false, released: false, expired: true };
+  }
+
+  if (liveExportNeedsHeadroom) {
+    state.solarHeadroomClearChecks = 0;
+    return { active: true, released: false, expired: false };
+  }
+
+  state.solarHeadroomClearChecks = Math.max(0, Number(state.solarHeadroomClearChecks) || 0) + 1;
+  if (state.solarHeadroomClearChecks < ADAPTIVE_CHARGING_SOLAR_HEADROOM_CLEAR_CHECKS) {
+    return { active: true, released: false, expired: false };
+  }
+
+  state.solarHeadroomHoldUntil = null;
+  state.solarHeadroomClearChecks = 0;
+  return { active: false, released: true, expired: false };
+}
+
 function adaptiveChargingClock(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "--:--";
@@ -5453,13 +6179,16 @@ function adaptiveChargingPlanLogMessage(plan, trigger, liveSoc) {
   const batteryModelSummary = Number.isFinite(Number(model.charge?.whPerSocPoint))
     ? `; battery model v${model.version ?? BATTERY_LEARNING_MODEL_VERSION} [charge ${Number(model.charge.whPerSocPoint).toFixed(1)} Wh/SOC (${model.charge.source}), discharge ${Number(model.discharge?.whPerSocPoint).toFixed(1)} Wh/SOC (${model.discharge?.source}), power ${Math.round(Number(model.power?.effectiveWatts))} W (${model.power?.source})]`
     : "";
-  return `Plan recalculated (${trigger}): SOC ${Number(liveSoc).toFixed(0)}%; ${Number(plan.predictedSolarKwh).toFixed(2)} kWh solar, ${Number(plan.predictedDemandKwh).toFixed(2)} kWh demand, ${Number(plan.plannedChargeKwh).toFixed(2)} kWh discounted charging; targets [${targets}]; slots [${slots}]${awaySummary}${batteryModelSummary}${plan.warning ? `; ${plan.warning}` : ""}`;
+  const fuelCell = plan.fuelCellModel;
+  const fuelCellSummary = fuelCell
+    ? `; Ene-Farm ${Number(plan.predictedFuelCellKwh ?? 0).toFixed(2)} kWh median (${fuelCell.method}, ${fuelCell.influence}${fuelCell.blockers?.length ? `; ${fuelCell.blockers.join(", ")}` : ""})`
+    : "";
+  return `Plan recalculated (${trigger}): SOC ${Number(liveSoc).toFixed(0)}%; ${Number(plan.predictedSolarKwh).toFixed(2)} kWh solar, ${Number(plan.predictedDemandKwh).toFixed(2)} kWh demand, ${Number(plan.plannedChargeKwh).toFixed(2)} kWh discounted charging; targets [${targets}]; slots [${slots}]${awaySummary}${fuelCellSummary}${batteryModelSummary}${plan.warning ? `; ${plan.warning}` : ""}`;
 }
 
 async function evaluateAdaptiveCharging(config, status, rules, now = new Date()) {
   let state = await readAdaptiveChargingState();
-  const modelSwitchAt = new Date(state.batteryLearning?.switchAfterSlotEnd).getTime();
-  if (Number.isFinite(modelSwitchAt) && modelSwitchAt <= now.getTime()) {
+  if (batteryLearningModelSwitchDue(state, now)) {
     state.pendingPlanReason = "battery model migration after active slot";
     state.batteryLearning.switchAfterSlotEnd = null;
   }
@@ -5586,6 +6315,7 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
     await refreshBatteryLearning(config, state, now);
     const historicalDemandDays = await readAdaptiveChargingDemandProfileDays();
     state.plan = buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDays, awayPeriods, now });
+    recordFuelCellPlanForecast(state.plan, now);
     state.lastPlanEventKey = refreshDecision.eventKey;
     state.pendingPlanReason = null;
     if (state.interruptedCharge) {
@@ -5619,6 +6349,15 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
   else finalizeExpiredAdaptiveChargingWindow(state, soc, now);
   const gridExportW = numericMetric(status.meter?.grid_export_power);
   const liveExportNeedsHeadroom = Number.isFinite(gridExportW) && gridExportW > 50;
+  const solarHeadroomHold = updateAdaptiveChargingSolarHeadroomHold(state, liveExportNeedsHeadroom, now);
+  if (solarHeadroomHold.released) {
+    appendAdaptiveChargingLog(
+      state,
+      "Grid export remained clear for two checks; releasing solar headroom hold and allowing planned charging to resume",
+      "resume",
+      now,
+    );
+  }
   if (liveExportNeedsHeadroom && state.standbyHoldUntil) {
     await executeAction("set-mode", { mode: "auto" });
     appendAdaptiveChargingLog(
@@ -5628,9 +6367,6 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
       now,
     );
     state.standbyHoldUntil = null;
-  }
-  if (state.solarHeadroomHoldUntil && new Date(state.solarHeadroomHoldUntil).getTime() <= now.getTime()) {
-    state.solarHeadroomHoldUntil = null;
   }
   const activeTargetKwh = Number(state.activeSlot?.targetWh ?? 0) / 1000;
   const activeTargetSocPercent = Number(state.activeSlot?.targetSocPercent ?? config.adaptiveCharging.targetSocPercent);
@@ -5676,9 +6412,15 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
         ? `Grid Import (${importText}) reached Charging Demand Guard limit (${limitText}) after ${interruption.deliveredWh} Wh; ${interruption.remainingWh} Wh remains in this charge`
         : `Grid Import (${importText}) reached Charging Demand Guard limit (${limitText})`;
     }
-    else if (liveExportNeedsHeadroom) stopReason = "Live grid export indicates solar needs battery headroom";
+    else if (liveExportNeedsHeadroom) {
+      const interruption = preserveInterruptedAdaptiveCharge(state, now);
+      stopReason = interruption
+        ? `Live grid export indicates solar needs battery headroom after ${interruption.deliveredWh} Wh; ${interruption.remainingWh} Wh remains in this charge`
+        : "Live grid export indicates solar needs battery headroom";
+    }
     if (liveExportNeedsHeadroom && state.activeSlot?.windowEnd) {
       state.solarHeadroomHoldUntil = state.activeSlot.windowEnd;
+      state.solarHeadroomClearChecks = 0;
     }
     const completedWindowEndMs = new Date(completedSlot?.windowEnd).getTime();
     const holdStandbyUntilWindowEnd = Boolean(
@@ -5722,9 +6464,13 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
     state.plan.chargePerformance?.effectiveWatts ?? config.batteryCapabilities.maximumChargeWatts,
     now,
   ) : null;
-  if (liveExportNeedsHeadroom && slot?.windowEnd) state.solarHeadroomHoldUntil = slot.windowEnd;
+  if (liveExportNeedsHeadroom && slot?.windowEnd) {
+    state.solarHeadroomHoldUntil = slot.windowEnd;
+    state.solarHeadroomClearChecks = 0;
+  }
   const solarHeadroomHoldActive = Boolean(
-    state.solarHeadroomHoldUntil && new Date(state.solarHeadroomHoldUntil).getTime() > now.getTime(),
+    solarHeadroomHold.active
+    || (state.solarHeadroomHoldUntil && new Date(state.solarHeadroomHoldUntil).getTime() > now.getTime()),
   );
   const standbyHoldActive = Boolean(
     state.standbyHoldUntil && new Date(state.standbyHoldUntil).getTime() > now.getTime(),
@@ -6460,7 +7206,7 @@ function startDiscoveryJob(timeout, mode = "broadcast", subnets = []) {
 function startScheduler() {
   scheduleTimer = setInterval(() => {
     runDueSchedules().catch((err) => logDetailedError("scheduler", err));
-  }, 15000);
+  }, SCHEDULE_CHECK_INTERVAL_MS);
   automationTimer = setInterval(() => {
     runAutomationRulesScheduled().catch((err) => logDetailedError("automation", err));
   }, AUTOMATION_CHECK_INTERVAL_MS);
@@ -6543,6 +7289,64 @@ async function api(req, res, url) {
       ?? (body.retentionDays ? normalizeRetentionConfig({}, body.retentionDays) : config.retention);
     return json(res, 200, await trimHistory(retention));
   }
+  if (req.method === "GET" && url.pathname === "/api/gas-tariffs") {
+    const config = await readConfig();
+    const provider = url.searchParams.get("provider") ?? config.fuelCell?.tariff?.provider ?? "tokyo-gas";
+    const billingMonth = url.searchParams.get("month");
+    if (billingMonth && !validBillingMonth(billingMonth)) return json(res, 400, { error: "month must be YYYY-MM" });
+    return json(res, 200, {
+      provider,
+      billingMonth,
+      snapshots: historyStore.gasTariffSnapshots({ provider, billingMonth }),
+      override: billingMonth ? historyStore.gasTariffOverride(provider, billingMonth) : null,
+    });
+  }
+  if (req.method === "POST" && url.pathname === "/api/gas-tariffs/import") {
+    const body = await readBody(req);
+    const config = await readConfig();
+    const provider = String(body.provider ?? config.fuelCell?.tariff?.provider ?? "tokyo-gas");
+    const billingMonth = String(body.billingMonth ?? body.month ?? "");
+    if (!validBillingMonth(billingMonth)) return json(res, 400, { error: "billingMonth must be YYYY-MM" });
+    let imported;
+    if (body.tariff || body.bands) {
+      const payload = normalizeGasTariffPayload(body.tariff ?? body);
+      imported = {
+        provider,
+        billingMonth,
+        sourceUrl: body.sourceUrl ?? payload.providerPlanUrl ?? null,
+        sourceHash: gasTariffHash(payload),
+        payload,
+      };
+    } else {
+      imported = await importGasTariff(provider, {
+        billingMonth,
+        readingDay: config.fuelCell?.tariff?.meterReadingDay ?? 1,
+        season: body.season,
+      });
+    }
+    return json(res, 201, historyStore.recordGasTariffSnapshot({ ...imported, fetchedAt: new Date().toISOString() }));
+  }
+  if (url.pathname.startsWith("/api/gas-tariffs/") && url.pathname.endsWith("/override")) {
+    const parts = url.pathname.split("/").filter(Boolean);
+    const billingMonth = decodeURIComponent(parts[2] ?? "");
+    if (!validBillingMonth(billingMonth)) return json(res, 400, { error: "month must be YYYY-MM" });
+    const config = await readConfig();
+    const provider = url.searchParams.get("provider") ?? config.fuelCell?.tariff?.provider ?? "tokyo-gas";
+    if (req.method === "PUT") {
+      const body = await readBody(req);
+      const payload = body.bands || body.tariff ? normalizeGasTariffPayload(body.tariff ?? body) : {
+        season: body.season === "winter" ? "winter" : "other",
+        bands: [{ minM3: 0, maxM3: null, baseChargeYen: Number(body.baseChargeYen) || 0, yenPerM3: Number(body.yenPerM3) }],
+        discounts: [],
+        notes: String(body.notes ?? "Manual override"),
+      };
+      if (!Number.isFinite(payload.bands?.[0]?.yenPerM3)) return json(res, 400, { error: "A valid yenPerM3 rate is required" });
+      return json(res, 200, historyStore.setGasTariffOverride(provider, billingMonth, payload));
+    }
+    if (req.method === "DELETE") {
+      return json(res, 200, { ok: historyStore.deleteGasTariffOverride(provider, billingMonth) });
+    }
+  }
   if (req.method === "POST" && url.pathname === "/api/discovery") {
     const body = await readBody(req);
     return json(
@@ -6591,6 +7395,39 @@ async function api(req, res, url) {
         config,
       ),
     );
+  }
+  if (req.method === "GET" && url.pathname === "/api/ene-farm") {
+    const config = await readConfig();
+    const start = url.searchParams.get("start") ?? new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+    const end = url.searchParams.get("end") ?? new Date().toISOString();
+    const startMs = new Date(start).getTime();
+    const endMs = new Date(end).getTime();
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs >= endMs) return json(res, 400, { error: "valid start and end are required" });
+    const samples = await readHistorySamplesInRange(startMs, endMs);
+    const allTransitions = historyStore.eventsBetween("fuelCell", 0, endMs)
+      .filter((event) => event.type === "state-transition");
+    const latestStateTransition = allTransitions.at(-1) ?? null;
+    const lastStopTransition = allTransitions.findLast((event) => event.payload?.to === "stopped") ?? null;
+    const summary = summarizeEneFarmSamples(samples, config, { start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString() });
+    if (latestStateTransition?.at) {
+      summary.stateSince = latestStateTransition.at;
+      summary.timeInStateSeconds = Math.max(0, (endMs - new Date(latestStateTransition.at).getTime()) / 1000);
+    }
+    if (lastStopTransition?.at) summary.lastStopAt = lastStopTransition.at;
+    return json(res, 200, {
+      ...summary,
+      transitions: historyStore.eventsBetween("fuelCell", startMs, endMs),
+      configured: config.fuelCellEnabled !== false,
+      estimateNotice: "All costs and savings are estimates. Check your provider statement for accurate billing information.",
+    });
+  }
+  if (req.method === "GET" && url.pathname === "/api/reports/ene-farm") {
+    const config = await readConfig();
+    const start = url.searchParams.get("start");
+    const end = url.searchParams.get("end");
+    const bucket = normalizeReportBucket(url.searchParams.get("bucket") ?? "day");
+    if (!start || !end) return json(res, 400, { error: "start and end are required" });
+    return json(res, 200, await eneFarmReport(start, end, bucket, config));
   }
   if (req.method === "GET" && url.pathname === "/api/away-periods") {
     return json(res, 200, awayPeriodsView());
@@ -6678,6 +7515,7 @@ async function api(req, res, url) {
     const historicalDemandDays = await readAdaptiveChargingDemandProfileDays();
     const awayPeriods = historyStore.awayPeriods({ includeCompleted: true, nowMs: now.getTime() });
     state.plan = buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDays, awayPeriods, now });
+    recordFuelCellPlanForecast(state.plan, now);
     state.lastPlanEventKey = adaptiveChargingScheduledEvent(config, now).eventKey ?? `manual:${now.toISOString()}`;
     state.pendingPlanReason = null;
     if (state.interruptedCharge) {
@@ -6820,9 +7658,183 @@ async function serveStatic(res, pathname) {
   }
 }
 
+function databaseUpgradeView() {
+  return {
+    ...databaseUpgrade,
+    applicationReady: applicationStarted,
+  };
+}
+
+async function serveDatabaseUpgradeStatic(res, pathname) {
+  const files = {
+    "/database-upgrade": "database-upgrade.html",
+    "/database-upgrade.html": "database-upgrade.html",
+    "/database-upgrade.css": "database-upgrade.css",
+    "/database-upgrade.js": "database-upgrade.js",
+  };
+  const filename = files[pathname];
+  if (!filename) {
+    res.writeHead(302, { Location: "/database-upgrade" });
+    res.end();
+    return;
+  }
+  await serveStatic(res, `/${filename}`);
+}
+
+async function initializeApplication() {
+  if (applicationStarted) return;
+  await migrateLegacyAdaptiveChargingData();
+  const batteryLearningMigration = await migrateBatteryLearningState();
+  await historyStore.initialize();
+  if (batteryLearningMigration.migrated) {
+    historyStore.tagEventsBefore("adaptiveCharging", batteryLearningMigration.migratedAt, { modelVersion: 1 });
+  }
+  lastRecordedSample = historyStore.latestSample();
+  await migrateBatteryCapabilitiesFromGuard();
+  const startupConfig = await readConfig();
+  const startupAdaptiveChargingState = await readAdaptiveChargingState();
+  await refreshBatteryLearning(startupConfig, startupAdaptiveChargingState);
+  await writeAdaptiveChargingState(startupAdaptiveChargingState);
+  if (batteryLearningMigration.migrated) {
+    historyStore.recordEvent({
+      eventKey: `adaptiveCharging:battery-model-migration:${batteryLearningMigration.migratedAt}`,
+      at: batteryLearningMigration.migratedAt,
+      category: "adaptiveCharging",
+      type: "battery-model-migration",
+      message: `Battery learning migrated to model version ${BATTERY_LEARNING_MODEL_VERSION}; legacy derived efficiency values were invalidated`,
+      payload: { modelVersion: BATTERY_LEARNING_MODEL_VERSION },
+    });
+  }
+  await writeAutomationRuleStates(await readAutomationRules());
+  const notificationHistory = await notificationService.view();
+  for (const delivery of notificationHistory.deliveries) {
+    const at = delivery.at ?? delivery.event?.occurredAt;
+    historyStore.recordEvent({
+      eventKey: `notification:legacy:${at}:${delivery.event?.dedupeKey ?? "delivery"}`,
+      at,
+      category: "notification",
+      type: delivery.ok ? "delivered" : "failed",
+      message: delivery.event?.message,
+      payload: delivery,
+    });
+  }
+  startScheduler();
+  startBackgroundRecorder();
+  const runRetention = async () => {
+    try {
+      const config = await readConfig();
+      if (config.retention.automaticMaintenance) await trimHistory(config.retention);
+      try {
+        await updateCurrentGasTariff(config);
+      } catch (error) {
+        logDetailedError("gas-tariff", error);
+      }
+    } catch (err) {
+      logDetailedError("retention", err);
+    }
+  };
+  retentionTimer = setInterval(runRetention, 24 * 60 * 60_000);
+  retentionTimer.unref?.();
+  void runRetention();
+  applicationStarted = true;
+}
+
+async function performDatabaseUpgrade(backupRequested) {
+  if (startupPromise) throw requestError(409, "Database upgrade is already running");
+  const inspection = await inspectHistoryDatabase(DATA_DIR);
+  if (inspection.state !== "upgrade") {
+    throw requestError(409, inspection.error ?? `Database is no longer upgradeable (${inspection.state})`);
+  }
+  const originalSourceVersion = inspection.version;
+  databaseUpgrade.sourceVersion = originalSourceVersion;
+  databaseUpgrade.targetVersion = SCHEMA_VERSION;
+  databaseUpgrade.decision = backupRequested ? "backup" : "skip";
+  databaseUpgrade.error = null;
+  databaseUpgrade.percent = 0;
+  databaseUpgrade.processed = 0;
+  databaseUpgrade.total = 0;
+  databaseUpgrade.unit = null;
+  if (!backupRequested) databaseUpgrade.backup = null;
+  startupPromise = (async () => {
+    try {
+      if (backupRequested) {
+        databaseUpgrade.state = "backing-up";
+        databaseUpgrade.phase = "preparing";
+        databaseUpgrade.backup = await backupDatabaseBeforeUpgrade({
+          databaseFile: inspection.databaseFile,
+          backupDir: DATABASE_BACKUP_DIR,
+          sourceVersion: inspection.version,
+          targetVersion: SCHEMA_VERSION,
+          onProgress(progress) {
+            Object.assign(databaseUpgrade, progress);
+          },
+        });
+      }
+      databaseUpgrade.state = "migrating";
+      databaseUpgrade.phase = "migrating";
+      databaseUpgrade.percent = 0;
+      await migrateHistoryDatabase(DATA_DIR, {
+        onProgress({ fromVersion, toVersion }) {
+          databaseUpgrade.sourceVersion = fromVersion;
+          databaseUpgrade.migratingToVersion = toVersion;
+          databaseUpgrade.percent = Math.round(((toVersion - originalSourceVersion) / (SCHEMA_VERSION - originalSourceVersion)) * 100);
+          databaseUpgrade.processed = toVersion - originalSourceVersion;
+          databaseUpgrade.total = SCHEMA_VERSION - originalSourceVersion;
+          databaseUpgrade.unit = "versions";
+        },
+      });
+      databaseUpgrade.phase = "starting";
+      databaseUpgrade.percent = 100;
+      await initializeApplication();
+      historyStore.recordEvent({
+        eventKey: `database:upgrade:${originalSourceVersion}:${SCHEMA_VERSION}:${new Date().toISOString()}`,
+        at: new Date().toISOString(),
+        category: "database",
+        type: "schema-upgrade",
+        message: `Database upgraded from v${originalSourceVersion} to v${SCHEMA_VERSION}`,
+        payload: {
+          decision: databaseUpgrade.decision,
+          backupFilename: databaseUpgrade.backup?.filename ?? null,
+          backupCompressedBytes: databaseUpgrade.backup?.compressedBytes ?? null,
+          backupDurationMs: databaseUpgrade.backup?.durationMs ?? null,
+          migrationResult: "complete",
+        },
+      });
+      databaseUpgrade.state = "complete";
+      databaseUpgrade.phase = "complete";
+      databaseUpgrade.required = false;
+      console.log(`database upgrade: v${originalSourceVersion} to v${SCHEMA_VERSION}; decision=${databaseUpgrade.decision}; backup=${databaseUpgrade.backup?.path ?? "none"}`);
+    } catch (error) {
+      databaseUpgrade.state = "failed";
+      databaseUpgrade.phase = "failed";
+      databaseUpgrade.error = error.message;
+      logDetailedError("database-upgrade", error);
+    } finally {
+      startupPromise = null;
+    }
+  })();
+}
+
 export const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   try {
+    if (req.method === "GET" && url.pathname === "/api/database-upgrade/status") {
+      const incompatible = databaseUpgrade.state === "invalid" || databaseUpgrade.state === "newer";
+      return json(res, incompatible ? 409 : 200, databaseUpgradeView());
+    }
+    if (!applicationStarted) {
+      if (req.method === "POST" && url.pathname === "/api/database-upgrade/decision") {
+        if (!databaseUpgrade.required) return json(res, 409, { error: "Database upgrade is not awaiting a decision" });
+        const body = await readBody(req);
+        if (typeof body.backup !== "boolean") return json(res, 400, { error: "backup must be true or false" });
+        await performDatabaseUpgrade(body.backup);
+        return json(res, 202, databaseUpgradeView());
+      }
+      if (url.pathname.startsWith("/api/")) {
+        return json(res, 503, { error: "Database upgrade must be completed before the application can start", upgrade: databaseUpgradeView() });
+      }
+      return serveDatabaseUpgradeStatic(res, url.pathname);
+    }
     if (url.pathname.startsWith("/api/")) {
       await api(req, res, url);
       return;
@@ -6845,6 +7857,7 @@ export {
   beginAdaptiveChargingBreakerRecovery,
   buildAdaptiveChargingPlan,
   buildAdaptiveChargingTimelineView,
+  batteryLearningModelSwitchDue,
   capAdaptiveChargingSlotToRemainingTime,
   clearStaleScheduleRuns,
   cleanAutomationRule,
@@ -6859,6 +7872,7 @@ export {
   discountedPlanStatus,
   dailySolarForecastIssues,
   buildBatteryLearningModel,
+  buildFuelCellGenerationModel,
   effectiveBatteryLearningModel,
   effectiveAdaptiveChargeWatts,
   executeAdaptiveChargeStart,
@@ -6913,61 +7927,32 @@ export {
   suspendAdaptiveChargeInStandby,
   summarizeCircuits,
   syncAdaptiveChargingWindowExecution,
+  updateAdaptiveChargingSolarHeadroomHold,
   predictHouseDemand,
 };
 
 async function main() {
   await ensureDataDir();
-  await migrateLegacyAdaptiveChargingData();
-  const batteryLearningMigration = await migrateBatteryLearningState();
-  await historyStore.initialize();
-  if (batteryLearningMigration.migrated) {
-    historyStore.tagEventsBefore("adaptiveCharging", batteryLearningMigration.migratedAt, { modelVersion: 1 });
-  }
-  lastRecordedSample = historyStore.latestSample();
-  await migrateBatteryCapabilitiesFromGuard();
-  const startupConfig = await readConfig();
-  const startupAdaptiveChargingState = await readAdaptiveChargingState();
-  await refreshBatteryLearning(startupConfig, startupAdaptiveChargingState);
-  await writeAdaptiveChargingState(startupAdaptiveChargingState);
-  if (batteryLearningMigration.migrated) {
-    historyStore.recordEvent({
-      eventKey: `adaptiveCharging:battery-model-migration:${batteryLearningMigration.migratedAt}`,
-      at: batteryLearningMigration.migratedAt,
-      category: "adaptiveCharging",
-      type: "battery-model-migration",
-      message: `Battery learning migrated to model version ${BATTERY_LEARNING_MODEL_VERSION}; legacy derived efficiency values were invalidated`,
-      payload: { modelVersion: BATTERY_LEARNING_MODEL_VERSION },
-    });
-  }
-  await writeAutomationRuleStates(await readAutomationRules());
-  const notificationHistory = await notificationService.view();
-  for (const delivery of notificationHistory.deliveries) {
-    const at = delivery.at ?? delivery.event?.occurredAt;
-    historyStore.recordEvent({
-      eventKey: `notification:legacy:${at}:${delivery.event?.dedupeKey ?? "delivery"}`,
-      at,
-      category: "notification",
-      type: delivery.ok ? "delivered" : "failed",
-      message: delivery.event?.message,
-      payload: delivery,
-    });
-  }
-  startScheduler();
-  startBackgroundRecorder();
-  const runRetention = async () => {
-    try {
-      const config = await readConfig();
-      if (config.retention.automaticMaintenance) await trimHistory(config.retention);
-    } catch (err) {
-      logDetailedError("retention", err);
-    }
+  const inspection = await inspectHistoryDatabase(DATA_DIR);
+  databaseUpgrade = {
+    ...databaseUpgrade,
+    required: inspection.state === "upgrade",
+    state: inspection.state === "upgrade" ? "awaiting-decision" : inspection.state,
+    phase: inspection.state === "upgrade" ? "awaiting-decision" : inspection.state,
+    sourceVersion: inspection.version ?? null,
+    targetVersion: SCHEMA_VERSION,
+    databaseBytes: inspection.databaseBytes,
+    error: inspection.error ?? (inspection.state === "newer" ? `Database schema v${inspection.version} is newer than supported v${SCHEMA_VERSION}` : null),
   };
-  retentionTimer = setInterval(runRetention, 24 * 60 * 60_000);
-  retentionTimer.unref?.();
-  void runRetention();
+  if (inspection.state === "new" || inspection.state === "current") {
+    await initializeApplication();
+    databaseUpgrade.state = "complete";
+    databaseUpgrade.phase = "complete";
+  }
   server.listen(PORT, "0.0.0.0", () => {
+    serverListening = true;
     console.log(`HOME ENERGY & BATTERY listening on http://0.0.0.0:${PORT}`);
+    if (databaseUpgrade.required) console.log(`database upgrade: awaiting decision for v${inspection.version} to v${SCHEMA_VERSION}`);
   });
 }
 

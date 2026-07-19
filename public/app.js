@@ -7,6 +7,9 @@ import {
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
+const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+})[character]);
 
 const ACTIVE_REFRESH_MS = 15_000;
 const INACTIVE_REFRESH_MS = 5 * 60_000;
@@ -46,6 +49,8 @@ const state = {
   historyLoadToken: 0,
   reportData: null,
   reportBucket: "day",
+  reportDomain: "energy",
+  fuelCellSummary: null,
   automationRules: [],
   adaptiveChargingStatus: null,
   adaptiveChargingTimelineHover: null,
@@ -276,9 +281,9 @@ const I18N = {
     mode: "Mode",
     dischargeLimit: "Discharge Limit",
     solarGeneration: "Solar Generation",
-    solarSavings: "Solar Savings",
+    solarSavings: "Estimated Solar Savings",
     co2Savings: "CO2 Savings",
-    offPeakSavings: "Off-Peak Charge Savings",
+    offPeakSavings: "Estimated Off-Peak Charge Savings",
     powerImported: "Power Imported",
     powerExported: "Power Exported",
     guardTriggerCount: "Demand Guard Triggers",
@@ -292,6 +297,31 @@ const I18N = {
     gridExport: "Grid Export",
     fuelCellGeneration: "Ene-Farm Generation",
     fuelCellStatus: "Ene-Farm Status",
+    fuelCellOperation: "Ene-Farm Operation",
+    electricityToday: "Electricity today",
+    gasToday: "Gas today",
+    operatingTime: "Operating time",
+    starts: "Starts",
+    timeInState: "Time in state",
+    lastStop: "Last stop",
+    reportType: "Report type",
+    energyUsage: "Energy Usage",
+    eneFarmReports: "Ene-Farm Performance",
+    eneFarmReportsHelp: "Compare generation, gas use, operating time, estimated cost, and carbon by period.",
+    generatedElectricity: "Generated electricity",
+    gasConsumed: "Gas consumed",
+    exactCounterOnly: "Exact counter data only",
+    electricalYield: "Electrical yield",
+    generationCoverage: "Generation coverage",
+    estimatedMarginalGasCost: "Estimated marginal gas cost",
+    allocatedGasCost: "Estimated allocated gas cost",
+    verifyProviderBill: "Verify with your provider",
+    standingChargeScenario: "Includes allocated standing charge for complete billing periods",
+    electricityCarbonBalance: "Electricity-only carbon balance",
+    heatNotMeasured: "Recovered heat is not measured",
+    eneFarmByPeriod: "Ene-Farm by Period",
+    estimateNotice: "All costs and savings are estimates. Check your provider statement for accurate billing information.",
+    carbonBalance: "Carbon balance",
     batterySettings: "Battery Settings",
     chargingProfileHelp:
       "Choose the battery behavior profile used by the controller.",
@@ -424,6 +454,8 @@ const I18N = {
     configure: "Configure",
     forecastAge: "Forecast age",
     predictedSolar: "Predicted solar",
+    predictedFuelCell: "Predicted Ene-Farm",
+    fuelCellForecastModel: "Ene-Farm forecast model",
     predictedDemand: "Predicted demand",
     predictedSurplus: "Predicted surplus",
     plannedGridCharge: "Planned grid charge",
@@ -482,6 +514,15 @@ const I18N = {
     forecastBiasLearning: "Learning · {count}/5 valid days",
     forecastBiasApplied: "{value}% correction · {count} valid days",
     noSolarForecastOutcomes: "Completed forecast outcomes will appear after a full day of well-covered solar data.",
+    fuelCellForecastAccuracy: "Ene-Farm Forecast Outcomes",
+    fuelCellForecastAccuracyHelp: "Compare completed 30-minute forecasts with recorded generation. Observe-mode forecasts remain informational and never change charging plans.",
+    completedForecastIntervals: "Completed forecast intervals",
+    forecastBias: "Forecast bias",
+    forecastRange: "Forecast range",
+    medianForecast: "Median forecast",
+    plannerInfluence: "Planner influence",
+    noFuelCellForecastOutcomes: "Completed Ene-Farm forecast outcomes will appear after recorded generation covers a forecast interval.",
+    onSiteGeneration: "On-site generation",
     selectedRateWindows: "Discounted window plan",
     windowTarget: "target",
     solarHeadroom: "solar headroom",
@@ -565,6 +606,47 @@ const I18N = {
     installedEquipment: "Installed Equipment",
     solarEnabled: "Show solar generation",
     fuelCellEnabled: "Show Ene-Farm generation and status",
+    fuelCellPrimaryHost: "Ene-Farm primary device",
+    fuelCellProxyHosts: "Smart Cosmo fallback proxies",
+    fuelCellSettings: "Ene-Farm",
+    fuelCellSettingsHelp: "Configure reporting, gas estimates, and read-only generation forecasts.",
+    generationModel: "Generation model",
+    automaticOmakase: "Automatic / Omakase",
+    fixedSchedule: "Fixed schedule",
+    plannerInfluence: "Planner influence",
+    observeOnly: "Observe only",
+    active: "Active",
+    off: "Off",
+    gasCo2Factor: "City gas emissions (kg-CO2/m³)",
+    gasProvider: "Gas provider",
+    gasRegion: "Gas region",
+    gasPlan: "Gas plan",
+    meterReadingDay: "Meter reading day",
+    winterUsage: "Expected winter household gas (m³/month)",
+    otherSeasonUsage: "Expected non-winter household gas (m³/month)",
+    equipmentDiscount: "Equipment discount",
+    marginalRateOverride: "Marginal rate override (yen/m³)",
+    automaticTariffUpdates: "Automatically import monthly Tokyo Gas tariffs",
+    fixedGenerationWindows: "Fixed generation windows",
+    addWindow: "Add Window",
+    saveFuelCellSettings: "Save Ene-Farm Settings",
+    gasTariffData: "Gas Tariff Data",
+    billingMonth: "Billing month",
+    season: "Season",
+    otherSeason: "Other season",
+    winter: "Winter",
+    importPublishedTariff: "Import Published Tariff",
+    manualMonthlyOverride: "Manual monthly override",
+    manualMonthlyOverrideHelp: "Use the base charge and variable rate for the expected household usage band in this billing month.",
+    baseCharge: "Base charge (yen)",
+    variableGasRate: "Variable rate (yen/m³)",
+    saveOverride: "Save override",
+    deleteOverride: "Delete override",
+    tokyoGasTariffSource: "Tokyo Gas tariff source",
+    exactCounter: "Exact counter",
+    integratedEstimate: "Integrated estimate",
+    mixedQuality: "Mixed exact and estimated data",
+    plannerObserveReason: "Observe mode: forecasts are compared with outcomes but do not change charging.",
     battery: "Battery",
     homePowerMeter: "Home power meter",
     solar: "Solar",
@@ -774,9 +856,9 @@ const I18N = {
     mode: "モード",
     dischargeLimit: "放電下限",
     solarGeneration: "太陽光発電",
-    solarSavings: "太陽光の節約額",
+    solarSavings: "太陽光の推定節約額",
     co2Savings: "CO2削減量",
-    offPeakSavings: "夜間充電の節約額",
+    offPeakSavings: "夜間充電の推定節約額",
     powerImported: "買電量",
     powerExported: "売電量",
     guardTriggerCount: "ブレーカー落ちガード作動回数",
@@ -790,6 +872,31 @@ const I18N = {
     gridExport: "売電",
     fuelCellGeneration: "エネファーム発電",
     fuelCellStatus: "エネファーム状態",
+    fuelCellOperation: "エネファーム運転状況",
+    electricityToday: "本日の発電量",
+    gasToday: "本日のガス使用量",
+    operatingTime: "運転時間",
+    starts: "起動回数",
+    timeInState: "現在状態の継続時間",
+    lastStop: "最終停止",
+    reportType: "レポート種類",
+    energyUsage: "電力使用量",
+    eneFarmReports: "エネファーム実績",
+    eneFarmReportsHelp: "期間ごとの発電、ガス使用、運転時間、推定コスト、CO2を比較します。",
+    generatedElectricity: "発電電力量",
+    gasConsumed: "ガス使用量",
+    exactCounterOnly: "積算値データのみ",
+    electricalYield: "発電効率",
+    generationCoverage: "需要に対する発電割合",
+    estimatedMarginalGasCost: "推定ガス従量料金",
+    allocatedGasCost: "推定基本料金配賦後コスト",
+    verifyProviderBill: "正確な料金はガス会社の請求書をご確認ください",
+    standingChargeScenario: "完全な検針期間では基本料金を配賦",
+    electricityCarbonBalance: "発電のみのCO2収支",
+    heatNotMeasured: "排熱利用は計測されていません",
+    eneFarmByPeriod: "期間別エネファーム",
+    estimateNotice: "料金と節約額はすべて推定値です。正確な請求額は契約先にご確認ください。",
+    carbonBalance: "CO2収支",
     batterySettings: "蓄電池設定",
     chargingProfileHelp:
       "コントローラーが使う蓄電池の動作プロファイルを選びます。",
@@ -920,6 +1027,8 @@ const I18N = {
     configure: "設定",
     forecastAge: "予報の経過時間",
     predictedSolar: "予測太陽光発電量",
+    predictedFuelCell: "予測エネファーム発電",
+    fuelCellForecastModel: "エネファーム予測モデル",
     predictedDemand: "予測使用電力量",
     predictedSurplus: "予測余剰電力量",
     plannedGridCharge: "予定買電充電量",
@@ -978,6 +1087,15 @@ const I18N = {
     forecastBiasLearning: "学習中 · 有効日数 {count}/5日",
     forecastBiasApplied: "{value}%補正 · 有効日数 {count}日",
     noSolarForecastOutcomes: "十分な太陽光データが一日分記録されると、完了した予測実績が表示されます。",
+    fuelCellForecastAccuracy: "エネファーム予測結果",
+    fuelCellForecastAccuracyHelp: "完了した30分予測と実測発電量を比較します。観察モードの予測は情報表示のみで、充電計画には影響しません。",
+    completedForecastIntervals: "完了した予測区間",
+    forecastBias: "予測バイアス",
+    forecastRange: "予測範囲",
+    medianForecast: "中央値予測",
+    plannerInfluence: "計画への反映",
+    noFuelCellForecastOutcomes: "予測区間を実測発電データがカバーすると、エネファーム予測結果が表示されます。",
+    onSiteGeneration: "自家消費発電量",
     selectedRateWindows: "割安料金帯の充電計画",
     windowTarget: "目標",
     solarHeadroom: "太陽光用空き容量",
@@ -1061,6 +1179,47 @@ const I18N = {
     installedEquipment: "設置済み設備",
     solarEnabled: "太陽光発電を表示",
     fuelCellEnabled: "エネファーム発電・状態を表示",
+    fuelCellPrimaryHost: "エネファーム本体",
+    fuelCellProxyHosts: "スマートコスモのフォールバック",
+    fuelCellSettings: "エネファーム",
+    fuelCellSettingsHelp: "レポート、ガス料金推定、読み取り専用の発電予測を設定します。",
+    generationModel: "発電モデル",
+    automaticOmakase: "自動・おまかせ",
+    fixedSchedule: "固定スケジュール",
+    plannerInfluence: "充電計画への反映",
+    observeOnly: "観察のみ",
+    active: "有効",
+    off: "無効",
+    gasCo2Factor: "都市ガス排出係数 (kg-CO2/m³)",
+    gasProvider: "ガス会社",
+    gasRegion: "供給地域",
+    gasPlan: "ガス料金プラン",
+    meterReadingDay: "検針日",
+    winterUsage: "冬期の想定家庭ガス使用量 (m³/月)",
+    otherSeasonUsage: "冬期以外の想定家庭ガス使用量 (m³/月)",
+    equipmentDiscount: "機器割引",
+    marginalRateOverride: "従量単価の上書き (円/m³)",
+    automaticTariffUpdates: "東京ガスの月別料金を自動取得",
+    fixedGenerationWindows: "固定発電時間帯",
+    addWindow: "時間帯を追加",
+    saveFuelCellSettings: "エネファーム設定を保存",
+    gasTariffData: "ガス料金データ",
+    billingMonth: "請求月",
+    season: "季節",
+    otherSeason: "その他期",
+    winter: "冬期",
+    importPublishedTariff: "公開料金を取得",
+    manualMonthlyOverride: "月別手動上書き",
+    manualMonthlyOverrideHelp: "この請求月の想定家庭使用量帯に対応する基本料金と従量単価を入力します。",
+    baseCharge: "基本料金 (円)",
+    variableGasRate: "従量単価 (円/m³)",
+    saveOverride: "上書きを保存",
+    deleteOverride: "上書きを削除",
+    tokyoGasTariffSource: "東京ガス料金データ",
+    exactCounter: "積算値",
+    integratedEstimate: "積算推定",
+    mixedQuality: "積算値と推定値の混在",
+    plannerObserveReason: "観察モード：予測と実績を比較しますが、充電計画には反映しません。",
     battery: "蓄電池",
     homePowerMeter: "家庭内電力メーター",
     solar: "太陽光",
@@ -1324,6 +1483,71 @@ function energyKwh(value) {
   }).format(value)} kWh`;
 }
 
+function gasM3(value) {
+  return Number.isFinite(value) ? `${value.toFixed(value >= 10 ? 1 : 3)} m³` : "--";
+}
+
+function optionalNumber(value) {
+  return value === null || value === undefined || value === "" ? Number.NaN : Number(value);
+}
+
+function durationText(seconds) {
+  if (!Number.isFinite(seconds)) return "--";
+  const minutes = Math.max(0, Math.round(seconds / 60));
+  const hours = Math.floor(minutes / 60);
+  return hours ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
+}
+
+function fuelCellQualityLabel(quality) {
+  if (quality === "counter") return t("exactCounter");
+  if (quality === "integrated") return t("integratedEstimate");
+  if (quality === "mixed") return t("mixedQuality");
+  return t("unavailable");
+}
+
+function renderFuelCellStateStrip(selector, transitions = [], start, end, intervals = []) {
+  const root = $(selector);
+  if (!root) return;
+  const startMs = new Date(start).getTime();
+  const endMs = new Date(end).getTime();
+  root.replaceChildren();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return;
+  if (intervals.length) {
+    for (const interval of intervals) {
+      const intervalStart = Math.max(startMs, new Date(interval.start).getTime());
+      const intervalEnd = Math.min(endMs, new Date(interval.end).getTime());
+      if (!Number.isFinite(intervalStart) || !Number.isFinite(intervalEnd) || intervalEnd <= intervalStart) continue;
+      const segment = document.createElement("i");
+      segment.dataset.state = interval.state ?? "unknown";
+      segment.style.width = `${(intervalEnd - intervalStart) / (endMs - startMs) * 100}%`;
+      const gas = interval.gasM3 == null ? "--" : gasM3(Number(interval.gasM3));
+      segment.title = `${displayValue(interval.state)} · ${durationText((intervalEnd - intervalStart) / 1000)} · ${energyKwh(Number(interval.generatedKwh))} · ${gas}${interval.sourceHost ? ` · ${interval.sourceHost}` : ""}${interval.quality ? ` · ${fuelCellQualityLabel(interval.quality)}` : ""}`;
+      root.append(segment);
+    }
+    return;
+  }
+  const ordered = transitions
+    .map((event) => ({ at: new Date(event.at).getTime(), state: event.payload?.to ?? event.payload?.state ?? event.type }))
+    .filter((event) => Number.isFinite(event.at) && event.at <= endMs)
+    .sort((a, b) => a.at - b.at);
+  let stateName = ordered.filter((event) => event.at <= startMs).at(-1)?.state ?? "stopped";
+  let cursor = startMs;
+  for (const event of ordered.filter((item) => item.at > startMs)) {
+    const segment = document.createElement("i");
+    segment.dataset.state = stateName;
+    segment.style.width = `${Math.max(0, event.at - cursor) / (endMs - startMs) * 100}%`;
+    segment.title = `${displayValue(stateName)} · ${durationText((event.at - cursor) / 1000)}`;
+    root.append(segment);
+    cursor = event.at;
+    stateName = event.state;
+  }
+  const segment = document.createElement("i");
+  segment.dataset.state = stateName;
+  segment.style.width = `${Math.max(0, endMs - cursor) / (endMs - startMs) * 100}%`;
+  segment.title = `${displayValue(stateName)} · ${durationText((endMs - cursor) / 1000)}`;
+  root.append(segment);
+}
+
 function yen(value) {
   if (!Number.isFinite(value)) return "--";
   return new Intl.NumberFormat(state.language === "ja" ? "ja-JP" : "en-US", {
@@ -1331,6 +1555,10 @@ function yen(value) {
     currency: "JPY",
     maximumFractionDigits: value >= 100 ? 0 : 2,
   }).format(value);
+}
+
+function yenPerM3(value) {
+  return Number.isFinite(value) ? `${yen(value)}/m³` : "--";
 }
 
 function co2Saved(valueKg) {
@@ -2744,7 +2972,7 @@ function drawAdaptiveChargingTimeline(status = state.adaptiveChargingStatus) {
     const durationHours = (new Date(item.end) - new Date(item.start)) / 3_600_000;
     return durationHours > 0 ? Number(item.plannedChargeWh || 0) / durationHours : 0;
   };
-  const maxPower = Math.max(100, ...timeline.flatMap((item) => [item.demandW, item.solarW, chargeW(item)]).map(Number).filter(Number.isFinite));
+  const maxPower = Math.max(100, ...timeline.flatMap((item) => [item.demandW, item.solarW, item.fuelCellMedianW, chargeW(item)]).map(Number).filter(Number.isFinite));
   const xFor = (time) => pad.left + ((new Date(time).getTime() - startMs) / spanMs) * chartWidth;
   const powerY = (value) => pad.top + chartHeight - Math.max(0, Number(value) || 0) / maxPower * chartHeight;
   const socY = (value) => pad.top + chartHeight - Math.max(0, Math.min(100, Number(value) || 0)) / 100 * chartHeight;
@@ -2802,6 +3030,7 @@ function drawAdaptiveChargingTimeline(status = state.adaptiveChargingStatus) {
   };
   drawLine("demandW", "#dc2626", powerY);
   drawLine("solarW", "#d8872c", powerY);
+  drawLine("fuelCellMedianW", "#2563eb", powerY);
 
   const finiteSoc = (value) => value === null || value === undefined
     ? null
@@ -2941,7 +3170,10 @@ function handleAdaptiveChargingTimelinePointer(event) {
   const socDetail = startSoc === null || startSoc === undefined
     ? `End SOC ${formatAdaptiveChargingPercent(endSoc)}`
     : `End SOC ${formatAdaptiveChargingPercent(endSoc)} (from ${formatAdaptiveChargingPercent(startSoc)})`;
-  tooltip.textContent = `${new Date(item.start).toLocaleString()} - ${new Date(item.end).toLocaleTimeString()} · ${Math.round(item.demandW)} W average demand · ${Math.round(item.solarW)} W average solar · ${socDetail} · ${item.plannedChargeWh} Wh charge${storedCharge} · ${item.rateLabel || "Standard"} (${rate})${awayDetail}`;
+  const fuelCellDetail = Number(item.fuelCellMedianW) > 0 || Number(item.fuelCellSampleCount) > 0
+    ? ` · ${Math.round(item.fuelCellMedianW)} W Ene-Farm median (P20 ${Math.round(item.fuelCellP20W)} W, P80 ${Math.round(item.fuelCellP80W)} W)`
+    : "";
+  tooltip.textContent = `${new Date(item.start).toLocaleString()} - ${new Date(item.end).toLocaleTimeString()} · ${Math.round(item.demandW)} W average demand · ${Math.round(item.solarW)} W average solar${fuelCellDetail} · ${socDetail} · ${item.plannedChargeWh} Wh charge${storedCharge} · ${item.rateLabel || "Standard"} (${rate})${awayDetail}`;
   tooltip.style.left = `${Math.min(window.innerWidth - 270, event.clientX + 12)}px`;
   tooltip.style.top = `${Math.max(8, event.clientY - 48)}px`;
   tooltip.classList.remove("hidden");
@@ -3028,18 +3260,81 @@ function batteryModelBlockerText(blocker) {
   return value;
 }
 
+function renderFuelCellForecastOutcomes(outcomes = []) {
+  const latestByInterval = new Map();
+  for (const outcome of outcomes) {
+    const key = outcome.targetStart ?? outcome.start;
+    if (!key || latestByInterval.has(key)) continue;
+    latestByInterval.set(key, outcome);
+  }
+  const rows = [...latestByInterval.values()].map((outcome) => {
+    const start = new Date(outcome.start ?? outcome.targetStart);
+    const end = new Date(outcome.end);
+    const actualKwh = outcome.actualKwh === null || outcome.actualKwh === undefined
+      ? Number.NaN
+      : Number(outcome.actualKwh);
+    const durationHours = Math.max(0, end.getTime() - start.getTime()) / 3_600_000;
+    const medianKwh = Number(outcome.medianW) * durationHours / 1000;
+    return {
+      ...outcome,
+      start,
+      end,
+      durationHours,
+      actualKwh,
+      medianKwh,
+      errorKwh: actualKwh - medianKwh,
+    };
+  }).filter((outcome) => !Number.isNaN(outcome.start.getTime())
+    && !Number.isNaN(outcome.end.getTime())
+    && Number.isFinite(outcome.actualKwh)
+    && Number.isFinite(outcome.medianKwh));
+
+  setText("#fuelCellForecastCompletedIntervals", String(rows.length));
+  setText("#fuelCellForecastMeanError", rows.length
+    ? energyKwh(rows.reduce((sum, outcome) => sum + Math.abs(outcome.errorKwh), 0) / rows.length)
+    : "--");
+  setText("#fuelCellForecastBias", rows.length
+    ? energyKwh(rows.reduce((sum, outcome) => sum + outcome.errorKwh, 0) / rows.length)
+    : "--");
+
+  const body = $("#fuelCellForecastOutcomeRows");
+  body.innerHTML = "";
+  for (const outcome of rows.slice(0, 12)) {
+    const p20Kwh = Number(outcome.p20W) * outcome.durationHours / 1000;
+    const p80Kwh = Number(outcome.p80W) * outcome.durationHours / 1000;
+    const row = document.createElement("tr");
+    const values = [
+      `${outcome.start.toLocaleString()}–${outcome.end.toLocaleTimeString()}`,
+      `${energyKwh(p20Kwh)}–${energyKwh(p80Kwh)}`,
+      energyKwh(outcome.medianKwh),
+      energyKwh(outcome.actualKwh),
+      energyKwh(outcome.errorKwh),
+      displayValue(outcome.influence),
+    ];
+    for (const value of values) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.append(cell);
+    }
+    body.append(row);
+  }
+  $("#fuelCellForecastOutcomeEmpty").classList.toggle("hidden", rows.length > 0);
+}
+
 function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
   if (!status) return;
   state.adaptiveChargingStatus = status;
   renderAdaptiveChargingWidget(status);
   renderAwayPeriods(status.away);
   renderSolarForecastAccuracy(status.solarForecastAccuracy);
+  renderFuelCellForecastOutcomes(status.fuelCellForecastOutcomes);
   const plan = status.plan ?? {};
   $("#adaptiveChargingForecastAge").textContent = Number.isFinite(status.forecast?.ageMs)
     ? `${Math.round(status.forecast.ageMs / 60_000)} min`
     : "--";
   $("#adaptiveChargingPredictedSolar").textContent = formatAdaptiveChargingKwh(plan.predictedSolarKwh);
   $("#adaptiveChargingPredictedDemand").textContent = formatAdaptiveChargingKwh(plan.predictedDemandKwh);
+  $("#adaptiveChargingPredictedFuelCell").textContent = formatAdaptiveChargingKwh(plan.predictedFuelCellKwh);
   $("#adaptiveChargingPredictedSurplus").textContent = formatAdaptiveChargingKwh(plan.predictedSurplusKwh);
   $("#adaptiveChargingGridCharge").textContent = formatAdaptiveChargingKwh(plan.plannedChargeKwh);
   $("#adaptiveChargingStoredCharge").textContent = formatAdaptiveChargingKwh(plan.plannedStoredChargeKwh);
@@ -3130,6 +3425,10 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
   if (power.blockers?.length) powerParts.push(power.blockers.map(batteryModelBlockerText).join("; "));
   $("#adaptiveChargingPowerModel").textContent = powerParts.join(" · ") || "--";
   $("#adaptiveChargingConfidence").textContent = `${state.config?.adaptiveCharging?.forecastMarginPercent ?? 10}% · ${plan.solarCalibration?.learned ? t("calibratedForecast") : t("initialForecastModel")}`;
+  const fuelCellModel = plan.fuelCellModel;
+  $("#adaptiveChargingFuelCellModel").textContent = fuelCellModel
+    ? `${displayValue(fuelCellModel.method)} · ${displayValue(fuelCellModel.influence)}${fuelCellModel.blockers?.length ? ` · ${fuelCellModel.blockers.join("; ")}` : ""}`
+    : "--";
   const demandHistory = plan.demandHistory ?? {};
   $("#adaptiveChargingDemandHistory").textContent = Number(demandHistory.recentComparableDayCount) > 0
     ? Number(demandHistory.seasonalYears?.length) > 0
@@ -3640,6 +3939,74 @@ function collectRetentionConfig() {
   };
 }
 
+function fuelCellDayLabel(day) {
+  const date = new Date(2026, 0, 4 + Number(day));
+  return new Intl.DateTimeFormat(state.language === "ja" ? "ja-JP" : "en-US", { weekday: "short" }).format(date);
+}
+
+function addFuelCellFixedWindow(window = {}) {
+  const root = $("#fuelCellFixedWindows");
+  if (!root) return;
+  const row = document.createElement("div");
+  row.className = "fixed-window-row";
+  row.innerHTML = `
+    <label><span>${t("label")}</span><input data-fuel-cell-window="label" value="${escapeHtml(window.label ?? "")}" /></label>
+    <label><span>${t("start")}</span><input data-fuel-cell-window="start" type="time" value="${window.start ?? "08:00"}" /></label>
+    <label><span>${t("end")}</span><input data-fuel-cell-window="end" type="time" value="${window.end ?? "18:00"}" /></label>
+    <button type="button" class="delete" data-remove-fuel-cell-window>${t("remove")}</button>
+    <div class="fixed-window-days">${Array.from({ length: 7 }, (_, day) => `<label><input data-fuel-cell-day="${day}" type="checkbox" ${(window.days ?? [0,1,2,3,4,5,6]).includes(day) ? "checked" : ""} />${fuelCellDayLabel(day)}</label>`).join("")}</div>`;
+  root.append(row);
+}
+
+function renderFuelCellFixedWindows(windows = []) {
+  const root = $("#fuelCellFixedWindows");
+  if (!root) return;
+  root.replaceChildren();
+  for (const window of windows) addFuelCellFixedWindow(window);
+  if (!windows.length) addFuelCellFixedWindow();
+}
+
+function collectFuelCellFixedWindows() {
+  return $$("#fuelCellFixedWindows .fixed-window-row").map((row) => ({
+    label: row.querySelector('[data-fuel-cell-window="label"]').value,
+    start: row.querySelector('[data-fuel-cell-window="start"]').value,
+    end: row.querySelector('[data-fuel-cell-window="end"]').value,
+    days: Array.from(row.querySelectorAll("[data-fuel-cell-day]:checked")).map((input) => Number(input.dataset.fuelCellDay)),
+  })).filter((window) => window.days.length && window.start && window.end && window.start !== window.end);
+}
+
+function updateFuelCellModelControls() {
+  const model = $("#fuelCellGenerationModel")?.value ?? "automatic";
+  $("#fuelCellFixedSchedule")?.classList.toggle("hidden", model !== "fixed");
+  const influence = $("#fuelCellPlannerInfluence");
+  if (influence) influence.disabled = model === "off";
+  setText("#fuelCellInfluenceStatus", model === "off" ? t("off") : influence?.value === "active" ? t("active") : t("plannerObserveReason"));
+}
+
+async function loadFuelCellTariffMonth() {
+  const month = $("#fuelCellTariffMonth")?.value;
+  if (!month) return;
+  try {
+    const result = await api(`/api/gas-tariffs?month=${encodeURIComponent(month)}`);
+    const tariff = result.override ?? result.snapshots?.[0] ?? null;
+    const season = tariff?.season ?? $("#fuelCellTariffSeason").value;
+    if (tariff?.season) $("#fuelCellTariffSeason").value = tariff.season;
+    const expectedUsage = season === "winter"
+      ? Number(state.config?.fuelCell?.tariff?.expectedWinterMonthlyM3)
+      : Number(state.config?.fuelCell?.tariff?.expectedOtherMonthlyM3);
+    const band = tariff?.bands?.find((item) => Number.isFinite(expectedUsage)
+      && expectedUsage >= Number(item.minM3 ?? 0)
+      && (item.maxM3 == null || expectedUsage < Number(item.maxM3))) ?? tariff?.bands?.[0];
+    $("#fuelCellTariffBaseCharge").value = band?.baseChargeYen ?? "";
+    $("#fuelCellTariffYenPerM3").value = band?.yenPerM3 ?? "";
+    setText("#fuelCellTariffStatus", tariff
+      ? `${month} · ${result.override ? t("manualMonthlyOverride") : `v${tariff.version}`}`
+      : "");
+  } catch (error) {
+    setText("#fuelCellTariffStatus", error.message);
+  }
+}
+
 function updateConfigControls(config) {
   state.config = config;
   setLanguage(config.language ?? "en");
@@ -3653,13 +4020,30 @@ function updateConfigControls(config) {
   $("#configBatteryHost").value = config.batteryHost ?? "";
   $("#configMeterHost").value = config.meterHost ?? "";
   $("#configSolarHost").value = config.solarHost ?? "";
-  $("#configFuelCellHosts").value = (config.fuelCellHosts ?? []).join(",");
+  $("#configFuelCellPrimaryHost").value = config.fuelCellPrimaryHost ?? "";
+  $("#configFuelCellProxyHosts").value = (config.fuelCellProxyHosts ?? []).join(",");
   $("#configDiscoverySubnets").value = (config.discoverySubnets ?? []).join(
     ",",
   );
   $("#configSolarEnabled").checked = config.solarEnabled !== false;
   $("#configSmartCosmoEnabled").checked = config.smartCosmoEnabled !== false;
   $("#configFuelCellEnabled").checked = config.fuelCellEnabled !== false;
+  const fuelCell = config.fuelCell ?? {};
+  $("#fuelCellGenerationModel").value = fuelCell.generationModel ?? "automatic";
+  $("#fuelCellPlannerInfluence").value = fuelCell.plannerInfluence ?? "observe";
+  $("#fuelCellGasCo2").value = fuelCell.gasCo2KgPerM3 ?? 2.21;
+  $("#fuelCellTariffProvider").value = fuelCell.tariff?.provider ?? "tokyo-gas";
+  $("#fuelCellTariffRegion").value = fuelCell.tariff?.region ?? "tokyo";
+  $("#fuelCellTariffPlan").value = fuelCell.tariff?.plan ?? "enefarm";
+  $("#fuelCellReadingDay").value = fuelCell.tariff?.meterReadingDay ?? 1;
+  $("#fuelCellWinterUsage").value = fuelCell.tariff?.expectedWinterMonthlyM3 ?? "";
+  $("#fuelCellOtherUsage").value = fuelCell.tariff?.expectedOtherMonthlyM3 ?? "";
+  $("#fuelCellDiscount").value = fuelCell.tariff?.equipmentDiscount ?? "";
+  $("#fuelCellMarginalRate").value = fuelCell.tariff?.marginalRateOverrideYenPerM3 ?? "";
+  $("#fuelCellTariffAutomatic").checked = fuelCell.tariff?.automaticUpdates === true;
+  renderFuelCellFixedWindows(fuelCell.fixedWindows ?? []);
+  updateFuelCellModelControls();
+  if (!$("#fuelCellTariffMonth").value) $("#fuelCellTariffMonth").value = new Date().toISOString().slice(0, 7);
   const rateMode = rateModeFromConfig(config);
   const modeInput = document.querySelector(
     `input[name="rateMode"][value="${rateMode}"]`,
@@ -3700,7 +4084,8 @@ function updateConfigControls(config) {
   updateAutomationControls();
   $("#configSolarHost").disabled = config.solarEnabled === false;
   $("#configMeterHost").disabled = config.smartCosmoEnabled === false;
-  $("#configFuelCellHosts").disabled = config.fuelCellEnabled === false;
+  $("#configFuelCellPrimaryHost").disabled = config.fuelCellEnabled === false;
+  $("#configFuelCellProxyHosts").disabled = config.fuelCellEnabled === false;
   updateAdaptiveChargingAvailability(config);
 }
 
@@ -4011,6 +4396,36 @@ function renderDashboard(data, options = {}) {
 
 }
 
+function renderFuelCellSummary(summary) {
+  state.fuelCellSummary = summary;
+  if (!summary) return;
+  setText("#fuelCellElectricityToday", energyKwh(optionalNumber(summary.generatedKwh)));
+  setText("#fuelCellGasToday", gasM3(optionalNumber(summary.gasM3)));
+  setText("#fuelCellOperatingToday", durationText(optionalNumber(summary.operatingSeconds)));
+  setText("#fuelCellStartsToday", Number(summary.startCount ?? 0).toLocaleString());
+  setText("#fuelCellTimeInState", durationText(summary.timeInStateSeconds == null ? Number.NaN : Number(summary.timeInStateSeconds)));
+  setText("#fuelCellLastStop", summary.lastStopAt ? new Date(summary.lastStopAt).toLocaleString() : "--");
+  setText("#fuelCellStatusQuality", `${fuelCellQualityLabel(summary.dataQuality)}${summary.sourceHost ? ` · ${summary.sourceHost}` : ""}`);
+  if (summary.currentState) setText("#fuelCellStatus", displayValue(summary.currentState));
+  renderFuelCellStateStrip("#fuelCellStatusStateStrip", summary.transitions, summary.start, summary.end, summary.stateIntervals);
+  renderFuelCellStateStrip("#fuelCellDashboardStateStrip", summary.transitions, summary.start, summary.end, summary.stateIntervals);
+}
+
+async function refreshFuelCellSummary({ start = null, end = null, graph = false } = {}) {
+  if (state.config?.fuelCellEnabled === false) return null;
+  const rangeEnd = end ?? new Date();
+  const rangeStart = start ?? new Date(rangeEnd.getFullYear(), rangeEnd.getMonth(), rangeEnd.getDate());
+  const summary = await api(`/api/ene-farm?${new URLSearchParams({ start: rangeStart.toISOString(), end: rangeEnd.toISOString() })}`);
+  if (!start) renderFuelCellSummary(summary);
+  if (graph) {
+    $("#graphFuelCellStateStrip")?.classList.toggle("hidden", state.activeGraph !== "fuelCellPower");
+    if (state.activeGraph === "fuelCellPower") {
+      renderFuelCellStateStrip("#graphFuelCellStateStrip", summary.transitions, summary.start, summary.end, summary.stateIntervals);
+    }
+  }
+  return summary;
+}
+
 const TREND_HEADLINE_NOTE_IDS = [
   "#solarPowerNote",
   "#fuelCellPowerNote",
@@ -4128,6 +4543,10 @@ async function loadGraphHistory() {
     rangeStartMs: start.getTime(),
     rangeEndMs: end.getTime(),
   });
+  $("#graphFuelCellStateStrip")?.classList.toggle("hidden", state.activeGraph !== "fuelCellPower");
+  if (state.activeGraph === "fuelCellPower") {
+    await refreshFuelCellSummary({ start, end, graph: true }).catch(() => {});
+  }
   setServiceState("historicalData");
 }
 
@@ -4151,6 +4570,10 @@ async function openGraphPage(name) {
 
 function reportBucket() {
   return document.querySelector('input[name="reportBucket"]:checked')?.value ?? "day";
+}
+
+function reportDomain() {
+  return document.querySelector('input[name="reportDomain"]:checked')?.value ?? "energy";
 }
 
 function addReportRange(date, amount, unit) {
@@ -4242,6 +4665,41 @@ function renderReportSummary(report) {
   if (solarCardNote) solarCardNote.textContent = `${t("solarCoverage")}: ${percentage(Number(totals.solarCoveragePercent))}`;
 }
 
+function renderEneFarmReportSummary(report) {
+  const totals = report?.totals ?? {};
+  setText("#eneFarmReportGeneration", energyKwh(optionalNumber(totals.generatedKwh)));
+  setText("#eneFarmReportGas", gasM3(optionalNumber(totals.gasM3)));
+  setText("#eneFarmReportYield", Number.isFinite(optionalNumber(totals.electricalYieldKwhPerM3)) ? `${Number(totals.electricalYieldKwhPerM3).toFixed(2)} kWh/m³` : "--");
+  setText("#eneFarmReportCoverage", percentage(optionalNumber(totals.generationCoveragePercent)));
+  setText("#eneFarmReportOperating", durationText(optionalNumber(totals.operatingSeconds)));
+  setText("#eneFarmReportStarts", `${t("starts")}: ${Number(totals.startCount ?? 0).toLocaleString()}`);
+  setText("#eneFarmReportQuality", fuelCellQualityLabel(totals.dataQuality));
+  setText("#eneFarmReportMarginalCost", yen(optionalNumber(totals.estimatedGasCost?.marginalCostYen)));
+  const allocated = totals.estimatedGasCost?.standingChargeInclusive;
+  setText("#eneFarmReportAllocatedCost", yenPerM3(optionalNumber(allocated?.allocatedYenPerM3)));
+  setText("#eneFarmReportAllocatedCostNote", allocated?.available
+    ? `${yen(optionalNumber(allocated.totalYen))} · ${t("standingChargeScenario")}`
+    : allocated?.reason ?? t("standingChargeScenario"));
+  const carbon = optionalNumber(totals.carbon?.electricityOnlyBalanceKg);
+  setText("#eneFarmReportCarbon", Number.isFinite(carbon) ? `${carbon.toFixed(2)} kg-CO₂` : "--");
+}
+
+function renderEneFarmReportRows(report) {
+  const root = $("#eneFarmReportRows");
+  if (!root) return;
+  root.replaceChildren();
+  if (!(report?.buckets ?? []).length) {
+    root.innerHTML = `<tr><td colspan="9">${t("noReportData")}</td></tr>`;
+    return;
+  }
+  for (const bucket of report.buckets) {
+    const row = document.createElement("tr");
+    const carbon = optionalNumber(bucket.carbon?.electricityOnlyBalanceKg);
+    row.innerHTML = `<td>${escapeHtml(bucket.label)}</td><td>${energyKwh(optionalNumber(bucket.generatedKwh))}</td><td>${gasM3(optionalNumber(bucket.gasM3))}</td><td>${Number.isFinite(optionalNumber(bucket.electricalYieldKwhPerM3)) ? `${Number(bucket.electricalYieldKwhPerM3).toFixed(2)} kWh/m³` : "--"}</td><td>${durationText(optionalNumber(bucket.operatingSeconds))}</td><td>${Number(bucket.startCount ?? 0).toLocaleString()}</td><td>${yen(optionalNumber(bucket.estimatedGasCost?.marginalCostYen))}</td><td>${yenPerM3(optionalNumber(bucket.estimatedGasCost?.standingChargeInclusive?.allocatedYenPerM3))}</td><td>${Number.isFinite(carbon) ? `${carbon.toFixed(2)} kg-CO₂` : "--"}</td>`;
+    root.append(row);
+  }
+}
+
 function renderReportRows(report) {
   const rows = $("#reportRows");
   if (!rows) return;
@@ -4268,6 +4726,12 @@ function renderReportRows(report) {
 }
 
 function reportChartSeries(features = {}) {
+  if (state.reportDomain === "ene-farm") {
+    return [
+      { key: "generatedKwh", color: "#7c3aed", label: t("generatedElectricity"), style: "bar", enabled: true },
+      { key: "onSiteKwh", color: "#16877f", label: t("onSiteGeneration"), style: "line", enabled: true },
+    ];
+  }
   return [
     {
       key: "houseDemandKwh",
@@ -4412,9 +4876,18 @@ function drawReportChart(report = state.reportData) {
 
 function renderReport(report) {
   state.reportData = report;
-  renderReportSummary(report);
-  renderReportRows(report);
-  setReportFeatureVisibility(report.features);
+  setText("#reportEyebrow", state.reportDomain === "ene-farm" ? t("fuelCell") : t("energyReports"));
+  setText("#reportHeading", state.reportDomain === "ene-farm" ? t("eneFarmReports") : t("exactUsageReports"));
+  setText("#reportHelp", state.reportDomain === "ene-farm" ? t("eneFarmReportsHelp") : t("reportsHelp"));
+  $$('[data-report-domain]').forEach((element) => element.classList.toggle("hidden", element.dataset.reportDomain !== state.reportDomain));
+  if (state.reportDomain === "ene-farm") {
+    renderEneFarmReportSummary(report);
+    renderEneFarmReportRows(report);
+  } else {
+    renderReportSummary(report);
+    renderReportRows(report);
+    setReportFeatureVisibility(report.features);
+  }
   renderReportChartLegend(report.features);
   $("#reportMeta").textContent = template("reportBucketCount", {
     count: (report.buckets ?? []).length.toLocaleString(),
@@ -4428,7 +4901,9 @@ async function loadReport() {
   const bucket = reportBucket();
   setLoadProgress("report", 0, 0, true);
   try {
-    const report = await api(`/api/reports/energy?${reportParams(start, end, bucket)}`);
+    state.reportDomain = reportDomain();
+    const endpoint = state.reportDomain === "ene-farm" ? "ene-farm" : "energy";
+    const report = await api(`/api/reports/${endpoint}?${reportParams(start, end, bucket)}`);
     renderReport(report);
     const recordsRead = Number(report.meta?.recordsRead ?? 0);
     finishLoadProgress("report", recordsRead, recordsRead);
@@ -4663,7 +5138,12 @@ async function refreshStatus() {
   if (state.discoveryInProgress) return;
   setServiceState("readingDevices");
   try {
-    renderDashboard(await api("/api/status"));
+    const [status, fuelCell] = await Promise.all([
+      api("/api/status"),
+      state.config?.fuelCellEnabled === false ? null : refreshFuelCellSummary().catch(() => null),
+    ]);
+    renderDashboard(status);
+    if (fuelCell) renderFuelCellSummary(fuelCell);
     state.lastLivePollAt = Date.now();
     setServiceState(
       document.visibilityState === "visible"
@@ -4689,6 +5169,11 @@ async function refreshAll() {
   }
   if (["dashboard", "adaptiveCharging", "settings"].includes(state.currentPage)) {
     tasks.push(refreshAdaptiveCharging());
+  }
+  if (state.currentPage === "graph" && state.activeGraph === "fuelCellPower") {
+    const start = new Date($("#graphHistoryStart").value);
+    const end = new Date($("#graphHistoryEnd").value);
+    if (Number.isFinite(start.getTime()) && Number.isFinite(end.getTime())) tasks.push(refreshFuelCellSummary({ start, end, graph: true }));
   }
   if (tasks.length) await Promise.allSettled(tasks);
   scheduleNextRefresh();
@@ -4718,6 +5203,7 @@ async function initialLoad() {
     updateConfigControls(configResult.value);
     if (state.status) renderCircuitWidgets(state.status);
     refreshAdaptiveCharging().catch(() => {});
+    refreshFuelCellSummary().catch(() => {});
   }
   scheduleNextRefresh();
 }
@@ -4847,6 +5333,14 @@ function initForms() {
       toast(err.message);
     }
   });
+  $$('input[name="reportDomain"]').forEach((input) => {
+    input.addEventListener("change", () => {
+      state.reportDomain = input.value;
+      state.reportData = null;
+      $$('[data-report-domain]').forEach((element) => element.classList.toggle("hidden", element.dataset.reportDomain !== state.reportDomain));
+      if (state.currentPage === "reports") loadReport().catch((err) => toast(err.message));
+    });
+  });
   $$('input[name="reportBucket"]').forEach((input) => {
     input.addEventListener("change", () => {
       state.reportBucket = input.value;
@@ -4952,7 +5446,8 @@ function initForms() {
       };
       $("#configSolarHost").disabled = !features.solarEnabled;
       $("#configMeterHost").disabled = !features.smartCosmoEnabled;
-      $("#configFuelCellHosts").disabled = !features.fuelCellEnabled;
+      $("#configFuelCellPrimaryHost").disabled = !features.fuelCellEnabled;
+      $("#configFuelCellProxyHosts").disabled = !features.fuelCellEnabled;
       applyFeatureVisibility(features);
       updateAdaptiveChargingAvailability({ ...(state.config ?? {}), ...features });
     });
@@ -4976,7 +5471,8 @@ function initForms() {
       smartCosmoEnabled: $("#configSmartCosmoEnabled").checked,
       solarHost: $("#configSolarHost").value,
       solarEnabled: $("#configSolarEnabled").checked,
-      fuelCellHosts: $("#configFuelCellHosts").value,
+      fuelCellPrimaryHost: $("#configFuelCellPrimaryHost").value,
+      fuelCellProxyHosts: $("#configFuelCellProxyHosts").value,
       fuelCellEnabled: $("#configFuelCellEnabled").checked,
       discoverySubnets: $("#configDiscoverySubnets").value,
       meterEoj: state.config?.meterEoj,
@@ -4999,6 +5495,78 @@ function initForms() {
     } catch (err) {
       toast(err.message);
     }
+  });
+  $("#fuelCellGenerationModel")?.addEventListener("change", updateFuelCellModelControls);
+  $("#fuelCellPlannerInfluence")?.addEventListener("change", updateFuelCellModelControls);
+  $("#addFuelCellWindow")?.addEventListener("click", () => addFuelCellFixedWindow());
+  $("#fuelCellFixedWindows")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-remove-fuel-cell-window]");
+    if (!button) return;
+    button.closest(".fixed-window-row")?.remove();
+  });
+  $("#fuelCellConfigForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const optional = (selector) => $(selector).value === "" ? null : $(selector).value;
+    try {
+      const config = await api("/api/config", { method: "PUT", body: {
+        fuelCell: {
+          generationModel: $("#fuelCellGenerationModel").value,
+          plannerInfluence: $("#fuelCellPlannerInfluence").value,
+          fixedWindows: collectFuelCellFixedWindows(),
+          gasCo2KgPerM3: $("#fuelCellGasCo2").value,
+          tariff: {
+            provider: $("#fuelCellTariffProvider").value,
+            region: $("#fuelCellTariffRegion").value,
+            plan: $("#fuelCellTariffPlan").value,
+            equipmentDiscount: $("#fuelCellDiscount").value,
+            meterReadingDay: $("#fuelCellReadingDay").value,
+            expectedWinterMonthlyM3: optional("#fuelCellWinterUsage"),
+            expectedOtherMonthlyM3: optional("#fuelCellOtherUsage"),
+            automaticUpdates: $("#fuelCellTariffAutomatic").checked,
+            marginalRateOverrideYenPerM3: optional("#fuelCellMarginalRate"),
+          },
+        },
+      }});
+      updateConfigControls(config);
+      toast(t("saved"));
+    } catch (err) { toast(err.message); }
+  });
+  $("#fuelCellTariffImportForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    setText("#fuelCellTariffStatus", t("loading"));
+    try {
+      const result = await api("/api/gas-tariffs/import", { method: "POST", body: {
+        provider: $("#fuelCellTariffProvider").value,
+        billingMonth: $("#fuelCellTariffMonth").value,
+        season: $("#fuelCellTariffSeason").value,
+      }});
+      setText("#fuelCellTariffStatus", `${result.billingMonth} · v${result.version}`);
+      await loadFuelCellTariffMonth();
+    } catch (err) { setText("#fuelCellTariffStatus", err.message); }
+  });
+  $("#fuelCellTariffMonth")?.addEventListener("change", () => void loadFuelCellTariffMonth());
+  $("#saveFuelCellTariffOverride")?.addEventListener("click", async () => {
+    const month = $("#fuelCellTariffMonth").value;
+    setText("#fuelCellTariffStatus", t("loading"));
+    try {
+      const result = await api(`/api/gas-tariffs/${encodeURIComponent(month)}/override`, { method: "PUT", body: {
+        season: $("#fuelCellTariffSeason").value,
+        baseChargeYen: $("#fuelCellTariffBaseCharge").value,
+        yenPerM3: $("#fuelCellTariffYenPerM3").value,
+      }});
+      setText("#fuelCellTariffStatus", `${result.billingMonth} · ${t("saved")}`);
+      await loadFuelCellTariffMonth();
+    } catch (err) { setText("#fuelCellTariffStatus", err.message); }
+  });
+  $("#deleteFuelCellTariffOverride")?.addEventListener("click", async () => {
+    const month = $("#fuelCellTariffMonth").value;
+    setText("#fuelCellTariffStatus", t("loading"));
+    try {
+      await api(`/api/gas-tariffs/${encodeURIComponent(month)}/override`, { method: "DELETE" });
+      $("#fuelCellTariffBaseCharge").value = "";
+      $("#fuelCellTariffYenPerM3").value = "";
+      setText("#fuelCellTariffStatus", t("saved"));
+    } catch (err) { setText("#fuelCellTariffStatus", err.message); }
   });
   $("#circuitLabelsForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();

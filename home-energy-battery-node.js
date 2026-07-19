@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import EchonetLite from "node-echonet-lite";
+import { fileURLToPath } from "node:url";
 
 const ECHONET_PORT = 3610;
 const STORAGE_BATTERY_EOJ = "0x027D01";
@@ -25,7 +26,11 @@ const EPC = {
   VENDOR_DISCHARGE_LIMIT: 0xf6,
   SOLAR_INSTANT_POWER_W: 0xe0,
   FUEL_CELL_INSTANT_POWER_W: 0xc4,
+  FUEL_CELL_RATED_POWER_W: 0xc2,
+  FUEL_CELL_CUMULATIVE_GENERATION: 0xc5,
+  FUEL_CELL_CUMULATIVE_GAS: 0xc8,
   FUEL_CELL_GENERATION_STATUS: 0xcb,
+  FUEL_CELL_INTERCONNECTION_STATUS: 0xd0,
   METER_CUMULATIVE_NORMAL: 0xc0,
   METER_CUMULATIVE_REVERSE: 0xc1,
   METER_CUMULATIVE_UNIT: 0xc2,
@@ -81,6 +86,13 @@ const EDT_TO_FUEL_CELL_STATUS = {
   0x42: "stopped",
   0x43: "starting",
   0x44: "stopping",
+  0x45: "idling",
+};
+
+const EDT_TO_FUEL_CELL_INTERCONNECTION = {
+  0x00: "grid_connected_reverse_flow_allowed",
+  0x01: "independent",
+  0x02: "grid_connected_reverse_flow_prohibited",
 };
 
 // EOJ is the three-byte object identifier in ECHONET Lite. The first two bytes
@@ -296,6 +308,22 @@ function decodeCumulativeKwh({ host, eoj, epc, name, raw, unit }) {
     value,
     unit: "kWh",
     human: unit === null || unit === undefined ? `${count} counts` : `${value.toFixed(2)} kWh`,
+  });
+}
+
+function decodeFuelCellCumulative({ host, epc, name, raw, unit }) {
+  if (!raw || raw.length !== 4) return metric({ host, eoj: FUEL_CELL_EOJ, epc, name, raw });
+  const count = raw.readUInt32BE(0);
+  const value = count * 0.001;
+  return metric({
+    host,
+    eoj: FUEL_CELL_EOJ,
+    epc,
+    name,
+    raw,
+    value,
+    unit,
+    human: `${value.toFixed(3)} ${unit}`,
   });
 }
 
@@ -713,7 +741,9 @@ async function cmdEnergyStatus(opts) {
   const fuelCellEnabled = !opts["no-fuel-cell"];
   const solarHost = opts["solar-host"] ?? "192.0.2.10";
   const batteryHost = opts["battery-host"] ?? "192.0.2.10";
-  const fuelCellHosts = values(opts["fuel-cell-host"], ["192.0.2.30"]);
+  const legacyFuelCellHosts = values(opts["fuel-cell-host"], []);
+  const fuelCellPrimaryHost = opts["fuel-cell-primary-host"] ?? legacyFuelCellHosts[0] ?? "192.0.2.30";
+  const fuelCellProxyHosts = values(opts["fuel-cell-proxy-host"], legacyFuelCellHosts.slice(1));
   return withClient(opts, async (client) => {
     async function read(host, eoj, epc) {
       try {
@@ -795,11 +825,22 @@ async function cmdEnergyStatus(opts) {
       },
       fuel_cells: [],
     };
-    for (const host of fuelCellEnabled ? fuelCellHosts : []) {
+    const fuelCellSources = fuelCellEnabled
+      ? [
+          ...(fuelCellPrimaryHost ? [{ host: fuelCellPrimaryHost, role: "primary" }] : []),
+          ...fuelCellProxyHosts.filter((host) => host !== fuelCellPrimaryHost).map((host) => ({ host, role: "proxy" })),
+        ]
+      : [];
+    for (const { host, role } of fuelCellSources) {
       const power = await read(host, FUEL_CELL_EOJ, EPC.FUEL_CELL_INSTANT_POWER_W);
       const status = await read(host, FUEL_CELL_EOJ, EPC.FUEL_CELL_GENERATION_STATUS);
+      const ratedPower = role === "primary" ? await read(host, FUEL_CELL_EOJ, EPC.FUEL_CELL_RATED_POWER_W) : null;
+      const cumulativeGeneration = role === "primary" ? await read(host, FUEL_CELL_EOJ, EPC.FUEL_CELL_CUMULATIVE_GENERATION) : null;
+      const cumulativeGas = role === "primary" ? await read(host, FUEL_CELL_EOJ, EPC.FUEL_CELL_CUMULATIVE_GAS) : null;
+      const interconnection = role === "primary" ? await read(host, FUEL_CELL_EOJ, EPC.FUEL_CELL_INTERCONNECTION_STATUS) : null;
       out.fuel_cells.push({
         host,
+        source_role: role,
         instant_power: decodeUnsigned({
           host,
           eoj: FUEL_CELL_EOJ,
@@ -816,6 +857,38 @@ async function cmdEnergyStatus(opts) {
           raw: status,
           mapping: EDT_TO_FUEL_CELL_STATUS,
         }),
+        ...(role === "primary" ? {
+          rated_power: decodeUnsigned({
+            host,
+            eoj: FUEL_CELL_EOJ,
+            epc: EPC.FUEL_CELL_RATED_POWER_W,
+            name: "fuel_cell_rated_power",
+            raw: ratedPower,
+            unit: "W",
+          }),
+          cumulative_generation: decodeFuelCellCumulative({
+            host,
+            epc: EPC.FUEL_CELL_CUMULATIVE_GENERATION,
+            name: "fuel_cell_cumulative_generation",
+            raw: cumulativeGeneration,
+            unit: "kWh",
+          }),
+          cumulative_gas: decodeFuelCellCumulative({
+            host,
+            epc: EPC.FUEL_CELL_CUMULATIVE_GAS,
+            name: "fuel_cell_cumulative_gas",
+            raw: cumulativeGas,
+            unit: "m3",
+          }),
+          interconnection_status: decodeEnum({
+            host,
+            eoj: FUEL_CELL_EOJ,
+            epc: EPC.FUEL_CELL_INTERCONNECTION_STATUS,
+            name: "fuel_cell_interconnection_status",
+            raw: interconnection,
+            mapping: EDT_TO_FUEL_CELL_INTERCONNECTION,
+          }),
+        } : {}),
       });
     }
     return out;
@@ -1179,7 +1252,11 @@ async function main() {
   console.log(JSON.stringify(result, null, 2));
 }
 
-main().catch((err) => {
-  console.error(`error: ${err.message}`);
-  process.exit(2);
-});
+export { decodeFuelCellCumulative, decodeEnum, EPC, EDT_TO_FUEL_CELL_STATUS, EDT_TO_FUEL_CELL_INTERCONNECTION };
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error(`error: ${err.message}`);
+    process.exit(2);
+  });
+}

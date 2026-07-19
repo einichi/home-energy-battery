@@ -114,6 +114,27 @@ try {
     Date.parse("2024-01-01T00:00:00.000Z"),
     Date.parse("2024-01-02T00:00:00.000Z"),
   ).every((event) => event.payload.modelVersion === 1));
+  const tariff = store.recordGasTariffSnapshot({
+    provider: "tokyo-gas",
+    billingMonth: "2026-07",
+    fetchedAt: "2026-07-01T00:00:00.000Z",
+    sourceUrl: "https://example.test/tariff",
+    sourceHash: "hash-1",
+    payload: { season: "other", bands: [{ minM3: 0, maxM3: null, baseChargeYen: 1000, yenPerM3: 150 }], discounts: [] },
+  });
+  assert.equal(tariff.version, 1);
+  assert.equal(store.gasTariffSnapshots({ provider: "tokyo-gas", billingMonth: "2026-07" })[0].bands[0].yenPerM3, 150);
+  store.setGasTariffOverride("tokyo-gas", "2026-07", { bands: [{ minM3: 0, maxM3: null, baseChargeYen: 900, yenPerM3: 140 }] });
+  assert.equal(store.gasTariffOverride("tokyo-gas", "2026-07").bands[0].yenPerM3, 140);
+  assert.equal(store.deleteGasTariffOverride("tokyo-gas", "2026-07"), true);
+  assert.equal(store.gasTariffOverride("tokyo-gas", "2026-07"), null);
+  assert.equal(store.recordFuelCellForecasts([{
+    start: "2026-07-19T08:00:00.000Z",
+    end: "2026-07-19T08:30:00.000Z",
+    p20W: 500,
+    medianW: 650,
+    p80W: 700,
+  }], "2026-07-19T00:00:00.000Z"), 1);
   await store.applyRetention({
     rawTelemetryDays: 365,
     intervalAggregatesDays: null,
