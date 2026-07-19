@@ -116,6 +116,7 @@ const DASHBOARD_WIDGET_DEFAULTS = [
   { id: "vendorProfile", group: "status", labelKey: "chargingProfile", visible: true, priority: 30 },
   { id: "dischargeLimit", group: "status", labelKey: "dischargeLimit", visible: true, priority: 40 },
   { id: "fuelCellStatus", group: "status", labelKey: "fuelCellStatus", visible: true, priority: 50 },
+  { id: "fuelCellStateTimeline", group: "status", labelKey: "fuelCellStateTimeline", visible: true, priority: 55 },
   { id: "solarSavings", group: "status", labelKey: "solarSavings", visible: true, priority: 60 },
   { id: "co2Savings", group: "status", labelKey: "co2Savings", visible: true, priority: 70 },
   { id: "offPeakSavings", group: "status", labelKey: "offPeakSavings", visible: true, priority: 80 },
@@ -133,6 +134,7 @@ const DASHBOARD_WIDGET_FEATURES = {
   gridImportPower: "smart-cosmo",
   gridExportPower: "smart-cosmo",
   fuelCellStatus: "fuel-cell",
+  fuelCellStateTimeline: "fuel-cell",
   solarSavings: "solar",
   co2Savings: "solar",
   offPeakSavings: "off-peak-savings",
@@ -288,6 +290,13 @@ const I18N = {
     powerExported: "Power Exported",
     guardTriggerCount: "Demand Guard Triggers",
     energySources: "Energy Sources",
+    fuelCellStateTimeline: "Ene-Farm Activity Today",
+    fuelCellContribution: "Ene-Farm contribution",
+    fuelCellStateGenerating: "Generating",
+    fuelCellStateStarting: "Starting",
+    fuelCellStateStopping: "Stopping",
+    fuelCellStateIdling: "Idle",
+    fuelCellStateStopped: "Stopped",
     peakGridEnergy: "Peak grid",
     offPeakGridEnergy: "Off-peak grid",
     solarUsedOnSite: "Solar contribution",
@@ -874,6 +883,13 @@ const I18N = {
     powerExported: "売電量",
     guardTriggerCount: "ブレーカー落ちガード作動回数",
     energySources: "エネルギー供給内訳",
+    fuelCellStateTimeline: "本日のエネファーム運転履歴",
+    fuelCellContribution: "エネファームの供給分",
+    fuelCellStateGenerating: "発電中",
+    fuelCellStateStarting: "起動中",
+    fuelCellStateStopping: "停止処理中",
+    fuelCellStateIdling: "待機中",
+    fuelCellStateStopped: "停止中",
     peakGridEnergy: "通常・ピーク時間帯の買電",
     offPeakGridEnergy: "割安時間帯の買電",
     solarUsedOnSite: "太陽光の供給分",
@@ -1568,6 +1584,27 @@ function renderFuelCellStateStrip(selector, transitions = [], start, end, interv
   segment.style.width = `${Math.max(0, endMs - cursor) / (endMs - startMs) * 100}%`;
   segment.title = `${displayValue(stateName)} · ${durationText((endMs - cursor) / 1000)}`;
   root.append(segment);
+}
+
+function renderFuelCellStateAxis(start, end) {
+  const startDate = new Date(start);
+  const endDate = new Date(end);
+  const valid = Number.isFinite(startDate.getTime())
+    && Number.isFinite(endDate.getTime())
+    && endDate > startDate;
+  const middleDate = valid
+    ? new Date(startDate.getTime() + (endDate.getTime() - startDate.getTime()) / 2)
+    : null;
+  const timeLabel = (date) => date
+    ? date.toLocaleTimeString(state.language === "ja" ? "ja-JP" : "en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    })
+    : "--:--";
+  setText("#fuelCellStateAxisStart", valid ? timeLabel(startDate) : "--:--");
+  setText("#fuelCellStateAxisMiddle", timeLabel(middleDate));
+  setText("#fuelCellStateAxisEnd", valid ? timeLabel(endDate) : "--:--");
 }
 
 function yen(value) {
@@ -4179,7 +4216,7 @@ function featureEnabled(features = {}, feature) {
   if (feature === "solar") return features.solarEnabled !== false;
   if (feature === "fuel-cell") return features.fuelCellEnabled !== false;
   if (feature === "energy-sources") {
-    return featureEnabled(features, "smart-cosmo") && featureEnabled(features, "solar");
+    return featureEnabled(features, "smart-cosmo");
   }
   if (feature === "off-peak-savings") {
     const featureRateMode = features.rateMode ?? state.config?.rateMode;
@@ -4311,6 +4348,7 @@ function renderEnergySources(summary = {}, periodLabel = "--") {
     ["Peak", "peakGridKwh", "peakGridPercent"],
     ["OffPeak", "offPeakGridKwh", "offPeakGridPercent"],
     ["Solar", "solarUsedKwh", "solarUsedPercent"],
+    ["FuelCell", "fuelCellContributionKwh", "fuelCellContributionPercent"],
   ];
   for (const [suffix, valueKey, percentKey] of segments) {
     const value = Number(sources?.[valueKey]);
@@ -4490,9 +4528,9 @@ function renderFuelCellSummary(summary) {
   setText("#fuelCellStartsToday", Number(summary.startCount ?? 0).toLocaleString());
   setText("#fuelCellTimeInState", durationText(summary.timeInStateSeconds == null ? Number.NaN : Number(summary.timeInStateSeconds)));
   setText("#fuelCellLastStop", summary.lastStopAt ? new Date(summary.lastStopAt).toLocaleString() : "--");
-  setText("#fuelCellStatusQuality", `${fuelCellQualityLabel(summary.dataQuality)}${summary.sourceHost ? ` · ${summary.sourceHost}` : ""}`);
   if (summary.currentState) setText("#fuelCellStatus", displayValue(summary.currentState));
   renderFuelCellStateStrip("#fuelCellStatusStateStrip", summary.transitions, summary.start, summary.end, summary.stateIntervals);
+  renderFuelCellStateAxis(summary.start, summary.end);
   renderFuelCellStateStrip("#fuelCellDashboardStateStrip", summary.transitions, summary.start, summary.end, summary.stateIntervals);
 }
 

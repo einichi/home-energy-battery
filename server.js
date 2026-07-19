@@ -89,6 +89,7 @@ const DEFAULT_DASHBOARD_WIDGETS = [
   { id: "vendorProfile", group: "status", visible: true, priority: 30 },
   { id: "dischargeLimit", group: "status", visible: true, priority: 40 },
   { id: "fuelCellStatus", group: "status", visible: true, priority: 50 },
+  { id: "fuelCellStateTimeline", group: "status", visible: true, priority: 55 },
   { id: "solarSavings", group: "status", visible: true, priority: 60 },
   { id: "co2Savings", group: "status", visible: true, priority: 70 },
   { id: "offPeakSavings", group: "status", visible: true, priority: 80 },
@@ -3447,7 +3448,7 @@ function hasPowerSample(sample, directKey, wattsKey, previousSample) {
     && Number.isFinite(finiteNumberOrNull(sample?.[wattsKey])));
 }
 
-function summarizeEnergySources(samples, config, solarGenerationKwh, gridExportKwh) {
+function summarizeEnergySources(samples, config, solarGenerationKwh, gridExportKwh, fuelCellKwh) {
   const standardRate = configNumber(
     config.standardRateYenPerKwh,
     DEFAULT_CONFIG.standardRateYenPerKwh,
@@ -3472,16 +3473,23 @@ function summarizeEnergySources(samples, config, solarGenerationKwh, gridExportK
     },
     { peakGridKwh: 0, offPeakGridKwh: 0 },
   );
-  const solarUsedKwh = Math.max(0, solarGenerationKwh - gridExportKwh);
-  const totalKwh = grid.peakGridKwh + grid.offPeakGridKwh + solarUsedKwh;
+  const solarUsedKwh = config.solarEnabled === false
+    ? 0
+    : Math.max(0, solarGenerationKwh - gridExportKwh);
+  const fuelCellContributionKwh = config.fuelCellEnabled === false
+    ? 0
+    : Math.max(0, Number(fuelCellKwh) || 0);
+  const totalKwh = grid.peakGridKwh + grid.offPeakGridKwh + solarUsedKwh + fuelCellContributionKwh;
   const percent = (value) => totalKwh > 0 ? (value / totalKwh) * 100 : 0;
   return {
     ...grid,
     solarUsedKwh,
+    fuelCellContributionKwh,
     totalKwh,
     peakGridPercent: percent(grid.peakGridKwh),
     offPeakGridPercent: percent(grid.offPeakGridKwh),
     solarUsedPercent: percent(solarUsedKwh),
+    fuelCellContributionPercent: percent(fuelCellContributionKwh),
   };
 }
 
@@ -3535,6 +3543,7 @@ function summarizeSamples(samples, config = DEFAULT_CONFIG, extras = {}) {
     config,
     solarGenerationKwh,
     gridExportKwh,
+    fuelCellKwh,
   );
   return {
     sampleCount: samples.length,

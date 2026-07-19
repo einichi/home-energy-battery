@@ -240,8 +240,27 @@
               <small><span data-i18n="timeInState">Time in state</span><b id="fuelCellTimeInState">--</b></small>
               <small><span data-i18n="lastStop">Last stop</span><b id="fuelCellLastStop">--</b></small>
             </div>
-            <div id="fuelCellStatusStateStrip" class="fuel-cell-state-strip" aria-label="Ene-Farm operating states"></div>
-            <small id="fuelCellStatusQuality" class="widget-note">--</small>
+          </article>
+          <article class="widget fuel-cell-state-widget" data-widget-id="fuelCellStateTimeline" data-widget-group="status" data-feature="fuel-cell">
+            <header class="fuel-cell-state-header">
+              <span data-i18n="fuelCellStateTimeline">Ene-Farm Activity Today</span>
+              <small data-i18n="today">Today</small>
+            </header>
+            <div class="fuel-cell-state-legend" aria-hidden="true">
+              <span><i data-state="generating"></i><span data-i18n="fuelCellStateGenerating">Generating</span></span>
+              <span><i data-state="starting"></i><span data-i18n="fuelCellStateStarting">Starting</span></span>
+              <span><i data-state="stopping"></i><span data-i18n="fuelCellStateStopping">Stopping</span></span>
+              <span><i data-state="idling"></i><span data-i18n="fuelCellStateIdling">Idle</span></span>
+              <span><i data-state="stopped"></i><span data-i18n="fuelCellStateStopped">Stopped</span></span>
+            </div>
+            <div class="fuel-cell-state-timeline">
+              <div id="fuelCellStatusStateStrip" class="fuel-cell-state-strip" aria-label="Ene-Farm operating states"></div>
+              <div class="fuel-cell-state-axis" aria-hidden="true">
+                <time id="fuelCellStateAxisStart">--:--</time>
+                <time id="fuelCellStateAxisMiddle">--:--</time>
+                <time id="fuelCellStateAxisEnd">--:--</time>
+              </div>
+            </div>
           </article>
           <article class="widget" data-widget-id="solarSavings" data-widget-group="status" data-feature="solar">
             <span data-i18n="solarSavings">Solar Savings</span>
@@ -281,7 +300,8 @@
             <div class="energy-sources-bar" aria-hidden="true">
               <i id="energyPeakBar" class="energy-source-peak"></i>
               <i id="energyOffPeakBar" class="energy-source-off-peak"></i>
-              <i id="energySolarBar" class="energy-source-solar"></i>
+              <i id="energySolarBar" class="energy-source-solar" data-feature="solar"></i>
+              <i id="energyFuelCellBar" class="energy-source-fuel-cell" data-feature="fuel-cell"></i>
             </div>
             <div class="energy-source-metrics">
               <div class="energy-source-metric">
@@ -294,10 +314,15 @@
                 <strong id="energyOffPeakValue">--</strong>
                 <small><span id="energyOffPeakShare">--</span> · <span data-i18n="includesBatteryCharging">Includes battery charging</span></small>
               </div>
-              <div class="energy-source-metric">
+              <div class="energy-source-metric" data-feature="solar">
                 <span><i class="energy-source-swatch energy-source-solar"></i><span data-i18n="solarUsedOnSite">Solar contribution</span></span>
                 <strong id="energySolarValue">--</strong>
                 <small id="energySolarShare">--</small>
+              </div>
+              <div class="energy-source-metric" data-feature="fuel-cell">
+                <span><i class="energy-source-swatch energy-source-fuel-cell"></i><span data-i18n="fuelCellContribution">Ene-Farm contribution</span></span>
+                <strong id="energyFuelCellValue">--</strong>
+                <small id="energyFuelCellShare">--</small>
               </div>
             </div>
           </article>

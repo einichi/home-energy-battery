@@ -209,7 +209,7 @@ assert.equal(simple.smartCosmoEnabled, true);
 assert.deepEqual(simple.circuitLabels, {});
 assert.equal(simple.circuitSortMode, "number");
 assert.equal(rateForTimestamp(simple.rateBands, "2026-05-31T23:30:00+09:00").yenPerKwh, 42);
-assert.equal(simple.dashboardWidgets.length, 21);
+assert.equal(simple.dashboardWidgets.length, 22);
 assert.equal(simple.dashboardWidgets[0].id, "solarPower");
 assert.equal(simple.dashboardWidgets.find((widget) => widget.id === "adaptiveCharging")?.priority, 5);
 assert.equal(simple.dashboardWidgets.find((widget) => widget.id === "awayStatus")?.priority, 7);
@@ -1909,7 +1909,7 @@ const normalizedWidgets = normalizeDashboardWidgets([
   { id: "houseDemandPower", visible: true, priority: "bad" },
   { id: "unknownWidget", visible: true, priority: 1 },
 ]);
-assert.equal(normalizedWidgets.length, 21);
+assert.equal(normalizedWidgets.length, 22);
 assert.deepEqual(normalizedWidgets.find((widget) => widget.id === "solarPower"), {
   id: "solarPower",
   group: "trends",
@@ -1928,6 +1928,7 @@ assert.equal(normalizedWidgets.some((widget) => widget.id === "powerImported"), 
 assert.equal(normalizedWidgets.some((widget) => widget.id === "powerExported"), true);
 assert.equal(normalizedWidgets.some((widget) => widget.id === "guardTriggerCount"), true);
 assert.equal(normalizedWidgets.some((widget) => widget.id === "energySources"), true);
+assert.equal(normalizedWidgets.some((widget) => widget.id === "fuelCellStateTimeline"), true);
 assert.equal(normalizedWidgets.some((widget) => widget.id === "adaptiveCharging"), true);
 
 assert.throws(
@@ -2139,6 +2140,7 @@ const energySourceSummary = summarizeSamples([
     gridImportKwh: 0.5,
     gridExportKwh: 0.2,
     solarGenerationKwh: 1.2,
+    fuelCellKwh: 0.5,
   },
   {
     timestamp: "2026-07-11T11:30:00+09:00",
@@ -2156,10 +2158,12 @@ const energySourceSummary = summarizeSamples([
 assert.equal(energySourceSummary.energySources.peakGridKwh, 0.5);
 assert.equal(energySourceSummary.energySources.offPeakGridKwh, 1);
 assert.equal(energySourceSummary.energySources.solarUsedKwh, 1);
-assert.equal(energySourceSummary.energySources.totalKwh, 2.5);
-assert.equal(energySourceSummary.energySources.peakGridPercent, 20);
-assert.equal(energySourceSummary.energySources.offPeakGridPercent, 40);
-assert.equal(energySourceSummary.energySources.solarUsedPercent, 40);
+assert.equal(energySourceSummary.energySources.fuelCellContributionKwh, 0.5);
+assert.equal(energySourceSummary.energySources.totalKwh, 3);
+assert.ok(Math.abs(energySourceSummary.energySources.peakGridPercent - 16.6666666667) < 0.000001);
+assert.ok(Math.abs(energySourceSummary.energySources.offPeakGridPercent - 100 / 3) < 0.000001);
+assert.ok(Math.abs(energySourceSummary.energySources.solarUsedPercent - 100 / 3) < 0.000001);
+assert.ok(Math.abs(energySourceSummary.energySources.fuelCellContributionPercent - 16.6666666667) < 0.000001);
 
 const reportSamples = [
   {
