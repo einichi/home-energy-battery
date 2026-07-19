@@ -18,8 +18,10 @@ assert.equal(energy.solar.instant_power.value, 850);
 assert.equal(energy.fuel_cells[0].source_role, "primary");
 assert.equal(energy.fuel_cells[0].cumulative_generation.value, 4321.234);
 assert.equal(energy.fuel_cells[0].cumulative_gas.value, 987.654);
+assert.equal(energy.fuel_cells[0].hot_water_level.value, 4);
 assert.equal(energy.fuel_cells[1].source_role, "proxy");
 assert.equal("cumulative_generation" in energy.fuel_cells[1], false);
+assert.equal("hot_water_level" in energy.fuel_cells[1], false);
 
 const meter = await simulator.execute("meter-status", { host: "10.250.0.20" });
 assert.equal(meter.grid_import_power.value, 920);

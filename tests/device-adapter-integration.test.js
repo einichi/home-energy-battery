@@ -90,6 +90,7 @@ try {
   assert.equal(initial.payload.meter.channel_power.decoded.channels.length, 3);
   assert.equal(initial.payload.energy.fuel_cells[0].source_role, "primary");
   assert.equal(initial.payload.energy.fuel_cells[0].cumulative_generation.value, 4321.234);
+  assert.equal(initial.payload.energy.fuel_cells[0].hot_water_level.value, 4);
   assert.equal(initial.payload.energy.fuel_cells[1].source_role, "proxy");
 
   const charge = await request(baseUrl, "/api/actions/charge", {

@@ -90,6 +90,7 @@ const DEFAULT_DASHBOARD_WIDGETS = [
   { id: "dischargeLimit", group: "status", visible: true, priority: 40 },
   { id: "fuelCellStatus", group: "status", visible: true, priority: 50 },
   { id: "fuelCellStateTimeline", group: "status", visible: true, priority: 55 },
+  { id: "fuelCellHotWater", group: "status", visible: true, priority: 57 },
   { id: "solarSavings", group: "status", visible: true, priority: 60 },
   { id: "co2Savings", group: "status", visible: true, priority: 70 },
   { id: "offPeakSavings", group: "status", visible: true, priority: 80 },
@@ -3247,6 +3248,7 @@ function sampleFromStatus(status, config, previousSample) {
   const fuelCellRatedPowerW = numericMetric(fuelCellPrimary?.rated_power);
   const fuelCellCumulativeGenerationKwh = numericMetric(fuelCellPrimary?.cumulative_generation);
   const fuelCellCumulativeGasM3 = numericMetric(fuelCellPrimary?.cumulative_gas);
+  const fuelCellHotWaterLevel = numericMetric(fuelCellPrimary?.hot_water_level);
   const counterSourceHost = fuelCellCumulativeGenerationKwh !== null || fuelCellCumulativeGasM3 !== null
     ? fuelCellPrimary?.host ?? null
     : null;
@@ -3319,6 +3321,7 @@ function sampleFromStatus(status, config, previousSample) {
     fuelCellCumulativeGenerationKwh,
     fuelCellCumulativeGasM3,
     fuelCellGenerationState,
+    fuelCellHotWaterLevel,
     fuelCellInterconnection,
     fuelCellSourceHost: fuelCellReading?.host ?? null,
     fuelCellCounterSourceHost: counterSourceHost,

@@ -476,6 +476,72 @@ label {
   align-content: center;
 }
 
+.fuel-cell-hot-water-widget {
+  align-content: stretch;
+}
+
+.fuel-cell-tank-display {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  align-items: end;
+  gap: 14px;
+}
+
+.fuel-cell-tank {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 58px;
+  height: 78px;
+  padding: 7px;
+  border: 3px solid #68798a;
+  border-radius: 6px;
+  background: #edf2f6;
+}
+
+.fuel-cell-tank::before {
+  content: "";
+  position: absolute;
+  top: -7px;
+  left: 15px;
+  width: 22px;
+  height: 5px;
+  border-radius: 3px 3px 0 0;
+  background: #68798a;
+}
+
+.fuel-cell-tank i {
+  flex: 1;
+  border-radius: 2px;
+  background: #d5dee6;
+  transition: background 160ms ease;
+}
+
+.fuel-cell-tank i.is-filled {
+  background: #16877f;
+}
+
+.fuel-cell-tank.is-unavailable i {
+  background: #d5dee6;
+}
+
+.fuel-cell-tank-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fuel-cell-tank-copy strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.fuel-cell-tank-copy small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
 .fuel-cell-state-strip {
   display: flex;
   width: 100%;

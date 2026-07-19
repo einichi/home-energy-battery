@@ -209,7 +209,7 @@ assert.equal(simple.smartCosmoEnabled, true);
 assert.deepEqual(simple.circuitLabels, {});
 assert.equal(simple.circuitSortMode, "number");
 assert.equal(rateForTimestamp(simple.rateBands, "2026-05-31T23:30:00+09:00").yenPerKwh, 42);
-assert.equal(simple.dashboardWidgets.length, 22);
+assert.equal(simple.dashboardWidgets.length, 23);
 assert.equal(simple.dashboardWidgets[0].id, "solarPower");
 assert.equal(simple.dashboardWidgets.find((widget) => widget.id === "adaptiveCharging")?.priority, 5);
 assert.equal(simple.dashboardWidgets.find((widget) => widget.id === "awayStatus")?.priority, 7);
@@ -1909,7 +1909,7 @@ const normalizedWidgets = normalizeDashboardWidgets([
   { id: "houseDemandPower", visible: true, priority: "bad" },
   { id: "unknownWidget", visible: true, priority: 1 },
 ]);
-assert.equal(normalizedWidgets.length, 22);
+assert.equal(normalizedWidgets.length, 23);
 assert.deepEqual(normalizedWidgets.find((widget) => widget.id === "solarPower"), {
   id: "solarPower",
   group: "trends",
@@ -1929,6 +1929,7 @@ assert.equal(normalizedWidgets.some((widget) => widget.id === "powerExported"), 
 assert.equal(normalizedWidgets.some((widget) => widget.id === "guardTriggerCount"), true);
 assert.equal(normalizedWidgets.some((widget) => widget.id === "energySources"), true);
 assert.equal(normalizedWidgets.some((widget) => widget.id === "fuelCellStateTimeline"), true);
+assert.equal(normalizedWidgets.some((widget) => widget.id === "fuelCellHotWater"), true);
 assert.equal(normalizedWidgets.some((widget) => widget.id === "adaptiveCharging"), true);
 
 assert.throws(
@@ -2019,6 +2020,7 @@ const primaryFuelCellSample = sampleFromStatus({
       generation_status: { value: "generating", human: "generating" },
       cumulative_generation: { value: 100.25 },
       cumulative_gas: { value: 50.125 },
+      hot_water_level: { value: 4 },
       interconnection_status: { value: "grid_connected_reverse_flow_prohibited", human: "grid_connected_reverse_flow_prohibited" },
     },
   ] },
@@ -2034,6 +2036,7 @@ assert.equal(primaryFuelCellSample.fuelCellKwh, 0.25);
 assert.equal(primaryFuelCellSample.fuelCellGasM3, 0.125);
 assert.equal(primaryFuelCellSample.fuelCellSourceHost, "10.0.0.150");
 assert.equal(primaryFuelCellSample.fuelCellDataQuality, "counter");
+assert.equal(primaryFuelCellSample.fuelCellHotWaterLevel, 4);
 assert.equal(primaryFuelCellSample.fuelCellStartCount, 1);
 
 const proxyFuelCellSample = sampleFromStatus({

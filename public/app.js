@@ -117,6 +117,7 @@ const DASHBOARD_WIDGET_DEFAULTS = [
   { id: "dischargeLimit", group: "status", labelKey: "dischargeLimit", visible: true, priority: 40 },
   { id: "fuelCellStatus", group: "status", labelKey: "fuelCellStatus", visible: true, priority: 50 },
   { id: "fuelCellStateTimeline", group: "status", labelKey: "fuelCellStateTimeline", visible: true, priority: 55 },
+  { id: "fuelCellHotWater", group: "status", labelKey: "fuelCellHotWater", visible: true, priority: 57 },
   { id: "solarSavings", group: "status", labelKey: "solarSavings", visible: true, priority: 60 },
   { id: "co2Savings", group: "status", labelKey: "co2Savings", visible: true, priority: 70 },
   { id: "offPeakSavings", group: "status", labelKey: "offPeakSavings", visible: true, priority: 80 },
@@ -135,6 +136,7 @@ const DASHBOARD_WIDGET_FEATURES = {
   gridExportPower: "smart-cosmo",
   fuelCellStatus: "fuel-cell",
   fuelCellStateTimeline: "fuel-cell",
+  fuelCellHotWater: "fuel-cell",
   solarSavings: "solar",
   co2Savings: "solar",
   offPeakSavings: "off-peak-savings",
@@ -307,6 +309,9 @@ const I18N = {
     fuelCellGeneration: "Ene-Farm Generation",
     fuelCellStatus: "Ene-Farm Status",
     fuelCellOperation: "Ene-Farm Operation",
+    fuelCellHotWater: "Ene-Farm Hot Water",
+    hotWaterLevel: "Hot water level",
+    hotWaterLevelHelp: "Water at approximately 45°C or hotter",
     electricityToday: "Electricity today",
     gasToday: "Gas today",
     operatingTime: "Operating time",
@@ -900,6 +905,9 @@ const I18N = {
     fuelCellGeneration: "エネファーム発電",
     fuelCellStatus: "エネファーム状態",
     fuelCellOperation: "エネファーム運転状況",
+    fuelCellHotWater: "エネファーム残湯量",
+    hotWaterLevel: "残湯量",
+    hotWaterLevelHelp: "約45℃以上のお湯の目安",
     electricityToday: "本日の発電量",
     gasToday: "本日のガス使用量",
     operatingTime: "運転時間",
@@ -4249,6 +4257,27 @@ function strongestFuelCellWatts(fuelCells) {
   return values.length ? Math.max(...values) : null;
 }
 
+function renderFuelCellHotWater(fuelCells = []) {
+  const primary = fuelCells.find((cell) => cell.source_role === "primary");
+  const rawLevel = primary?.hot_water_level?.value;
+  const numericLevel = rawLevel === null || rawLevel === undefined || rawLevel === ""
+    ? Number.NaN
+    : Number(rawLevel);
+  const level = Number.isInteger(numericLevel) && numericLevel >= 0 && numericLevel <= 5
+    ? numericLevel
+    : null;
+  setText("#fuelCellHotWaterLevel", level === null ? "-- / 5" : `${level} / 5`);
+  const tank = $("#fuelCellHotWaterTank");
+  if (!tank) return;
+  tank.setAttribute("aria-label", t("hotWaterLevel"));
+  tank.setAttribute("aria-valuenow", level === null ? "0" : String(level));
+  tank.setAttribute("aria-valuetext", level === null ? t("unavailable") : `${level} / 5`);
+  tank.classList.toggle("is-unavailable", level === null);
+  tank.querySelectorAll("[data-tank-level]").forEach((segment) => {
+    segment.classList.toggle("is-filled", level !== null && Number(segment.dataset.tankLevel) <= level);
+  });
+}
+
 function renderCircuitWidgets(data) {
   const grid = $("#circuitWidgetGrid");
   const section = $("[data-circuit-section]");
@@ -4463,6 +4492,7 @@ function renderDashboard(data, options = {}) {
     Number.isFinite(fuelCellWatts) ? `${fuelCellWatts} W` : "-- W",
   );
   setText("#fuelCellStatus", fuelStatuses.map(displayValue).join(", ") || "--");
+  renderFuelCellHotWater(fuelCells);
   setText("#solarSavings", yen(Number(data.savings?.solarSavingYen)));
   setText("#co2Savings", co2Saved(Number(data.savings?.co2SavingKg)));
   setText("#offPeakSavings", yen(Number(data.savings?.offPeakSavingYen)));
@@ -4631,7 +4661,11 @@ async function renderHistory(history, { start, end } = {}) {
       },
       solar: { instant_power: { value: latest.solarPowerW, unit: "W" } },
       fuel_cells: [
-        { instant_power: { value: latest.fuelCellPowerW, unit: "W" } },
+        {
+          source_role: "primary",
+          instant_power: { value: latest.fuelCellPowerW, unit: "W" },
+          hot_water_level: { value: latest.fuelCellHotWaterLevel, unit: "level" },
+        },
       ],
     },
     meter: {

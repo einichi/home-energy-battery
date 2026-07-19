@@ -47,6 +47,7 @@ const DEFAULT_DEVICE_STATE = Object.freeze({
     cumulativeGasM3: 987.654,
     generationStatus: "generating",
     interconnectionStatus: "grid_connected_reverse_flow_allowed",
+    hotWaterLevel: 4,
   },
   unavailableHosts: [],
   pollAdvanceMs: 0,
@@ -174,6 +175,7 @@ function simulatedFuelCellMetric(host, role, fuelCell, available) {
     cumulative_generation: metric({ host, eoj: FUEL_CELL_EOJ, epc: "0xC5", name: "fuel_cell_cumulative_generation", value: value(fuelCell.cumulativeGenerationKwh), unit: "kWh", raw: value(rawUnsigned(fuelCell.cumulativeGenerationKwh * 1000)) }),
     cumulative_gas: metric({ host, eoj: FUEL_CELL_EOJ, epc: "0xC8", name: "fuel_cell_cumulative_gas", value: value(fuelCell.cumulativeGasM3), unit: "m3", raw: value(rawUnsigned(fuelCell.cumulativeGasM3 * 1000)) }),
     interconnection_status: enumMetric({ host, eoj: FUEL_CELL_EOJ, epc: "0xD0", name: "fuel_cell_interconnection_status", value: value(fuelCell.interconnectionStatus), raw: value("0x00") }),
+    hot_water_level: metric({ host, eoj: FUEL_CELL_EOJ, epc: "0xF4", name: "fuel_cell_hot_water_level", value: value(fuelCell.hotWaterLevel), unit: "level", raw: value(rawUnsigned(fuelCell.hotWaterLevel, 1)) }),
   };
 }
 

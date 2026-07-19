@@ -31,6 +31,7 @@ const EPC = {
   FUEL_CELL_CUMULATIVE_GAS: 0xc8,
   FUEL_CELL_GENERATION_STATUS: 0xcb,
   FUEL_CELL_INTERCONNECTION_STATUS: 0xd0,
+  FUEL_CELL_HOT_WATER_LEVEL: 0xf4,
   METER_CUMULATIVE_NORMAL: 0xc0,
   METER_CUMULATIVE_REVERSE: 0xc1,
   METER_CUMULATIVE_UNIT: 0xc2,
@@ -324,6 +325,24 @@ function decodeFuelCellCumulative({ host, epc, name, raw, unit }) {
     value,
     unit,
     human: `${value.toFixed(3)} ${unit}`,
+  });
+}
+
+function decodeFuelCellHotWaterLevel({ host, raw }) {
+  const epc = EPC.FUEL_CELL_HOT_WATER_LEVEL;
+  if (!raw || raw.length !== 1 || raw[0] > 5) {
+    return metric({ host, eoj: FUEL_CELL_EOJ, epc, name: "fuel_cell_hot_water_level", raw });
+  }
+  const value = raw[0];
+  return metric({
+    host,
+    eoj: FUEL_CELL_EOJ,
+    epc,
+    name: "fuel_cell_hot_water_level",
+    raw,
+    value,
+    unit: "level",
+    human: `${value} / 5`,
   });
 }
 
@@ -838,6 +857,7 @@ async function cmdEnergyStatus(opts) {
       const cumulativeGeneration = role === "primary" ? await read(host, FUEL_CELL_EOJ, EPC.FUEL_CELL_CUMULATIVE_GENERATION) : null;
       const cumulativeGas = role === "primary" ? await read(host, FUEL_CELL_EOJ, EPC.FUEL_CELL_CUMULATIVE_GAS) : null;
       const interconnection = role === "primary" ? await read(host, FUEL_CELL_EOJ, EPC.FUEL_CELL_INTERCONNECTION_STATUS) : null;
+      const hotWaterLevel = role === "primary" ? await read(host, FUEL_CELL_EOJ, EPC.FUEL_CELL_HOT_WATER_LEVEL) : null;
       out.fuel_cells.push({
         host,
         source_role: role,
@@ -887,6 +907,10 @@ async function cmdEnergyStatus(opts) {
             name: "fuel_cell_interconnection_status",
             raw: interconnection,
             mapping: EDT_TO_FUEL_CELL_INTERCONNECTION,
+          }),
+          hot_water_level: decodeFuelCellHotWaterLevel({
+            host,
+            raw: hotWaterLevel,
           }),
         } : {}),
       });
@@ -1252,7 +1276,14 @@ async function main() {
   console.log(JSON.stringify(result, null, 2));
 }
 
-export { decodeFuelCellCumulative, decodeEnum, EPC, EDT_TO_FUEL_CELL_STATUS, EDT_TO_FUEL_CELL_INTERCONNECTION };
+export {
+  decodeFuelCellCumulative,
+  decodeFuelCellHotWaterLevel,
+  decodeEnum,
+  EPC,
+  EDT_TO_FUEL_CELL_STATUS,
+  EDT_TO_FUEL_CELL_INTERCONNECTION,
+};
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   main().catch((err) => {
