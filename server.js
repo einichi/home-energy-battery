@@ -657,6 +657,12 @@ function adaptiveChargingHistorySample(sample) {
     compact[key] = sample[key];
     if (sample[key] !== null) hasAdaptiveChargingMetric = true;
   }
+  for (const key of [
+    "rollupStart", "rollupEnd", "rollupResolution", "expectedIntervalSeconds",
+    "intervalAveragePowerW", "powerCoverageSeconds", "coverageSeconds",
+  ]) {
+    if (sample[key] !== undefined) compact[key] = sample[key];
+  }
   return hasAdaptiveChargingMetric ? compact : null;
 }
 
@@ -2225,7 +2231,7 @@ function aggregateDemandDays(samples, { awayPeriods = [], occupancy = "all" } = 
         ([index, bucket]) => [index, bucket.weightedSum / bucket.coverageSeconds],
       )),
     };
-  });
+  }).filter((day) => day.values.size > 0);
 }
 
 function percentile(values, fraction) {
@@ -2813,7 +2819,10 @@ function predictHouseDemand(samples, targetDate = new Date(), temperatureByDay =
     occupancy,
   );
   const recordedDayMap = new Map(historicalDays.map((day) => [day.key, day]));
-  for (const day of aggregateDemandDays(samples, { awayPeriods, occupancy })) recordedDayMap.set(day.key, day);
+  for (const day of aggregateDemandDays(samples, { awayPeriods, occupancy })) {
+    const existing = recordedDayMap.get(day.key);
+    if (!existing || day.coverage >= existing.coverage) recordedDayMap.set(day.key, day);
+  }
   const recordedDays = [...recordedDayMap.values()];
   const validDays = recordedDays.filter((day) => day.daytimeCoverage >= 0.8);
   const recentCandidates = validDays

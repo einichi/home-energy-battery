@@ -1935,6 +1935,17 @@ assert.equal(youngWeekendPrediction.validDayCount, 10);
 assert.equal(youngWeekendPrediction.sameDayTypeDays.length, 3);
 assert.equal(youngWeekendPrediction.usedDayTypeFallback, true);
 
+const indexedYoungDemandDays = aggregateDemandDays(youngDemandHistory);
+const compactYoungDemandHistory = youngDemandHistory.map(({ coverageSeconds, ...sample }) => sample);
+const indexedYoungPrediction = predictHouseDemand(
+  compactYoungDemandHistory,
+  new Date(2026, 6, 12),
+  new Map(),
+  { historicalDays: indexedYoungDemandDays },
+);
+assert.equal(indexedYoungPrediction.available, true);
+assert.equal(indexedYoungPrediction.validDayCount, 10);
+
 const incompleteDemandHistory = youngDemandHistory.filter((sample) => new Date(sample.timestamp).getHours() < 8);
 const incompletePrediction = predictHouseDemand(incompleteDemandHistory, new Date(2026, 6, 12));
 assert.equal(incompletePrediction.available, false);
