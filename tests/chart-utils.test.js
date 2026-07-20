@@ -4,6 +4,8 @@ import {
   decimateTimeSeries,
   nextHalfHourBoundary,
   pruneTrendPoints,
+  trendAxisLabelOptions,
+  trendAxisTicks,
   trendSamplePoints,
 } from "../public/chart-utils.js";
 
@@ -85,6 +87,27 @@ assert.deepEqual(
   pruneTrendPoints(rollingSegment, 0),
   rollingSegment,
   "pruning keeps an unchanged in-range series",
+);
+
+assert.deepEqual(
+  trendAxisLabelOptions(8 * 60 * 60 * 1000),
+  { hour: "2-digit", minute: "2-digit" },
+  "sub-day axes show time without redundant dates",
+);
+assert.deepEqual(
+  trendAxisLabelOptions(7 * 24 * 60 * 60 * 1000),
+  { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" },
+  "multi-day axes include dates so equal clock times remain distinguishable",
+);
+assert.deepEqual(
+  trendAxisTicks(0, 7000, 800),
+  [0, 1750, 3500, 5250, 7000],
+  "wide analysis charts show intermediate range ticks",
+);
+assert.deepEqual(
+  trendAxisTicks(0, 7000, 300),
+  [0, 7000],
+  "compact dashboard charts keep edge labels from overlapping",
 );
 
 assert.equal(

@@ -2,6 +2,8 @@ import {
   decimateTimeSeries,
   nextHalfHourBoundary,
   pruneTrendPoints,
+  trendAxisLabelOptions,
+  trendAxisTicks,
   trendSamplePoints,
 } from "./chart-utils.js";
 
@@ -2300,23 +2302,25 @@ function drawTrendCanvas(name, canvas, points, hover, horizonMs, options = {}) {
     : Number.isFinite(windowEndMs)
       ? windowEndMs - horizonMs
       : null;
-  const firstLabel = Number.isFinite(windowStartMs)
-    ? new Date(windowStartMs).toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : state.historyMode
-      ? t("selectedRange")
-      : t("minAgo");
-  const lastLabel = Number.isFinite(windowEndMs)
-    ? new Date(windowEndMs).toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : t("now");
-  ctx.fillText(firstLabel, pad.left, height - 14);
-  ctx.textAlign = "right";
-  ctx.fillText(lastLabel, width - pad.right, height - 14);
+  const axisTicks = trendAxisTicks(windowStartMs, windowEndMs, chartWidth);
+  const axisLabelOptions = trendAxisLabelOptions(horizonMs);
+  if (axisTicks.length) {
+    axisTicks.forEach((timestamp, index) => {
+      const ratio = index / (axisTicks.length - 1);
+      if (index === 0) ctx.textAlign = "left";
+      else if (index === axisTicks.length - 1) ctx.textAlign = "right";
+      else ctx.textAlign = "center";
+      ctx.fillText(
+        new Date(timestamp).toLocaleString([], axisLabelOptions),
+        pad.left + chartWidth * ratio,
+        height - 14,
+      );
+    });
+  } else {
+    ctx.fillText(state.historyMode ? t("selectedRange") : t("minAgo"), pad.left, height - 14);
+    ctx.textAlign = "right";
+    ctx.fillText(t("now"), width - pad.right, height - 14);
+  }
   ctx.textAlign = "center";
   ctx.fillText(t("timeAxis"), pad.left + chartWidth / 2, height - 3);
 
