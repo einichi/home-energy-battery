@@ -641,6 +641,7 @@ const I18N = {
     databaseBackupsHelp: "Create, restore, or delete local compressed database backups.",
     createDatabaseBackup: "Create Backup",
     databaseRestoreSafetyHelp: "Restoring automatically creates a safety backup of the current database first. Only backups matching this application database version can be restored.",
+    currentDatabaseVersion: "Current application DB version",
     backupCreated: "Created",
     backupType: "Type",
     backupVersion: "DB Version",
@@ -653,7 +654,7 @@ const I18N = {
     backupTypePreUpgrade: "Before upgrade",
     backupTypePreRestore: "Before restore",
     backupTypeUnknown: "Unknown",
-    incompatibleBackup: "Requires application DB version {version}",
+    incompatibleBackup: "Backup DB version v{version} does not match current application DB version v{currentVersion}",
     unknownBackupVersion: "Backup DB version is unknown",
     confirmRestoreDatabase: "Restore {filename}? The current database will be backed up first and briefly unavailable.",
     confirmDeleteDatabaseBackup: "Permanently delete {filename}?",
@@ -1277,6 +1278,7 @@ const I18N = {
     databaseBackupsHelp: "ローカルの圧縮データベースバックアップを作成、復元、削除します。",
     createDatabaseBackup: "バックアップを作成",
     databaseRestoreSafetyHelp: "復元前に現在のデータベースを自動的に安全バックアップします。このアプリと同じデータベースバージョンのバックアップのみ復元できます。",
+    currentDatabaseVersion: "現在のアプリDBバージョン",
     backupCreated: "作成日時",
     backupType: "種類",
     backupVersion: "DBバージョン",
@@ -1289,7 +1291,7 @@ const I18N = {
     backupTypePreUpgrade: "アップグレード前",
     backupTypePreRestore: "復元前",
     backupTypeUnknown: "不明",
-    incompatibleBackup: "アプリのDBバージョン{version}が必要です",
+    incompatibleBackup: "バックアップのDBバージョンv{version}は現在のアプリDBバージョンv{currentVersion}と一致しません",
     unknownBackupVersion: "バックアップのDBバージョンが不明です",
     confirmRestoreDatabase: "{filename}を復元しますか？ 現在のデータベースを先にバックアップし、一時的に利用できなくなります。",
     confirmDeleteDatabaseBackup: "{filename}を完全に削除しますか？",
@@ -5564,6 +5566,8 @@ function renderDatabaseBackups(view) {
   const rows = $("#databaseBackupRows");
   if (!rows) return;
   const busy = view?.operation?.busy === true;
+  const currentVersion = Number.isInteger(view?.schemaVersion) ? view.schemaVersion : null;
+  setText("#currentDatabaseVersion", Number.isInteger(currentVersion) ? `v${currentVersion}` : "--");
   $("#createDatabaseBackupBtn").disabled = busy;
   renderDatabaseBackupProgress(view?.operation ?? {});
   rows.replaceChildren();
@@ -5600,11 +5604,19 @@ function renderDatabaseBackups(view) {
     restore.dataset.databaseBackupAction = "restore";
     restore.dataset.databaseBackupFilename = backup.filename;
     restore.textContent = t("restoreBackup");
-    restore.disabled = busy || !backup.compatible;
-    if (!backup.compatible) {
+    const compatible = backup.compatible === true
+      && Number.isInteger(backup.schemaVersion)
+      && Number.isInteger(currentVersion)
+      && backup.schemaVersion === currentVersion;
+    restore.disabled = busy || !compatible;
+    if (!compatible) {
       restore.title = Number.isInteger(backup.schemaVersion)
-        ? template("incompatibleBackup", { version: backup.schemaVersion })
+        ? template("incompatibleBackup", {
+          version: backup.schemaVersion,
+          currentVersion: Number.isInteger(currentVersion) ? currentVersion : "--",
+        })
         : t("unknownBackupVersion");
+      row.classList.add("database-backup-incompatible");
     }
     const remove = document.createElement("button");
     remove.type = "button";

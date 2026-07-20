@@ -4,6 +4,7 @@ import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { SCHEMA_VERSION } from "../lib/history-store.js";
 
 const dataDir = await mkdtemp(path.join(os.tmpdir(), "device-adapter-integration-"));
 let child = null;
@@ -189,6 +190,7 @@ try {
     path.join(dataDir, "backups", incompatibleFilename),
   );
   const backupInventory = await request(baseUrl, "/api/database-backups");
+  assert.equal(backupInventory.payload.schemaVersion, SCHEMA_VERSION);
   const incompatible = backupInventory.payload.backups.find((item) => item.filename === incompatibleFilename);
   assert.equal(incompatible.compatible, false);
   assert.equal(incompatible.schemaVersion, 4);

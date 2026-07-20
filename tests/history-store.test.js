@@ -262,6 +262,9 @@ try {
       largeDevicePayload: "x".repeat(400),
     }));
   }
+  const detailedDay = store.querySamples(start, start + 24 * 60 * 60_000);
+  assert.equal(detailedDay.length, 13, "24-hour requests retain every raw sample despite response limits");
+  assert.ok(detailedDay.every((value) => value.rollupResolution === undefined));
   const compact = store.querySamples(start - 86_400_000, start + 2 * 60 * 60_000);
   assert.ok(compact.length < 13, "oversized serialized ranges use compact interval rollups");
   assert.ok(compact.every((value) => value.rollupResolution === "interval"));

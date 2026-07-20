@@ -1491,6 +1491,25 @@ output {
   overflow-wrap: anywhere;
 }
 
+.database-current-version {
+  margin: 10px 0;
+  color: var(--muted);
+}
+
+.database-current-version strong {
+  color: var(--text);
+}
+
+.database-backup-incompatible td:not(:last-child) {
+  color: var(--muted);
+}
+
+.database-backup-actions button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+  filter: grayscale(0.65);
+}
+
 .database-backup-actions {
   display: flex;
   gap: 8px;
