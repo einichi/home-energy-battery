@@ -58,6 +58,7 @@ const state = {
   awayPeriodsView: null,
   awayFromSetByNow: false,
   notifications: null,
+  databaseBackups: null,
   isComposing: false,
   discoveryInProgress: false,
   staticCircuitOrderKey: null,
@@ -634,6 +635,41 @@ const I18N = {
     saveRetention: "Save Retention",
     trimHistoryNow: "Trim history now",
     historyTrimmed: "History trimmed",
+    databaseBackups: "Database Backups",
+    databaseBackupsHelp: "Create, restore, or delete local compressed database backups.",
+    createDatabaseBackup: "Create Backup",
+    databaseRestoreSafetyHelp: "Restoring automatically creates a safety backup of the current database first. Only backups matching this application database version can be restored.",
+    backupCreated: "Created",
+    backupType: "Type",
+    backupVersion: "DB Version",
+    backupSize: "Size",
+    actions: "Actions",
+    restoreBackup: "Restore",
+    deleteBackup: "Delete",
+    noDatabaseBackups: "No database backups have been created.",
+    backupTypeManual: "Manual",
+    backupTypePreUpgrade: "Before upgrade",
+    backupTypePreRestore: "Before restore",
+    backupTypeUnknown: "Unknown",
+    incompatibleBackup: "Requires application DB version {version}",
+    unknownBackupVersion: "Backup DB version is unknown",
+    confirmRestoreDatabase: "Restore {filename}? The current database will be backed up first and briefly unavailable.",
+    confirmDeleteDatabaseBackup: "Permanently delete {filename}?",
+    databaseBackupCreated: "Database backup created",
+    databaseBackupDeleted: "Database backup deleted",
+    databaseBackupRestored: "Database restored",
+    databaseOperationPreparing: "Preparing",
+    databaseOperationCopying: "Copying database",
+    databaseOperationValidating: "Validating backup",
+    databaseOperationCompressing: "Compressing backup",
+    databaseOperationDecompressing: "Decompressing backup",
+    databaseOperationSafetyBackup: "Backing up current database",
+    databaseOperationStopping: "Pausing application",
+    databaseOperationRestoring: "Restoring database",
+    databaseOperationRestarting: "Restarting application",
+    databaseOperationDeleting: "Deleting backup",
+    databaseOperationComplete: "Complete",
+    databaseOperationFailed: "Failed",
     installedEquipment: "Installed Equipment",
     solarEnabled: "Show solar generation",
     fuelCellEnabled: "Show Ene-Farm generation and status",
@@ -1235,6 +1271,41 @@ const I18N = {
     saveRetention: "保存期間設定を保存",
     trimHistoryNow: "データを今すぐトリム",
     historyTrimmed: "履歴をトリムしました",
+    databaseBackups: "データベースバックアップ",
+    databaseBackupsHelp: "ローカルの圧縮データベースバックアップを作成、復元、削除します。",
+    createDatabaseBackup: "バックアップを作成",
+    databaseRestoreSafetyHelp: "復元前に現在のデータベースを自動的に安全バックアップします。このアプリと同じデータベースバージョンのバックアップのみ復元できます。",
+    backupCreated: "作成日時",
+    backupType: "種類",
+    backupVersion: "DBバージョン",
+    backupSize: "サイズ",
+    actions: "操作",
+    restoreBackup: "復元",
+    deleteBackup: "削除",
+    noDatabaseBackups: "データベースバックアップはありません。",
+    backupTypeManual: "手動",
+    backupTypePreUpgrade: "アップグレード前",
+    backupTypePreRestore: "復元前",
+    backupTypeUnknown: "不明",
+    incompatibleBackup: "アプリのDBバージョン{version}が必要です",
+    unknownBackupVersion: "バックアップのDBバージョンが不明です",
+    confirmRestoreDatabase: "{filename}を復元しますか？ 現在のデータベースを先にバックアップし、一時的に利用できなくなります。",
+    confirmDeleteDatabaseBackup: "{filename}を完全に削除しますか？",
+    databaseBackupCreated: "データベースバックアップを作成しました",
+    databaseBackupDeleted: "データベースバックアップを削除しました",
+    databaseBackupRestored: "データベースを復元しました",
+    databaseOperationPreparing: "準備中",
+    databaseOperationCopying: "データベースをコピー中",
+    databaseOperationValidating: "バックアップを検証中",
+    databaseOperationCompressing: "バックアップを圧縮中",
+    databaseOperationDecompressing: "バックアップを展開中",
+    databaseOperationSafetyBackup: "現在のデータベースをバックアップ中",
+    databaseOperationStopping: "アプリケーションを一時停止中",
+    databaseOperationRestoring: "データベースを復元中",
+    databaseOperationRestarting: "アプリケーションを再開中",
+    databaseOperationDeleting: "バックアップを削除中",
+    databaseOperationComplete: "完了",
+    databaseOperationFailed: "失敗",
     installedEquipment: "設置済み設備",
     solarEnabled: "太陽光発電を表示",
     fuelCellEnabled: "エネファーム発電・状態を表示",
@@ -1466,6 +1537,7 @@ function setLanguage(language) {
   drawGraphAnalysis();
   renderDashboardWidgetControls(state.config ?? {});
   if (state.notifications) renderNotificationView(state.notifications);
+  if (state.databaseBackups) renderDatabaseBackups(state.databaseBackups);
   if (state.adaptiveChargingStatus) renderAdaptiveChargingStatus(state.adaptiveChargingStatus);
   else if (state.awayPeriodsView) renderAwayPeriods(state.awayPeriodsView);
   setPage(state.currentPage);
@@ -5395,6 +5467,7 @@ async function hydrateSettingsView() {
     refreshAdaptiveCharging(),
     refreshHistoryStats(),
     refreshNotifications(),
+    refreshDatabaseBackups(),
   ]);
   for (const result of results) {
     if (result.status === "rejected") toast(result.reason.message);
@@ -5434,6 +5507,140 @@ async function refreshHistoryStats() {
   } catch (err) {
     toast(err.message);
   }
+}
+
+function databaseBackupTypeLabel(kind) {
+  return t({
+    manual: "backupTypeManual",
+    "pre-upgrade": "backupTypePreUpgrade",
+    "pre-restore": "backupTypePreRestore",
+  }[kind] ?? "backupTypeUnknown");
+}
+
+function databaseOperationLabel(phase = "idle") {
+  if (String(phase).startsWith("safety-")) return t("databaseOperationSafetyBackup");
+  return t({
+    preparing: "databaseOperationPreparing",
+    copying: "databaseOperationCopying",
+    validating: "databaseOperationValidating",
+    compressing: "databaseOperationCompressing",
+    decompressing: "databaseOperationDecompressing",
+    "safety-backup": "databaseOperationSafetyBackup",
+    stopping: "databaseOperationStopping",
+    restoring: "databaseOperationRestoring",
+    restarting: "databaseOperationRestarting",
+    deleting: "databaseOperationDeleting",
+    complete: "databaseOperationComplete",
+    failed: "databaseOperationFailed",
+  }[phase] ?? "databaseOperationPreparing");
+}
+
+function renderDatabaseBackupProgress(operation = {}) {
+  const root = $("#databaseBackupProgress");
+  if (!root) return;
+  const visible = operation.busy || ["complete", "failed"].includes(operation.phase);
+  root.classList.toggle("hidden", !visible);
+  if (!visible) return;
+  const percent = Math.max(0, Math.min(100, Number(operation.percent) || 0));
+  setText("#databaseBackupProgressLabel", operation.error || databaseOperationLabel(operation.phase));
+  setText("#databaseBackupProgressPercent", `${Math.round(percent)}%`);
+  $("#databaseBackupProgressBar").value = percent;
+  const processed = Number(operation.processed);
+  const total = Number(operation.total);
+  const detail = Number.isFinite(processed) && Number.isFinite(total) && total > 0
+    ? operation.unit === "bytes"
+      ? `${formatBytes(processed)} / ${formatBytes(total)}`
+      : `${processed.toLocaleString()} / ${total.toLocaleString()} ${operation.unit ?? ""}`.trim()
+    : operation.filename ?? "";
+  setText("#databaseBackupProgressDetail", detail);
+}
+
+function renderDatabaseBackups(view) {
+  state.databaseBackups = view;
+  const rows = $("#databaseBackupRows");
+  if (!rows) return;
+  const busy = view?.operation?.busy === true;
+  $("#createDatabaseBackupBtn").disabled = busy;
+  renderDatabaseBackupProgress(view?.operation ?? {});
+  rows.replaceChildren();
+  const backups = view?.backups ?? [];
+  if (!backups.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 5;
+    cell.className = "empty-state";
+    cell.textContent = t("noDatabaseBackups");
+    row.append(cell);
+    rows.append(row);
+    return;
+  }
+  for (const backup of backups) {
+    const row = document.createElement("tr");
+    const created = document.createElement("td");
+    const filename = document.createElement("strong");
+    filename.textContent = backup.filename;
+    const date = document.createElement("small");
+    date.textContent = new Date(backup.createdAt ?? backup.modifiedAt).toLocaleString();
+    created.append(filename, date);
+    const kind = document.createElement("td");
+    kind.textContent = databaseBackupTypeLabel(backup.kind);
+    const version = document.createElement("td");
+    version.textContent = Number.isInteger(backup.schemaVersion) ? `v${backup.schemaVersion}` : "--";
+    const size = document.createElement("td");
+    size.textContent = formatBytes(Number(backup.sizeBytes));
+    const actions = document.createElement("td");
+    actions.className = "database-backup-actions";
+    const restore = document.createElement("button");
+    restore.type = "button";
+    restore.className = "ghost";
+    restore.dataset.databaseBackupAction = "restore";
+    restore.dataset.databaseBackupFilename = backup.filename;
+    restore.textContent = t("restoreBackup");
+    restore.disabled = busy || !backup.compatible;
+    if (!backup.compatible) {
+      restore.title = Number.isInteger(backup.schemaVersion)
+        ? template("incompatibleBackup", { version: backup.schemaVersion })
+        : t("unknownBackupVersion");
+    }
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "delete";
+    remove.dataset.databaseBackupAction = "delete";
+    remove.dataset.databaseBackupFilename = backup.filename;
+    remove.textContent = t("deleteBackup");
+    remove.disabled = busy;
+    actions.append(restore, remove);
+    row.append(created, kind, version, size, actions);
+    rows.append(row);
+  }
+}
+
+async function refreshDatabaseBackups() {
+  const view = await api("/api/database-backups");
+  renderDatabaseBackups(view);
+  return view;
+}
+
+async function runDatabaseOperation(request, successKey, { reload = false } = {}) {
+  let settled = false;
+  let result;
+  let failure;
+  request.then((value) => {
+    settled = true;
+    result = value;
+  }, (error) => {
+    settled = true;
+    failure = error;
+  });
+  while (!settled) {
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await refreshDatabaseBackups().catch(() => {});
+  }
+  if (failure) throw failure;
+  renderDatabaseBackups(result);
+  toast(t(successKey));
+  if (reload) window.location.reload();
+  return result;
 }
 
 async function mutate(path, body, success) {
@@ -5991,6 +6198,51 @@ function initForms() {
       await refreshHistoryStats();
     } catch (err) {
       toast(err.message);
+    }
+  });
+
+  $("#createDatabaseBackupBtn")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      await runDatabaseOperation(
+        api("/api/database-backups", { method: "POST", body: {} }),
+        "databaseBackupCreated",
+      );
+    } catch (err) {
+      toast(err.message);
+      await refreshDatabaseBackups().catch(() => {});
+    } finally {
+      button.disabled = state.databaseBackups?.operation?.busy === true;
+    }
+  });
+
+  $("#databaseBackupRows")?.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-database-backup-action]");
+    if (!button || button.disabled) return;
+    const filename = button.dataset.databaseBackupFilename;
+    const action = button.dataset.databaseBackupAction;
+    if (action === "restore"
+      && !window.confirm(template("confirmRestoreDatabase", { filename }))) return;
+    if (action === "delete"
+      && !window.confirm(template("confirmDeleteDatabaseBackup", { filename }))) return;
+    button.disabled = true;
+    try {
+      if (action === "restore") {
+        await runDatabaseOperation(
+          api(`/api/database-backups/${encodeURIComponent(filename)}/restore`, { method: "POST", body: {} }),
+          "databaseBackupRestored",
+          { reload: true },
+        );
+      } else {
+        await runDatabaseOperation(
+          api(`/api/database-backups/${encodeURIComponent(filename)}`, { method: "DELETE" }),
+          "databaseBackupDeleted",
+        );
+      }
+    } catch (err) {
+      toast(err.message);
+      await refreshDatabaseBackups().catch(() => {});
     }
   });
 

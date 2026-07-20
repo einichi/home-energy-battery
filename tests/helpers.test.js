@@ -362,12 +362,13 @@ const activeBatteryModelMigrationDir = await mkdtemp(
   path.join(os.tmpdir(), "active-battery-model-migration-"),
 );
 try {
+  const activeMigrationSlotEnd = new Date(Date.now() + 60 * 60_000).toISOString();
   await writeFile(
     path.join(activeBatteryModelMigrationDir, "adaptive-charging-state.json"),
     JSON.stringify({
       owner: "adaptiveCharging",
       plan: { available: true, plannedChargeKwh: 1.2 },
-      activeSlot: { targetWh: 900, end: "2026-07-20T01:30:00.000Z" },
+      activeSlot: { targetWh: 900, end: activeMigrationSlotEnd },
       activeChargedKwh: 0.25,
       activeChargeSession: {
         startedAt: "2026-07-10T01:00:00.000Z",
@@ -386,7 +387,7 @@ try {
   assert.equal(activeCanonical.activeSlot.targetWh, 900);
   assert.equal(activeCanonical.activeChargedKwh, 0.25);
   assert.equal(activeCanonical.pendingPlanReason, null);
-  assert.equal(activeCanonical.batteryLearning.switchAfterSlotEnd, "2026-07-20T01:30:00.000Z");
+  assert.equal(activeCanonical.batteryLearning.switchAfterSlotEnd, activeMigrationSlotEnd);
 } finally {
   await rm(activeBatteryModelMigrationDir, { recursive: true, force: true });
 }
@@ -445,6 +446,22 @@ const awayDemandDays = aggregateDemandDays(occupancySamples, { awayPeriods, occu
 assert.deepEqual([...homeDemandDays[0].values.values()], [1200], "Away buckets are excluded from normal demand training");
 assert.deepEqual([...awayDemandDays[0].values.values()], [300], "Away buckets remain available to Away training");
 assert.equal(filterDemandDaysByOccupancy(homeDemandDays, awayPeriods, "home")[0].values.size, 1);
+
+const directPowerCoverageDays = aggregateDemandDays([{
+  timestamp: "2026-07-12T09:30:00.000Z",
+  houseDemandW: 900,
+  intervalAveragePowerW: { houseDemandW: 1000 },
+  powerCoverageSeconds: { houseDemandW: 1800 },
+  coverageSeconds: { houseDemandKwh: 0 },
+}]);
+const directCoverageTime = new Date("2026-07-12T09:30:00.000Z");
+const directCoverageBucket = directCoverageTime.getHours() * 2 + (directCoverageTime.getMinutes() >= 30 ? 1 : 0);
+assert.equal(
+  directPowerCoverageDays[0].coverageByBucket.get(directCoverageBucket),
+  1800,
+  "Demand learning uses direct power coverage instead of unrelated energy coverage",
+);
+assert.equal(directPowerCoverageDays[0].values.get(directCoverageBucket), 1000);
 
 const awayBucketDate = new Date("2026-07-12T09:30:00.000Z");
 const awayBucket = awayBucketDate.getHours() * 2 + (awayBucketDate.getMinutes() >= 30 ? 1 : 0);

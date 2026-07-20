@@ -1100,7 +1100,7 @@ label {
   /* Settings are split by intent so address config, data retention, rates, and
      state-changing controls do not blur together. */
   display: grid;
-  grid-template-columns: minmax(520px, 1.45fr) minmax(360px, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
   align-items: start;
 }
@@ -1405,6 +1405,103 @@ output {
   white-space: nowrap;
 }
 
+.database-backup-section {
+  margin-top: 18px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.data-panel {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.database-backup-heading,
+.database-backup-progress-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.database-backup-heading h2,
+.database-backup-heading p {
+  margin: 0;
+}
+
+.database-backup-heading p {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.database-backup-heading button {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.database-backup-progress {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.database-backup-progress progress {
+  width: 100%;
+  height: 10px;
+  accent-color: var(--accent);
+}
+
+.database-backup-progress small,
+.database-backup-table td small {
+  display: block;
+  color: var(--muted);
+}
+
+.database-backup-table-wrap {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  margin-top: 12px;
+}
+
+.database-backup-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+}
+
+.database-backup-table th,
+.database-backup-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.database-backup-table td:first-child strong {
+  display: block;
+  max-width: 420px;
+  overflow-wrap: anywhere;
+}
+
+.database-backup-actions {
+  display: flex;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.database-backup-actions button {
+  width: auto;
+  min-width: 72px;
+}
+
 @media (max-width: 620px) {
   .retention-row {
     grid-template-columns: minmax(0, 1fr);
@@ -1412,6 +1509,15 @@ output {
 
   .retention-row .check-row {
     min-height: 24px;
+  }
+
+  .database-backup-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .database-backup-heading button {
+    width: 100%;
   }
 }
 
@@ -2269,20 +2375,24 @@ td code {
     order: 7;
   }
 
-  .circuit-label-panel {
+  .fuel-cell-panel {
     order: 8;
   }
 
-  .rates-panel {
+  .circuit-label-panel {
     order: 9;
   }
 
-  .adaptive-charging-panel {
+  .rates-panel {
     order: 10;
   }
 
-  .data-panel {
+  .adaptive-charging-panel {
     order: 11;
+  }
+
+  .data-panel {
+    order: 12;
   }
 }
 

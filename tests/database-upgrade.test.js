@@ -12,10 +12,33 @@ import {
   inspectHistoryDatabase,
   migrateHistoryDatabase,
 } from "../lib/history-store.js";
-import { backupDatabaseBeforeUpgrade, databaseBackupFilename } from "../lib/database-upgrade.js";
+import {
+  backupDatabaseBeforeUpgrade,
+  backupDatabaseManually,
+  cleanupExtractedDatabaseBackup,
+  databaseBackupFilename,
+  databaseBackupMetadata,
+  deleteDatabaseBackup,
+  extractAndValidateDatabaseBackup,
+  listDatabaseBackups,
+  manualDatabaseBackupFilename,
+} from "../lib/database-upgrade.js";
 
 assert.match(databaseBackupFilename(3, 4, new Date("2026-07-19T12:34:56.000Z")),
   /^history-v3-before-v4-20260719T123456Z\.sqlite\.zst$/);
+assert.match(manualDatabaseBackupFilename(5, new Date("2026-07-20T01:02:03.000Z")),
+  /^history-v5-manual-20260720T010203Z\.sqlite\.zst$/);
+assert.deepEqual(
+  databaseBackupMetadata("history-v4-before-v5-20260720T010203Z.sqlite.zst", 5),
+  {
+    filename: "history-v4-before-v5-20260720T010203Z.sqlite.zst",
+    kind: "pre-upgrade",
+    schemaVersion: 4,
+    targetVersion: 5,
+    createdAt: "2026-07-20T01:02:03.000Z",
+    compatible: false,
+  },
+);
 
 const dataDir = await mkdtemp(path.join(os.tmpdir(), "database-upgrade-"));
 const backupDir = path.join(dataDir, "backups");
@@ -95,6 +118,40 @@ try {
     2,
   );
   upgraded.close();
+
+  const manualBackup = await backupDatabaseManually({
+    databaseFile,
+    backupDir,
+    sourceVersion: SCHEMA_VERSION,
+    now: new Date("2026-07-20T01:02:03.000Z"),
+  });
+  const inventory = await listDatabaseBackups({ backupDir, currentVersion: SCHEMA_VERSION });
+  const manualInventory = inventory.find((item) => item.filename === manualBackup.filename);
+  assert.equal(manualInventory.kind, "manual");
+  assert.equal(manualInventory.schemaVersion, SCHEMA_VERSION);
+  assert.equal(manualInventory.compatible, true);
+  assert.equal(inventory.find((item) => item.filename === backup.filename).compatible, false);
+
+  const extractedManual = await extractAndValidateDatabaseBackup({
+    backupFile: manualBackup.path,
+    workingDir: dataDir,
+  });
+  assert.equal(extractedManual.schemaVersion, SCHEMA_VERSION);
+  const extractedDb = new DatabaseSync(extractedManual.snapshotFile, { readOnly: true });
+  assert.equal(extractedDb.prepare("PRAGMA quick_check").get().quick_check, "ok");
+  extractedDb.close();
+  await cleanupExtractedDatabaseBackup(extractedManual.snapshotFile);
+
+  await deleteDatabaseBackup({ backupDir, filename: manualBackup.filename });
+  assert.equal(
+    (await listDatabaseBackups({ backupDir, currentVersion: SCHEMA_VERSION }))
+      .some((item) => item.filename === manualBackup.filename),
+    false,
+  );
+  await assert.rejects(
+    deleteDatabaseBackup({ backupDir, filename: "../history.sqlite.zst" }),
+    /Invalid database backup filename/,
+  );
 
   const newerDir = await mkdtemp(path.join(os.tmpdir(), "database-newer-"));
   try {

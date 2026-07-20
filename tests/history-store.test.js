@@ -79,6 +79,8 @@ try {
   );
   assert.equal(interval.length, 3);
   assert.equal(interval[1].houseDemandKwh, 0.75);
+  assert.equal(interval[1].powerCoverageSeconds.houseDemandW, 1800);
+  assert.equal(interval[1].intervalAveragePowerW.houseDemandW, 1500);
   assert.equal(interval[1].solarGenerationKwh, undefined);
   assert.equal(interval[2].houseDemandKwh, undefined);
 
@@ -245,6 +247,55 @@ try {
   await rm(overlappingRollupDir, { recursive: true, force: true });
 }
 
+const compactAutoRangeDir = await mkdtemp(path.join(os.tmpdir(), "history-store-compact-auto-"));
+try {
+  let store = createHistoryStore({
+    dataDir: compactAutoRangeDir,
+    logger: { log() {}, warn() {} },
+    maxRawAutoBytes: 1000,
+  });
+  await store.initialize();
+  const start = Date.parse("2026-07-15T00:00:00.000Z");
+  for (let minute = 0; minute <= 60; minute += 5) {
+    store.appendSample(sample(new Date(start + minute * 60_000).toISOString(), {
+      houseDemandW: 1000 + minute,
+      largeDevicePayload: "x".repeat(400),
+    }));
+  }
+  const compact = store.querySamples(start - 86_400_000, start + 2 * 60 * 60_000);
+  assert.ok(compact.length < 13, "oversized serialized ranges use compact interval rollups");
+  assert.ok(compact.every((value) => value.rollupResolution === "interval"));
+  store.close();
+
+  const database = new DatabaseSync(path.join(compactAutoRangeDir, "history.sqlite"));
+  const rows = database.prepare("SELECT resolution, bucket_start_ms, payload_json FROM rollups").all();
+  const update = database.prepare(`
+    UPDATE rollups SET payload_json = ? WHERE resolution = ? AND bucket_start_ms = ?
+  `);
+  for (const row of rows) {
+    const payload = JSON.parse(row.payload_json);
+    delete payload.powerCoverageSeconds;
+    delete payload.intervalAveragePowerW;
+    update.run(JSON.stringify(payload), row.resolution, row.bucket_start_ms);
+  }
+  database.close();
+
+  store = createHistoryStore({ dataDir: compactAutoRangeDir, logger: { log() {}, warn() {} } });
+  await store.initialize();
+  const recovered = store.querySamples(start, start + 60 * 60_000, { resolution: "interval" });
+  assert.ok(
+    recovered.some((value) => Number(value.powerCoverageSeconds?.houseDemandW) > 0),
+    "existing rollup state restores direct power coverage without a database rebuild",
+  );
+  assert.ok(
+    recovered.some((value) => Number.isFinite(Number(value.intervalAveragePowerW?.houseDemandW))),
+    "existing rollup state restores interval power averages without a database rebuild",
+  );
+  store.close();
+} finally {
+  await rm(compactAutoRangeDir, { recursive: true, force: true });
+}
+
 const awayPeriodDir = await mkdtemp(path.join(os.tmpdir(), "history-store-away-periods-"));
 try {
   const store = createHistoryStore({ dataDir: awayPeriodDir, logger: { log() {}, warn() {} } });
@@ -257,7 +308,7 @@ try {
     createdAt: "2026-07-15T00:00:00.000Z",
     updatedAt: "2026-07-15T00:00:00.000Z",
   });
-  assert.equal(created.status, "scheduled");
+  assert.equal(store.awayPeriod("holiday", Date.parse("2026-07-20T00:00:00.000Z")).status, "scheduled");
   assert.equal(store.awayPeriod("holiday", Date.parse("2026-07-20T02:00:00.000Z")).status, "active");
   assert.equal(store.awayPeriod("holiday", Date.parse("2026-07-21T00:00:00.000Z")).status, "completed");
   assert.equal(store.awayPeriods({

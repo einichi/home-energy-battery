@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -174,6 +174,47 @@ try {
     return schedules.payload.find((item) => item.id === schedule.payload.id)?.lastResult?.ok === true;
   });
   assert.equal((await request(baseUrl, "/api/status")).payload.energy.battery.operation_mode.value, "auto");
+
+  const manualBackup = await request(baseUrl, "/api/database-backups", {
+    method: "POST",
+    body: {},
+  });
+  assert.equal(manualBackup.response.status, 201, JSON.stringify(manualBackup.payload));
+  const compatible = manualBackup.payload.backups.find((item) => item.kind === "manual");
+  assert.equal(compatible.compatible, true);
+
+  const incompatibleFilename = compatible.filename.replace(/^history-v\d+-/, "history-v4-");
+  await copyFile(
+    path.join(dataDir, "backups", compatible.filename),
+    path.join(dataDir, "backups", incompatibleFilename),
+  );
+  const backupInventory = await request(baseUrl, "/api/database-backups");
+  const incompatible = backupInventory.payload.backups.find((item) => item.filename === incompatibleFilename);
+  assert.equal(incompatible.compatible, false);
+  assert.equal(incompatible.schemaVersion, 4);
+  const incompatibleRestore = await request(
+    baseUrl,
+    `/api/database-backups/${encodeURIComponent(incompatibleFilename)}/restore`,
+    { method: "POST", body: {} },
+  );
+  assert.equal(incompatibleRestore.response.status, 409);
+
+  const restored = await request(
+    baseUrl,
+    `/api/database-backups/${encodeURIComponent(compatible.filename)}/restore`,
+    { method: "POST", body: {} },
+  );
+  assert.equal(restored.response.status, 200, `${JSON.stringify(restored.payload)}\n${output}`);
+  assert.ok(restored.payload.backups.some((item) => item.kind === "pre-restore"));
+  assert.equal((await request(baseUrl, "/api/status")).response.status, 200);
+
+  const deleted = await request(
+    baseUrl,
+    `/api/database-backups/${encodeURIComponent(incompatibleFilename)}`,
+    { method: "DELETE" },
+  );
+  assert.equal(deleted.response.status, 200);
+  assert.equal(deleted.payload.backups.some((item) => item.filename === incompatibleFilename), false);
 } finally {
   if (child && child.exitCode === null) {
     child.kill("SIGTERM");

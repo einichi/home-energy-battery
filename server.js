@@ -19,7 +19,14 @@ import {
   migrateHistoryDatabase,
   normalizeRetentionPolicy,
 } from "./lib/history-store.js";
-import { backupDatabaseBeforeUpgrade } from "./lib/database-upgrade.js";
+import {
+  backupDatabaseBeforeUpgrade,
+  backupDatabaseManually,
+  cleanupExtractedDatabaseBackup,
+  deleteDatabaseBackup,
+  extractAndValidateDatabaseBackup,
+  listDatabaseBackups,
+} from "./lib/database-upgrade.js";
 import {
   applicableGasDiscount,
   applicableGasTariffBand,
@@ -180,11 +187,27 @@ let scheduleTimer = null;
 let automationTimer = null;
 let recorderTimer = null;
 let retentionTimer = null;
+let retentionRunPromise = null;
+let backgroundProcessesEnabled = false;
 let adaptiveChargingSlotEndTimer = null;
 let adaptiveChargingSlotEndTimerKey = null;
 let applicationStarted = false;
 let serverListening = false;
 let startupPromise = null;
+let databaseOperation = {
+  busy: false,
+  type: null,
+  filename: null,
+  phase: "idle",
+  percent: 0,
+  processed: 0,
+  total: 0,
+  unit: null,
+  startedAt: null,
+  completedAt: null,
+  error: null,
+  result: null,
+};
 let databaseUpgrade = {
   required: false,
   state: "checking",
@@ -750,8 +773,8 @@ function addSampleToAdaptiveChargingDemandProfileIndex(index, sample) {
     coverageSeconds: Array(48).fill(0),
   };
   const coverageSeconds = Math.min(1800, Math.max(0,
-    Number(sample?.coverageSeconds?.houseDemandKwh
-      ?? sample?.powerCoverageSeconds?.houseDemandW
+    Number(sample?.powerCoverageSeconds?.houseDemandW
+      ?? sample?.coverageSeconds?.houseDemandKwh
       ?? sample?.expectedIntervalSeconds
       ?? 0),
   ));
@@ -2179,8 +2202,8 @@ function aggregateDemandDays(samples, { awayPeriods = [], occupancy = "all" } = 
     const day = days.get(key);
     const index = halfHourIndex(time);
     const seconds = Math.min(1800, Math.max(0,
-      Number(sample.coverageSeconds?.houseDemandKwh
-        ?? sample.powerCoverageSeconds?.houseDemandW
+      Number(sample.powerCoverageSeconds?.houseDemandW
+        ?? sample.coverageSeconds?.houseDemandKwh
         ?? sample.expectedIntervalSeconds
         ?? 0),
     ));
@@ -7829,6 +7852,62 @@ function startScheduler() {
   runAutomationRulesScheduled().catch((err) => logDetailedError("automation", err));
 }
 
+function stopApplicationBackgroundProcesses() {
+  backgroundProcessesEnabled = false;
+  if (scheduleTimer) clearInterval(scheduleTimer);
+  if (automationTimer) clearInterval(automationTimer);
+  if (recorderTimer) clearTimeout(recorderTimer);
+  if (retentionTimer) clearInterval(retentionTimer);
+  scheduleTimer = null;
+  automationTimer = null;
+  recorderTimer = null;
+  retentionTimer = null;
+  clearAdaptiveChargingSlotEndTimer();
+}
+
+async function runRetentionMaintenance() {
+  if (retentionRunPromise) return retentionRunPromise;
+  retentionRunPromise = (async () => {
+    try {
+      const config = await readConfig();
+      if (config.retention.automaticMaintenance) await trimHistory(config.retention);
+      try {
+        await updateCurrentGasTariff(config);
+      } catch (error) {
+        logDetailedError("gas-tariff", error);
+      }
+    } catch (err) {
+      logDetailedError("retention", err);
+    } finally {
+      retentionRunPromise = null;
+    }
+  })();
+  return retentionRunPromise;
+}
+
+function startApplicationBackgroundProcesses() {
+  backgroundProcessesEnabled = true;
+  startScheduler();
+  startBackgroundRecorder();
+  retentionTimer = setInterval(runRetentionMaintenance, 24 * 60 * 60_000);
+  retentionTimer.unref?.();
+  void runRetentionMaintenance();
+}
+
+async function waitForDatabaseWriters(timeoutMs = 60_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (automationRunInProgress
+    || cliQueueRunning
+    || runningScheduleIds.size > 0
+    || retentionRunPromise
+    || statusRefreshPromise) {
+    if (Date.now() >= deadline) {
+      throw new Error("Timed out waiting for active application work before database restore");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 function anyDeviceConfigured(config) {
   // A real device is any host that isn't blank or one of the placeholder
   // documentation addresses shipped in DEFAULT_CONFIG.
@@ -7848,10 +7927,12 @@ function startBackgroundRecorder() {
   // timer (rescheduled after each read completes) guarantees reads never
   // overlap, even if one takes longer than the configured interval.
   const scheduleNext = (intervalMs) => {
+    if (!backgroundProcessesEnabled) return;
     recorderTimer = setTimeout(tick, intervalMs);
     if (typeof recorderTimer.unref === "function") recorderTimer.unref();
   };
   async function tick() {
+    if (!backgroundProcessesEnabled) return;
     let intervalMs = DEFAULT_CONFIG.updateIntervalSeconds * 1000;
     try {
       const config = await readConfig();
@@ -7873,7 +7954,268 @@ function startBackgroundRecorder() {
   tick();
 }
 
+function databaseOperationProgress(patch) {
+  Object.assign(databaseOperation, patch);
+}
+
+async function databaseBackupsView() {
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    operation: { ...databaseOperation },
+    backups: await listDatabaseBackups({
+      backupDir: DATABASE_BACKUP_DIR,
+      currentVersion: SCHEMA_VERSION,
+    }),
+  };
+}
+
+async function withDatabaseOperation(type, filename, operation) {
+  if (databaseOperation.busy) {
+    throw requestError(409, `Database ${databaseOperation.type} is already running`);
+  }
+  databaseOperation = {
+    busy: true,
+    type,
+    filename: filename ?? null,
+    phase: "preparing",
+    percent: 0,
+    processed: 0,
+    total: 0,
+    unit: null,
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+    error: null,
+    result: null,
+  };
+  try {
+    const result = await operation((progress) => databaseOperationProgress(progress));
+    databaseOperationProgress({
+      busy: false,
+      phase: "complete",
+      percent: 100,
+      completedAt: new Date().toISOString(),
+      result,
+    });
+    return result;
+  } catch (error) {
+    databaseOperationProgress({
+      busy: false,
+      phase: "failed",
+      completedAt: new Date().toISOString(),
+      error: error.message,
+      result: null,
+    });
+    throw error;
+  }
+}
+
+async function manualDatabaseBackup() {
+  return withDatabaseOperation("backup", null, async (onProgress) => {
+    const result = await backupDatabaseManually({
+      databaseFile: historyStore.databaseFile,
+      backupDir: DATABASE_BACKUP_DIR,
+      sourceVersion: SCHEMA_VERSION,
+      onProgress,
+    });
+    historyStore.recordEvent({
+      eventKey: `database:manual-backup:${result.filename}`,
+      at: new Date().toISOString(),
+      category: "database",
+      type: "manual-backup",
+      message: `Manual database backup created: ${result.filename}`,
+      payload: {
+        filename: result.filename,
+        compressedBytes: result.compressedBytes,
+        durationMs: result.durationMs,
+        schemaVersion: SCHEMA_VERSION,
+      },
+    });
+    return {
+      filename: result.filename,
+      compressedBytes: result.compressedBytes,
+      durationMs: result.durationMs,
+      schemaVersion: SCHEMA_VERSION,
+    };
+  });
+}
+
+async function compatibleBackup(filename) {
+  if (path.basename(filename) !== filename || !filename.endsWith(".sqlite.zst")) {
+    throw requestError(400, "Invalid database backup filename");
+  }
+  const backups = await listDatabaseBackups({
+    backupDir: DATABASE_BACKUP_DIR,
+    currentVersion: SCHEMA_VERSION,
+  });
+  const backup = backups.find((item) => item.filename === filename);
+  if (!backup) throw requestError(404, "Database backup not found");
+  if (!backup.compatible) {
+    throw requestError(409, `Backup schema v${backup.schemaVersion ?? "unknown"} cannot be restored by application schema v${SCHEMA_VERSION}`);
+  }
+  return { ...backup, path: path.join(DATABASE_BACKUP_DIR, filename) };
+}
+
+async function restoreDatabaseBackup(filename) {
+  const backup = await compatibleBackup(filename);
+  return withDatabaseOperation("restore", filename, async (onProgress) => {
+    let extracted = null;
+    let originalMoved = false;
+    let backgroundStopped = false;
+    let databaseReady = true;
+    const databaseFile = historyStore.databaseFile;
+    const originalFile = `${databaseFile}.restore-original-${randomUUID()}.tmp`;
+    try {
+      extracted = await extractAndValidateDatabaseBackup({
+        backupFile: backup.path,
+        workingDir: DATA_DIR,
+        onProgress,
+      });
+      if (extracted.schemaVersion !== SCHEMA_VERSION) {
+        throw requestError(409, `Backup contains schema v${extracted.schemaVersion}; application requires schema v${SCHEMA_VERSION}`);
+      }
+
+      onProgress({ phase: "safety-backup", percent: 0, processed: 0, total: 0, unit: null });
+      const safetyBackup = await backupDatabaseManually({
+        databaseFile,
+        backupDir: DATABASE_BACKUP_DIR,
+        sourceVersion: SCHEMA_VERSION,
+        beforeRestore: true,
+        onProgress(progress) {
+          onProgress({ ...progress, phase: `safety-${progress.phase}` });
+        },
+      });
+
+      onProgress({ phase: "stopping", percent: 0, processed: 0, total: 0, unit: null });
+      stopApplicationBackgroundProcesses();
+      backgroundStopped = true;
+      await waitForDatabaseWriters();
+      historyStore.close();
+      databaseReady = false;
+      await Promise.all([
+        rm(`${databaseFile}-wal`, { force: true }),
+        rm(`${databaseFile}-shm`, { force: true }),
+      ]);
+
+      onProgress({ phase: "restoring", percent: 50, processed: 1, total: 2, unit: "files" });
+      await rename(databaseFile, originalFile);
+      originalMoved = true;
+      await rename(extracted.snapshotFile, databaseFile);
+      extracted = null;
+      await historyStore.initialize();
+      databaseReady = true;
+      await rm(originalFile, { force: true });
+      originalMoved = false;
+      lastRecordedSample = historyStore.latestSample();
+      latestStatusSnapshot = null;
+      statusRefreshPromise = null;
+      adaptiveChargingHistoryCache = null;
+      adaptiveChargingDemandProfileIndexPromise = null;
+      try {
+        historyStore.recordEvent({
+          eventKey: `database:restore:${filename}:${new Date().toISOString()}`,
+          at: new Date().toISOString(),
+          category: "database",
+          type: "manual-restore",
+          message: `Database restored from ${filename}`,
+          payload: {
+            filename,
+            schemaVersion: SCHEMA_VERSION,
+            safetyBackupFilename: safetyBackup.filename,
+          },
+        });
+      } catch (error) {
+        logDetailedError("database-restore-event", error);
+      }
+      onProgress({ phase: "restarting", percent: 100, processed: 2, total: 2, unit: "files" });
+      return {
+        filename,
+        schemaVersion: SCHEMA_VERSION,
+        safetyBackupFilename: safetyBackup.filename,
+      };
+    } catch (error) {
+      if (originalMoved) {
+        try {
+          historyStore.close();
+          databaseReady = false;
+          await Promise.all([
+            rm(databaseFile, { force: true }),
+            rm(`${databaseFile}-wal`, { force: true }),
+            rm(`${databaseFile}-shm`, { force: true }),
+          ]);
+          await rename(originalFile, databaseFile);
+          originalMoved = false;
+          await historyStore.initialize();
+          databaseReady = true;
+          lastRecordedSample = historyStore.latestSample();
+        } catch (rollbackError) {
+          logDetailedError("database-restore-rollback", rollbackError);
+          throw new Error(`${error.message}; database rollback also failed: ${rollbackError.message}`);
+        }
+      } else if (!databaseReady) {
+        try {
+          await historyStore.initialize();
+          databaseReady = true;
+          lastRecordedSample = historyStore.latestSample();
+        } catch (reopenError) {
+          logDetailedError("database-restore-reopen", reopenError);
+          throw new Error(`${error.message}; database reopen also failed: ${reopenError.message}`);
+        }
+      }
+      throw error;
+    } finally {
+      if (extracted?.snapshotFile) await cleanupExtractedDatabaseBackup(extracted.snapshotFile);
+      if (backgroundStopped && databaseReady) startApplicationBackgroundProcesses();
+    }
+  });
+}
+
+async function removeDatabaseBackup(filename) {
+  if (path.basename(filename) !== filename || !filename.endsWith(".sqlite.zst")) {
+    throw requestError(400, "Invalid database backup filename");
+  }
+  const backups = await listDatabaseBackups({ backupDir: DATABASE_BACKUP_DIR, currentVersion: SCHEMA_VERSION });
+  if (!backups.some((item) => item.filename === filename)) throw requestError(404, "Database backup not found");
+  return withDatabaseOperation("delete", filename, async (onProgress) => {
+    onProgress({ phase: "deleting", percent: 50, processed: 0, total: 1, unit: "files" });
+    await deleteDatabaseBackup({ backupDir: DATABASE_BACKUP_DIR, filename });
+    onProgress({ phase: "deleting", percent: 100, processed: 1, total: 1, unit: "files" });
+    return { filename };
+  });
+}
+
 async function api(req, res, url) {
+  if (req.method === "GET" && url.pathname === "/api/database-backups") {
+    return json(res, 200, await databaseBackupsView());
+  }
+  if (databaseOperation.busy) {
+    return json(res, 503, {
+      error: `Database ${databaseOperation.type} is in progress`,
+      operation: { ...databaseOperation },
+    });
+  }
+  if (req.method === "POST" && url.pathname === "/api/database-backups") {
+    await readBody(req);
+    await manualDatabaseBackup();
+    return json(res, 201, await databaseBackupsView());
+  }
+  if (url.pathname.startsWith("/api/database-backups/")) {
+    const encodedFilename = url.pathname.slice("/api/database-backups/".length).split("/")[0];
+    let filename;
+    try {
+      filename = decodeURIComponent(encodedFilename);
+    } catch {
+      throw requestError(400, "Invalid database backup filename");
+    }
+    if (req.method === "POST" && url.pathname.endsWith("/restore")) {
+      await readBody(req);
+      await restoreDatabaseBackup(filename);
+      return json(res, 200, await databaseBackupsView());
+    }
+    if (req.method === "DELETE" && !url.pathname.endsWith("/restore")) {
+      await removeDatabaseBackup(filename);
+      return json(res, 200, await databaseBackupsView());
+    }
+  }
   if (req.method === "GET" && url.pathname === "/api/notifications") {
     return json(res, 200, await notificationService.view());
   }
@@ -8328,24 +8670,7 @@ async function initializeApplication() {
       payload: delivery,
     });
   }
-  startScheduler();
-  startBackgroundRecorder();
-  const runRetention = async () => {
-    try {
-      const config = await readConfig();
-      if (config.retention.automaticMaintenance) await trimHistory(config.retention);
-      try {
-        await updateCurrentGasTariff(config);
-      } catch (error) {
-        logDetailedError("gas-tariff", error);
-      }
-    } catch (err) {
-      logDetailedError("retention", err);
-    }
-  };
-  retentionTimer = setInterval(runRetention, 24 * 60 * 60_000);
-  retentionTimer.unref?.();
-  void runRetention();
+  startApplicationBackgroundProcesses();
   applicationStarted = true;
 }
 
