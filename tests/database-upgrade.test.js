@@ -52,7 +52,7 @@ try {
     databaseFile,
     backupDir,
     sourceVersion: 3,
-    targetVersion: 4,
+    targetVersion: SCHEMA_VERSION,
     now: new Date("2026-07-19T12:34:56.000Z"),
     onProgress(value) { phases.push(value.phase); },
   });
@@ -64,7 +64,7 @@ try {
     databaseFile,
     backupDir,
     sourceVersion: 3,
-    targetVersion: 4,
+    targetVersion: SCHEMA_VERSION,
     now: new Date("2026-07-19T12:34:56.000Z"),
   });
   assert.match(secondBackup.filename, /-2\.sqlite\.zst$/);
@@ -81,12 +81,19 @@ try {
   const progress = [];
   const migrated = await migrateHistoryDatabase(dataDir, { onProgress(value) { progress.push(value); } });
   assert.equal(migrated.state, "current");
-  assert.deepEqual(progress, [{ fromVersion: 3, toVersion: 4 }]);
+  assert.deepEqual(progress, [
+    { fromVersion: 3, toVersion: 4 },
+    { fromVersion: 4, toVersion: 5 },
+  ]);
   const upgraded = new DatabaseSync(databaseFile, { readOnly: true });
   assert.equal(upgraded.prepare("PRAGMA quick_check").get().quick_check, "ok");
   for (const table of ["gas_tariff_snapshots", "gas_tariff_overrides", "fuel_cell_forecasts"]) {
     assert.ok(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
   }
+  assert.equal(
+    JSON.parse(upgraded.prepare("SELECT value FROM metadata WHERE key = 'energyCalculationVersion'").get().value),
+    2,
+  );
   upgraded.close();
 
   const newerDir = await mkdtemp(path.join(os.tmpdir(), "database-newer-"));

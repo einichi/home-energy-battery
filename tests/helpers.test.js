@@ -15,6 +15,7 @@ import {
   applySolarForecastBias,
   applyInterruptedChargeCap,
   aggregateEnergyReportSamples,
+  assertDeviceCommandResult,
   beginAdaptiveChargingBreakerRecovery,
   buildBatteryLearningModel,
   buildFuelCellGenerationModel,
@@ -88,6 +89,15 @@ import {
   syncAdaptiveChargingWindowExecution,
   updateAdaptiveChargingSolarHeadroomHold,
 } from "../server.js";
+
+assert.throws(
+  () => assertDeviceCommandResult({ ok: false, esv: "SetC_SNA" }, "test write"),
+  /test write failed: rejected with SetC_SNA/,
+);
+assert.throws(
+  () => assertDeviceCommandResult({ results: [{ epc: "0xDA", ok: false, esv: "SetC_SNA" }] }, "multi-write"),
+  /0xDA rejected with SetC_SNA/,
+);
 
 const staleSchedules = [
   { id: "stale", running: true, runningSince: "2026-06-15T02:59:01.000Z" },
@@ -427,8 +437,8 @@ assert.equal(
   "future planning restores home demand during the return buffer",
 );
 const occupancySamples = [
-  { timestamp: "2026-07-12T08:30:00.000Z", houseDemandW: 1200 },
-  { timestamp: "2026-07-12T09:30:00.000Z", houseDemandW: 300 },
+  { timestamp: "2026-07-12T08:30:00.000Z", houseDemandW: 1200, coverageSeconds: { houseDemandKwh: 1800 } },
+  { timestamp: "2026-07-12T09:30:00.000Z", houseDemandW: 300, coverageSeconds: { houseDemandKwh: 1800 } },
 ];
 const homeDemandDays = aggregateDemandDays(occupancySamples, { awayPeriods, occupancy: "home" });
 const awayDemandDays = aggregateDemandDays(occupancySamples, { awayPeriods, occupancy: "away" });
@@ -441,9 +451,9 @@ const awayBucket = awayBucketDate.getHours() * 2 + (awayBucketDate.getMinutes() 
 
 const learnedAway = predictAwayDemand(
   [
-    { timestamp: "2026-07-12T09:30:00.000Z", houseDemandW: 300 },
-    { timestamp: "2026-07-13T09:30:00.000Z", houseDemandW: 400 },
-    { timestamp: "2026-07-14T09:30:00.000Z", houseDemandW: 500 },
+    { timestamp: "2026-07-12T09:30:00.000Z", houseDemandW: 300, coverageSeconds: { houseDemandKwh: 1800 } },
+    { timestamp: "2026-07-13T09:30:00.000Z", houseDemandW: 400, coverageSeconds: { houseDemandKwh: 1800 } },
+    { timestamp: "2026-07-14T09:30:00.000Z", houseDemandW: 500, coverageSeconds: { houseDemandKwh: 1800 } },
   ],
   new Date("2026-07-15T09:30:00.000Z"),
   new Map(),
@@ -1834,6 +1844,7 @@ for (let week = 1; week <= 8; week += 1) {
     demandSamples.push({
       timestamp: new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(bucket / 2), bucket % 2 ? 30 : 0).toISOString(),
       houseDemandW: 1000 + week * 10,
+      coverageSeconds: { houseDemandKwh: 1800 },
     });
   }
 }
@@ -1850,6 +1861,7 @@ for (const year of [2023, 2024, 2025]) {
     multiYearDemandSamples.push({
       timestamp: new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(bucket / 2), bucket % 2 ? 30 : 0).toISOString(),
       houseDemandW: 3000,
+      coverageSeconds: { houseDemandKwh: 1800 },
     });
   }
 }
@@ -1882,6 +1894,7 @@ for (let bucket = 0; bucket < 48; bucket += 1) {
   outOfSeasonDemandSamples.push({
     timestamp: new Date(2025, 0, 13, Math.floor(bucket / 2), bucket % 2 ? 30 : 0).toISOString(),
     houseDemandW: 5000,
+    coverageSeconds: { houseDemandKwh: 1800 },
   });
 }
 const outOfSeasonDemandPrediction = predictHouseDemand(outOfSeasonDemandSamples, new Date(2026, 6, 13));
@@ -1895,6 +1908,7 @@ for (let daysAgo = 1; daysAgo <= 10; daysAgo += 1) {
     youngDemandHistory.push({
       timestamp: new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(bucket / 2), bucket % 2 ? 30 : 0).toISOString(),
       houseDemandW: 900 + daysAgo * 20,
+      coverageSeconds: { houseDemandKwh: 1800 },
     });
   }
 }
@@ -2030,10 +2044,11 @@ const sample = sampleFromStatus({
   circuitCumulativeKwh: { 1: 10, 2: 20 },
 });
 assert.equal(sample.rateYenPerKwh, 40);
-assert.equal(sample.solarSavingYen, 24);
-assert.equal(sample.solarGenerationKwh, 0.6);
-assert.equal(sample.gridImportKwh, 0.1);
-assert.equal(sample.gridExportKwh, 0.05);
+assert.equal(sample.solarSavingYen, undefined);
+assert.equal(sample.solarGenerationKwh, undefined);
+assert.equal(sample.gridImportKwh, undefined);
+assert.equal(sample.gridExportKwh, undefined);
+assert.equal(sample.houseDemandKwh, 0.75);
 assert.equal(sample.circuitPowerW["1"], 120);
 assert.equal(sample.circuitCumulativeKwh["2"], 20.25);
 assert.equal(sample.circuitEnergyKwh["1"], 0.5);
@@ -2112,7 +2127,7 @@ const mixedGridSolarCharge = sampleFromStatus({
   },
   meter: { grid_import_power: { value: 700 } },
 }, { ...migrated, rateBands: bands }, { timestamp: previousOffPeakTimestamp });
-assert.equal(mixedGridSolarCharge.offPeakSavingYen, 7);
+assert.equal(mixedGridSolarCharge.offPeakSavingYen, undefined);
 
 const mixedChargeWithoutGridMeter = sampleFromStatus({
   read_at: offPeakTimestamp,
@@ -2121,7 +2136,7 @@ const mixedChargeWithoutGridMeter = sampleFromStatus({
     solar: { instant_power: { value: 600 } },
   },
 }, { ...migrated, rateBands: bands }, { timestamp: previousOffPeakTimestamp });
-assert.equal(mixedChargeWithoutGridMeter.offPeakSavingYen, 4);
+assert.equal(mixedChargeWithoutGridMeter.offPeakSavingYen, undefined);
 
 const smartCosmoDisabledSample = sampleFromStatus({
   read_at: "2026-05-31T12:15:00+09:00",
@@ -2330,8 +2345,39 @@ const legacyPowerSummary = summarizeSamples([
   { timestamp: "2026-05-31T00:00:00.000Z", gridImportW: 1000, gridExportW: 500 },
   { timestamp: "2026-05-31T00:30:00.000Z", gridImportW: 2000, gridExportW: 1000 },
 ]);
-assert.equal(legacyPowerSummary.gridImportKwh, 1);
-assert.equal(legacyPowerSummary.gridExportKwh, 0.5);
+assert.equal(legacyPowerSummary.gridImportKwh, 0.75);
+assert.equal(legacyPowerSummary.gridExportKwh, 0.375);
+
+const recordingGapSummary = summarizeSamples([
+  { timestamp: "2026-05-31T00:00:00.000Z", gridImportW: 1000, expectedIntervalSeconds: 15 },
+  { timestamp: "2026-05-31T02:00:00.000Z", gridImportW: 1000, expectedIntervalSeconds: 15 },
+]);
+assert.equal(recordingGapSummary.gridImportKwh, 0, "recording gaps must not be filled with invented energy");
+
+const partialRangeReport = aggregateEnergyReportSamples([{
+  timestamp: "2026-05-31T00:30:00.000Z",
+  rollupStart: "2026-05-31T00:00:00.000Z",
+  rollupEnd: "2026-05-31T00:30:00.000Z",
+  gridImportKwh: 0.5,
+  solarGenerationKwh: 0.3,
+  batteryChargeKwh: 0.2,
+  solarSavingYen: 30,
+  offPeakSavingYen: 12,
+  coverageSeconds: { gridImportKwh: 1800, solarGenerationKwh: 1800, batteryChargeKwh: 1800 },
+  energyQuality: { gridImportKwh: "integrated", solarGenerationKwh: "integrated", batteryChargeKwh: "integrated" },
+}], {
+  start: "2026-05-31T00:10:00.000Z",
+  end: "2026-05-31T00:27:00.000Z",
+  bucket: "day",
+});
+assert.ok(Math.abs(partialRangeReport.totals.gridImportKwh - 17 / 60) < 1e-9);
+assert.ok(Math.abs(partialRangeReport.totals.solarSavingYen - 17) < 1e-9);
+assert.ok(Math.abs(partialRangeReport.totals.offPeakSavingYen - 6.8) < 1e-9);
+assert.equal(
+  partialRangeReport.buckets[0].dataQuality.gridImportKwh.coveragePercent,
+  100,
+  "partial calendar buckets report coverage against the selected range",
+);
 
 const rule = cleanAutomationRule({ enabled: true, conditions: { breakerAmps: 40, reserveAmps: 5, source: "houseDemandW" } });
 assert.equal(rule.action, "set-mode");
@@ -2371,7 +2417,7 @@ assert.equal(unavailableDemand.result.skipped, "demand unavailable");
 
 const actualChargingSafe = await evaluateAutomationRule(cleanAutomationRule({
   enabled: true,
-  conditions: { source: "houseDemandW", breakerAmps: 40, reserveAmps: 5, batteryChargingEstimateW: 1000 },
+  conditions: { source: "houseDemandW", breakerAmps: 40, reserveAmps: 5 },
 }), {
   energy: { battery: { operation_mode: { value: "auto" }, instant_power: { value: 600 } } },
   meter: { house_demand_power: { value: 2800 } },
@@ -2381,7 +2427,7 @@ assert.equal(actualChargingSafe.result.actualDemandWithChargingW, 3400);
 
 const gridImportDoesNotDoubleCountCharging = await evaluateAutomationRule(cleanAutomationRule({
   enabled: true,
-  conditions: { source: "gridImportW", breakerAmps: 40, reserveAmps: 5, batteryChargingEstimateW: 1000 },
+  conditions: { source: "gridImportW", breakerAmps: 40, reserveAmps: 5 },
 }), {
   energy: { battery: { operation_mode: { value: "auto" }, instant_power: { value: 600 } } },
   meter: { grid_import_power: { value: 3400 } },
@@ -2389,6 +2435,7 @@ const gridImportDoesNotDoubleCountCharging = await evaluateAutomationRule(cleanA
 assert.equal(gridImportDoesNotDoubleCountCharging.result.skipped, "conditions not met");
 assert.equal(gridImportDoesNotDoubleCountCharging.result.guardDemandW, 3400);
 
+const guardBatteryConfig = { batteryCapabilities: { maximumChargeWatts: 1000 } };
 
 const restoreWouldTrip = await evaluateAutomationRule(cleanAutomationRule({
   enabled: true,
@@ -2397,13 +2444,12 @@ const restoreWouldTrip = await evaluateAutomationRule(cleanAutomationRule({
     breakerAmps: 40,
     source: "houseDemandW",
     reserveAmps: 5,
-    batteryChargingEstimateW: 1000,
     restoreBelowAmps: 30,
   },
 }), {
   energy: { battery: { operation_mode: { value: "standby" }, instant_power: { value: 0 } } },
   meter: { house_demand_power: { value: 2600 } },
-}, new Date("2026-05-31T00:00:00.000Z"));
+}, new Date("2026-05-31T00:00:00.000Z"), () => {}, guardBatteryConfig);
 assert.equal(restoreWouldTrip.result.skipped, "restore would exceed breaker reserve");
 assert.equal(restoreWouldTrip.result.estimatedRestoredDemandW, 3600);
 
@@ -2415,18 +2461,17 @@ const repeatedRestoreLogRule = cleanAutomationRule({
     source: "gridImportW",
     breakerAmps: 40,
     reserveAmps: 5,
-    batteryChargingEstimateW: 1000,
     restoreBelowAmps: 30,
   },
 });
 await evaluateAutomationRule(repeatedRestoreLogRule, {
   energy: { battery: { operation_mode: { value: "standby" }, instant_power: { value: 0 } } },
   meter: { grid_import_power: { value: 3200 } },
-}, new Date("2026-05-31T00:01:00.000Z"));
+}, new Date("2026-05-31T00:01:00.000Z"), () => {}, guardBatteryConfig);
 await evaluateAutomationRule(repeatedRestoreLogRule, {
   energy: { battery: { operation_mode: { value: "standby" }, instant_power: { value: 0 } } },
   meter: { grid_import_power: { value: 3100 } },
-}, new Date("2026-05-31T00:02:00.000Z"));
+}, new Date("2026-05-31T00:02:00.000Z"), () => {}, guardBatteryConfig);
 assert.equal(repeatedRestoreLogRule.log.length, 2);
 assert.match(repeatedRestoreLogRule.log[0].message, /Grid Import \(3200 W\) still exceeds/);
 assert.match(repeatedRestoreLogRule.log[1].message, /Grid Import \(3100 W\) still exceeds/);
@@ -2439,14 +2484,13 @@ const reassertStandbyRule = cleanAutomationRule({
     source: "gridImportW",
     breakerAmps: 40,
     reserveAmps: 5,
-    batteryChargingEstimateW: 1000,
     restoreBelowAmps: 30,
   },
 });
 await evaluateAutomationRule(reassertStandbyRule, {
   energy: { battery: { operation_mode: { value: "auto" }, instant_power: { value: 0 } } },
   meter: { grid_import_power: { value: 2000 } },
-}, new Date("2026-05-31T00:03:00.000Z"), () => {}, null, {
+}, new Date("2026-05-31T00:03:00.000Z"), () => {}, guardBatteryConfig, {
   execute: async (action, payload) => {
     reassertActions.push({ action, payload });
     return { ok: true };
@@ -2464,7 +2508,6 @@ const deferredRestoreRule = cleanAutomationRule({
     source: "gridImportW",
     breakerAmps: 40,
     reserveAmps: 5,
-    batteryChargingEstimateW: 1000,
     restoreBelowAmps: 30,
     restoreDelaySeconds: 30,
   },
@@ -2472,7 +2515,7 @@ const deferredRestoreRule = cleanAutomationRule({
 const deferredRestore = await evaluateAutomationRule(deferredRestoreRule, {
   energy: { battery: { operation_mode: { value: "standby" }, instant_power: { value: 0 } } },
   meter: { grid_import_power: { value: 2000 } },
-}, new Date("2026-05-31T00:01:00.000Z"), () => {}, null, {
+}, new Date("2026-05-31T00:01:00.000Z"), () => {}, guardBatteryConfig, {
   holdStandbyForAdaptiveCharging: true,
   execute: async (action, payload) => deferredRestoreActions.push({ action, payload }),
 });

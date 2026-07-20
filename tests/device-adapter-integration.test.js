@@ -65,6 +65,36 @@ try {
   child.stderr.on("data", (chunk) => { output += chunk; });
 
   await waitFor(async () => (await fetch(`${baseUrl}/api/config`)).ok);
+  const indexResponse = await fetch(`${baseUrl}/`);
+  assert.equal(indexResponse.status, 200);
+  assert.match(indexResponse.headers.get("content-security-policy") ?? "", /default-src 'self'/);
+  assert.equal(indexResponse.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(indexResponse.headers.get("x-frame-options"), "DENY");
+
+  const invalidContentType = await fetch(`${baseUrl}/api/config`, {
+    method: "PUT",
+    headers: { "content-type": "text/plain" },
+    body: "{}",
+  });
+  assert.equal(invalidContentType.status, 415);
+
+  const crossOriginMutation = await fetch(`${baseUrl}/api/config`, {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      origin: "https://attacker.example",
+    },
+    body: "{}",
+  });
+  assert.equal(crossOriginMutation.status, 403);
+
+  const oversizedMutation = await fetch(`${baseUrl}/api/config`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ padding: "x".repeat(1024 * 1024 + 1) }),
+  });
+  assert.equal(oversizedMutation.status, 413);
+
   const configured = await request(baseUrl, "/api/config", {
     method: "PUT",
     body: {

@@ -22,11 +22,24 @@ assert.deepEqual(normalizeRetentionPolicy({}, 730), {
 
 const enriched = enrichHistorySample(
   sample("2026-01-01T00:30:00.000Z", { houseDemandW: 1000, batteryPowerW: -500 }),
-  sample("2026-01-01T00:00:00.000Z"),
+  sample("2026-01-01T00:00:00.000Z", { houseDemandW: 1000, batteryPowerW: -500 }),
 );
 assert.equal(enriched.houseDemandKwh, 0.5);
 assert.equal(enriched.batteryChargeKwh, 0);
 assert.equal(enriched.batteryDischargeKwh, 0.25);
+
+const exactEnergyWithPower = enrichHistorySample(
+  sample("2026-01-01T00:30:00.000Z", {
+    gridImportW: 2000,
+    gridImportKwh: 0.7,
+    coverageSeconds: { gridImportKwh: 1800 },
+    energyQuality: { gridImportKwh: "counter" },
+  }),
+  sample("2026-01-01T00:00:00.000Z", { gridImportW: 1000 }),
+);
+assert.equal(exactEnergyWithPower.gridImportKwh, 0.7);
+assert.equal(exactEnergyWithPower.intervalAveragePowerW.gridImportW, 1500);
+assert.equal(exactEnergyWithPower.powerCoverageSeconds.gridImportW, 1800);
 
 const dataDir = await mkdtemp(path.join(os.tmpdir(), "history-store-"));
 try {
@@ -65,8 +78,8 @@ try {
     { resolution: "interval" },
   );
   assert.equal(interval.length, 3);
-  assert.equal(interval[1].houseDemandKwh, 1);
-  assert.equal(interval[1].solarGenerationKwh, 0.25);
+  assert.equal(interval[1].houseDemandKwh, 0.75);
+  assert.equal(interval[1].solarGenerationKwh, undefined);
   assert.equal(interval[2].houseDemandKwh, undefined);
 
   const oversizedRange = store.querySamples(
@@ -302,6 +315,7 @@ try {
   for (let hour = 0; hour < 24; hour += 1) {
     store.appendSample(sample(new Date(firstDayStart + hour * 3_600_000).toISOString(), {
       solarGenerationKwh: 0.1,
+      coverageSeconds: { solarGenerationKwh: 3600 },
     }));
   }
   assert.equal(store.settleSolarForecastOutcomes(dayRange("2026-07-02").start), 3);
@@ -324,6 +338,7 @@ try {
     for (let hour = 0; hour < 24; hour += 1) {
       store.appendSample(sample(new Date(startMs + hour * 3_600_000).toISOString(), {
         solarGenerationKwh: 0.1,
+        coverageSeconds: { solarGenerationKwh: 3600 },
       }));
     }
   }
@@ -344,6 +359,7 @@ try {
   for (let hour = 0; hour < 2; hour += 1) {
     store.appendSample(sample(new Date(incompleteStart + hour * 3_600_000).toISOString(), {
       solarGenerationKwh: 0.1,
+      coverageSeconds: { solarGenerationKwh: 3600 },
     }));
   }
   assert.equal(store.settleSolarForecastOutcomes(dayRange("2026-07-09").start), 0);

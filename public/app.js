@@ -240,7 +240,7 @@ const I18N = {
     lastYear: "Last year",
     energyReports: "Energy Reports",
     exactUsageReports: "Energy Usage",
-    reportsHelp: "Compare exact usage totals by day, week, or month.",
+    reportsHelp: "Compare recorded energy totals by day, week, or month.",
     reportMode: "Report mode",
     dailyReport: "Daily",
     weeklyReport: "Weekly",
@@ -256,7 +256,7 @@ const I18N = {
     sentToGrid: "Sent to grid",
     peakDemand: "Peak Demand",
     usageTrend: "Usage Trend",
-    exactKwhTable: "Exact kWh by Period",
+    exactKwhTable: "Energy by Period",
     period: "Period",
     change: "Change",
     noReportData: "No report data loaded yet.",
@@ -859,7 +859,7 @@ const I18N = {
     sentToGrid: "送電量",
     peakDemand: "最大需要",
     usageTrend: "使用量トレンド",
-    exactKwhTable: "期間別の正確なkWh",
+    exactKwhTable: "期間別エネルギー",
     period: "期間",
     change: "増減",
     noReportData: "レポートデータはまだ読み込まれていません。",
@@ -1849,16 +1849,6 @@ function sampleValueForTrend(name, sample) {
   return Number.isFinite(value) ? value : null;
 }
 
-function pushSampleToTrends(sample, options = {}) {
-  const time = new Date(sample.timestamp).getTime();
-  for (const channel of Object.keys(sample.circuitPowerW ?? {})) {
-    ensureCircuitTrendConfig(channel);
-  }
-  for (const name of Object.keys(TREND_CONFIG)) {
-    pushTrend(name, sampleValueForTrend(name, sample), time, options);
-  }
-}
-
 function ensureCircuitTrendConfigsForSamples(samples = []) {
   for (const sample of samples) {
     for (const channel of Object.keys(sample.circuitPowerW ?? {})) {
@@ -2465,15 +2455,6 @@ function setBar(selector, percent) {
   el.style.width = `${Math.max(0, Math.min(100, percent))}%`;
 }
 
-function setPowerBar(selector, watts, maxWatts = 3000) {
-  const el = $(selector);
-  if (!el) return;
-  const percent = Math.max(-100, Math.min(100, (watts / maxWatts) * 100));
-  el.style.width = `${Math.abs(percent)}%`;
-  el.style.marginLeft = percent < 0 ? `${50 - Math.abs(percent) / 2}%` : "50%";
-  el.classList.toggle("negative", percent < 0);
-}
-
 function selectHourOptions(select) {
   select.innerHTML = "";
   const current = document.createElement("option");
@@ -2508,7 +2489,7 @@ function operationModeOptions() {
 function rateBandRow(band = {}, index = 0) {
   return `
     <div class="rate-band-row" data-rate-band="${index}">
-      <label><span>${t("rateBandLabel")}</span><input data-rate-field="label" value="${band.label ?? ""}" /></label>
+      <label><span>${t("rateBandLabel")}</span><input data-rate-field="label" value="${escapeHtml(band.label ?? "")}" /></label>
       <label><span>${t("rateBandPrice")}</span><input data-rate-field="yenPerKwh" type="number" min="0" step="0.01" value="${band.yenPerKwh ?? ""}" /></label>
       <label><span>${t("rateBandStart")}</span><input data-rate-field="start" type="time" value="${band.start ?? "00:00"}" /></label>
       <label><span>${t("rateBandEnd")}</span><input data-rate-field="end" type="time" value="${band.end ?? "00:00"}" /></label>
@@ -2646,7 +2627,6 @@ function defaultAutomationRule() {
       breakerAmps: 40,
       breakerVoltage: 100,
       reserveAmps: 5,
-      batteryChargingEstimateW: state.config?.batteryCapabilities?.maximumChargeWatts ?? 1000,
       restoreBelowAmps: 30,
       restoreDelaySeconds: 300,
     },
@@ -4205,7 +4185,6 @@ function updateConfigControls(config) {
   $("#automaticRetention").checked = retention.automaticMaintenance !== false;
   $("#batteryUsableCapacity").value = config.batteryCapabilities?.usableCapacityKwh ?? "";
   $("#batteryMaximumChargeWatts").value = config.batteryCapabilities?.maximumChargeWatts
-    ?? state.automationRules.find((rule) => rule.type === "backup-demand-guard")?.conditions?.batteryChargingEstimateW
     ?? "";
   $("#adaptiveChargingEnabled").checked = config.adaptiveCharging?.enabled === true;
   $("#adaptiveChargingLatitude").value = config.adaptiveCharging?.latitude ?? "";
@@ -4892,7 +4871,7 @@ function renderReportRows(report) {
   for (const bucket of buckets) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${bucket.label}</td>
+      <td>${escapeHtml(bucket.label)}</td>
       <td data-report-feature="smart-cosmo">${energyKwh(Number(bucket.houseDemandKwh))}</td>
       <td data-report-feature="smart-cosmo">${formatReportDelta(bucket)}</td>
       <td data-report-feature="solar">${energyKwh(Number(bucket.solarGenerationKwh))}</td>
@@ -5234,19 +5213,33 @@ function renderSchedules(schedules) {
         : schedule.lastResult.error
       : t("waiting");
     const toggleLabel = schedule.enabled === false ? t("resume") : t("pause");
-    const toggleButton = schedule.completed
-      ? ""
-      : `<button class="ghost" data-toggle-enabled="${schedule.id}" data-enabled="${schedule.enabled === false ? "true" : "false"}">${toggleLabel}</button>`;
-    tr.innerHTML = `
-      <td>${scheduleWhen(schedule)}</td>
-      <td>${actionLabel(schedule.action)}</td>
-      <td>${schedule.repeat === "daily" ? `${scheduleDays(schedule)}<br>` : ""}${schedulePayloadDetails(schedule)}</td>
-      <td>${status}</td>
-      <td class="schedule-actions">
-        ${toggleButton}
-        <button class="delete" data-delete="${schedule.id}">Delete</button>
-      </td>
-    `;
+    const whenCell = document.createElement("td");
+    whenCell.textContent = scheduleWhen(schedule);
+    const actionCell = document.createElement("td");
+    actionCell.textContent = actionLabel(schedule.action);
+    const detailsCell = document.createElement("td");
+    if (schedule.repeat === "daily") {
+      detailsCell.append(document.createTextNode(scheduleDays(schedule)), document.createElement("br"));
+    }
+    detailsCell.append(document.createTextNode(schedulePayloadDetails(schedule)));
+    const statusCell = document.createElement("td");
+    statusCell.textContent = status;
+    const actionsCell = document.createElement("td");
+    actionsCell.className = "schedule-actions";
+    if (!schedule.completed) {
+      const toggleButton = document.createElement("button");
+      toggleButton.className = "ghost";
+      toggleButton.dataset.toggleEnabled = schedule.id;
+      toggleButton.dataset.enabled = schedule.enabled === false ? "true" : "false";
+      toggleButton.textContent = toggleLabel;
+      actionsCell.append(toggleButton);
+    }
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "delete";
+    deleteButton.dataset.delete = schedule.id;
+    deleteButton.textContent = t("delete");
+    actionsCell.append(deleteButton);
+    tr.append(whenCell, actionCell, detailsCell, statusCell, actionsCell);
     rows.append(tr);
   }
   updateScheduleAdaptiveChargingState();
@@ -6171,8 +6164,6 @@ function initForms() {
         breakerAmps: $("#automationBreakerAmps").value,
         breakerVoltage: existing?.conditions?.breakerVoltage ?? 100,
         reserveAmps: $("#automationReserveAmps").value,
-        batteryChargingEstimateW: state.config?.batteryCapabilities?.maximumChargeWatts
-          ?? $("#batteryMaximumChargeWatts").value,
         restoreBelowAmps: $("#automationRestoreBelow").value,
         restoreDelaySeconds: $("#automationRestoreDelay").value,
       },
@@ -6419,29 +6410,41 @@ function renderDiscovery(result) {
     el.innerHTML = `<p>${t("noDevicesFound")}</p>`;
     return;
   }
-  const rows = result.discovered
-    .map(
-      (device) => `
-    <tr>
-      <td>${device.host}</td>
-      <td>${device.roles.map(localizeRole).join(", ")}</td>
-      <td>${device.instances.length}</td>
-    </tr>
-  `,
-    )
-    .join("");
-  el.innerHTML = `
-    <div class="table-wrap discovery-table">
-      <table>
-        <thead>
-          <tr><th>${t("address")}</th><th>${t("likelyRole")}</th><th>${t("services")}</th></tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
-    <button id="applyDiscoveryBtn" class="ghost" type="button">${t("useSuggestedAddresses")}</button>
-  `;
-  $("#applyDiscoveryBtn").addEventListener("click", () => {
+  el.replaceChildren();
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap discovery-table";
+  const table = document.createElement("table");
+  const header = document.createElement("tr");
+  for (const label of [t("address"), t("likelyRole"), t("services")]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    header.append(th);
+  }
+  const thead = document.createElement("thead");
+  thead.append(header);
+  const tbody = document.createElement("tbody");
+  for (const device of result.discovered) {
+    const row = document.createElement("tr");
+    for (const value of [
+      device.host,
+      device.roles.map(localizeRole).join(", "),
+      String(device.instances.length),
+    ]) {
+      const td = document.createElement("td");
+      td.textContent = value;
+      row.append(td);
+    }
+    tbody.append(row);
+  }
+  table.append(thead, tbody);
+  wrap.append(table);
+  const applyButton = document.createElement("button");
+  applyButton.id = "applyDiscoveryBtn";
+  applyButton.className = "ghost";
+  applyButton.type = "button";
+  applyButton.textContent = t("useSuggestedAddresses");
+  el.append(wrap, applyButton);
+  applyButton.addEventListener("click", () => {
     updateConfigControls(result.suggestedConfig);
     toast(t("suggestedLoaded"));
   });
