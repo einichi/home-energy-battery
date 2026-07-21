@@ -62,6 +62,8 @@ const ADAPTIVE_CHARGING_SOLAR_HEADROOM_CLEAR_CHECKS = 2;
 const ADAPTIVE_CHARGING_BREAKER_SAFETY_MARGIN_W = 200;
 const ADAPTIVE_CHARGING_BREAKER_WAIT_LOG_MS = 5 * 60_000;
 const ADAPTIVE_CHARGING_MIN_EXECUTABLE_CHARGE_WH = 50;
+const OPERATION_MODE_VERIFY_ATTEMPTS = 4;
+const OPERATION_MODE_VERIFY_DELAY_MS = 750;
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
 const ADAPTIVE_CHARGE_SESSION_LIMIT = 30;
 const ADAPTIVE_CHARGE_SAMPLE_LIMIT = 500;
@@ -5536,24 +5538,49 @@ function assertDeviceCommandResult(result, description = "device command") {
   };
 }
 
-async function verifyBatteryOperationMode(result, host, expectedMode) {
-  const status = await runCliQueued("energy-status", {
+async function verifyBatteryOperationMode(result, host, expectedMode, {
+  attempts = OPERATION_MODE_VERIFY_ATTEMPTS,
+  delayMs = OPERATION_MODE_VERIFY_DELAY_MS,
+  readStatus = () => runCliQueued("energy-status", {
     "battery-host": host,
     "no-solar": true,
     "no-fuel-cell": true,
-  });
-  const actualMode = status?.battery?.operation_mode?.value
-    ?? status?.battery?.operation_mode?.human
-    ?? null;
-  if (!actualMode) {
-    throw new Error(`operation mode ${expectedMode} was acknowledged but could not be verified`);
-  }
-  const normalizedActual = String(actualMode).toLowerCase().replaceAll("-", "_");
+  }),
+  wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+} = {}) {
   const normalizedExpected = String(expectedMode).toLowerCase().replaceAll("-", "_");
-  if (normalizedActual !== normalizedExpected) {
-    throw new Error(`operation mode ${expectedMode} was acknowledged but read back as ${actualMode}`);
+  let actualMode = null;
+  let lastReadError = null;
+  const maximumAttempts = Math.max(1, Math.floor(Number(attempts) || 1));
+  for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+    try {
+      const status = await readStatus();
+      actualMode = status?.battery?.operation_mode?.value
+        ?? status?.battery?.operation_mode?.human
+        ?? null;
+      const normalizedActual = actualMode === null
+        ? null
+        : String(actualMode).toLowerCase().replaceAll("-", "_");
+      if (normalizedActual === normalizedExpected) {
+        return { ...result, verified: true, readBack: { operationMode: actualMode, attempts: attempt } };
+      }
+      lastReadError = null;
+    } catch (error) {
+      lastReadError = error;
+      break;
+    }
+    if (attempt < maximumAttempts && delayMs > 0) await wait(delayMs);
   }
-  return { ...result, verified: true, readBack: { operationMode: actualMode } };
+  if (lastReadError) {
+    throw new Error(
+      `operation mode ${expectedMode} was acknowledged but verification failed after ${maximumAttempts} attempts: ${lastReadError.message}`,
+      { cause: lastReadError },
+    );
+  }
+  if (!actualMode) {
+    throw new Error(`operation mode ${expectedMode} was acknowledged but could not be verified after ${maximumAttempts} attempts`);
+  }
+  throw new Error(`operation mode ${expectedMode} was acknowledged but still read back as ${actualMode} after ${maximumAttempts} attempts`);
 }
 
 function parseRunAt(schedule) {
@@ -6249,10 +6276,29 @@ async function enforceAdaptiveChargingSlotEndDeadline(expectedKey, {
   if (remainingMs > 0) return { stopped: false, remainingMs };
   const windowEndMs = new Date(state.activeSlot?.windowEnd).getTime();
   const slotEndMs = new Date(state.activeSlot?.end).getTime();
-  const windowEnded = Number.isFinite(windowEndMs) && Number.isFinite(slotEndMs) && slotEndMs >= windowEndMs;
+  const windowEnded = Number.isFinite(windowEndMs)
+    && (now.getTime() >= windowEndMs || (Number.isFinite(slotEndMs) && slotEndMs >= windowEndMs));
   const reason = windowEnded ? "Planned discounted window ended" : "Planned charging slot ended";
-  if (windowEnded) await release(state, reason, now);
-  else await suspend(state, reason, now, null, undefined, state.activeSlot?.windowEnd);
+  try {
+    if (windowEnded) await release(state, reason, now);
+    else await suspend(state, reason, now, null, undefined, state.activeSlot?.windowEnd);
+  } catch (error) {
+    appendAdaptiveChargingLog(
+      state,
+      `Failed to stop overdue charge after ${reason.toLowerCase()}: ${error.message}; retrying`,
+      "error",
+      now,
+    );
+    state.lastResult = {
+      ok: false,
+      at: now.toISOString(),
+      error: error.message,
+      kind: "slot-end-retry",
+      reason: reason.toLowerCase(),
+    };
+    await writeState(state);
+    return { stopped: false, retryMs: ADAPTIVE_CHARGING_SLOT_END_RETRY_MS, error: error.message };
+  }
   finalizeExpiredAdaptiveChargingWindow(state, state.activeWindowExecution?.latestSocPercent, now);
   state.lastResult = {
     ok: true,
@@ -6272,20 +6318,28 @@ function clearAdaptiveChargingSlotEndTimer() {
 
 function armAdaptiveChargingSlotEndTimer(key, delayMs) {
   adaptiveChargingSlotEndTimerKey = key;
-  adaptiveChargingSlotEndTimer = setTimeout(() => {
-    adaptiveChargingSlotEndTimer = null;
-    adaptiveChargingSlotEndTimerKey = null;
+  const timer = setTimeout(() => {
     enforceAdaptiveChargingSlotEndDeadline(key)
       .then((result) => {
-        if (Number.isFinite(result.remainingMs) && result.remainingMs > 0) {
-          armAdaptiveChargingSlotEndTimer(key, Math.min(result.remainingMs, MAX_TIMER_DELAY_MS));
+        if (adaptiveChargingSlotEndTimer !== timer) return;
+        adaptiveChargingSlotEndTimer = null;
+        adaptiveChargingSlotEndTimerKey = null;
+        const retryDelayMs = Number.isFinite(result.remainingMs) && result.remainingMs > 0
+          ? result.remainingMs
+          : result.retryMs;
+        if (Number.isFinite(retryDelayMs) && retryDelayMs > 0) {
+          armAdaptiveChargingSlotEndTimer(key, Math.min(retryDelayMs, MAX_TIMER_DELAY_MS));
         }
       })
       .catch((err) => {
+        if (adaptiveChargingSlotEndTimer !== timer) return;
+        adaptiveChargingSlotEndTimer = null;
+        adaptiveChargingSlotEndTimerKey = null;
         logDetailedError("adaptive-charging-slot-end", err);
         armAdaptiveChargingSlotEndTimer(key, ADAPTIVE_CHARGING_SLOT_END_RETRY_MS);
       });
   }, Math.max(0, Math.min(delayMs, MAX_TIMER_DELAY_MS)));
+  adaptiveChargingSlotEndTimer = timer;
   if (typeof adaptiveChargingSlotEndTimer.unref === "function") adaptiveChargingSlotEndTimer.unref();
 }
 
@@ -7036,7 +7090,12 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
   )) {
     const completedSlot = state.activeSlot;
     let stopReason = "Planned charge target reached";
-    if (activeExpired) stopReason = "Planned discounted window ended";
+    if (activeExpired) {
+      const activeWindowEndMs = new Date(completedSlot?.windowEnd).getTime();
+      stopReason = Number.isFinite(activeWindowEndMs) && now.getTime() < activeWindowEndMs
+        ? "Planned charging slot ended"
+        : "Planned discounted window ended";
+    }
     else if (activePlanStopReason) stopReason = activePlanStopReason;
     else if (!liveImportSafety.available) {
       const interruption = breakerReserveInterrupted
@@ -7073,19 +7132,36 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
       && Number.isFinite(completedWindowEndMs)
       && completedWindowEndMs > now.getTime(),
     );
-    if (breakerReserveInterrupted) {
-      await suspendAdaptiveChargeInStandby(state, stopReason, now);
-    } else if (holdStandbyUntilWindowEnd) {
-      await suspendAdaptiveChargeInStandby(
+    try {
+      if (breakerReserveInterrupted) {
+        await suspendAdaptiveChargeInStandby(state, stopReason, now);
+      } else if (holdStandbyUntilWindowEnd) {
+        await suspendAdaptiveChargeInStandby(
+          state,
+          stopReason,
+          now,
+          null,
+          executeAction,
+          completedSlot.windowEnd,
+        );
+      } else {
+        await releaseAdaptiveCharge(state, stopReason, now);
+      }
+    } catch (error) {
+      appendAdaptiveChargingLog(
         state,
-        stopReason,
+        `Failed to stop active charge after ${stopReason.toLowerCase()}: ${error.message}; will retry on the next check`,
+        "error",
         now,
-        null,
-        executeAction,
-        completedSlot.windowEnd,
       );
-    } else {
-      await releaseAdaptiveCharge(state, stopReason, now);
+      state.lastResult = {
+        ok: false,
+        at: now.toISOString(),
+        error: error.message,
+        kind: "charge-stop-retry",
+        reason: stopReason.toLowerCase(),
+      };
+      return writeAdaptiveChargingState(state);
     }
     if (activeEnergyTargetReached || activeSocTargetReached) {
       state.plan = consumeCompletedAdaptiveChargingSlot(state.plan, completedSlot);
@@ -7896,6 +7972,9 @@ async function runRetentionMaintenance() {
 
 function startApplicationBackgroundProcesses() {
   backgroundProcessesEnabled = true;
+  readAdaptiveChargingState()
+    .then((state) => syncAdaptiveChargingSlotEndTimer(state))
+    .catch((error) => logDetailedError("adaptive-charging-slot-end-startup", error));
   startScheduler();
   startBackgroundRecorder();
   retentionTimer = setInterval(runRetentionMaintenance, 24 * 60 * 60_000);
@@ -8879,6 +8958,7 @@ export {
   summarizeCircuits,
   syncAdaptiveChargingWindowExecution,
   updateAdaptiveChargingSolarHeadroomHold,
+  verifyBatteryOperationMode,
   predictHouseDemand,
 };
 

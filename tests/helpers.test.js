@@ -88,6 +88,7 @@ import {
   suspendAdaptiveChargeInStandby,
   syncAdaptiveChargingWindowExecution,
   updateAdaptiveChargingSolarHeadroomHold,
+  verifyBatteryOperationMode,
 } from "../server.js";
 
 assert.throws(
@@ -97,6 +98,41 @@ assert.throws(
 assert.throws(
   () => assertDeviceCommandResult({ results: [{ epc: "0xDA", ok: false, esv: "SetC_SNA" }] }, "multi-write"),
   /0xDA rejected with SetC_SNA/,
+);
+
+let operationModeReadCount = 0;
+let operationModeWaitCount = 0;
+const verifiedOperationMode = await verifyBatteryOperationMode(
+  { ok: true },
+  "192.0.2.10",
+  "standby",
+  {
+    attempts: 3,
+    delayMs: 1,
+    readStatus: async () => ({
+      battery: {
+        operation_mode: { value: operationModeReadCount++ === 0 ? "auto" : "standby" },
+      },
+    }),
+    wait: async () => { operationModeWaitCount += 1; },
+  },
+);
+assert.equal(verifiedOperationMode.verified, true);
+assert.equal(verifiedOperationMode.readBack.operationMode, "standby");
+assert.equal(verifiedOperationMode.readBack.attempts, 2);
+assert.equal(operationModeWaitCount, 1);
+await assert.rejects(
+  verifyBatteryOperationMode(
+    { ok: true },
+    "192.0.2.10",
+    "standby",
+    {
+      attempts: 2,
+      delayMs: 0,
+      readStatus: async () => ({ battery: { operation_mode: { value: "auto" } } }),
+    },
+  ),
+  /still read back as auto after 2 attempts/,
 );
 
 const staleSchedules = [
@@ -1621,6 +1657,63 @@ await enforceAdaptiveChargingSlotEndDeadline(intermediateDeadlineKey, {
 });
 assert.equal(intermediateSuspendCount, 1);
 assert.equal(intermediateDeadlineState.standbyHoldUntil, "2026-07-11T13:00:00.000Z");
+
+const overdueWindowState = {
+  owner: "adaptiveCharging",
+  activePlanCreatedAt: "overdue-window-plan",
+  activeSlot: {
+    start: "2026-07-11T12:00:00.000Z",
+    end: "2026-07-11T12:30:00.000Z",
+    windowEnd: "2026-07-11T13:00:00.000Z",
+    targetWh: 1050,
+  },
+};
+let overdueReleaseCount = 0;
+let overdueSuspendCount = 0;
+await enforceAdaptiveChargingSlotEndDeadline(
+  adaptiveChargingSlotEndKey(overdueWindowState),
+  {
+    now: new Date("2026-07-11T14:00:00.000Z"),
+    readState: async () => overdueWindowState,
+    release: async (state) => {
+      overdueReleaseCount += 1;
+      state.owner = null;
+      state.activeSlot = null;
+    },
+    suspend: async () => { overdueSuspendCount += 1; },
+    writeState: async () => {},
+  },
+);
+assert.equal(overdueReleaseCount, 1);
+assert.equal(overdueSuspendCount, 0);
+
+const failedDeadlineState = {
+  owner: "adaptiveCharging",
+  activePlanCreatedAt: "failed-deadline-plan",
+  activeSlot: {
+    start: "2026-07-11T12:00:00.000Z",
+    end: "2026-07-11T12:30:00.000Z",
+    windowEnd: "2026-07-11T13:00:00.000Z",
+    targetWh: 1050,
+  },
+  log: [],
+};
+let failedDeadlineWriteCount = 0;
+const failedDeadlineResult = await enforceAdaptiveChargingSlotEndDeadline(
+  adaptiveChargingSlotEndKey(failedDeadlineState),
+  {
+    now: new Date("2026-07-11T12:30:00.000Z"),
+    readState: async () => failedDeadlineState,
+    suspend: async () => { throw new Error("mode read-back remained auto"); },
+    writeState: async () => { failedDeadlineWriteCount += 1; },
+  },
+);
+assert.equal(failedDeadlineResult.stopped, false);
+assert.equal(failedDeadlineResult.retryMs, 5000);
+assert.equal(failedDeadlineState.owner, "adaptiveCharging");
+assert.equal(failedDeadlineWriteCount, 1);
+assert.match(failedDeadlineState.log.at(-1).message, /Failed to stop overdue charge/);
+assert.equal(failedDeadlineState.lastResult.kind, "slot-end-retry");
 
 function chronologicalSlot(hour, band, netKwh = 0, highSolarNetKwh = netKwh) {
   const startMs = Date.parse("2026-07-12T00:00:00.000Z") + hour * 3_600_000;
