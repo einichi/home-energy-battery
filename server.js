@@ -35,6 +35,9 @@ import {
   normalizeGasTariffPayload,
   validBillingMonth,
 } from "./lib/gas-tariffs.js";
+import { timestampConsole } from "./lib/console-timestamps.js";
+
+timestampConsole();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 8787);
@@ -47,6 +50,8 @@ const ADAPTIVE_CHARGING_DIR = path.join(DATA_DIR, "adaptive-charging");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 const DATABASE_BACKUP_DIR = path.join(DATA_DIR, "backups");
 const CLI_TIMEOUT_MS = Number(process.env.CLI_TIMEOUT_MS ?? 15000);
+const CLI_QUEUE_TIMEOUT_MS = Math.max(30_000, CLI_TIMEOUT_MS * 4);
+const CLI_QUEUE_STARVATION_MS = Math.max(15_000, CLI_TIMEOUT_MS * 2);
 const CLI_FILE = "home-energy-battery-node.js";
 const SCHEDULE_CHECK_INTERVAL_MS = Number(process.env.SCHEDULE_CHECK_INTERVAL_MS ?? 15_000);
 const AUTOMATION_CHECK_INTERVAL_MS = 30_000;
@@ -268,7 +273,19 @@ function runCli(command, args = {}, positional = []) {
   return new Promise((resolve, reject) => {
     execFile(process.execPath, execArgs, { timeout: CLI_TIMEOUT_MS }, (error, stdout, stderr) => {
       if (error) {
-        reject(new Error((stderr || error.message).trim()));
+        const details = [];
+        if (stderr?.trim()) details.push(stderr.trim());
+        if (error.killed || error.signal) {
+          details.push(`CLI ${command} exceeded ${CLI_TIMEOUT_MS}ms or was terminated (${error.signal ?? "unknown signal"})`);
+        } else if (error.message) {
+          details.push(error.message.trim());
+        }
+        if (stdout?.trim()) details.push(`stdout: ${jsonSnippet(stdout.trim())}`);
+        const failure = new Error([...new Set(details)].join("\n") || `CLI ${command} failed`);
+        failure.cause = error;
+        failure.command = command;
+        failure.args = execArgs.slice(1);
+        reject(failure);
         return;
       }
       try {
@@ -320,8 +337,16 @@ function cliCommandPriority(command) {
 async function runNextCliTask() {
   if (cliQueueRunning || !cliQueue.length) return;
   cliQueueRunning = true;
-  cliQueue.sort((left, right) => left.priority - right.priority || left.sequence - right.sequence);
+  const now = Date.now();
+  cliQueue.sort((left, right) => {
+    const leftStarved = now - left.queuedAt >= CLI_QUEUE_STARVATION_MS;
+    const rightStarved = now - right.queuedAt >= CLI_QUEUE_STARVATION_MS;
+    if (leftStarved !== rightStarved) return leftStarved ? -1 : 1;
+    if (leftStarved) return left.sequence - right.sequence;
+    return left.priority - right.priority || left.sequence - right.sequence;
+  });
   const queued = cliQueue.shift();
+  clearTimeout(queued.queueTimeout);
   try {
     const startedMs = Date.now();
     const context = {
@@ -350,20 +375,34 @@ async function runNextCliTask() {
 }
 
 function runCliQueued(command, args = {}, positional = [], options = {}) {
-  if (cliQueue.length >= 100 && cliCommandPriority(command) > 0) {
+  const priority = Number.isFinite(Number(options.priority)) ? Number(options.priority) : cliCommandPriority(command);
+  if (cliQueue.length >= 100 && priority > 0) {
     return Promise.reject(new Error(`device command queue is full; ${command} was not queued`));
   }
+  let queued;
   const task = new Promise((resolve, reject) => {
-    cliQueue.push({
+    queued = {
       command,
       args,
       positional,
-      priority: Number.isFinite(Number(options.priority)) ? Number(options.priority) : cliCommandPriority(command),
+      priority,
       sequence: ++cliQueueSequence,
+      queuedAt: Date.now(),
+      queueTimeout: null,
       resolve,
       reject,
-    });
+    };
+    cliQueue.push(queued);
   });
+  const queueTimeoutMs = Number.isFinite(Number(options.queueTimeoutMs))
+    ? Math.max(1, Number(options.queueTimeoutMs))
+    : CLI_QUEUE_TIMEOUT_MS;
+  queued.queueTimeout = setTimeout(() => {
+    const index = cliQueue.indexOf(queued);
+    if (index < 0) return;
+    cliQueue.splice(index, 1);
+    queued.reject(new Error(`CLI ${command} timed out after waiting ${queueTimeoutMs}ms in the device command queue`));
+  }, queueTimeoutMs);
   runNextCliTask();
   return task;
 }
@@ -5538,14 +5577,37 @@ function assertDeviceCommandResult(result, description = "device command") {
   };
 }
 
+const BATTERY_OPERATION_MODE_BY_EDT = new Map([
+  [0x40, "other"],
+  [0x41, "rapid_charging"],
+  [0x42, "charging"],
+  [0x43, "discharging"],
+  [0x44, "standby"],
+  [0x45, "test"],
+  [0x46, "auto"],
+  [0x47, "restart"],
+  [0x48, "capacity_recalculation"],
+]);
+
+function batteryOperationModeFromReadback(status) {
+  const decoded = status?.battery?.operation_mode?.value
+    ?? status?.battery?.operation_mode?.human
+    ?? null;
+  if (decoded !== null) return decoded;
+  const rawMatch = String(status?.raw ?? "").match(/^0x([0-9a-f]{2})$/i);
+  if (!rawMatch) return null;
+  return BATTERY_OPERATION_MODE_BY_EDT.get(Number.parseInt(rawMatch[1], 16)) ?? null;
+}
+
 async function verifyBatteryOperationMode(result, host, expectedMode, {
   attempts = OPERATION_MODE_VERIFY_ATTEMPTS,
   delayMs = OPERATION_MODE_VERIFY_DELAY_MS,
-  readStatus = () => runCliQueued("energy-status", {
-    "battery-host": host,
-    "no-solar": true,
-    "no-fuel-cell": true,
-  }),
+  readStatus = () => runCliQueued(
+    "raw-get",
+    { host, eoj: "0x027D01", timeout: 3 },
+    ["0xDA"],
+    { priority: 0 },
+  ),
   wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
 } = {}) {
   const normalizedExpected = String(expectedMode).toLowerCase().replaceAll("-", "_");
@@ -5555,9 +5617,7 @@ async function verifyBatteryOperationMode(result, host, expectedMode, {
   for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
     try {
       const status = await readStatus();
-      actualMode = status?.battery?.operation_mode?.value
-        ?? status?.battery?.operation_mode?.human
-        ?? null;
+      actualMode = batteryOperationModeFromReadback(status);
       const normalizedActual = actualMode === null
         ? null
         : String(actualMode).toLowerCase().replaceAll("-", "_");
@@ -8942,6 +9002,7 @@ export {
   rateForTimestamp,
   readAdaptiveChargingDemandProfileDays,
   recoverConcatenatedJsonValue,
+  runCliQueued,
   sampleFromStatus,
   setDeviceCommandExecutor,
   shouldTriggerDemandGuard,

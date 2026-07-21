@@ -8,6 +8,7 @@ import {
   smtpTransportOptions,
   validateSmtpSettings,
 } from "../lib/notifications.js";
+import { localIsoTimestamp, timestampConsole } from "../lib/console-timestamps.js";
 import {
   activeAdaptiveChargingSlotStopReason,
   advanceAdaptiveChargingBreakerRecovery,
@@ -75,7 +76,9 @@ import {
   predictAwayDemand,
   rateForTimestamp,
   recoverConcatenatedJsonValue,
+  runCliQueued,
   sampleFromStatus,
+  setDeviceCommandExecutor,
   shouldTriggerDemandGuard,
   shouldHoldGuardStandbyForAdaptiveCharging,
   adaptiveChargingPlanRefreshDecision,
@@ -90,6 +93,20 @@ import {
   updateAdaptiveChargingSolarHeadroomHold,
   verifyBatteryOperationMode,
 } from "../server.js";
+
+const timestampWrites = [];
+const testConsole = {
+  log: (...args) => timestampWrites.push(args),
+  warn: (...args) => timestampWrites.push(args),
+};
+assert.equal(timestampConsole(testConsole, () => new Date("2026-07-21T03:30:00.123Z")), true);
+testConsole.log("automation", { state: "ready" });
+assert.deepEqual(timestampWrites[0], [
+  `[${localIsoTimestamp("2026-07-21T03:30:00.123Z")}]`,
+  "automation",
+  { state: "ready" },
+]);
+assert.equal(timestampConsole(testConsole), false);
 
 assert.throws(
   () => assertDeviceCommandResult({ ok: false, esv: "SetC_SNA" }, "test write"),
@@ -109,11 +126,9 @@ const verifiedOperationMode = await verifyBatteryOperationMode(
   {
     attempts: 3,
     delayMs: 1,
-    readStatus: async () => ({
-      battery: {
-        operation_mode: { value: operationModeReadCount++ === 0 ? "auto" : "standby" },
-      },
-    }),
+    readStatus: async () => operationModeReadCount++ === 0
+      ? { battery: { operation_mode: { value: "auto" } } }
+      : { raw: "0x44" },
     wait: async () => { operationModeWaitCount += 1; },
   },
 );
@@ -134,6 +149,22 @@ await assert.rejects(
   ),
   /still read back as auto after 2 attempts/,
 );
+
+let releaseBlockedCli;
+const restoreQueuedExecutor = setDeviceCommandExecutor(async (command) => {
+  if (command === "inspect-host") {
+    return new Promise((resolve) => { releaseBlockedCli = resolve; });
+  }
+  return { ok: true };
+});
+const blockedCli = runCliQueued("inspect-host", { host: "192.0.2.10" }, [], { queueTimeoutMs: 1000 });
+await assert.rejects(
+  runCliQueued("probe", { host: "192.0.2.11" }, [], { queueTimeoutMs: 5 }),
+  /timed out after waiting 5ms in the device command queue/,
+);
+releaseBlockedCli({ ok: true });
+await blockedCli;
+restoreQueuedExecutor();
 
 const staleSchedules = [
   { id: "stale", running: true, runningSince: "2026-06-15T02:59:01.000Z" },
