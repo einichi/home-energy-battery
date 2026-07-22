@@ -107,6 +107,7 @@ try {
   assert.deepEqual(progress, [
     { fromVersion: 3, toVersion: 4 },
     { fromVersion: 4, toVersion: 5 },
+    { fromVersion: 5, toVersion: 6 },
   ]);
   const upgraded = new DatabaseSync(databaseFile, { readOnly: true });
   assert.equal(upgraded.prepare("PRAGMA quick_check").get().quick_check, "ok");
@@ -115,9 +116,68 @@ try {
   }
   assert.equal(
     JSON.parse(upgraded.prepare("SELECT value FROM metadata WHERE key = 'energyCalculationVersion'").get().value),
-    2,
+    3,
   );
   upgraded.close();
+
+  const repairDir = await mkdtemp(path.join(os.tmpdir(), "database-counter-repair-"));
+  try {
+    const repairStore = createHistoryStore({ dataDir: repairDir, logger: { log() {}, warn() {} } });
+    await repairStore.initialize();
+    repairStore.appendSample({
+      timestamp: "2026-07-22T10:09:27.000Z",
+      gridExportW: 0,
+      gridImportW: 700,
+      meterCounterSourceHost: "10.0.0.135",
+      gridImportCumulativeKwh: 674.1,
+      gridExportCumulativeKwh: 11.04,
+      circuitPowerW: { 1: 100 },
+      circuitCumulativeKwh: { 1: 10 },
+    });
+    repairStore.appendSample({
+      timestamp: "2026-07-22T10:09:34.000Z",
+      gridExportW: 0,
+      gridImportW: 700,
+      meterCounterSourceHost: "10.0.0.135",
+      gridImportCumulativeKwh: 674.1,
+      gridExportCumulativeKwh: null,
+      circuitPowerW: { 1: 100 },
+      circuitCumulativeKwh: { 1: 0 },
+    });
+    repairStore.appendSample({
+      timestamp: "2026-07-22T10:09:41.000Z",
+      gridExportW: 0,
+      gridImportW: 700,
+      meterCounterSourceHost: "10.0.0.135",
+      gridImportCumulativeKwh: 674.1,
+      gridExportCumulativeKwh: 11.04,
+      gridExportKwh: 11.04,
+      circuitPowerW: { 1: 100 },
+      circuitCumulativeKwh: { 1: 10 },
+      circuitEnergyKwh: { 1: 10 },
+    });
+    repairStore.close();
+    const preRepair = new DatabaseSync(path.join(repairDir, "history.sqlite"));
+    preRepair.prepare("UPDATE metadata SET value = ? WHERE key = 'schemaVersion'").run(JSON.stringify(5));
+    preRepair.prepare("UPDATE metadata SET value = ? WHERE key = 'energyCalculationVersion'").run(JSON.stringify(2));
+    preRepair.close();
+
+    await migrateHistoryDatabase(repairDir);
+    const repaired = new DatabaseSync(path.join(repairDir, "history.sqlite"), { readOnly: true });
+    const repairedSamples = repaired.prepare("SELECT payload_json FROM samples ORDER BY timestamp_ms").all()
+      .map((row) => JSON.parse(row.payload_json));
+    assert.ok(repairedSamples[2].gridExportKwh < 0.001);
+    assert.ok(repairedSamples[2].circuitEnergyKwh["1"] < 0.001);
+    assert.equal(repairedSamples[2].calculationVersion, 3);
+    const repairedRollup = JSON.parse(repaired.prepare(
+      "SELECT payload_json FROM rollups WHERE resolution = 'interval' ORDER BY bucket_start_ms LIMIT 1",
+    ).get().payload_json);
+    assert.ok(repairedRollup.gridExportKwh < 0.001);
+    assert.ok(repairedRollup.circuitEnergyKwh["1"] < 0.001);
+    repaired.close();
+  } finally {
+    await rm(repairDir, { recursive: true, force: true });
+  }
 
   const manualBackup = await backupDatabaseManually({
     databaseFile,

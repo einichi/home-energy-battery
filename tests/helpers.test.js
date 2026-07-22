@@ -10,6 +10,10 @@ import {
 } from "../lib/notifications.js";
 import { localIsoTimestamp, timestampConsole } from "../lib/console-timestamps.js";
 import {
+  COUNTER_POLICIES,
+  cumulativeCounterDeltaResult,
+} from "../lib/counter-utils.js";
+import {
   activeAdaptiveChargingSlotStopReason,
   advanceAdaptiveChargingBreakerRecovery,
   aggregateDemandDays,
@@ -2285,6 +2289,95 @@ assert.deepEqual(resetFuelCellSample.fuelCellCounterIssues, [
   { counter: "electricity", issue: "reset" },
   { counter: "gas", issue: "reset" },
 ]);
+
+assert.deepEqual(
+  cumulativeCounterDeltaResult(11.04, null, COUNTER_POLICIES.grid, 7),
+  { delta: null, issue: null },
+);
+assert.deepEqual(
+  cumulativeCounterDeltaResult(11.04, 0, COUNTER_POLICIES.grid, 7),
+  { delta: null, issue: "invalid-jump" },
+);
+assert.ok(Math.abs(
+  cumulativeCounterDeltaResult(11.04, 11.03, COUNTER_POLICIES.grid, 7).delta - 0.01,
+) < 0.000001);
+
+const counterConfig = { ...migratedFuelCellHosts, smartCosmoEnabled: true, meterHost: "10.0.0.135" };
+const missingCounterSample = sampleFromStatus({
+  read_at: "2026-07-22T10:09:34.000Z",
+  meter: {
+    cumulative_bought: { value: 674.1 },
+    cumulative_sold: { value: null },
+    channel_energy: { decoded: { channels: [
+      { channel: 1, value: null },
+      { channel: 2, value: null },
+    ] } },
+  },
+  energy: { fuel_cells: [{
+    host: "10.0.0.150",
+    source_role: "primary",
+    cumulative_generation: { value: 4.5 },
+    cumulative_gas: { value: null },
+  }] },
+}, counterConfig, {
+  timestamp: "2026-07-22T10:09:27.000Z",
+  meterCounterSourceHost: "10.0.0.135",
+  gridImportCumulativeKwh: 674.1,
+  gridExportCumulativeKwh: 11.04,
+  circuitCumulativeKwh: { 1: 10, 2: 20 },
+  fuelCellCounterSourceHost: "10.0.0.150",
+  fuelCellCumulativeGenerationKwh: 4.5,
+  fuelCellCumulativeGasM3: 1.5,
+});
+assert.equal(missingCounterSample.gridExportKwh, undefined);
+assert.equal(missingCounterSample.fuelCellGasM3, undefined);
+assert.deepEqual(missingCounterSample.circuitCumulativeKwh, {});
+assert.deepEqual(missingCounterSample.circuitEnergyKwh, {});
+
+const recoveredCounterSample = sampleFromStatus({
+  read_at: "2026-07-22T10:09:41.000Z",
+  meter: {
+    cumulative_bought: { value: 674.1 },
+    cumulative_sold: { value: 11.04 },
+    channel_energy: { decoded: { channels: [
+      { channel: 1, value: 10 },
+      { channel: 2, value: 20 },
+    ] } },
+  },
+  energy: { fuel_cells: [{
+    host: "10.0.0.150",
+    source_role: "primary",
+    cumulative_generation: { value: 4.5 },
+    cumulative_gas: { value: 1.5 },
+  }] },
+}, counterConfig, missingCounterSample);
+assert.equal(recoveredCounterSample.gridExportKwh, undefined);
+assert.equal(recoveredCounterSample.fuelCellGasM3, undefined);
+assert.deepEqual(recoveredCounterSample.circuitEnergyKwh, {});
+
+const resumedCounterSample = sampleFromStatus({
+  read_at: "2026-07-22T10:09:48.000Z",
+  meter: {
+    cumulative_bought: { value: 674.11 },
+    cumulative_sold: { value: 11.05 },
+    channel_energy: { decoded: { channels: [
+      { channel: 1, value: 10.01 },
+      { channel: 2, value: 20 },
+    ] } },
+  },
+  energy: { fuel_cells: [{
+    host: "10.0.0.150",
+    source_role: "primary",
+    cumulative_generation: { value: 4.501 },
+    cumulative_gas: { value: 1.501 },
+  }] },
+}, counterConfig, recoveredCounterSample);
+assert.ok(Math.abs(resumedCounterSample.gridExportKwh - 0.01) < 0.000001);
+assert.ok(Math.abs(resumedCounterSample.gridImportKwh - 0.01) < 0.000001);
+assert.ok(Math.abs(resumedCounterSample.fuelCellKwh - 0.001) < 0.000001);
+assert.ok(Math.abs(resumedCounterSample.fuelCellGasM3 - 0.001) < 0.000001);
+assert.ok(Math.abs(resumedCounterSample.circuitEnergyKwh["1"] - 0.01) < 0.000001);
+assert.equal(resumedCounterSample.circuitEnergyKwh["2"], 0);
 
 const offPeakTimestamp = new Date(2026, 4, 31, 1, 0).toISOString();
 const previousOffPeakTimestamp = new Date(2026, 4, 31, 0, 30).toISOString();

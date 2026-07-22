@@ -42,6 +42,11 @@ import {
   nextFuelCellSchedule,
   normalizeFuelCellAutomation,
 } from "./lib/fuel-cell-automation.js";
+import {
+  COUNTER_POLICIES,
+  cumulativeCounterDeltaResult,
+  finiteCounterMap,
+} from "./lib/counter-utils.js";
 import { timestampConsole } from "./lib/console-timestamps.js";
 
 timestampConsole();
@@ -421,7 +426,7 @@ async function ensureDataDir() {
 }
 
 function numericMetric(item) {
-  if (item?.value === null || item?.value === undefined || item.value === "") return null;
+  if (item?.value === null || item?.value === undefined || item.value === "" || typeof item.value === "boolean") return null;
   const value = Number(item?.value);
   return Number.isFinite(value) ? value : null;
 }
@@ -434,21 +439,6 @@ function selectedFuelCellReading(fuelCells = []) {
   const primary = primaryFuelCell(fuelCells);
   if (numericMetric(primary?.instant_power) !== null || primary?.generation_status?.value) return primary;
   return fuelCells.find((cell) => cell.source_role === "proxy" && (numericMetric(cell.instant_power) !== null || cell.generation_status?.value)) ?? primary;
-}
-
-function cumulativeCounterDeltaResult(current, previous, maximum = 1_000_000, maxDelta = 10) {
-  const now = Number(current);
-  const before = Number(previous);
-  if (!Number.isFinite(now) || !Number.isFinite(before)) return { delta: null, issue: null };
-  if (now >= before) {
-    const delta = now - before;
-    return delta <= maxDelta ? { delta, issue: null } : { delta: null, issue: "invalid-jump" };
-  }
-  if (before > maximum * 0.9 && now < maximum * 0.1) {
-    const delta = maximum - before + now;
-    return delta <= maxDelta ? { delta, issue: "rollover" } : { delta: null, issue: "invalid-jump" };
-  }
-  return { delta: null, issue: "reset" };
 }
 
 function circuitLabelFor(channel, labels = {}) {
@@ -471,34 +461,15 @@ function normalizeCircuitLabels(value = {}) {
 }
 
 function circuitChannelMap(channels = []) {
-  const out = {};
-  for (const channel of channels) {
-    const id = Number(channel?.channel);
-    const value = Number(channel?.value);
-    if (!Number.isInteger(id) || id < 1 || id > 252) continue;
-    out[String(id)] = Number.isFinite(value) ? value : null;
-  }
-  return out;
+  return finiteCounterMap(channels);
 }
 
 function circuitCumulativeMap(channels = []) {
-  const out = {};
-  for (const channel of channels) {
-    const id = Number(channel?.channel);
-    const value = Number(channel?.value);
-    if (!Number.isInteger(id) || id < 1 || id > 252) continue;
-    out[String(id)] = Number.isFinite(value) ? value : null;
-  }
-  return out;
+  return finiteCounterMap(channels);
 }
 
-function circuitEnergyDeltaKwh(current, previous) {
-  if (!previous || current === null || current === undefined) return null;
-  const now = Number(current);
-  const before = Number(previous);
-  if (!Number.isFinite(now) || !Number.isFinite(before)) return null;
-  const delta = now - before;
-  return delta >= 0 ? delta : null;
+function circuitEnergyDeltaKwh(current, previous, elapsedSeconds = null) {
+  return cumulativeCounterDeltaResult(current, previous, COUNTER_POLICIES.circuit, elapsedSeconds).delta;
 }
 
 function intervalOverlapFraction(sample, directKey, previousSample, range = {}, usePrevious = true) {
@@ -519,9 +490,13 @@ function circuitKwhForSample(sample, channel, previousSample, range = {}) {
   const id = String(channel);
   const direct = Number(sample.circuitEnergyKwh?.[id]);
   if (Number.isFinite(direct)) return direct * intervalOverlapFraction(sample, `circuit:${id}`, previousSample, range, false);
+  const elapsedSeconds = previousSample?.timestamp && sample?.timestamp
+    ? Math.max(0, (new Date(sample.timestamp).getTime() - new Date(previousSample.timestamp).getTime()) / 1000)
+    : null;
   const cumulative = circuitEnergyDeltaKwh(
     sample.circuitCumulativeKwh?.[id],
     previousSample?.circuitCumulativeKwh?.[id],
+    elapsedSeconds,
   );
   if (cumulative !== null) return cumulative * intervalOverlapFraction(sample, `circuit:${id}`, previousSample, range, false);
   if (!previousSample?.timestamp || !sample?.timestamp) return 0;
@@ -3483,6 +3458,10 @@ function sampleFromStatus(status, config, previousSample) {
   // Convert the large live status payload into one compact time-series sample.
   // We store only normalized values that graphs and savings calculations need.
   const timestamp = status.read_at ?? new Date().toISOString();
+  const previousTimestamp = previousSample?.timestamp ?? null;
+  const elapsedSeconds = previousTimestamp
+    ? Math.max(0, (new Date(timestamp).getTime() - new Date(previousTimestamp).getTime()) / 1000)
+    : 0;
   const batteryPowerW = numericMetric(status.energy?.battery?.instant_power);
   const solarPowerW = config.solarEnabled === false ? null : numericMetric(status.energy?.solar?.instant_power);
   const fuelCells = config.fuelCellEnabled === false ? [] : (status.energy?.fuel_cells ?? []);
@@ -3498,12 +3477,21 @@ function sampleFromStatus(status, config, previousSample) {
     ? fuelCellPrimary?.host ?? null
     : null;
   const sameCounterSource = counterSourceHost && counterSourceHost === previousSample?.fuelCellCounterSourceHost;
-  const cumulativeMaximum = 0xffff_ffff / 1000;
   const electricityCounter = sameCounterSource
-    ? cumulativeCounterDeltaResult(fuelCellCumulativeGenerationKwh, previousSample?.fuelCellCumulativeGenerationKwh, cumulativeMaximum, 10)
+    ? cumulativeCounterDeltaResult(
+      fuelCellCumulativeGenerationKwh,
+      previousSample?.fuelCellCumulativeGenerationKwh,
+      COUNTER_POLICIES.fuelCellElectricity,
+      elapsedSeconds,
+    )
     : { delta: null, issue: null };
   const gasCounter = sameCounterSource
-    ? cumulativeCounterDeltaResult(fuelCellCumulativeGasM3, previousSample?.fuelCellCumulativeGasM3, cumulativeMaximum, 5)
+    ? cumulativeCounterDeltaResult(
+      fuelCellCumulativeGasM3,
+      previousSample?.fuelCellCumulativeGasM3,
+      COUNTER_POLICIES.fuelCellGas,
+      elapsedSeconds,
+    )
     : { delta: null, issue: null };
   const fuelCellKwh = electricityCounter.delta;
   const fuelCellGasM3 = gasCounter.delta;
@@ -3519,10 +3507,20 @@ function sampleFromStatus(status, config, previousSample) {
   const sameMeterCounterSource = meterCounterSourceHost
     && meterCounterSourceHost === previousSample?.meterCounterSourceHost;
   const gridImportCounter = sameMeterCounterSource
-    ? cumulativeCounterDeltaResult(gridImportCumulativeKwh, previousSample?.gridImportCumulativeKwh, 1_000_000_000, 100)
+    ? cumulativeCounterDeltaResult(
+      gridImportCumulativeKwh,
+      previousSample?.gridImportCumulativeKwh,
+      COUNTER_POLICIES.grid,
+      elapsedSeconds,
+    )
     : { delta: null, issue: null };
   const gridExportCounter = sameMeterCounterSource
-    ? cumulativeCounterDeltaResult(gridExportCumulativeKwh, previousSample?.gridExportCumulativeKwh, 1_000_000_000, 100)
+    ? cumulativeCounterDeltaResult(
+      gridExportCumulativeKwh,
+      previousSample?.gridExportCumulativeKwh,
+      COUNTER_POLICIES.grid,
+      elapsedSeconds,
+    )
     : { delta: null, issue: null };
   const stateOfChargePercent = numericMetric(status.energy?.battery?.remaining_percent);
   const circuitPowerW = config.smartCosmoEnabled === false
@@ -3532,18 +3530,20 @@ function sampleFromStatus(status, config, previousSample) {
     ? {}
     : circuitCumulativeMap(status.meter?.channel_energy?.decoded?.channels);
   const circuitEnergyKwh = {};
+  const circuitCounterIssues = [];
   for (const id of Object.keys({ ...circuitPowerW, ...circuitCumulativeKwh })) {
-    const cumulative = circuitEnergyDeltaKwh(circuitCumulativeKwh[id], previousSample?.circuitCumulativeKwh?.[id]);
-    if (cumulative !== null) {
-      circuitEnergyKwh[id] = cumulative;
-    }
+    const result = cumulativeCounterDeltaResult(
+      circuitCumulativeKwh[id],
+      previousSample?.circuitCumulativeKwh?.[id],
+      COUNTER_POLICIES.circuit,
+      elapsedSeconds,
+    );
+    if (result.delta !== null) circuitEnergyKwh[id] = result.delta;
+    if (result.issue) circuitCounterIssues.push({ channel: Number(id), issue: result.issue });
   }
   const rateBand = rateForTimestamp(config.rateBands, timestamp, config.standardRateYenPerKwh);
   const activeRate = rateBand.yenPerKwh;
   const highestRate = maxDailyRate(config.rateBands, config.standardRateYenPerKwh);
-  const elapsedSeconds = previousSample
-    ? Math.max(0, (new Date(timestamp).getTime() - new Date(previousSample.timestamp).getTime()) / 1000)
-    : 0;
   const maximumGapSeconds = Math.max(90, Number(config.updateIntervalSeconds) * 2.5);
   const intervalSeconds = elapsedSeconds <= maximumGapSeconds ? elapsedSeconds : 0;
   const fuelCellOperatingSeconds = ["generating", "starting", "stopping", "idling"].includes(previousSample?.fuelCellGenerationState)
@@ -3558,7 +3558,6 @@ function sampleFromStatus(status, config, previousSample) {
   const coverageSeconds = {};
   const energyQuality = {};
   const energyIntervalStart = {};
-  const previousTimestamp = previousSample?.timestamp ?? null;
   if (gridImportCounter.delta !== null) {
     coverageSeconds.gridImportKwh = intervalSeconds;
     energyQuality.gridImportKwh = "counter";
@@ -3621,9 +3620,14 @@ function sampleFromStatus(status, config, previousSample) {
     gridImportCumulativeKwh,
     gridExportCumulativeKwh,
     meterCounterSourceHost,
+    meterCounterIssues: [
+      ...(gridImportCounter.issue ? [{ counter: "import", issue: gridImportCounter.issue }] : []),
+      ...(gridExportCounter.issue ? [{ counter: "export", issue: gridExportCounter.issue }] : []),
+    ],
     circuitPowerW,
     circuitCumulativeKwh,
     circuitEnergyKwh,
+    circuitCounterIssues,
     ...(gridImportCounter.delta !== null ? { gridImportKwh: gridImportCounter.delta } : {}),
     ...(gridExportCounter.delta !== null ? { gridExportKwh: gridExportCounter.delta } : {}),
     ...(exactHouseDemandKwh !== null ? { houseDemandKwh: exactHouseDemandKwh } : {}),
