@@ -9145,9 +9145,19 @@ async function performDatabaseUpgrade(backupRequested) {
       databaseUpgrade.phase = "migrating";
       databaseUpgrade.percent = 0;
       await migrateHistoryDatabase(DATA_DIR, {
-        onProgress({ fromVersion, toVersion }) {
+        onProgress(progress) {
+          const { fromVersion, toVersion } = progress;
           databaseUpgrade.sourceVersion = fromVersion;
           databaseUpgrade.migratingToVersion = toVersion;
+          if (progress.phase === "compacting") {
+            databaseUpgrade.phase = "compacting";
+            databaseUpgrade.percent = progress.percent;
+            databaseUpgrade.processed = progress.processed;
+            databaseUpgrade.total = progress.total;
+            databaseUpgrade.unit = progress.unit;
+            return;
+          }
+          databaseUpgrade.phase = "migrating";
           databaseUpgrade.percent = Math.round(((toVersion - originalSourceVersion) / (SCHEMA_VERSION - originalSourceVersion)) * 100);
           databaseUpgrade.processed = toVersion - originalSourceVersion;
           databaseUpgrade.total = SCHEMA_VERSION - originalSourceVersion;

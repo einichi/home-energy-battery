@@ -799,6 +799,13 @@ const I18N = {
     batteryChargedLabel: "Charged",
     batteryDischargedLabel: "Discharged",
     databaseSize: "Database size",
+    databaseMainSize: "Main database",
+    databaseWalSize: "Write-ahead log",
+    averageSampleSize: "Average raw sample",
+    estimatedDailyGrowth: "Estimated daily growth",
+    databaseSchemaVersion: "Database schema",
+    lastDatabaseCompaction: "Last compaction",
+    neverCompacted: "Not compacted yet",
     daysRecorded: "Days recorded",
     samplesRecorded: "Samples recorded",
     now: "Now",
@@ -1442,6 +1449,13 @@ const I18N = {
     batteryChargedLabel: "充電",
     batteryDischargedLabel: "放電",
     databaseSize: "データベースサイズ",
+    databaseMainSize: "メインデータベース",
+    databaseWalSize: "先行書き込みログ",
+    averageSampleSize: "生サンプルの平均サイズ",
+    estimatedDailyGrowth: "1日の推定増加量",
+    databaseSchemaVersion: "データベーススキーマ",
+    lastDatabaseCompaction: "最終圧縮",
+    neverCompacted: "未圧縮",
     daysRecorded: "記録日数",
     samplesRecorded: "記録サンプル数",
     now: "現在",
@@ -5550,6 +5564,20 @@ async function refreshHistoryStats() {
   try {
     const stats = await api("/api/history/stats");
     setText("#historyStatSize", formatBytes(Number(stats.sizeBytes)));
+    setText("#historyStatMainSize", formatBytes(Number(stats.fileSizes?.mainBytes)));
+    setText("#historyStatWalSize", formatBytes(Number(stats.fileSizes?.walBytes)));
+    setText("#historyStatAverageSample", formatBytes(Number(stats.averageSampleBytes)));
+    setText("#historyStatDailyGrowth", formatBytes(Number(stats.estimatedDailyGrowthBytes)));
+    setText("#historyStatSchema", `v${Number(stats.schemaVersion ?? 0)}`);
+    setText(
+      "#historyStatCompaction",
+      stats.lastCompaction?.completedAt
+        ? `${formatDateTime(stats.lastCompaction.completedAt)} · ${formatBytes(
+          Math.max(0, Number(stats.lastCompaction.sourceSamplePayloadBytes ?? 0)
+            - Number(stats.lastCompaction.compactSamplePayloadBytes ?? 0)),
+        )}`
+        : t("neverCompacted"),
+    );
     setText(
       "#historyStatDays",
       new Intl.NumberFormat(state.language === "ja" ? "ja-JP" : "en-US", {

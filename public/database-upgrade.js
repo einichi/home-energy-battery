@@ -6,6 +6,7 @@ const phases = {
   validating: "Validating snapshot",
   compressing: "Compressing with Zstandard",
   migrating: "Applying database migration",
+  compacting: "Compacting raw telemetry",
   starting: "Starting application",
   complete: "Upgrade complete",
   failed: "Upgrade failed",

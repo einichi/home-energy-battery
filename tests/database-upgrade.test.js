@@ -104,11 +104,11 @@ try {
   const progress = [];
   const migrated = await migrateHistoryDatabase(dataDir, { onProgress(value) { progress.push(value); } });
   assert.equal(migrated.state, "current");
-  assert.deepEqual(progress, [
-    { fromVersion: 3, toVersion: 4 },
-    { fromVersion: 4, toVersion: 5 },
-    { fromVersion: 5, toVersion: 6 },
-  ]);
+  assert.deepEqual(
+    [...new Set(progress.map((item) => `${item.fromVersion}->${item.toVersion}`))],
+    ["3->4", "4->5", "5->6", "6->7"],
+  );
+  assert.ok(progress.some((item) => item.phase === "compacting" && item.percent === 100));
   const upgraded = new DatabaseSync(databaseFile, { readOnly: true });
   assert.equal(upgraded.prepare("PRAGMA quick_check").get().quick_check, "ok");
   for (const table of ["gas_tariff_snapshots", "gas_tariff_overrides", "fuel_cell_forecasts"]) {
@@ -116,7 +116,7 @@ try {
   }
   assert.equal(
     JSON.parse(upgraded.prepare("SELECT value FROM metadata WHERE key = 'energyCalculationVersion'").get().value),
-    3,
+    4,
   );
   upgraded.close();
 
@@ -156,8 +156,32 @@ try {
       circuitCumulativeKwh: { 1: 10 },
       circuitEnergyKwh: { 1: 10 },
     });
+    repairStore.recordFuelCellForecasts([{
+      start: "2026-07-23T11:00:00.000Z",
+      end: "2026-07-23T11:30:00.000Z",
+      medianW: 600,
+    }], "2026-07-22T10:01:00.000Z");
+    repairStore.recordFuelCellForecasts([{
+      start: "2026-07-23T11:00:00.000Z",
+      end: "2026-07-23T11:30:00.000Z",
+      medianW: 650,
+    }], "2026-07-22T10:02:00.000Z");
     repairStore.close();
     const preRepair = new DatabaseSync(path.join(repairDir, "history.sqlite"));
+    const corruptRow = preRepair.prepare("SELECT id, payload_json FROM samples ORDER BY timestamp_ms DESC LIMIT 1").get();
+    const corruptPayload = JSON.parse(corruptRow.payload_json);
+    corruptPayload.gridExportKwh = 11.04;
+    corruptPayload.circuitEnergyKwh = { 1: 10 };
+    corruptPayload.coverageSeconds = { gridExportKwh: 7, "circuit:1": 7 };
+    corruptPayload.energyQuality = { gridExportKwh: "counter", "circuit:1": "counter" };
+    corruptPayload.energyIntervalStart = {
+      gridExportKwh: "2026-07-22T10:09:34.000Z",
+      "circuit:1": "2026-07-22T10:09:34.000Z",
+    };
+    preRepair.prepare("UPDATE samples SET payload_json = ? WHERE id = ?").run(JSON.stringify(corruptPayload), corruptRow.id);
+    const preMigrationPayloadBytes = Number(preRepair.prepare(
+      "SELECT SUM(LENGTH(payload_json)) AS bytes FROM samples",
+    ).get().bytes);
     preRepair.prepare("UPDATE metadata SET value = ? WHERE key = 'schemaVersion'").run(JSON.stringify(5));
     preRepair.prepare("UPDATE metadata SET value = ? WHERE key = 'energyCalculationVersion'").run(JSON.stringify(2));
     preRepair.close();
@@ -166,17 +190,110 @@ try {
     const repaired = new DatabaseSync(path.join(repairDir, "history.sqlite"), { readOnly: true });
     const repairedSamples = repaired.prepare("SELECT payload_json FROM samples ORDER BY timestamp_ms").all()
       .map((row) => JSON.parse(row.payload_json));
-    assert.ok(repairedSamples[2].gridExportKwh < 0.001);
-    assert.ok(repairedSamples[2].circuitEnergyKwh["1"] < 0.001);
-    assert.equal(repairedSamples[2].calculationVersion, 3);
+    assert.equal(repairedSamples[2].gridExportKwh, undefined, "derived energy is not persisted in raw telemetry");
+    assert.equal(repairedSamples[2].circuitEnergyKwh, undefined);
+    assert.equal(repairedSamples[2].coverageSeconds, undefined);
+    assert.equal(repairedSamples[2].calculationVersion, undefined);
+    const postMigrationPayloadBytes = Number(repaired.prepare(
+      "SELECT SUM(LENGTH(payload_json)) AS bytes FROM samples",
+    ).get().bytes);
+    assert.ok(postMigrationPayloadBytes < preMigrationPayloadBytes);
+    assert.equal(repaired.prepare("SELECT COUNT(*) AS count FROM fuel_cell_forecasts").get().count, 1);
+    assert.equal(
+      JSON.parse(repaired.prepare("SELECT value FROM metadata WHERE key = 'energyCalculationVersion'").get().value),
+      4,
+    );
+    const compaction = JSON.parse(repaired.prepare(
+      "SELECT value FROM metadata WHERE key = 'compaction:schema-v7'",
+    ).get().value);
+    assert.equal(compaction.fuelCellForecastRowsRemoved, 1);
     const repairedRollup = JSON.parse(repaired.prepare(
       "SELECT payload_json FROM rollups WHERE resolution = 'interval' ORDER BY bucket_start_ms LIMIT 1",
     ).get().payload_json);
     assert.ok(repairedRollup.gridExportKwh < 0.001);
     assert.ok(repairedRollup.circuitEnergyKwh["1"] < 0.001);
     repaired.close();
+
+    const repairedStore = createHistoryStore({ dataDir: repairDir, logger: { log() {}, warn() {} } });
+    await repairedStore.initialize();
+    const interpreted = repairedStore.querySamples(
+      Date.parse("2026-07-22T10:09:27.000Z"),
+      Date.parse("2026-07-22T10:09:41.000Z"),
+      { resolution: "raw" },
+    );
+    assert.ok(interpreted[2].gridExportKwh < 0.001);
+    assert.ok(interpreted[2].circuitEnergyKwh["1"] < 0.001);
+    repairedStore.close();
   } finally {
     await rm(repairDir, { recursive: true, force: true });
+  }
+
+  const compactionDir = await mkdtemp(path.join(os.tmpdir(), "database-compaction-scale-"));
+  try {
+    const compactStore = createHistoryStore({ dataDir: compactionDir, logger: { log() {}, warn() {} } });
+    await compactStore.initialize();
+    compactStore.close();
+    const compactFile = path.join(compactionDir, "history.sqlite");
+    const bloated = new DatabaseSync(compactFile);
+    bloated.exec("PRAGMA journal_mode = DELETE; BEGIN IMMEDIATE; DELETE FROM rollups");
+    const insert = bloated.prepare(`
+      INSERT INTO samples(timestamp_ms, timestamp, payload_json) VALUES (?, ?, ?)
+    `);
+    const channels = Array.from({ length: 29 }, (_, index) => String(index + 1));
+    for (let index = 0; index < 2000; index += 1) {
+      const timestamp = new Date(Date.parse("2026-07-01T00:00:00.000Z") + index * 5000).toISOString();
+      const previous = new Date(Date.parse(timestamp) - 5000).toISOString();
+      const circuitPowerW = Object.fromEntries(channels.map((channel) => [channel, 100 + Number(channel)]));
+      const circuitCumulativeKwh = Object.fromEntries(channels.map((channel) => [channel, 10 + Number(channel) + index / 100]));
+      const metricKeys = [
+        "gridImportKwh",
+        "gridExportKwh",
+        "houseDemandKwh",
+        "fuelCellKwh",
+        ...channels.map((channel) => `circuit:${channel}`),
+      ];
+      insert.run(Date.parse(timestamp), timestamp, JSON.stringify({
+        timestamp,
+        houseDemandW: 1000,
+        gridImportW: 1000,
+        gridExportW: 0,
+        meterCounterSourceHost: "meter",
+        gridImportCumulativeKwh: 100 + index / 100,
+        gridExportCumulativeKwh: 10,
+        circuitPowerW,
+        circuitCumulativeKwh,
+        circuitEnergyKwh: Object.fromEntries(channels.map((channel) => [channel, 0.01])),
+        coverageSeconds: Object.fromEntries(metricKeys.map((key) => [key, 5])),
+        powerCoverageSeconds: Object.fromEntries([
+          ["houseDemandW", 5],
+          ["gridImportW", 5],
+          ...channels.map((channel) => [`circuit:${channel}`, 5]),
+        ]),
+        energyQuality: Object.fromEntries(metricKeys.map((key) => [key, "counter"])),
+        energyIntervalStart: Object.fromEntries(metricKeys.map((key) => [key, previous])),
+        intervalAveragePowerW: { houseDemandW: 1000, gridImportW: 1000, gridExportW: 0 },
+        intervalAverageCircuitPowerW: circuitPowerW,
+        calculationVersion: 3,
+        expectedIntervalSeconds: 5,
+      }));
+    }
+    bloated.prepare("UPDATE metadata SET value = ? WHERE key = 'schemaVersion'").run(JSON.stringify(6));
+    bloated.prepare("UPDATE metadata SET value = ? WHERE key = 'energyCalculationVersion'").run(JSON.stringify(3));
+    bloated.exec("COMMIT");
+    bloated.close();
+    const beforeBytes = (await stat(compactFile)).size;
+    await migrateHistoryDatabase(compactionDir);
+    const afterBytes = (await stat(compactFile)).size;
+    assert.ok(afterBytes < beforeBytes * 0.6, `expected compaction below 60% of source size; ${beforeBytes} -> ${afterBytes}`);
+    const compacted = createHistoryStore({ dataDir: compactionDir, logger: { log() {}, warn() {} } });
+    await compacted.initialize();
+    const compactedStats = await compacted.stats();
+    assert.equal(compactedStats.sampleCount, 2000);
+    assert.ok(compactedStats.averageSampleBytes < 2200);
+    assert.ok(compactedStats.lastCompaction.sourceSamplePayloadBytes > compactedStats.lastCompaction.compactSamplePayloadBytes * 2);
+    compacted.close();
+  } finally {
+    await rm(compactionDir, { recursive: true, force: true });
   }
 
   const manualBackup = await backupDatabaseManually({

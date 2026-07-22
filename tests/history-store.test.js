@@ -4,8 +4,10 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  compactHistorySample,
   createHistoryStore,
   enrichHistorySample,
+  interpretHistorySample,
   normalizeRetentionPolicy,
 } from "../lib/history-store.js";
 
@@ -40,6 +42,43 @@ const exactEnergyWithPower = enrichHistorySample(
 assert.equal(exactEnergyWithPower.gridImportKwh, 0.7);
 assert.equal(exactEnergyWithPower.intervalAveragePowerW.gridImportW, 1500);
 assert.equal(exactEnergyWithPower.powerCoverageSeconds.gridImportW, 1800);
+
+const compact = compactHistorySample({
+  timestamp: "2026-07-22T00:00:00.000Z",
+  gridExportW: 0,
+  gridExportCumulativeKwh: 11.04,
+  gridExportKwh: 11.04,
+  coverageSeconds: { gridExportKwh: 5 },
+  energyQuality: { gridExportKwh: "counter" },
+  energyIntervalStart: { gridExportKwh: "2026-07-21T23:59:55.000Z" },
+});
+assert.equal(compact.gridExportCumulativeKwh, 11.04);
+assert.equal(compact.gridExportKwh, undefined);
+assert.equal(compact.coverageSeconds, undefined);
+assert.equal(compact.energyQuality, undefined);
+assert.equal(compact.energyIntervalStart, undefined);
+
+const interpretedRecovery = interpretHistorySample(
+  sample("2026-07-22T00:00:10.000Z", {
+    gridExportW: 0,
+    meterCounterSourceHost: "meter",
+    gridExportCumulativeKwh: 11.04,
+    circuitPowerW: { 1: 100 },
+    circuitCumulativeKwh: { 1: 10 },
+    expectedIntervalSeconds: 5,
+  }),
+  sample("2026-07-22T00:00:05.000Z", {
+    gridExportW: 0,
+    meterCounterSourceHost: "meter",
+    gridExportCumulativeKwh: null,
+    circuitPowerW: { 1: 100 },
+    circuitCumulativeKwh: {},
+    expectedIntervalSeconds: 5,
+  }),
+);
+assert.equal(interpretedRecovery.gridExportKwh, 0, "counter recovery falls back to zero-watt integration");
+assert.ok(interpretedRecovery.circuitEnergyKwh["1"] < 0.001, "circuit recovery does not count its lifetime counter");
+assert.equal(interpretedRecovery.energyQuality.gridExportKwh, "integrated");
 
 const dataDir = await mkdtemp(path.join(os.tmpdir(), "history-store-"));
 try {
@@ -211,6 +250,63 @@ try {
   await rm(partialRollupDir, { recursive: true, force: true });
 }
 
+const compactStoreDir = await mkdtemp(path.join(os.tmpdir(), "history-store-compact-"));
+try {
+  let store = createHistoryStore({ dataDir: compactStoreDir, logger: { log() {}, warn() {} } });
+  await store.initialize();
+  const circuits = Object.fromEntries(Array.from({ length: 29 }, (_, index) => [index + 1, 100 + index]));
+  const cumulative = Object.fromEntries(Array.from({ length: 29 }, (_, index) => [index + 1, 10 + index / 100]));
+  store.appendSample(sample("2026-07-22T00:00:00.000Z", {
+    houseDemandW: 1000,
+    gridImportW: 1000,
+    gridImportCumulativeKwh: 100,
+    meterCounterSourceHost: "meter",
+    circuitPowerW: circuits,
+    circuitCumulativeKwh: cumulative,
+    expectedIntervalSeconds: 5,
+  }));
+  store.appendSample(sample("2026-07-22T00:00:05.000Z", {
+    houseDemandW: 1000,
+    gridImportW: 1000,
+    gridImportCumulativeKwh: 100.01,
+    meterCounterSourceHost: "meter",
+    circuitPowerW: circuits,
+    circuitCumulativeKwh: Object.fromEntries(Object.entries(cumulative).map(([key, value]) => [key, value + 0.01])),
+    expectedIntervalSeconds: 5,
+  }));
+  let queried = store.querySamples(
+    Date.parse("2026-07-22T00:00:00.000Z"),
+    Date.parse("2026-07-22T00:00:05.000Z"),
+    { resolution: "raw" },
+  );
+  assert.ok(Math.abs(queried[1].gridImportKwh - 0.01) < 0.000001);
+  assert.equal(queried[1].energyQuality.gridImportKwh, "counter");
+  queried = store.querySamples(
+    Date.parse("2026-07-22T00:00:05.000Z"),
+    Date.parse("2026-07-22T00:00:05.000Z"),
+    { resolution: "raw" },
+  );
+  assert.equal(queried[0].gridImportKwh, undefined, "a range does not include energy from before its start");
+  store.close();
+
+  const database = new DatabaseSync(path.join(compactStoreDir, "history.sqlite"), { readOnly: true });
+  const raw = database.prepare("SELECT payload_json FROM samples ORDER BY timestamp_ms DESC LIMIT 1").get().payload_json;
+  const persisted = JSON.parse(raw);
+  assert.equal(persisted.coverageSeconds, undefined);
+  assert.equal(persisted.energyQuality, undefined);
+  assert.equal(persisted.energyIntervalStart, undefined);
+  assert.equal(persisted.gridImportKwh, undefined);
+  assert.ok(Buffer.byteLength(raw) < 2200, `expected compact 29-circuit sample, got ${Buffer.byteLength(raw)} bytes`);
+  database.close();
+
+  store = createHistoryStore({ dataDir: compactStoreDir, logger: { log() {}, warn() {} } });
+  await store.initialize();
+  assert.ok((await store.stats()).averageSampleBytes < 2200);
+  store.close();
+} finally {
+  await rm(compactStoreDir, { recursive: true, force: true });
+}
+
 const overlappingRollupDir = await mkdtemp(
   path.join(os.tmpdir(), "history-store-overlapping-rollup-"),
 );
@@ -368,16 +464,16 @@ try {
   const firstDayStart = dayRange("2026-07-01").start.getTime();
   for (let hour = 0; hour < 24; hour += 1) {
     store.appendSample(sample(new Date(firstDayStart + hour * 3_600_000).toISOString(), {
-      solarGenerationKwh: 0.1,
-      coverageSeconds: { solarGenerationKwh: 3600 },
+      solarPowerW: 100,
+      expectedIntervalSeconds: 3600,
     }));
   }
   assert.equal(store.settleSolarForecastOutcomes(dayRange("2026-07-02").start), 3);
   let outcomes = store.solarForecastOutcomes();
   assert.equal(outcomes.length, 1);
   assert.equal(outcomes[0].issuedAt, "2026-06-30T12:00:00.000Z", "latest pre-day forecast is canonical");
-  assert.ok(Math.abs(outcomes[0].actualKwh - 2.4) < 0.000001);
-  assert.ok(Math.abs(outcomes[0].errorKwh - 0.2) < 0.000001);
+  assert.ok(Math.abs(outcomes[0].actualKwh - 2.3) < 0.000001);
+  assert.ok(Math.abs(outcomes[0].errorKwh - 0.1) < 0.000001);
   assert.equal(store.solarForecastAccuracy().learned, false, "one outcome does not change future forecasts");
 
   for (let day = 2; day <= 6; day += 1) {
@@ -391,8 +487,8 @@ try {
     })]);
     for (let hour = 0; hour < 24; hour += 1) {
       store.appendSample(sample(new Date(startMs + hour * 3_600_000).toISOString(), {
-        solarGenerationKwh: 0.1,
-        coverageSeconds: { solarGenerationKwh: 3600 },
+        solarPowerW: 100,
+        expectedIntervalSeconds: 3600,
       }));
     }
   }
@@ -412,8 +508,8 @@ try {
   const incompleteStart = dayRange("2026-07-08").start.getTime();
   for (let hour = 0; hour < 2; hour += 1) {
     store.appendSample(sample(new Date(incompleteStart + hour * 3_600_000).toISOString(), {
-      solarGenerationKwh: 0.1,
-      coverageSeconds: { solarGenerationKwh: 3600 },
+      solarPowerW: 100,
+      expectedIntervalSeconds: 3600,
     }));
   }
   assert.equal(store.settleSolarForecastOutcomes(dayRange("2026-07-09").start), 0);
