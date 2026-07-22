@@ -232,7 +232,6 @@ assert.deepEqual(migratedFuelCellAutomation.schedules, [{
   label: "Legacy",
   days: [1, 2, 3],
   start: "08:00",
-  end: "10:00",
 }]);
 
 const billingPeriodGas = fuelCellGasUsageByBillingPeriod([
@@ -254,18 +253,19 @@ for (let day = 1; day <= 8; day += 1) {
     });
   }
 }
-const fixedFuelCellModel = buildFuelCellGenerationModel(cleanConfig({
+const automatedFuelCellModel = buildFuelCellGenerationModel(cleanConfig({
   fuelCell: {
     automation: {
       enabled: true,
       includeInAdaptiveCharging: true,
-      schedules: [{ days: [0, 1, 2, 3, 4, 5, 6], start: "08:00", end: "18:00" }],
+      schedules: [{ days: [0, 1, 2, 3, 4, 5, 6], start: "08:00" }],
     },
   },
 }), fuelCellSamples, new Date(2026, 6, 9, 9));
-assert.equal(fixedFuelCellModel.influence, "active");
-assert.ok(fixedFuelCellModel.forecastAt(new Date(2026, 6, 9, 10)).medianW > 600);
-assert.equal(fixedFuelCellModel.forecastAt(new Date(2026, 6, 9, 20)).medianW, 0);
+assert.equal(automatedFuelCellModel.influence, "active");
+assert.equal(automatedFuelCellModel.method, "observed");
+assert.ok(automatedFuelCellModel.forecastAt(new Date(2026, 6, 9, 10)).medianW > 600);
+assert.equal(automatedFuelCellModel.forecastAt(new Date(2026, 6, 9, 20)).medianW, 0);
 const observedFuelCellModel = buildFuelCellGenerationModel(cleanConfig({
   fuelCell: { automation: { includeInAdaptiveCharging: false } },
 }), fuelCellSamples, new Date(2026, 6, 9, 9));

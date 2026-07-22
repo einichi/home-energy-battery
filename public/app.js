@@ -683,13 +683,13 @@ const I18N = {
     fuelCellSettingsHelp: "Configure generation automation, reporting, and gas estimates.",
     fuelCellAutomation: "Ene-Farm Automation",
     enableFuelCellAutomation: "Enable Ene-Farm automation",
-    fuelCellAutomationHelp: "Outside scheduled windows, generation is kept off using お出かけ停止. Adaptive Charging can use the schedule as a forecast input but never controls the Ene-Farm.",
+    fuelCellAutomationHelp: "The Ene-Farm is kept in お出かけ停止 until a scheduled or manual generation start. Adaptive Charging can learn from the resulting generation but never controls the Ene-Farm.",
     spoolUpOffset: "Start request offset (minutes)",
-    fuelCellSpoolUpHelp: "The start request is sent this many minutes before the displayed generation window. The stop request remains at the window end.",
+    fuelCellSpoolUpHelp: "The generation request is sent this many minutes before the configured start time. Ene-Farm determines when the run finishes unless an off-peak period stops it.",
     hotWaterStartLimit: "Prevent start at or above hot-water level",
     stopFuelCellDuringOffPeak: "Stop generation during discounted electricity rate periods",
     includeFuelCellInAdaptiveCharging: "Include predicted Ene-Farm generation in Adaptive Charging",
-    fuelCellGenerationWindows: "Generation windows",
+    fuelCellGenerationStarts: "Scheduled generation starts",
     fuelCellAutomationDisabled: "Ene-Farm automation is disabled.",
     fuelCellAutomationWaiting: "Waiting for the next automation check.",
     noFuelCellAutomationLog: "No Ene-Farm automation decisions have been recorded.",
@@ -713,7 +713,7 @@ const I18N = {
     gasSeasonAutomaticHelp: "Tokyo Gas winter rates are selected automatically for December through April billing months.",
     marginalRateOverride: "Marginal rate override (yen/m³)",
     automaticTariffUpdates: "Automatically import monthly Tokyo Gas tariffs",
-    addWindow: "Add Window",
+    addStartTime: "Add Start Time",
     saveFuelCellSettings: "Save Ene-Farm Settings",
     gasTariffData: "Gas Tariff Data",
     billingMonth: "Billing month",
@@ -1326,13 +1326,13 @@ const I18N = {
     fuelCellSettingsHelp: "発電自動化、レポート、ガス料金推定を設定します。",
     fuelCellAutomation: "エネファーム自動化",
     enableFuelCellAutomation: "エネファーム自動化を有効にする",
-    fuelCellAutomationHelp: "設定した時間帯以外は「お出かけ停止」を維持します。アダプティブ充電は予定を予測入力として利用できますが、エネファームを操作しません。",
+    fuelCellAutomationHelp: "予定または手動で発電を開始するまで、エネファームを「お出かけ停止」に維持します。アダプティブ充電は実際の発電結果から学習できますが、エネファームを操作しません。",
     spoolUpOffset: "起動要求の先行時間（分）",
-    fuelCellSpoolUpHelp: "表示する発電時間帯より、この分数だけ早く起動要求を送信します。停止要求は時間帯の終了時刻に送信します。",
+    fuelCellSpoolUpHelp: "設定した開始時刻より、この分数だけ早く発電要求を送信します。割引時間帯による停止を除き、発電の終了はエネファーム本体が判断します。",
     hotWaterStartLimit: "発電開始を抑止する残湯量（以上）",
     stopFuelCellDuringOffPeak: "電気料金の割引時間帯は発電を停止する",
     includeFuelCellInAdaptiveCharging: "エネファーム発電予測をアダプティブ充電に反映する",
-    fuelCellGenerationWindows: "発電時間帯",
+    fuelCellGenerationStarts: "発電開始スケジュール",
     fuelCellAutomationDisabled: "エネファーム自動化は無効です。",
     fuelCellAutomationWaiting: "次の自動化チェックを待っています。",
     noFuelCellAutomationLog: "エネファーム自動化の判断履歴はありません。",
@@ -1356,7 +1356,7 @@ const I18N = {
     gasSeasonAutomaticHelp: "東京ガスの冬期料金は12月〜4月検針分に自動適用されます。",
     marginalRateOverride: "従量単価の上書き (円/m³)",
     automaticTariffUpdates: "東京ガスの月別料金を自動取得",
-    addWindow: "時間帯を追加",
+    addStartTime: "開始時刻を追加",
     saveFuelCellSettings: "エネファーム設定を保存",
     gasTariffData: "ガス料金データ",
     billingMonth: "請求月",
@@ -4165,35 +4165,33 @@ function fuelCellDayLabel(day) {
   return new Intl.DateTimeFormat(state.language === "ja" ? "ja-JP" : "en-US", { weekday: "short" }).format(date);
 }
 
-function addFuelCellAutomationWindow(window = {}) {
-  const root = $("#fuelCellAutomationWindows");
+function addFuelCellAutomationStart(schedule = {}) {
+  const root = $("#fuelCellAutomationStarts");
   if (!root) return;
   const row = document.createElement("div");
-  row.className = "fixed-window-row";
+  row.className = "fuel-cell-start-row";
   row.innerHTML = `
-    <label><span>${t("label")}</span><input data-fuel-cell-window="label" value="${escapeHtml(window.label ?? "")}" /></label>
-    <label><span>${t("start")}</span><input data-fuel-cell-window="start" type="time" value="${window.start ?? "08:00"}" /></label>
-    <label><span>${t("end")}</span><input data-fuel-cell-window="end" type="time" value="${window.end ?? "18:00"}" /></label>
-    <button type="button" class="delete" data-remove-fuel-cell-window>${t("remove")}</button>
-    <div class="fixed-window-days">${Array.from({ length: 7 }, (_, day) => `<label><input data-fuel-cell-day="${day}" type="checkbox" ${(window.days ?? [0,1,2,3,4,5,6]).includes(day) ? "checked" : ""} />${fuelCellDayLabel(day)}</label>`).join("")}</div>`;
+    <label><span>${t("label")}</span><input data-fuel-cell-start="label" value="${escapeHtml(schedule.label ?? "")}" /></label>
+    <label><span>${t("start")}</span><input data-fuel-cell-start="time" type="time" value="${schedule.start ?? "08:00"}" /></label>
+    <button type="button" class="delete" data-remove-fuel-cell-start>${t("remove")}</button>
+    <div class="fuel-cell-start-days">${Array.from({ length: 7 }, (_, day) => `<label><input data-fuel-cell-day="${day}" type="checkbox" ${(schedule.days ?? [0,1,2,3,4,5,6]).includes(day) ? "checked" : ""} />${fuelCellDayLabel(day)}</label>`).join("")}</div>`;
   root.append(row);
 }
 
-function renderFuelCellAutomationWindows(windows = []) {
-  const root = $("#fuelCellAutomationWindows");
+function renderFuelCellAutomationStarts(schedules = []) {
+  const root = $("#fuelCellAutomationStarts");
   if (!root) return;
   root.replaceChildren();
-  for (const window of windows) addFuelCellAutomationWindow(window);
-  if (!windows.length) addFuelCellAutomationWindow();
+  for (const schedule of schedules) addFuelCellAutomationStart(schedule);
+  if (!schedules.length) addFuelCellAutomationStart();
 }
 
-function collectFuelCellAutomationWindows() {
-  return $$("#fuelCellAutomationWindows .fixed-window-row").map((row) => ({
-    label: row.querySelector('[data-fuel-cell-window="label"]').value,
-    start: row.querySelector('[data-fuel-cell-window="start"]').value,
-    end: row.querySelector('[data-fuel-cell-window="end"]').value,
+function collectFuelCellAutomationStarts() {
+  return $$("#fuelCellAutomationStarts .fuel-cell-start-row").map((row) => ({
+    label: row.querySelector('[data-fuel-cell-start="label"]').value,
+    start: row.querySelector('[data-fuel-cell-start="time"]').value,
     days: Array.from(row.querySelectorAll("[data-fuel-cell-day]:checked")).map((input) => Number(input.dataset.fuelCellDay)),
-  })).filter((window) => window.days.length && window.start && window.end && window.start !== window.end);
+  })).filter((schedule) => schedule.days.length && schedule.start);
 }
 
 function updateFuelCellAutomationControls() {
@@ -4202,12 +4200,12 @@ function updateFuelCellAutomationControls() {
     "#fuelCellSpoolUpMinutes",
     "#fuelCellHotWaterStartLimit",
     "#fuelCellStopDuringOffPeak",
-    "#addFuelCellWindow",
+    "#addFuelCellStart",
   ]) {
     const control = $(selector);
     if (control) control.disabled = !enabled;
   }
-  $$("#fuelCellAutomationWindows input, #fuelCellAutomationWindows button").forEach((control) => {
+  $$("#fuelCellAutomationStarts input, #fuelCellAutomationStarts button").forEach((control) => {
     control.disabled = !enabled;
   });
 }
@@ -4296,7 +4294,7 @@ function updateConfigControls(config) {
   $("#fuelCellDiscount").value = fuelCell.tariff?.equipmentDiscount ?? "";
   $("#fuelCellMarginalRate").value = fuelCell.tariff?.marginalRateOverrideYenPerM3 ?? "";
   $("#fuelCellTariffAutomatic").checked = fuelCell.tariff?.automaticUpdates === true;
-  renderFuelCellAutomationWindows(fuelCellAutomation.schedules ?? []);
+  renderFuelCellAutomationStarts(fuelCellAutomation.schedules ?? []);
   updateFuelCellAutomationControls();
   if (!$("#fuelCellTariffMonth").value) $("#fuelCellTariffMonth").value = new Date().toISOString().slice(0, 7);
   const rateMode = rateModeFromConfig(config);
@@ -5964,11 +5962,11 @@ function initForms() {
     }
   });
   $("#fuelCellAutomationEnabled")?.addEventListener("change", updateFuelCellAutomationControls);
-  $("#addFuelCellWindow")?.addEventListener("click", () => addFuelCellAutomationWindow());
-  $("#fuelCellAutomationWindows")?.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-remove-fuel-cell-window]");
+  $("#addFuelCellStart")?.addEventListener("click", () => addFuelCellAutomationStart());
+  $("#fuelCellAutomationStarts")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-remove-fuel-cell-start]");
     if (!button) return;
-    button.closest(".fixed-window-row")?.remove();
+    button.closest(".fuel-cell-start-row")?.remove();
   });
   $("#fuelCellConfigForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -5982,7 +5980,7 @@ function initForms() {
             stopDuringDiscountedRates: $("#fuelCellStopDuringOffPeak").checked,
             preventStartAtOrAboveHotWaterLevel: optional("#fuelCellHotWaterStartLimit"),
             includeInAdaptiveCharging: $("#fuelCellIncludeInAdaptiveCharging").checked,
-            schedules: collectFuelCellAutomationWindows(),
+            schedules: collectFuelCellAutomationStarts(),
           },
           gasCo2KgPerM3: $("#fuelCellGasCo2").value,
           tariff: {

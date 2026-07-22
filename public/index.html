@@ -1022,15 +1022,15 @@
                 <fieldset class="feature-options fuel-cell-automation-settings">
                   <legend data-i18n="fuelCellAutomation">Ene-Farm Automation</legend>
                   <label class="check-row"><input id="fuelCellAutomationEnabled" type="checkbox" /><span data-i18n="enableFuelCellAutomation">Enable Ene-Farm automation</span></label>
-                  <p class="field-help" data-i18n="fuelCellAutomationHelp">Outside scheduled windows, generation is kept off using お出かけ停止. Adaptive Charging can use the schedule as a forecast input but never controls the Ene-Farm.</p>
+                  <p class="field-help" data-i18n="fuelCellAutomationHelp">The Ene-Farm is kept in お出かけ停止 until a scheduled or manual generation start. Adaptive Charging can learn from the resulting generation but never controls the Ene-Farm.</p>
                   <div class="compact-field-grid">
                     <label><span data-i18n="spoolUpOffset">Start request offset (minutes)</span><input id="fuelCellSpoolUpMinutes" type="number" min="0" max="180" step="1" inputmode="numeric" /></label>
                     <label><span data-i18n="hotWaterStartLimit">Prevent start at or above hot-water level</span><select id="fuelCellHotWaterStartLimit"><option value="" data-i18n="disabled">Disabled</option><option value="1">1 / 5 (~20%)</option><option value="2">2 / 5 (~40%)</option><option value="3">3 / 5 (~60%)</option><option value="4">4 / 5 (~80%)</option><option value="5">5 / 5 (~100%)</option></select></label>
                   </div>
                   <label class="check-row"><input id="fuelCellStopDuringOffPeak" type="checkbox" /><span data-i18n="stopFuelCellDuringOffPeak">Stop generation during discounted electricity rate periods</span></label>
                   <label class="check-row"><input id="fuelCellIncludeInAdaptiveCharging" type="checkbox" /><span data-i18n="includeFuelCellInAdaptiveCharging">Include predicted Ene-Farm generation in Adaptive Charging</span></label>
-                  <fieldset id="fuelCellAutomationSchedule" class="feature-options"><legend data-i18n="fuelCellGenerationWindows">Generation windows</legend><div id="fuelCellAutomationWindows" class="fixed-window-list"></div><button id="addFuelCellWindow" type="button" class="ghost" data-i18n="addWindow">Add Window</button></fieldset>
-                  <p class="field-help" data-i18n="fuelCellSpoolUpHelp">The start request is sent this many minutes before the displayed generation window. The stop request remains at the window end.</p>
+                  <fieldset id="fuelCellAutomationSchedule" class="feature-options"><legend data-i18n="fuelCellGenerationStarts">Scheduled generation starts</legend><div id="fuelCellAutomationStarts" class="fuel-cell-start-list"></div><button id="addFuelCellStart" type="button" class="ghost" data-i18n="addStartTime">Add Start Time</button></fieldset>
+                  <p class="field-help" data-i18n="fuelCellSpoolUpHelp">The generation request is sent this many minutes before the configured start time. Ene-Farm determines when the run finishes unless an off-peak period stops it.</p>
                   <p id="fuelCellAutomationStatus" class="adaptive-charging-notice" aria-live="polite"></p>
                   <div id="fuelCellAutomationLog" class="automation-log fuel-cell-automation-log" aria-live="polite"></div>
                 </fieldset>

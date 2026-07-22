@@ -8,8 +8,9 @@ import {
   EPC,
 } from "../home-energy-battery-node.js";
 import {
-  activeFuelCellSchedule,
   decideFuelCellAutomation,
+  dueFuelCellSchedule,
+  fuelCellScheduledStartBlockReason,
   nextFuelCellSchedule,
   normalizeFuelCellAutomation,
 } from "../lib/fuel-cell-automation.js";
@@ -57,12 +58,18 @@ const automation = normalizeFuelCellAutomation({
   stopDuringDiscountedRates: true,
   preventStartAtOrAboveHotWaterLevel: 4,
   includeInAdaptiveCharging: true,
-  schedules: [{ label: "Morning", days: [1], start: "08:00", end: "10:00" }],
+  schedules: [{ label: "Morning", days: [1], start: "08:00" }],
 });
 assert.equal(normalizeFuelCellAutomation().spoolUpMinutes, 40);
 const mondayBeforeStart = new Date(2026, 6, 20, 7, 45);
-assert.equal(activeFuelCellSchedule(automation, mondayBeforeStart)?.label, "Morning");
-assert.equal(activeFuelCellSchedule(automation, mondayBeforeStart, { includeSpoolUp: false }), null);
+const dueSchedule = dueFuelCellSchedule(automation, mondayBeforeStart, {
+  lastEvaluatedAt: new Date(2026, 6, 20, 7, 39),
+});
+assert.equal(dueSchedule?.label, "Morning");
+assert.equal(dueFuelCellSchedule(automation, mondayBeforeStart, {
+  lastEvaluatedAt: new Date(2026, 6, 20, 7, 39),
+  lastHandledKey: dueSchedule.key,
+}), null);
 assert.equal(nextFuelCellSchedule(automation, new Date(2026, 6, 20, 6, 0))?.label, "Morning");
 
 const offDecision = decideFuelCellAutomation({
@@ -74,22 +81,19 @@ const offDecision = decideFuelCellAutomation({
 assert.equal(offDecision.action, "stop");
 assert.match(offDecision.reason, /お出かけ停止/);
 
-const hotWaterBlocked = decideFuelCellAutomation({
+const hotWaterBlocked = fuelCellScheduledStartBlockReason({
   automation,
-  now: mondayBeforeStart,
-  generationState: "stopped",
   hotWaterLevel: 4,
-  offModeConfirmed: true,
 });
-assert.equal(hotWaterBlocked.action, null);
-assert.match(hotWaterBlocked.reason, /4\/5/);
+assert.match(hotWaterBlocked, /4\/5/);
 
 const scheduledStart = decideFuelCellAutomation({
   automation,
   now: mondayBeforeStart,
   generationState: "stopped",
-  hotWaterLevel: 3,
   offModeConfirmed: true,
+  scheduledRunActive: true,
+  scheduledOccurrence: dueSchedule,
 });
 assert.equal(scheduledStart.action, "start");
 
@@ -97,9 +101,10 @@ const discountedStop = decideFuelCellAutomation({
   automation,
   now: new Date(2026, 6, 20, 8, 30),
   generationState: "generating",
-  hotWaterLevel: 2,
   discountedRateActive: true,
   offModeConfirmed: false,
+  scheduledRunActive: true,
+  scheduledOccurrence: dueSchedule,
 });
 assert.equal(discountedStop.action, "stop");
 
@@ -130,5 +135,6 @@ const migratedLegacy = normalizeFuelCellAutomation({}, {
 assert.equal(migratedLegacy.enabled, false);
 assert.equal(migratedLegacy.includeInAdaptiveCharging, true);
 assert.equal(migratedLegacy.schedules.length, 1);
+assert.equal("end" in migratedLegacy.schedules[0], false);
 
 console.log("Ene-Farm protocol tests passed");

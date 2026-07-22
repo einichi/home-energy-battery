@@ -700,29 +700,29 @@ label {
 .graph-state-strip { height: 14px; margin-top: 8px; }
 .report-domain-picker { margin-bottom: 10px; }
 
-.fixed-window-list { display: grid; gap: 10px; }
-.fixed-window-row {
+.fuel-cell-start-list { display: grid; gap: 10px; }
+.fuel-cell-start-row {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) repeat(2, minmax(105px, 150px)) auto;
+  grid-template-columns: minmax(120px, 1fr) minmax(105px, 150px) auto;
   gap: 10px;
   align-items: end;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
 }
-.fixed-window-days {
+.fuel-cell-start-days {
   grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
 }
-.fixed-window-days label {
+.fuel-cell-start-days label {
   display: flex;
   grid-auto-flow: column;
   align-items: center;
   gap: 4px;
   font-size: 12px;
 }
-.fixed-window-days input { width: 15px; min-height: 15px; }
+.fuel-cell-start-days input { width: 15px; min-height: 15px; }
 .fuel-cell-automation-settings { margin-bottom: 4px; }
 .fuel-cell-automation-settings > .feature-options { padding: 10px 0 0; border: 0; border-top: 1px solid var(--border); border-radius: 0; }
 .fuel-cell-automation-log { max-height: 180px; }
@@ -2778,12 +2778,12 @@ td code {
     gap: 14px;
   }
 
-  .fixed-window-row {
+  .fuel-cell-start-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .fixed-window-row > label:first-child,
-  .fixed-window-days {
+  .fuel-cell-start-row > label:first-child,
+  .fuel-cell-start-days {
     grid-column: 1 / -1;
   }
 }

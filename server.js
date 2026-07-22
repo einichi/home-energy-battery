@@ -36,8 +36,9 @@ import {
   validBillingMonth,
 } from "./lib/gas-tariffs.js";
 import {
-  activeFuelCellSchedule,
   decideFuelCellAutomation,
+  dueFuelCellSchedule,
+  fuelCellScheduledStartBlockReason,
   nextFuelCellSchedule,
   normalizeFuelCellAutomation,
 } from "./lib/fuel-cell-automation.js";
@@ -924,6 +925,21 @@ function cleanFuelCellAutomationState(value = {}) {
     manualRunActive: value.manualRunActive === true,
     manualRunObserved: value.manualRunObserved === true,
     manualRunRequestedAt: value.manualRunRequestedAt ?? null,
+    scheduledRunActive: value.scheduledRunActive === true,
+    scheduledRunObserved: value.scheduledRunObserved === true,
+    scheduledRunCommandedAt: value.scheduledRunCommandedAt ?? null,
+    scheduledRunOccurrence: value.scheduledRunOccurrence
+      && typeof value.scheduledRunOccurrence === "object"
+      ? {
+          key: String(value.scheduledRunOccurrence.key ?? ""),
+          scheduleIndex: Number(value.scheduledRunOccurrence.scheduleIndex),
+          label: String(value.scheduledRunOccurrence.label ?? ""),
+          start: value.scheduledRunOccurrence.start ?? null,
+          requestStart: value.scheduledRunOccurrence.requestStart ?? null,
+        }
+      : null,
+    lastScheduleOccurrenceKey: value.lastScheduleOccurrenceKey ?? null,
+    lastEvaluatedAt: value.lastEvaluatedAt ?? null,
     lastDecisionKey: value.lastDecisionKey ?? null,
     lastResult: value.lastResult ?? null,
     log: (Array.isArray(value.log) ? value.log : []).slice(-200).map((entry) => ({
@@ -2356,15 +2372,6 @@ function percentile(values, fraction) {
   return sorted[index];
 }
 
-function scheduledFuelCellWindowAt(config, date) {
-  const automation = config.fuelCell?.automation ?? normalizeFuelCellAutomation();
-  if (!automation.enabled) return null;
-  if (automation.stopDuringDiscountedRates && explicitDiscountedBand(config, date)) return null;
-  const occurrence = activeFuelCellSchedule(automation, date, { includeSpoolUp: false });
-  if (!occurrence) return null;
-  return { ...occurrence, index: occurrence.scheduleIndex };
-}
-
 function monthDistance(left, right) {
   const raw = Math.abs(left.getMonth() - right.getMonth());
   return Math.min(raw, 12 - raw);
@@ -2372,7 +2379,7 @@ function monthDistance(left, right) {
 
 function buildFuelCellGenerationModel(config, samples = [], now = new Date(), options = {}) {
   const automation = config.fuelCell?.automation ?? normalizeFuelCellAutomation();
-  const method = automation.enabled && automation.schedules.length ? "scheduled" : "observed";
+  const method = "observed";
   const requestedInfluence = automation.includeInAdaptiveCharging ? "active" : "observe";
   const temperatureByDay = options.temperatureByDay instanceof Map ? options.temperatureByDay : new Map();
   const awayPeriods = Array.isArray(options.awayPeriods) ? options.awayPeriods : [];
@@ -2408,21 +2415,6 @@ function buildFuelCellGenerationModel(config, samples = [], now = new Date(), op
     }])),
   }));
   const validDays = dailyBuckets.filter((day) => day.buckets.size >= 16);
-  const completedScheduledRunKeys = new Set();
-  for (const day of dailyBuckets) {
-    for (const [windowIndex] of automation.schedules.entries()) {
-      const expectedBuckets = [];
-      for (let bucket = 0; bucket < 48; bucket += 1) {
-        const bucketDate = new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate(), Math.floor(bucket / 2), bucket % 2 ? 30 : 0);
-        if (scheduledFuelCellWindowAt(config, bucketDate)?.index === windowIndex) expectedBuckets.push(bucket);
-      }
-      const generatedBuckets = expectedBuckets.filter((bucket) => Number(day.values.get(bucket)?.watts) > 25).length;
-      if (expectedBuckets.length >= 2 && generatedBuckets / expectedBuckets.length >= 0.8) {
-        completedScheduledRunKeys.add(`${day.key}:${windowIndex}`);
-      }
-    }
-  }
-  const completedScheduledRuns = completedScheduledRunKeys.size;
   const currentDayType = now.getDay() === 0 || now.getDay() === 6;
   const currentAway = isAwayAt(now.getTime(), awayPeriods, { forecast: true });
   const currentTemperature = finiteNumberOrNull(temperatureByDay.get(localDayKey(now)));
@@ -2432,32 +2424,25 @@ function buildFuelCellGenerationModel(config, samples = [], now = new Date(), op
     return weekend === currentDayType && day.away === currentAway && monthDistance(day.date, now) <= 2 && temperatureMatches;
   });
   const blockers = [];
-  if (method === "scheduled" && completedScheduledRuns < 3) blockers.push(`${3 - completedScheduledRuns} more comparable scheduled generation runs required`);
-  if (method === "observed" && validDays.length < 7) blockers.push(`${7 - validDays.length} more valid observation days required`);
-  if (method === "observed" && comparableDays.length < 4) blockers.push(`${4 - comparableDays.length} more comparable observation days required`);
+  if (validDays.length < 7) blockers.push(`${7 - validDays.length} more valid observation days required`);
+  if (comparableDays.length < 4) blockers.push(`${4 - comparableDays.length} more comparable observation days required`);
   const ready = blockers.length === 0;
   const influencesPlanner = requestedInfluence === "active" && ready;
   const latest = powerSamples.at(-1) ?? null;
 
   const forecastAt = (date) => {
-    const scheduledWindow = method === "scheduled" ? scheduledFuelCellWindowAt(config, date) : null;
-    if (method === "scheduled" && !scheduledWindow) return { p20W: 0, medianW: 0, p80W: 0, sampleCount: 0 };
     const bucket = halfHourIndex(date);
     const targetWeekend = date.getDay() === 0 || date.getDay() === 6;
     const targetAway = isAwayAt(date.getTime(), awayPeriods, { forecast: true });
     const targetTemperature = finiteNumberOrNull(temperatureByDay.get(localDayKey(date)));
     let candidates = dailyBuckets.filter((day) => day.values.has(bucket));
-    if (method === "scheduled") {
-      candidates = candidates.filter((day) => scheduledFuelCellWindowAt(config, new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate(), date.getHours(), date.getMinutes())));
-    } else {
-      const comparable = candidates.filter((day) => {
-        const weekend = day.date.getDay() === 0 || day.date.getDay() === 6;
-        const temperatureMatches = targetTemperature === null || day.temperatureC === null || Math.abs(day.temperatureC - targetTemperature) <= 6;
-        return weekend === targetWeekend && day.away === targetAway && monthDistance(day.date, date) <= 2 && temperatureMatches;
-      });
-      if (comparable.length >= 4) candidates = comparable;
-    }
-    if (method === "observed" && latest?.state && Math.abs(date.getTime() - now.getTime()) <= 2 * 60 * 60_000) {
+    const comparable = candidates.filter((day) => {
+      const weekend = day.date.getDay() === 0 || day.date.getDay() === 6;
+      const temperatureMatches = targetTemperature === null || day.temperatureC === null || Math.abs(day.temperatureC - targetTemperature) <= 6;
+      return weekend === targetWeekend && day.away === targetAway && monthDistance(day.date, date) <= 2 && temperatureMatches;
+    });
+    if (comparable.length >= 4) candidates = comparable;
+    if (latest?.state && Math.abs(date.getTime() - now.getTime()) <= 2 * 60 * 60_000) {
       const sameRecentState = candidates.filter((day) => day.values.get(bucket)?.state === latest.state);
       if (sameRecentState.length >= 4) candidates = sameRecentState;
     }
@@ -2477,7 +2462,6 @@ function buildFuelCellGenerationModel(config, samples = [], now = new Date(), op
     blockers,
     validObservationDays: validDays.length,
     comparableDays: comparableDays.length,
-    completedScheduledRuns,
     recentState: latest?.state ?? null,
     forecastAt,
   };
@@ -3453,7 +3437,6 @@ function buildAdaptiveChargingPlan({
       blockers: fuelCellModel.blockers,
       validObservationDays: fuelCellModel.validObservationDays,
       comparableDays: fuelCellModel.comparableDays,
-      completedScheduledRuns: fuelCellModel.completedScheduledRuns,
     },
     chargePerformance,
     batteryModel,
@@ -4908,9 +4891,14 @@ async function readConfig() {
     const cleaned = cleanConfig(parsed);
     const legacyFuelCellConfig = parsed.fuelCell && ["generationModel", "plannerInfluence", "fixedWindows"]
       .some((key) => Object.prototype.hasOwnProperty.call(parsed.fuelCell, key));
+    const legacyFuelCellScheduleEnds = Array.isArray(parsed.fuelCell?.automation?.schedules)
+      && parsed.fuelCell.automation.schedules.some(
+        (schedule) => schedule && Object.prototype.hasOwnProperty.call(schedule, "end"),
+      );
     if (Object.prototype.hasOwnProperty.call(parsed, "automation")
       || Object.prototype.hasOwnProperty.call(parsed, "historyRetentionDays")
-      || legacyFuelCellConfig) {
+      || legacyFuelCellConfig
+      || legacyFuelCellScheduleEnds) {
       await writeJsonFileAtomic(CONFIG_FILE, cleaned);
     }
     return cleaned;
@@ -5016,6 +5004,12 @@ async function commitConfig(previous, config) {
     const fuelCellState = await readFuelCellAutomationState();
     fuelCellState.offModeConfirmed = false;
     fuelCellState.commandCooldownUntil = null;
+    fuelCellState.scheduledRunActive = false;
+    fuelCellState.scheduledRunObserved = false;
+    fuelCellState.scheduledRunCommandedAt = null;
+    fuelCellState.scheduledRunOccurrence = null;
+    fuelCellState.lastScheduleOccurrenceKey = null;
+    fuelCellState.lastEvaluatedAt = null;
     fuelCellState.lastDecisionKey = null;
     fuelCellState.lastResult = null;
     appendFuelCellAutomationLog(fuelCellState, "Ene-Farm automation configuration changed", "config");
@@ -5649,8 +5643,10 @@ function fuelCellAutomationView(config, state, now = new Date()) {
     enabled,
     configured,
     defaultMode: "off",
-    activeSchedule: activeFuelCellSchedule(automation, now),
+    activeSchedule: state.scheduledRunActive ? state.scheduledRunOccurrence : null,
     nextSchedule: nextFuelCellSchedule(automation, now),
+    scheduledRunActive: state.scheduledRunActive,
+    manualRunActive: state.manualRunActive,
     lastObservedState: state.lastObservedState,
     lastObservedAt: state.lastObservedAt,
     lastStoppedAt: state.lastStoppedAt,
@@ -5687,6 +5683,23 @@ async function evaluateFuelCellAutomation(config, status, now = new Date()) {
     state.manualRunRequestedAt = null;
     appendFuelCellAutomationLog(state, "Manual one-off generation completed; returning to scheduled control", "manual", now);
   }
+  if (state.scheduledRunActive && ["generating", "starting"].includes(generationState)) {
+    state.scheduledRunObserved = true;
+  } else if (state.scheduledRunActive && state.scheduledRunObserved && generationState === "stopped") {
+    appendFuelCellAutomationLog(state, "Scheduled generation completed; returning to お出かけ停止", "schedule", now);
+    state.scheduledRunActive = false;
+    state.scheduledRunObserved = false;
+    state.scheduledRunCommandedAt = null;
+    state.scheduledRunOccurrence = null;
+  } else if (state.scheduledRunActive && !state.scheduledRunObserved && generationState === "stopped") {
+    const expectedStartMs = new Date(state.scheduledRunOccurrence?.start ?? 0).getTime();
+    if (Number.isFinite(expectedStartMs) && now.getTime() > expectedStartMs + 30 * 60_000) {
+      appendFuelCellAutomationLog(state, "Scheduled generation did not start within 30 minutes of its configured start; abandoning this run", "warning", now);
+      state.scheduledRunActive = false;
+      state.scheduledRunCommandedAt = null;
+      state.scheduledRunOccurrence = null;
+    }
+  }
 
   if (config.fuelCellEnabled === false || !config.fuelCellPrimaryHost) {
     state.lastResult = {
@@ -5695,19 +5708,52 @@ async function evaluateFuelCellAutomation(config, status, now = new Date()) {
       status: "disabled",
       reason: config.fuelCellEnabled === false ? "Ene-Farm is disabled" : "Ene-Farm primary device is not configured",
     };
+    state.lastEvaluatedAt = now.toISOString();
     return writeFuelCellAutomationState(state);
+  }
+
+  const discountedRateActive = Boolean(explicitDiscountedBand(config, now));
+  const dueSchedule = dueFuelCellSchedule(automation, now, {
+    lastEvaluatedAt: state.lastEvaluatedAt,
+    lastHandledKey: state.lastScheduleOccurrenceKey,
+  });
+  state.lastEvaluatedAt = now.toISOString();
+  if (dueSchedule) {
+    state.lastScheduleOccurrenceKey = dueSchedule.key;
+    const skipped = fuelCellScheduledStartBlockReason({
+      automation,
+      hotWaterLevel,
+      discountedRateActive,
+    });
+    if (skipped) {
+      appendFuelCellAutomationLog(state, skipped, "skipped", now);
+    } else {
+      state.scheduledRunActive = true;
+      state.scheduledRunObserved = ["generating", "starting"].includes(generationState);
+      state.scheduledRunCommandedAt = null;
+      state.scheduledRunOccurrence = dueSchedule;
+      state.offModeConfirmed = false;
+      appendFuelCellAutomationLog(
+        state,
+        `Scheduled generation start is due for ${dueSchedule.label || dueSchedule.start}`,
+        "schedule",
+        now,
+      );
+    }
   }
 
   const decision = decideFuelCellAutomation({
     automation,
     now,
     generationState,
-    hotWaterLevel,
-    discountedRateActive: Boolean(explicitDiscountedBand(config, now)),
+    discountedRateActive,
     commandCooldownUntil: state.commandCooldownUntil,
     offModeConfirmed: state.offModeConfirmed,
     lastCommand: state.lastCommand,
     manualRunActive: state.manualRunActive,
+    scheduledRunActive: state.scheduledRunActive,
+    scheduledOccurrence: state.scheduledRunOccurrence,
+    scheduledRunCommandedAt: state.scheduledRunCommandedAt,
   });
   const decisionKey = JSON.stringify([decision.status, decision.reason, decision.action]);
   if (decisionKey !== state.lastDecisionKey) {
@@ -5736,12 +5782,18 @@ async function evaluateFuelCellAutomation(config, status, now = new Date()) {
       state.manualRunActive = false;
       state.manualRunObserved = false;
       state.manualRunRequestedAt = null;
+      state.scheduledRunActive = false;
+      state.scheduledRunObserved = false;
+      state.scheduledRunCommandedAt = null;
+      state.scheduledRunOccurrence = null;
+    } else {
+      state.scheduledRunCommandedAt = now.toISOString();
     }
     state.lastResult = { ...state.lastResult, result };
     appendFuelCellAutomationLog(
       state,
       decision.action === "start"
-        ? `Generation start requested for ${decision.activeSchedule?.label || "scheduled window"}`
+        ? `Generation start requested for ${decision.activeSchedule?.label || "scheduled run"}`
         : "お出かけ停止 requested",
       decision.action,
       now,
