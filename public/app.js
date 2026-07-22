@@ -4282,7 +4282,7 @@ function updateConfigControls(config) {
   const fuelCell = config.fuelCell ?? {};
   const fuelCellAutomation = fuelCell.automation ?? {};
   $("#fuelCellAutomationEnabled").checked = fuelCellAutomation.enabled === true;
-  $("#fuelCellSpoolUpMinutes").value = fuelCellAutomation.spoolUpMinutes ?? 15;
+  $("#fuelCellSpoolUpMinutes").value = fuelCellAutomation.spoolUpMinutes ?? 40;
   $("#fuelCellHotWaterStartLimit").value = fuelCellAutomation.preventStartAtOrAboveHotWaterLevel ?? "";
   $("#fuelCellStopDuringOffPeak").checked = fuelCellAutomation.stopDuringDiscountedRates === true;
   $("#fuelCellIncludeInAdaptiveCharging").checked = fuelCellAutomation.includeInAdaptiveCharging === true;

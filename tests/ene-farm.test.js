@@ -59,6 +59,7 @@ const automation = normalizeFuelCellAutomation({
   includeInAdaptiveCharging: true,
   schedules: [{ label: "Morning", days: [1], start: "08:00", end: "10:00" }],
 });
+assert.equal(normalizeFuelCellAutomation().spoolUpMinutes, 40);
 const mondayBeforeStart = new Date(2026, 6, 20, 7, 45);
 assert.equal(activeFuelCellSchedule(automation, mondayBeforeStart)?.label, "Morning");
 assert.equal(activeFuelCellSchedule(automation, mondayBeforeStart, { includeSpoolUp: false }), null);
