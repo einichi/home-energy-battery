@@ -1017,11 +1017,24 @@
             </div>
 
             <div class="panel fuel-cell-panel" data-feature="fuel-cell">
-              <div class="panel-title"><h1 data-i18n="fuelCellSettings">Ene-Farm</h1><p data-i18n="fuelCellSettingsHelp">Configure reporting, gas estimates, and read-only generation forecasts.</p></div>
+              <div class="panel-title"><h1 data-i18n="fuelCellSettings">Ene-Farm</h1><p data-i18n="fuelCellSettingsHelp">Configure generation automation, reporting, and gas estimates.</p></div>
               <form id="fuelCellConfigForm" class="config-form">
+                <fieldset class="feature-options fuel-cell-automation-settings">
+                  <legend data-i18n="fuelCellAutomation">Ene-Farm Automation</legend>
+                  <label class="check-row"><input id="fuelCellAutomationEnabled" type="checkbox" /><span data-i18n="enableFuelCellAutomation">Enable Ene-Farm automation</span></label>
+                  <p class="field-help" data-i18n="fuelCellAutomationHelp">Outside scheduled windows, generation is kept off using お出かけ停止. Adaptive Charging can use the schedule as a forecast input but never controls the Ene-Farm.</p>
+                  <div class="compact-field-grid">
+                    <label><span data-i18n="spoolUpOffset">Start request offset (minutes)</span><input id="fuelCellSpoolUpMinutes" type="number" min="0" max="180" step="1" inputmode="numeric" /></label>
+                    <label><span data-i18n="hotWaterStartLimit">Prevent start at or above hot-water level</span><select id="fuelCellHotWaterStartLimit"><option value="" data-i18n="disabled">Disabled</option><option value="1">1 / 5 (~20%)</option><option value="2">2 / 5 (~40%)</option><option value="3">3 / 5 (~60%)</option><option value="4">4 / 5 (~80%)</option><option value="5">5 / 5 (~100%)</option></select></label>
+                  </div>
+                  <label class="check-row"><input id="fuelCellStopDuringOffPeak" type="checkbox" /><span data-i18n="stopFuelCellDuringOffPeak">Stop generation during discounted electricity rate periods</span></label>
+                  <label class="check-row"><input id="fuelCellIncludeInAdaptiveCharging" type="checkbox" /><span data-i18n="includeFuelCellInAdaptiveCharging">Include predicted Ene-Farm generation in Adaptive Charging</span></label>
+                  <fieldset id="fuelCellAutomationSchedule" class="feature-options"><legend data-i18n="fuelCellGenerationWindows">Generation windows</legend><div id="fuelCellAutomationWindows" class="fixed-window-list"></div><button id="addFuelCellWindow" type="button" class="ghost" data-i18n="addWindow">Add Window</button></fieldset>
+                  <p class="field-help" data-i18n="fuelCellSpoolUpHelp">The start request is sent this many minutes before the displayed generation window. The stop request remains at the window end.</p>
+                  <p id="fuelCellAutomationStatus" class="adaptive-charging-notice" aria-live="polite"></p>
+                  <div id="fuelCellAutomationLog" class="automation-log fuel-cell-automation-log" aria-live="polite"></div>
+                </fieldset>
                 <div class="compact-field-grid">
-                  <label><span data-i18n="generationModel">Generation model</span><select id="fuelCellGenerationModel"><option value="automatic" data-i18n="automaticOmakase">Automatic / Omakase</option><option value="fixed" data-i18n="fixedSchedule">Fixed schedule</option><option value="off" data-i18n="off">Off</option></select></label>
-                  <label><span data-i18n="plannerInfluence">Planner influence</span><select id="fuelCellPlannerInfluence"><option value="observe" data-i18n="observeOnly">Observe only</option><option value="active" data-i18n="active">Active</option></select></label>
                   <label><span data-i18n="gasProvider">Gas provider</span><select id="fuelCellTariffProvider"><option value="tokyo-gas">Tokyo Gas</option></select></label>
                   <label class="wide-field"><span data-i18n="gasRegion">Gas region</span><select id="fuelCellTariffRegion"><option value="tokyo" data-i18n="tokyoGasTokyoRegion">Tokyo district and surrounding areas</option><option value="gunma" data-i18n="tokyoGasGunmaRegion">Gunma district</option></select></label>
                   <label class="wide-field"><span data-i18n="gasPlan">Gas plan</span><select id="fuelCellTariffPlan"><option value="enefarm" data-i18n="tokyoGasEneFarmPlan">Ene-Farm generation eco plan</option></select></label>
@@ -1032,9 +1045,6 @@
                 </div>
                 <p class="field-help assumption-notice" data-i18n="eneFarmOnlyGasAssumption">Cost estimates treat recorded Ene-Farm gas as the household's total gas use for the billing period. Gas used by cooktops, heaters, boilers, or other appliances is not included.</p>
                 <label class="check-row"><input id="fuelCellTariffAutomatic" type="checkbox" /><span data-i18n="automaticTariffUpdates">Automatically import monthly Tokyo Gas tariffs</span></label>
-                <fieldset id="fuelCellFixedSchedule" class="feature-options hidden"><legend data-i18n="fixedGenerationWindows">Fixed generation windows</legend><div id="fuelCellFixedWindows" class="fixed-window-list"></div><button id="addFuelCellWindow" type="button" class="ghost" data-i18n="addWindow">Add Window</button></fieldset>
-                <p class="field-help" data-i18n="generationModelDeviceHelp">ECHONET reports whether the Ene-Farm is generating, but not its configured mode or schedule. These settings describe the configuration selected on the Ene-Farm itself.</p>
-                <p id="fuelCellInfluenceStatus" class="adaptive-charging-notice"></p>
                 <button data-i18n="saveFuelCellSettings">Save Ene-Farm Settings</button>
               </form>
               <form id="fuelCellTariffImportForm" class="config-form section-box">

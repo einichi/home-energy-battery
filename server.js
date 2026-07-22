@@ -35,6 +35,12 @@ import {
   normalizeGasTariffPayload,
   validBillingMonth,
 } from "./lib/gas-tariffs.js";
+import {
+  activeFuelCellSchedule,
+  decideFuelCellAutomation,
+  nextFuelCellSchedule,
+  normalizeFuelCellAutomation,
+} from "./lib/fuel-cell-automation.js";
 import { timestampConsole } from "./lib/console-timestamps.js";
 
 timestampConsole();
@@ -46,6 +52,7 @@ const SCHEDULES_FILE = path.join(DATA_DIR, "schedules.json");
 const AUTOMATION_RULES_FILE = path.join(DATA_DIR, "automation-rules.json");
 const AUTOMATION_RULE_STATE_FILE = path.join(DATA_DIR, "automation-rule-state.json");
 const ADAPTIVE_CHARGING_STATE_FILE = path.join(DATA_DIR, "adaptive-charging-state.json");
+const FUEL_CELL_AUTOMATION_STATE_FILE = path.join(DATA_DIR, "fuel-cell-automation-state.json");
 const ADAPTIVE_CHARGING_DIR = path.join(DATA_DIR, "adaptive-charging");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 const DATABASE_BACKUP_DIR = path.join(DATA_DIR, "backups");
@@ -54,7 +61,8 @@ const CLI_QUEUE_TIMEOUT_MS = Math.max(30_000, CLI_TIMEOUT_MS * 4);
 const CLI_QUEUE_STARVATION_MS = Math.max(15_000, CLI_TIMEOUT_MS * 2);
 const CLI_FILE = "home-energy-battery-node.js";
 const SCHEDULE_CHECK_INTERVAL_MS = Number(process.env.SCHEDULE_CHECK_INTERVAL_MS ?? 15_000);
-const AUTOMATION_CHECK_INTERVAL_MS = 30_000;
+const AUTOMATION_CHECK_INTERVAL_MS = Math.max(50, Number(process.env.AUTOMATION_CHECK_INTERVAL_MS ?? 30_000));
+const FUEL_CELL_COMMAND_RETRY_MS = 5 * 60_000;
 const SOLAR_FORECAST_REFRESH_MS = 3 * 60 * 60_000;
 const SOLAR_FORECAST_MAX_AGE_MS = 6 * 60 * 60_000;
 const ADAPTIVE_CHARGING_PREWINDOW_MS = 30 * 60_000;
@@ -138,9 +146,7 @@ const DEFAULT_CONFIG = {
   fuelCellProxyHosts: [],
   fuelCellEnabled: true,
   fuelCell: {
-    generationModel: "automatic",
-    plannerInfluence: "observe",
-    fixedWindows: [],
+    automation: normalizeFuelCellAutomation(),
     gasCo2KgPerM3: 2.21,
     tariff: {
       provider: "tokyo-gas",
@@ -189,6 +195,7 @@ let cliQueueRunning = false;
 let cliQueueSequence = 0;
 let configMutationQueue = Promise.resolve();
 let adaptiveChargingStateWriteQueue = Promise.resolve();
+let fuelCellAutomationStateWriteQueue = Promise.resolve();
 let scheduleMutationQueue = Promise.resolve();
 let scheduleTimer = null;
 let automationTimer = null;
@@ -904,6 +911,73 @@ async function pathExists(file) {
   }
 }
 
+function cleanFuelCellAutomationState(value = {}) {
+  return {
+    lastObservedState: value.lastObservedState ?? null,
+    lastObservedAt: value.lastObservedAt ?? null,
+    lastStoppedAt: value.lastStoppedAt ?? null,
+    lastCommand: ["start", "stop"].includes(value.lastCommand) ? value.lastCommand : null,
+    lastCommandAt: value.lastCommandAt ?? null,
+    lastCommandReason: value.lastCommandReason ?? null,
+    commandCooldownUntil: value.commandCooldownUntil ?? null,
+    offModeConfirmed: value.offModeConfirmed === true,
+    manualRunActive: value.manualRunActive === true,
+    manualRunObserved: value.manualRunObserved === true,
+    manualRunRequestedAt: value.manualRunRequestedAt ?? null,
+    lastDecisionKey: value.lastDecisionKey ?? null,
+    lastResult: value.lastResult ?? null,
+    log: (Array.isArray(value.log) ? value.log : []).slice(-200).map((entry) => ({
+      at: entry.at ?? null,
+      kind: entry.kind ?? "info",
+      message: String(entry.message ?? ""),
+    })),
+  };
+}
+
+async function readFuelCellAutomationState() {
+  await ensureDataDir();
+  try {
+    const text = await readFile(FUEL_CELL_AUTOMATION_STATE_FILE, "utf8");
+    let parsed;
+    let recovered = null;
+    try {
+      parsed = parseJsonWithContext(text, FUEL_CELL_AUTOMATION_STATE_FILE);
+    } catch (error) {
+      recovered = recoverConcatenatedJsonValue(
+        text,
+        (value) => value && typeof value === "object" && !Array.isArray(value),
+      );
+      if (!recovered) throw error;
+      logDetailedError("fuel-cell-automation-state", error);
+      parsed = recovered.value;
+    }
+    const cleaned = cleanFuelCellAutomationState(parsed);
+    if (recovered) await writeJsonFileAtomic(FUEL_CELL_AUTOMATION_STATE_FILE, cleaned);
+    return cleaned;
+  } catch (error) {
+    if (error.code === "ENOENT") return cleanFuelCellAutomationState();
+    throw error;
+  }
+}
+
+function writeFuelCellAutomationState(state) {
+  const task = fuelCellAutomationStateWriteQueue.then(async () => {
+    const cleaned = cleanFuelCellAutomationState(state);
+    await ensureDataDir();
+    await writeJsonFileAtomic(FUEL_CELL_AUTOMATION_STATE_FILE, cleaned);
+    return cleaned;
+  });
+  fuelCellAutomationStateWriteQueue = task.catch(() => {});
+  return task;
+}
+
+function appendFuelCellAutomationLog(state, message, kind = "info", at = new Date()) {
+  state.log = [
+    ...(Array.isArray(state.log) ? state.log : []),
+    { at: at.toISOString(), kind, message },
+  ].slice(-200);
+}
+
 async function migrateLegacyAdaptiveChargingData(dataDir = DATA_DIR, logger = console) {
   await mkdir(dataDir, { recursive: true });
   const configFile = path.join(dataDir, "config.json");
@@ -1542,7 +1616,7 @@ function adaptiveChargingView(config, state, rules = [], now = new Date()) {
 }
 
 function recordFuelCellPlanForecast(plan, now = new Date()) {
-  if (!historyStore.isReady() || !plan?.fuelCellModel || plan.fuelCellModel.method === "off") return 0;
+  if (!historyStore.isReady() || !plan?.fuelCellModel) return 0;
   historyStore.settleFuelCellForecastOutcomes(now);
   return historyStore.recordFuelCellForecasts((plan.timeline ?? []).map((interval) => ({
     start: interval.start,
@@ -2282,17 +2356,13 @@ function percentile(values, fraction) {
   return sorted[index];
 }
 
-function fixedFuelCellWindowAt(config, date) {
-  const windows = config.fuelCell?.fixedWindows ?? [];
-  const minute = date.getHours() * 60 + date.getMinutes();
-  const index = windows.findIndex((window) => {
-    if (!window.days?.includes(date.getDay())) return false;
-    const start = minutesOfDay(window.start);
-    const end = minutesOfDay(window.end);
-    if (start === null || end === null || start === end) return false;
-    return start < end ? minute >= start && minute < end : minute >= start || minute < end;
-  });
-  return index >= 0 ? { ...windows[index], index } : null;
+function scheduledFuelCellWindowAt(config, date) {
+  const automation = config.fuelCell?.automation ?? normalizeFuelCellAutomation();
+  if (!automation.enabled) return null;
+  if (automation.stopDuringDiscountedRates && explicitDiscountedBand(config, date)) return null;
+  const occurrence = activeFuelCellSchedule(automation, date, { includeSpoolUp: false });
+  if (!occurrence) return null;
+  return { ...occurrence, index: occurrence.scheduleIndex };
 }
 
 function monthDistance(left, right) {
@@ -2301,8 +2371,9 @@ function monthDistance(left, right) {
 }
 
 function buildFuelCellGenerationModel(config, samples = [], now = new Date(), options = {}) {
-  const method = config.fuelCell?.generationModel ?? "automatic";
-  const requestedInfluence = config.fuelCell?.plannerInfluence ?? "observe";
+  const automation = config.fuelCell?.automation ?? normalizeFuelCellAutomation();
+  const method = automation.enabled && automation.schedules.length ? "scheduled" : "observed";
+  const requestedInfluence = automation.includeInAdaptiveCharging ? "active" : "observe";
   const temperatureByDay = options.temperatureByDay instanceof Map ? options.temperatureByDay : new Map();
   const awayPeriods = Array.isArray(options.awayPeriods) ? options.awayPeriods : [];
   const powerSamples = samples.map((sample) => ({
@@ -2337,21 +2408,21 @@ function buildFuelCellGenerationModel(config, samples = [], now = new Date(), op
     }])),
   }));
   const validDays = dailyBuckets.filter((day) => day.buckets.size >= 16);
-  const completedFixedRunKeys = new Set();
+  const completedScheduledRunKeys = new Set();
   for (const day of dailyBuckets) {
-    for (const [windowIndex] of (config.fuelCell?.fixedWindows ?? []).entries()) {
+    for (const [windowIndex] of automation.schedules.entries()) {
       const expectedBuckets = [];
       for (let bucket = 0; bucket < 48; bucket += 1) {
         const bucketDate = new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate(), Math.floor(bucket / 2), bucket % 2 ? 30 : 0);
-        if (fixedFuelCellWindowAt(config, bucketDate)?.index === windowIndex) expectedBuckets.push(bucket);
+        if (scheduledFuelCellWindowAt(config, bucketDate)?.index === windowIndex) expectedBuckets.push(bucket);
       }
       const generatedBuckets = expectedBuckets.filter((bucket) => Number(day.values.get(bucket)?.watts) > 25).length;
       if (expectedBuckets.length >= 2 && generatedBuckets / expectedBuckets.length >= 0.8) {
-        completedFixedRunKeys.add(`${day.key}:${windowIndex}`);
+        completedScheduledRunKeys.add(`${day.key}:${windowIndex}`);
       }
     }
   }
-  const completedFixedRuns = completedFixedRunKeys.size;
+  const completedScheduledRuns = completedScheduledRunKeys.size;
   const currentDayType = now.getDay() === 0 || now.getDay() === 6;
   const currentAway = isAwayAt(now.getTime(), awayPeriods, { forecast: true });
   const currentTemperature = finiteNumberOrNull(temperatureByDay.get(localDayKey(now)));
@@ -2361,25 +2432,23 @@ function buildFuelCellGenerationModel(config, samples = [], now = new Date(), op
     return weekend === currentDayType && day.away === currentAway && monthDistance(day.date, now) <= 2 && temperatureMatches;
   });
   const blockers = [];
-  if (method === "fixed" && completedFixedRuns < 3) blockers.push(`${3 - completedFixedRuns} more comparable fixed generation runs required`);
-  if (method === "automatic" && validDays.length < 7) blockers.push(`${7 - validDays.length} more valid observation days required`);
-  if (method === "automatic" && comparableDays.length < 4) blockers.push(`${4 - comparableDays.length} more comparable observation days required`);
-  if (method === "off") blockers.push("Ene-Farm generation model is off");
+  if (method === "scheduled" && completedScheduledRuns < 3) blockers.push(`${3 - completedScheduledRuns} more comparable scheduled generation runs required`);
+  if (method === "observed" && validDays.length < 7) blockers.push(`${7 - validDays.length} more valid observation days required`);
+  if (method === "observed" && comparableDays.length < 4) blockers.push(`${4 - comparableDays.length} more comparable observation days required`);
   const ready = blockers.length === 0;
   const influencesPlanner = requestedInfluence === "active" && ready;
   const latest = powerSamples.at(-1) ?? null;
 
   const forecastAt = (date) => {
-    if (method === "off") return { p20W: 0, medianW: 0, p80W: 0, sampleCount: 0 };
-    const fixedWindow = method === "fixed" ? fixedFuelCellWindowAt(config, date) : null;
-    if (method === "fixed" && !fixedWindow) return { p20W: 0, medianW: 0, p80W: 0, sampleCount: 0 };
+    const scheduledWindow = method === "scheduled" ? scheduledFuelCellWindowAt(config, date) : null;
+    if (method === "scheduled" && !scheduledWindow) return { p20W: 0, medianW: 0, p80W: 0, sampleCount: 0 };
     const bucket = halfHourIndex(date);
     const targetWeekend = date.getDay() === 0 || date.getDay() === 6;
     const targetAway = isAwayAt(date.getTime(), awayPeriods, { forecast: true });
     const targetTemperature = finiteNumberOrNull(temperatureByDay.get(localDayKey(date)));
     let candidates = dailyBuckets.filter((day) => day.values.has(bucket));
-    if (method === "fixed") {
-      candidates = candidates.filter((day) => fixedFuelCellWindowAt(config, new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate(), date.getHours(), date.getMinutes())));
+    if (method === "scheduled") {
+      candidates = candidates.filter((day) => scheduledFuelCellWindowAt(config, new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate(), date.getHours(), date.getMinutes())));
     } else {
       const comparable = candidates.filter((day) => {
         const weekend = day.date.getDay() === 0 || day.date.getDay() === 6;
@@ -2388,7 +2457,7 @@ function buildFuelCellGenerationModel(config, samples = [], now = new Date(), op
       });
       if (comparable.length >= 4) candidates = comparable;
     }
-    if (method === "automatic" && latest?.state && Math.abs(date.getTime() - now.getTime()) <= 2 * 60 * 60_000) {
+    if (method === "observed" && latest?.state && Math.abs(date.getTime() - now.getTime()) <= 2 * 60 * 60_000) {
       const sameRecentState = candidates.filter((day) => day.values.get(bucket)?.state === latest.state);
       if (sameRecentState.length >= 4) candidates = sameRecentState;
     }
@@ -2408,7 +2477,7 @@ function buildFuelCellGenerationModel(config, samples = [], now = new Date(), op
     blockers,
     validObservationDays: validDays.length,
     comparableDays: comparableDays.length,
-    completedFixedRuns,
+    completedScheduledRuns,
     recentState: latest?.state ?? null,
     forecastAt,
   };
@@ -3384,7 +3453,7 @@ function buildAdaptiveChargingPlan({
       blockers: fuelCellModel.blockers,
       validObservationDays: fuelCellModel.validObservationDays,
       comparableDays: fuelCellModel.comparableDays,
-      completedFixedRuns: fuelCellModel.completedFixedRuns,
+      completedScheduledRuns: fuelCellModel.completedScheduledRuns,
     },
     chargePerformance,
     batteryModel,
@@ -4711,21 +4780,11 @@ function normalizeAdaptiveCharging(value = {}) {
 }
 
 function normalizeFuelCellConfig(value = {}) {
-  const fixedWindows = (Array.isArray(value.fixedWindows) ? value.fixedWindows : [])
-    .map((window) => ({
-      days: [...new Set((Array.isArray(window.days) ? window.days : []).map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))].sort(),
-      start: isValidTime(window.start) ? window.start : "00:00",
-      end: isValidTime(window.end) ? window.end : "00:00",
-      label: String(window.label ?? "").trim().slice(0, 80),
-    }))
-    .filter((window) => window.days.length && window.start !== window.end);
   const tariff = value.tariff ?? {};
   const region = String(tariff.region ?? "tokyo").trim();
   const discount = String(tariff.equipmentDiscount ?? "").trim();
   return {
-    generationModel: ["automatic", "fixed", "off"].includes(value.generationModel) ? value.generationModel : "automatic",
-    plannerInfluence: value.plannerInfluence === "active" ? "active" : "observe",
-    fixedWindows,
+    automation: normalizeFuelCellAutomation(value.automation ?? {}, value),
     gasCo2KgPerM3: configNumber(value.gasCo2KgPerM3, 2.21, 0, 100),
     tariff: {
       provider: String(tariff.provider ?? "tokyo-gas").trim() || "tokyo-gas",
@@ -4847,8 +4906,11 @@ async function readConfig() {
     const text = await readFile(CONFIG_FILE, "utf8");
     const parsed = parseJsonWithContext(text, CONFIG_FILE);
     const cleaned = cleanConfig(parsed);
+    const legacyFuelCellConfig = parsed.fuelCell && ["generationModel", "plannerInfluence", "fixedWindows"]
+      .some((key) => Object.prototype.hasOwnProperty.call(parsed.fuelCell, key));
     if (Object.prototype.hasOwnProperty.call(parsed, "automation")
-      || Object.prototype.hasOwnProperty.call(parsed, "historyRetentionDays")) {
+      || Object.prototype.hasOwnProperty.call(parsed, "historyRetentionDays")
+      || legacyFuelCellConfig) {
       await writeJsonFileAtomic(CONFIG_FILE, cleaned);
     }
     return cleaned;
@@ -4877,7 +4939,7 @@ async function commitConfig(previous, config) {
     batteryCapabilities: previous.batteryCapabilities,
     adaptiveCharging: previous.adaptiveCharging,
     fuelCellEnabled: previous.fuelCellEnabled,
-    fuelCell: previous.fuelCell,
+    fuelCellAutomation: previous.fuelCell?.automation,
   }) !== JSON.stringify({
     batteryHost: cleaned.batteryHost,
     meterHost: cleaned.meterHost,
@@ -4891,7 +4953,16 @@ async function commitConfig(previous, config) {
     batteryCapabilities: cleaned.batteryCapabilities,
     adaptiveCharging: cleaned.adaptiveCharging,
     fuelCellEnabled: cleaned.fuelCellEnabled,
-    fuelCell: cleaned.fuelCell,
+    fuelCellAutomation: cleaned.fuelCell?.automation,
+  });
+  const fuelCellAutomationChanged = JSON.stringify({
+    enabled: previous.fuelCellEnabled,
+    host: previous.fuelCellPrimaryHost,
+    automation: previous.fuelCell?.automation,
+  }) !== JSON.stringify({
+    enabled: cleaned.fuelCellEnabled,
+    host: cleaned.fuelCellPrimaryHost,
+    automation: cleaned.fuelCell?.automation,
   });
   if (adaptiveChargingInputsChanged) {
     const state = await readAdaptiveChargingState();
@@ -4940,6 +5011,15 @@ async function commitConfig(previous, config) {
       );
     }
     await writeAdaptiveChargingState(state);
+  }
+  if (fuelCellAutomationChanged) {
+    const fuelCellState = await readFuelCellAutomationState();
+    fuelCellState.offModeConfirmed = false;
+    fuelCellState.commandCooldownUntil = null;
+    fuelCellState.lastDecisionKey = null;
+    fuelCellState.lastResult = null;
+    appendFuelCellAutomationLog(fuelCellState, "Ene-Farm automation configuration changed", "config");
+    await writeFuelCellAutomationState(fuelCellState);
   }
   await writeJsonFileAtomic(CONFIG_FILE, cleaned);
   if (hostChanged) {
@@ -5479,23 +5559,27 @@ async function executeAction(action, payload = {}) {
   // Settings and direct actions share this path so scheduled jobs exercise the
   // same validation and CLI writes as button clicks in the UI.
   const config = await readConfig();
-  if (action === "fuel-cell-start") {
+  if (action === "fuel-cell-start" || action === "fuel-cell-stop") {
     if (config.fuelCellEnabled === false) throw new Error("Ene-Farm is disabled");
     const fuelCellHost = String(config.fuelCellPrimaryHost ?? "").trim();
     if (!fuelCellHost) throw new Error("Ene-Farm primary device is not configured");
+    const requested = action === "fuel-cell-start" ? "on" : "off";
+    const operation = requested === "on" ? "generation request" : "お出かけ停止 request";
     const result = assertDeviceCommandResult(
-      await runCliQueued("fuel-cell-generation", { host: fuelCellHost }, ["on"]),
-      "Ene-Farm generation request",
+      await runCliQueued("fuel-cell-generation", { host: fuelCellHost }, [requested]),
+      `Ene-Farm ${operation}`,
     );
     if (historyStore.isReady()) {
       const at = new Date().toISOString();
       historyStore.recordEvent({
-        eventKey: `fuelCell:manual-generation-request:${at}`,
+        eventKey: `fuelCell:${action}:${at}`,
         at,
         category: "fuelCell",
-        type: "manual-generation-request",
-        message: "Manual Ene-Farm generation requested",
-        payload: { host: fuelCellHost },
+        type: action,
+        message: action === "fuel-cell-start"
+          ? "Ene-Farm generation requested"
+          : "Ene-Farm お出かけ停止 requested",
+        payload: { host: fuelCellHost, requested },
       });
     }
     return result;
@@ -5555,6 +5639,139 @@ async function executeAction(action, payload = {}) {
     default:
       throw new Error(`unknown action: ${action}`);
   }
+}
+
+function fuelCellAutomationView(config, state, now = new Date()) {
+  const automation = config.fuelCell?.automation ?? normalizeFuelCellAutomation();
+  const enabled = config.fuelCellEnabled !== false && automation.enabled;
+  const configured = config.fuelCellEnabled !== false && Boolean(config.fuelCellPrimaryHost);
+  return {
+    enabled,
+    configured,
+    defaultMode: "off",
+    activeSchedule: activeFuelCellSchedule(automation, now),
+    nextSchedule: nextFuelCellSchedule(automation, now),
+    lastObservedState: state.lastObservedState,
+    lastObservedAt: state.lastObservedAt,
+    lastStoppedAt: state.lastStoppedAt,
+    lastCommand: state.lastCommand,
+    lastCommandAt: state.lastCommandAt,
+    lastCommandReason: state.lastCommandReason,
+    lastResult: config.fuelCellEnabled === false
+      ? { ok: true, status: "disabled", reason: "Ene-Farm is disabled" }
+      : !configured
+        ? { ok: true, status: "disabled", reason: "Ene-Farm primary device is not configured" }
+      : !enabled
+        ? { ok: true, status: "disabled", reason: "Ene-Farm automation is disabled" }
+        : state.lastResult,
+    log: state.log,
+  };
+}
+
+async function evaluateFuelCellAutomation(config, status, now = new Date()) {
+  const automation = config.fuelCell?.automation ?? normalizeFuelCellAutomation();
+  let state = await readFuelCellAutomationState();
+  const primary = primaryFuelCell(status.energy?.fuel_cells ?? []);
+  const generationState = primary?.generation_status?.value ?? null;
+  const hotWaterLevel = numericMetric(primary?.hot_water_level);
+  if (generationState && generationState !== state.lastObservedState) {
+    if (generationState === "stopped") state.lastStoppedAt = now.toISOString();
+    state.lastObservedState = generationState;
+  }
+  if (generationState) state.lastObservedAt = now.toISOString();
+  if (state.manualRunActive && ["generating", "starting"].includes(generationState)) {
+    state.manualRunObserved = true;
+  } else if (state.manualRunActive && state.manualRunObserved && generationState === "stopped") {
+    state.manualRunActive = false;
+    state.manualRunObserved = false;
+    state.manualRunRequestedAt = null;
+    appendFuelCellAutomationLog(state, "Manual one-off generation completed; returning to scheduled control", "manual", now);
+  }
+
+  if (config.fuelCellEnabled === false || !config.fuelCellPrimaryHost) {
+    state.lastResult = {
+      ok: true,
+      at: now.toISOString(),
+      status: "disabled",
+      reason: config.fuelCellEnabled === false ? "Ene-Farm is disabled" : "Ene-Farm primary device is not configured",
+    };
+    return writeFuelCellAutomationState(state);
+  }
+
+  const decision = decideFuelCellAutomation({
+    automation,
+    now,
+    generationState,
+    hotWaterLevel,
+    discountedRateActive: Boolean(explicitDiscountedBand(config, now)),
+    commandCooldownUntil: state.commandCooldownUntil,
+    offModeConfirmed: state.offModeConfirmed,
+    lastCommand: state.lastCommand,
+    manualRunActive: state.manualRunActive,
+  });
+  const decisionKey = JSON.stringify([decision.status, decision.reason, decision.action]);
+  if (decisionKey !== state.lastDecisionKey) {
+    appendFuelCellAutomationLog(state, decision.reason, decision.action ? "action" : decision.status, now);
+    state.lastDecisionKey = decisionKey;
+  }
+  state.lastResult = {
+    ok: true,
+    at: now.toISOString(),
+    status: decision.status,
+    reason: decision.reason,
+    activeSchedule: decision.activeSchedule,
+    nextSchedule: decision.nextSchedule,
+  };
+  if (!decision.action) return writeFuelCellAutomationState(state);
+
+  try {
+    const action = decision.action === "start" ? "fuel-cell-start" : "fuel-cell-stop";
+    const result = await executeAction(action);
+    state.lastCommand = decision.action;
+    state.lastCommandAt = now.toISOString();
+    state.lastCommandReason = decision.reason;
+    state.commandCooldownUntil = new Date(now.getTime() + FUEL_CELL_COMMAND_RETRY_MS).toISOString();
+    state.offModeConfirmed = decision.action === "stop";
+    if (decision.action === "stop") {
+      state.manualRunActive = false;
+      state.manualRunObserved = false;
+      state.manualRunRequestedAt = null;
+    }
+    state.lastResult = { ...state.lastResult, result };
+    appendFuelCellAutomationLog(
+      state,
+      decision.action === "start"
+        ? `Generation start requested for ${decision.activeSchedule?.label || "scheduled window"}`
+        : "お出かけ停止 requested",
+      decision.action,
+      now,
+    );
+  } catch (error) {
+    state.commandCooldownUntil = new Date(now.getTime() + FUEL_CELL_COMMAND_RETRY_MS).toISOString();
+    state.lastResult = { ...state.lastResult, ok: false, error: error.message };
+    appendFuelCellAutomationLog(state, `Ene-Farm ${decision.action} failed: ${error.message}`, "error", now);
+  }
+  return writeFuelCellAutomationState(state);
+}
+
+async function recordManualFuelCellAutomationAction(config, action, now = new Date()) {
+  if (config.fuelCell?.automation?.enabled !== true) return;
+  const state = await readFuelCellAutomationState();
+  if (action === "fuel-cell-start") {
+    state.manualRunActive = true;
+    state.manualRunObserved = false;
+    state.manualRunRequestedAt = now.toISOString();
+    state.offModeConfirmed = false;
+    appendFuelCellAutomationLog(state, "Manual one-off generation requested; scheduled default-off control is temporarily suspended", "manual", now);
+  } else if (action === "fuel-cell-stop") {
+    state.manualRunActive = false;
+    state.manualRunObserved = false;
+    state.manualRunRequestedAt = null;
+    state.offModeConfirmed = true;
+    appendFuelCellAutomationLog(state, "Manual お出かけ停止 requested", "manual", now);
+  }
+  state.lastDecisionKey = null;
+  await writeFuelCellAutomationState(state);
 }
 
 function assertDeviceCommandResult(result, description = "device command") {
@@ -7388,15 +7605,19 @@ async function runAutomationRules(context = {}) {
   const config = await readConfig();
   const rules = await readAutomationRules();
   const enabledRules = rules.filter((rule) => rule.enabled);
+  const fuelCellAutomationEnabled = config.fuelCellEnabled !== false
+    && config.fuelCell?.automation?.enabled === true
+    && Boolean(config.fuelCellPrimaryHost);
   const adaptiveChargingRequested = adaptiveChargingConfiguredActive(config);
   const adaptiveChargingStateBeforeStatus = adaptiveChargingRequested ? await readAdaptiveChargingState() : null;
   const adaptiveChargingEnabled = adaptiveChargingRequested
     && (adaptiveChargingBaseAvailability(config).available || adaptiveChargingStateBeforeStatus?.owner === "adaptiveCharging");
   context.enabledRules = [
     ...enabledRules.map(automationRuleLabel),
+    ...(fuelCellAutomationEnabled ? ["Ene-Farm Automation"] : []),
     ...(adaptiveChargingEnabled ? ["Adaptive Charging"] : []),
   ];
-  if (!enabledRules.length && !adaptiveChargingEnabled) {
+  if (!enabledRules.length && !adaptiveChargingEnabled && !fuelCellAutomationEnabled) {
     if (adaptiveChargingRequested) {
       const adaptiveChargingState = await evaluateAdaptiveCharging(config, {}, rules, startedAt);
       observeAdaptiveChargingNotifications(config, adaptiveChargingState);
@@ -7482,6 +7703,10 @@ async function runAutomationRules(context = {}) {
   if (changed) {
     context.phase = `persisting state for ${automationRuleList(enabledRules)}`;
     await writeAutomationRuleStates(rules);
+  }
+  if (fuelCellAutomationEnabled) {
+    context.phase = "evaluating Ene-Farm automation";
+    await evaluateFuelCellAutomation(config, status, new Date());
   }
   if (adaptiveChargingEnabled) {
     context.phase = "evaluating adaptive charging";
@@ -8387,6 +8612,10 @@ async function api(req, res, url) {
   if (req.method === "PUT" && url.pathname === "/api/config") {
     return json(res, 200, { ...(await writeConfig(await readBody(req))), port: PORT });
   }
+  if (req.method === "GET" && url.pathname === "/api/fuel-cell-automation") {
+    const config = await readConfig();
+    return json(res, 200, fuelCellAutomationView(config, await readFuelCellAutomationState()));
+  }
   if (req.method === "POST" && url.pathname === "/api/history/trim") {
     const config = await readConfig();
     const body = await readBody(req);
@@ -8645,8 +8874,11 @@ async function api(req, res, url) {
   if (req.method === "POST" && url.pathname.startsWith("/api/actions/")) {
     const body = await readBody(req);
     const action = url.pathname.replace("/api/actions/", "");
-    if (action !== "fuel-cell-start") await pauseAdaptiveChargingForManualAction(action);
-    return json(res, 200, await executeAction(action, body));
+    if (!action.startsWith("fuel-cell-")) await pauseAdaptiveChargingForManualAction(action);
+    const config = action.startsWith("fuel-cell-") ? await readConfig() : null;
+    const result = await executeAction(action, body);
+    if (config) await recordManualFuelCellAutomationAction(config, action);
+    return json(res, 200, result);
   }
   if (req.method === "GET" && url.pathname === "/api/schedules") {
     return json(res, 200, await readSchedules());

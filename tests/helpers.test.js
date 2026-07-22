@@ -219,6 +219,21 @@ const invalidFuelCellTariff = cleanConfig({
 assert.equal(invalidFuelCellTariff.fuelCell.tariff.region, "tokyo");
 assert.equal(invalidFuelCellTariff.fuelCell.tariff.plan, "enefarm");
 assert.equal(invalidFuelCellTariff.fuelCell.tariff.equipmentDiscount, "");
+const migratedFuelCellAutomation = cleanConfig({
+  fuelCell: {
+    generationModel: "fixed",
+    plannerInfluence: "active",
+    fixedWindows: [{ label: "Legacy", days: [1, 2, 3], start: "08:00", end: "10:00" }],
+  },
+}).fuelCell.automation;
+assert.equal(migratedFuelCellAutomation.enabled, false);
+assert.equal(migratedFuelCellAutomation.includeInAdaptiveCharging, true);
+assert.deepEqual(migratedFuelCellAutomation.schedules, [{
+  label: "Legacy",
+  days: [1, 2, 3],
+  start: "08:00",
+  end: "10:00",
+}]);
 
 const billingPeriodGas = fuelCellGasUsageByBillingPeriod([
   { timestamp: "2026-07-09T00:00:00", fuelCellGasM3: 1.25 },
@@ -241,21 +256,23 @@ for (let day = 1; day <= 8; day += 1) {
 }
 const fixedFuelCellModel = buildFuelCellGenerationModel(cleanConfig({
   fuelCell: {
-    generationModel: "fixed",
-    plannerInfluence: "active",
-    fixedWindows: [{ days: [0, 1, 2, 3, 4, 5, 6], start: "08:00", end: "18:00" }],
+    automation: {
+      enabled: true,
+      includeInAdaptiveCharging: true,
+      schedules: [{ days: [0, 1, 2, 3, 4, 5, 6], start: "08:00", end: "18:00" }],
+    },
   },
 }), fuelCellSamples, new Date(2026, 6, 9, 9));
 assert.equal(fixedFuelCellModel.influence, "active");
 assert.ok(fixedFuelCellModel.forecastAt(new Date(2026, 6, 9, 10)).medianW > 600);
 assert.equal(fixedFuelCellModel.forecastAt(new Date(2026, 6, 9, 20)).medianW, 0);
 const observedFuelCellModel = buildFuelCellGenerationModel(cleanConfig({
-  fuelCell: { generationModel: "automatic", plannerInfluence: "observe" },
+  fuelCell: { automation: { includeInAdaptiveCharging: false } },
 }), fuelCellSamples, new Date(2026, 6, 9, 9));
 assert.equal(observedFuelCellModel.ready, true);
 assert.equal(observedFuelCellModel.influence, "observe");
 const immatureFuelCellModel = buildFuelCellGenerationModel(cleanConfig({
-  fuelCell: { generationModel: "automatic", plannerInfluence: "active" },
+  fuelCell: { automation: { includeInAdaptiveCharging: true } },
 }), fuelCellSamples.filter((sample) => new Date(sample.timestamp).getDate() <= 3), new Date(2026, 6, 9, 9));
 assert.equal(immatureFuelCellModel.ready, false);
 assert.equal(immatureFuelCellModel.influence, "observe");
@@ -266,7 +283,7 @@ const denseFuelCellSamples = fuelCellSamples.flatMap((sample) => [
   { ...sample, timestamp: new Date(new Date(sample.timestamp).getTime() + 10 * 60_000).toISOString() },
 ]);
 const denseFuelCellModel = buildFuelCellGenerationModel(cleanConfig({
-  fuelCell: { generationModel: "automatic", plannerInfluence: "observe" },
+  fuelCell: { automation: { includeInAdaptiveCharging: false } },
 }), denseFuelCellSamples, new Date(2026, 6, 9, 9));
 assert.equal(
   denseFuelCellModel.forecastAt(new Date(2026, 6, 9, 10)).medianW,

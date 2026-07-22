@@ -62,6 +62,7 @@ async function assertIndependentApisAvailable(baseUrl, label) {
     `/api/reports/energy?start=${start}&end=${end}&bucket=day`,
     `/api/ene-farm?start=${start}&end=${end}`,
     `/api/reports/ene-farm?start=${start}&end=${end}&bucket=day`,
+    "/api/fuel-cell-automation",
     "/api/gas-tariffs?month=2026-07",
     "/api/away-periods",
   ];

@@ -59,6 +59,7 @@ try {
       DEVICE_COMMAND_ADAPTER_MODULE: path.resolve("tests/support/device-simulator.js"),
       DEVICE_SIMULATOR_SCENARIO: "normal",
       SCHEDULE_CHECK_INTERVAL_MS: "50",
+      AUTOMATION_CHECK_INTERVAL_MS: "50",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -123,6 +124,32 @@ try {
   assert.equal(initial.payload.energy.fuel_cells[0].cumulative_generation.value, 4321.234);
   assert.equal(initial.payload.energy.fuel_cells[0].hot_water_level.value, 4);
   assert.equal(initial.payload.energy.fuel_cells[1].source_role, "proxy");
+
+  const disabledFuelCellAutomation = await request(baseUrl, "/api/fuel-cell-automation");
+  assert.equal(disabledFuelCellAutomation.response.status, 200);
+  assert.equal(disabledFuelCellAutomation.payload.enabled, false);
+  const enabledFuelCellAutomationConfig = await request(baseUrl, "/api/config", {
+    method: "PUT",
+    body: {
+      fuelCell: {
+        automation: {
+          enabled: true,
+          schedules: [],
+          spoolUpMinutes: 15,
+        },
+      },
+    },
+  });
+  assert.equal(enabledFuelCellAutomationConfig.response.status, 200);
+  const enforcedAwayStop = await waitFor(async () => {
+    const view = await request(baseUrl, "/api/fuel-cell-automation");
+    return view.payload.lastCommand === "stop" ? view.payload : null;
+  });
+  assert.match(enforcedAwayStop.lastCommandReason, /お出かけ停止/);
+  await request(baseUrl, "/api/config", {
+    method: "PUT",
+    body: { fuelCell: { automation: { enabled: false, schedules: [] } } },
+  });
 
   const manualGeneration = await request(baseUrl, "/api/actions/fuel-cell-start", {
     method: "POST",
