@@ -10,6 +10,7 @@ import {
 import {
   decideFuelCellAutomation,
   dueFuelCellSchedule,
+  fuelCellScheduledStartAllowedDuringDiscount,
   fuelCellScheduledStartBlockReason,
   nextFuelCellSchedule,
   normalizeFuelCellAutomation,
@@ -72,6 +73,20 @@ assert.equal(dueFuelCellSchedule(automation, mondayBeforeStart, {
 }), null);
 assert.equal(nextFuelCellSchedule(automation, new Date(2026, 6, 20, 6, 0))?.label, "Morning");
 
+const discountedEnd = new Date(2026, 6, 20, 13, 0);
+assert.equal(fuelCellScheduledStartAllowedDuringDiscount({
+  start: new Date(2026, 6, 20, 13, 0).toISOString(),
+}, discountedEnd), true);
+assert.equal(fuelCellScheduledStartAllowedDuringDiscount({
+  start: new Date(2026, 6, 20, 12, 55).toISOString(),
+}, discountedEnd), true);
+assert.equal(fuelCellScheduledStartAllowedDuringDiscount({
+  start: new Date(2026, 6, 20, 12, 54, 59).toISOString(),
+}, discountedEnd), false);
+assert.equal(fuelCellScheduledStartAllowedDuringDiscount({
+  start: new Date(2026, 6, 20, 13, 30).toISOString(),
+}, discountedEnd), true);
+
 const offDecision = decideFuelCellAutomation({
   automation,
   now: new Date(2026, 6, 20, 6, 0),
@@ -86,6 +101,12 @@ const hotWaterBlocked = fuelCellScheduledStartBlockReason({
   hotWaterLevel: 4,
 });
 assert.match(hotWaterBlocked, /4\/5/);
+assert.equal(fuelCellScheduledStartBlockReason({
+  automation,
+  hotWaterLevel: 0,
+  discountedRateActive: true,
+  scheduledStartAllowedDuringDiscount: true,
+}), null);
 
 const scheduledStart = decideFuelCellAutomation({
   automation,
@@ -96,6 +117,36 @@ const scheduledStart = decideFuelCellAutomation({
   scheduledOccurrence: dueSchedule,
 });
 assert.equal(scheduledStart.action, "start");
+
+const boundaryStart = decideFuelCellAutomation({
+  automation,
+  now: new Date(2026, 6, 20, 12, 20),
+  generationState: "stopped",
+  discountedRateActive: true,
+  offModeConfirmed: true,
+  scheduledRunActive: true,
+  scheduledOccurrence: {
+    ...dueSchedule,
+    start: discountedEnd.toISOString(),
+  },
+  scheduledStartAllowedDuringDiscount: true,
+});
+assert.equal(boundaryStart.action, "start");
+
+const boundaryStarting = decideFuelCellAutomation({
+  automation,
+  now: new Date(2026, 6, 20, 12, 30),
+  generationState: "starting",
+  discountedRateActive: true,
+  scheduledRunActive: true,
+  scheduledOccurrence: {
+    ...dueSchedule,
+    start: discountedEnd.toISOString(),
+  },
+  scheduledStartAllowedDuringDiscount: true,
+});
+assert.equal(boundaryStarting.action, null);
+assert.equal(boundaryStarting.status, "running");
 
 const discountedStop = decideFuelCellAutomation({
   automation,

@@ -38,6 +38,7 @@ import {
 import {
   decideFuelCellAutomation,
   dueFuelCellSchedule,
+  fuelCellScheduledStartAllowedDuringDiscount,
   fuelCellScheduledStartBlockReason,
   nextFuelCellSchedule,
   normalizeFuelCellAutomation,
@@ -913,6 +914,16 @@ function cleanFuelCellAutomationState(value = {}) {
           requestStart: value.scheduledRunOccurrence.requestStart ?? null,
         }
       : null,
+    pendingScheduleOccurrence: value.pendingScheduleOccurrence
+      && typeof value.pendingScheduleOccurrence === "object"
+      ? {
+          key: String(value.pendingScheduleOccurrence.key ?? ""),
+          scheduleIndex: Number(value.pendingScheduleOccurrence.scheduleIndex),
+          label: String(value.pendingScheduleOccurrence.label ?? ""),
+          start: value.pendingScheduleOccurrence.start ?? null,
+          requestStart: value.pendingScheduleOccurrence.requestStart ?? null,
+        }
+      : null,
     lastScheduleOccurrenceKey: value.lastScheduleOccurrenceKey ?? null,
     lastEvaluatedAt: value.lastEvaluatedAt ?? null,
     lastDecisionKey: value.lastDecisionKey ?? null,
@@ -1726,6 +1737,13 @@ function discountedBandOccurrence(config, now = new Date()) {
   return discountedBandOccurrences(config, now)
     .find((occurrence) => new Date(occurrence.start).getTime() <= time
       && time < new Date(occurrence.end).getTime()) ?? null;
+}
+
+function scheduledFuelCellStartAllowedDuringDiscount(config, occurrence, now = new Date()) {
+  if (!occurrence?.start) return false;
+  const discountedOccurrence = discountedBandOccurrence(config, now);
+  if (!discountedOccurrence) return false;
+  return fuelCellScheduledStartAllowedDuringDiscount(occurrence, discountedOccurrence.end);
 }
 
 function solarPowerFromIrradiance(irradianceWm2, config, learnedFactor = null) {
@@ -5012,6 +5030,7 @@ async function commitConfig(previous, config) {
     fuelCellState.scheduledRunObserved = false;
     fuelCellState.scheduledRunCommandedAt = null;
     fuelCellState.scheduledRunOccurrence = null;
+    fuelCellState.pendingScheduleOccurrence = null;
     fuelCellState.lastScheduleOccurrenceKey = null;
     fuelCellState.lastEvaluatedAt = null;
     fuelCellState.lastDecisionKey = null;
@@ -5648,6 +5667,7 @@ function fuelCellAutomationView(config, state, now = new Date()) {
     configured,
     defaultMode: "off",
     activeSchedule: state.scheduledRunActive ? state.scheduledRunOccurrence : null,
+    pendingSchedule: state.pendingScheduleOccurrence,
     nextSchedule: nextFuelCellSchedule(automation, now),
     scheduledRunActive: state.scheduledRunActive,
     manualRunActive: state.manualRunActive,
@@ -5722,24 +5742,58 @@ async function evaluateFuelCellAutomation(config, status, now = new Date()) {
     lastHandledKey: state.lastScheduleOccurrenceKey,
   });
   state.lastEvaluatedAt = now.toISOString();
-  if (dueSchedule) {
-    state.lastScheduleOccurrenceKey = dueSchedule.key;
+  const scheduleToStart = state.pendingScheduleOccurrence ?? dueSchedule;
+  if (scheduleToStart) {
+    const wasPending = state.pendingScheduleOccurrence?.key === scheduleToStart.key;
+    const scheduledStartAllowedDuringDiscount = scheduledFuelCellStartAllowedDuringDiscount(
+      config,
+      scheduleToStart,
+      now,
+    );
     const skipped = fuelCellScheduledStartBlockReason({
       automation,
       hotWaterLevel,
       discountedRateActive,
+      scheduledStartAllowedDuringDiscount,
     });
     if (skipped) {
-      appendFuelCellAutomationLog(state, skipped, "skipped", now);
+      const temporarilyBlockedByDiscount = automation.stopDuringDiscountedRates
+        && discountedRateActive
+        && !scheduledStartAllowedDuringDiscount;
+      const scheduledStartMs = new Date(scheduleToStart.start ?? 0).getTime();
+      const pendingExpired = Number.isFinite(scheduledStartMs)
+        && now.getTime() > scheduledStartMs + 30 * 60_000;
+      if (temporarilyBlockedByDiscount && !pendingExpired) {
+        state.pendingScheduleOccurrence = scheduleToStart;
+        if (!wasPending) {
+          appendFuelCellAutomationLog(
+            state,
+            `${skipped}; deferring this occurrence for retry`,
+            "waiting",
+            now,
+          );
+        }
+      } else {
+        state.lastScheduleOccurrenceKey = scheduleToStart.key;
+        state.pendingScheduleOccurrence = null;
+        appendFuelCellAutomationLog(
+          state,
+          pendingExpired ? `${skipped}; the 30-minute retry window has expired` : skipped,
+          "skipped",
+          now,
+        );
+      }
     } else {
+      state.lastScheduleOccurrenceKey = scheduleToStart.key;
+      state.pendingScheduleOccurrence = null;
       state.scheduledRunActive = true;
       state.scheduledRunObserved = ["generating", "starting"].includes(generationState);
       state.scheduledRunCommandedAt = null;
-      state.scheduledRunOccurrence = dueSchedule;
+      state.scheduledRunOccurrence = scheduleToStart;
       state.offModeConfirmed = false;
       appendFuelCellAutomationLog(
         state,
-        `Scheduled generation start is due for ${dueSchedule.label || dueSchedule.start}`,
+        `Scheduled generation start is due for ${scheduleToStart.label || scheduleToStart.start}`,
         "schedule",
         now,
       );
@@ -5758,6 +5812,11 @@ async function evaluateFuelCellAutomation(config, status, now = new Date()) {
     scheduledRunActive: state.scheduledRunActive,
     scheduledOccurrence: state.scheduledRunOccurrence,
     scheduledRunCommandedAt: state.scheduledRunCommandedAt,
+    scheduledStartAllowedDuringDiscount: scheduledFuelCellStartAllowedDuringDiscount(
+      config,
+      state.scheduledRunOccurrence,
+      now,
+    ),
   });
   const decisionKey = JSON.stringify([decision.status, decision.reason, decision.action]);
   if (decisionKey !== state.lastDecisionKey) {

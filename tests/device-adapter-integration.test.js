@@ -146,6 +146,93 @@ try {
     return view.payload.lastCommand === "stop" ? view.payload : null;
   });
   assert.match(enforcedAwayStop.lastCommandReason, /お出かけ停止/);
+
+  const scheduleConfiguredAt = new Date();
+  const discountedStart = new Date(scheduleConfiguredAt);
+  discountedStart.setMinutes(discountedStart.getMinutes() - 1, 0, 0);
+  const scheduledGenerationStart = new Date(scheduleConfiguredAt);
+  scheduledGenerationStart.setMinutes(scheduledGenerationStart.getMinutes() + 40, 0, 0);
+  const timeValue = (date) => `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  const boundaryScheduleConfig = await request(baseUrl, "/api/config", {
+    method: "PUT",
+    body: {
+      rateMode: "multi",
+      standardRateYenPerKwh: 30,
+      rateBands: [{
+        start: timeValue(discountedStart),
+        end: timeValue(scheduledGenerationStart),
+        yenPerKwh: 10,
+        label: "Simulated discounted period",
+      }],
+      fuelCell: {
+        automation: {
+          enabled: true,
+          schedules: [{
+            days: [scheduledGenerationStart.getDay()],
+            start: timeValue(scheduledGenerationStart),
+            label: "Boundary generation",
+          }],
+          spoolUpMinutes: 40,
+          stopDuringDiscountedRates: true,
+          preventStartAtOrAboveHotWaterLevel: null,
+        },
+      },
+    },
+  });
+  assert.equal(boundaryScheduleConfig.response.status, 200);
+  const boundaryStart = await waitFor(async () => {
+    const view = await request(baseUrl, "/api/fuel-cell-automation");
+    return view.payload.scheduledRunActive ? view.payload : null;
+  });
+  assert.equal(boundaryStart.scheduledRunActive, true);
+  assert.equal(boundaryStart.pendingSchedule, null);
+  assert.equal(boundaryStart.log.some((entry) => entry.kind === "schedule"
+    && /Boundary generation/.test(entry.message)), true);
+  assert.equal(boundaryStart.log.some((entry) => entry.kind === "skipped"), false);
+
+  await request(baseUrl, "/api/actions/fuel-cell-stop", { method: "POST", body: {} });
+
+  const deferredConfiguredAt = new Date();
+  const deferredBandStart = new Date(deferredConfiguredAt);
+  deferredBandStart.setMinutes(deferredBandStart.getMinutes() - 1, 0, 0);
+  const deferredGenerationStart = new Date(deferredConfiguredAt);
+  deferredGenerationStart.setMinutes(deferredGenerationStart.getMinutes() + 40, 0, 0);
+  const deferredBandEnd = new Date(deferredGenerationStart);
+  deferredBandEnd.setMinutes(deferredBandEnd.getMinutes() + 10);
+  await request(baseUrl, "/api/config", {
+    method: "PUT",
+    body: {
+      rateBands: [{
+        start: timeValue(deferredBandStart),
+        end: timeValue(deferredBandEnd),
+        yenPerKwh: 10,
+        label: "Long simulated discounted period",
+      }],
+      fuelCell: {
+        automation: {
+          enabled: true,
+          schedules: [{
+            days: [deferredGenerationStart.getDay()],
+            start: timeValue(deferredGenerationStart),
+            label: "Deferred generation",
+          }],
+          spoolUpMinutes: 40,
+          stopDuringDiscountedRates: true,
+          preventStartAtOrAboveHotWaterLevel: null,
+        },
+      },
+    },
+  });
+  const deferredStart = await waitFor(async () => {
+    const view = await request(baseUrl, "/api/fuel-cell-automation");
+    return view.payload.pendingSchedule?.label === "Deferred generation" ? view.payload : null;
+  });
+  assert.equal(deferredStart.scheduledRunActive, false);
+  assert.equal(deferredStart.log.some((entry) => entry.kind === "waiting"
+    && /deferring this occurrence for retry/.test(entry.message)), true);
+  assert.equal(deferredStart.log.some((entry) => entry.kind === "skipped"
+    && /Deferred generation/.test(entry.message)), false);
+
   await request(baseUrl, "/api/config", {
     method: "PUT",
     body: { fuelCell: { automation: { enabled: false, schedules: [] } } },
