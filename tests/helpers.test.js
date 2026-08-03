@@ -8,6 +8,11 @@ import {
   smtpTransportOptions,
   validateSmtpSettings,
 } from "../lib/notifications.js";
+import { localIsoTimestamp, timestampConsole } from "../lib/console-timestamps.js";
+import {
+  COUNTER_POLICIES,
+  cumulativeCounterDeltaResult,
+} from "../lib/counter-utils.js";
 import {
   activeAdaptiveChargingSlotStopReason,
   advanceAdaptiveChargingBreakerRecovery,
@@ -15,6 +20,7 @@ import {
   applySolarForecastBias,
   applyInterruptedChargeCap,
   aggregateEnergyReportSamples,
+  assertDeviceCommandResult,
   beginAdaptiveChargingBreakerRecovery,
   buildBatteryLearningModel,
   buildFuelCellGenerationModel,
@@ -43,12 +49,14 @@ import {
   forecastHourForInterval,
   forecastIsFresh,
   fuelCellGasUsageByBillingPeriod,
+  fuelCellHotWaterEmptyNotificationActive,
   finalizeAdaptiveChargeSession,
   finalizeAdaptiveChargingWindowExecution,
   learnedSolarFactor,
   logAdaptiveChargingInitialHeadroomWait,
   logAdaptiveChargingBreakerWait,
   migrateLegacyAdaptiveChargingData,
+  migrateLegacyFuelCellControlData,
   migrateBatteryLearningState,
   normalizeCircuitLabels,
   normalizeDashboardWidgets,
@@ -74,7 +82,9 @@ import {
   predictAwayDemand,
   rateForTimestamp,
   recoverConcatenatedJsonValue,
+  runCliQueued,
   sampleFromStatus,
+  setDeviceCommandExecutor,
   shouldTriggerDemandGuard,
   shouldHoldGuardStandbyForAdaptiveCharging,
   adaptiveChargingPlanRefreshDecision,
@@ -83,11 +93,101 @@ import {
   adaptiveChargingBaseAvailability,
   solarPowerFromIrradiance,
   predictHouseDemand,
+  summarizeCalendarSavings,
   summarizeSamples,
   suspendAdaptiveChargeInStandby,
   syncAdaptiveChargingWindowExecution,
   updateAdaptiveChargingSolarHeadroomHold,
+  verifyBatteryOperationMode,
 } from "../server.js";
+
+const timestampWrites = [];
+const testConsole = {
+  log: (...args) => timestampWrites.push(args),
+  warn: (...args) => timestampWrites.push(args),
+};
+assert.equal(timestampConsole(testConsole, () => new Date("2026-07-21T03:30:00.123Z")), true);
+testConsole.log("automation", { state: "ready" });
+assert.deepEqual(timestampWrites[0], [
+  `[${localIsoTimestamp("2026-07-21T03:30:00.123Z")}]`,
+  "automation",
+  { state: "ready" },
+]);
+assert.equal(timestampConsole(testConsole), false);
+
+assert.equal(fuelCellHotWaterEmptyNotificationActive({
+  hot_water_level: { value: 0 },
+  generation_status: { value: "stopped" },
+}), true);
+assert.equal(fuelCellHotWaterEmptyNotificationActive({
+  hot_water_level: { value: 0 },
+  generation_status: { value: "generating" },
+}), false, "an empty tank must not notify while the Ene-Farm is generating");
+assert.equal(fuelCellHotWaterEmptyNotificationActive({
+  hot_water_level: { value: 1 },
+  generation_status: { value: "stopped" },
+}), false);
+assert.equal(fuelCellHotWaterEmptyNotificationActive({
+  hot_water_level: { value: 0 },
+}), null, "an unknown generation state must not produce an empty-tank alert");
+
+assert.throws(
+  () => assertDeviceCommandResult({ ok: false, esv: "SetC_SNA" }, "test write"),
+  /test write failed: rejected with SetC_SNA/,
+);
+assert.throws(
+  () => assertDeviceCommandResult({ results: [{ epc: "0xDA", ok: false, esv: "SetC_SNA" }] }, "multi-write"),
+  /0xDA rejected with SetC_SNA/,
+);
+
+let operationModeReadCount = 0;
+let operationModeWaitCount = 0;
+const verifiedOperationMode = await verifyBatteryOperationMode(
+  { ok: true },
+  "192.0.2.10",
+  "standby",
+  {
+    attempts: 3,
+    delayMs: 1,
+    readStatus: async () => operationModeReadCount++ === 0
+      ? { battery: { operation_mode: { value: "auto" } } }
+      : { raw: "0x44" },
+    wait: async () => { operationModeWaitCount += 1; },
+  },
+);
+assert.equal(verifiedOperationMode.verified, true);
+assert.equal(verifiedOperationMode.readBack.operationMode, "standby");
+assert.equal(verifiedOperationMode.readBack.attempts, 2);
+assert.equal(operationModeWaitCount, 1);
+await assert.rejects(
+  verifyBatteryOperationMode(
+    { ok: true },
+    "192.0.2.10",
+    "standby",
+    {
+      attempts: 2,
+      delayMs: 0,
+      readStatus: async () => ({ battery: { operation_mode: { value: "auto" } } }),
+    },
+  ),
+  /still read back as auto after 2 attempts/,
+);
+
+let releaseBlockedCli;
+const restoreQueuedExecutor = setDeviceCommandExecutor(async (command) => {
+  if (command === "inspect-host") {
+    return new Promise((resolve) => { releaseBlockedCli = resolve; });
+  }
+  return { ok: true };
+});
+const blockedCli = runCliQueued("inspect-host", { host: "192.0.2.10" }, [], { queueTimeoutMs: 1000 });
+await assert.rejects(
+  runCliQueued("probe", { host: "192.0.2.11" }, [], { queueTimeoutMs: 5 }),
+  /timed out after waiting 5ms in the device command queue/,
+);
+releaseBlockedCli({ ok: true });
+await blockedCli;
+restoreQueuedExecutor();
 
 const staleSchedules = [
   { id: "stale", running: true, runningSince: "2026-06-15T02:59:01.000Z" },
@@ -142,6 +242,15 @@ const invalidFuelCellTariff = cleanConfig({
 assert.equal(invalidFuelCellTariff.fuelCell.tariff.region, "tokyo");
 assert.equal(invalidFuelCellTariff.fuelCell.tariff.plan, "enefarm");
 assert.equal(invalidFuelCellTariff.fuelCell.tariff.equipmentDiscount, "");
+const migratedFuelCellForecastInfluence = cleanConfig({
+  fuelCell: {
+    generationModel: "fixed",
+    plannerInfluence: "active",
+    fixedWindows: [{ label: "Legacy", days: [1, 2, 3], start: "08:00", end: "10:00" }],
+  },
+}).fuelCell;
+assert.equal(migratedFuelCellForecastInfluence.includeInAdaptiveCharging, false);
+assert.equal("automation" in migratedFuelCellForecastInfluence, false);
 
 const billingPeriodGas = fuelCellGasUsageByBillingPeriod([
   { timestamp: "2026-07-09T00:00:00", fuelCellGasM3: 1.25 },
@@ -162,23 +271,20 @@ for (let day = 1; day <= 8; day += 1) {
     });
   }
 }
-const fixedFuelCellModel = buildFuelCellGenerationModel(cleanConfig({
-  fuelCell: {
-    generationModel: "fixed",
-    plannerInfluence: "active",
-    fixedWindows: [{ days: [0, 1, 2, 3, 4, 5, 6], start: "08:00", end: "18:00" }],
-  },
+const automatedFuelCellModel = buildFuelCellGenerationModel(cleanConfig({
+  fuelCell: { includeInAdaptiveCharging: true },
 }), fuelCellSamples, new Date(2026, 6, 9, 9));
-assert.equal(fixedFuelCellModel.influence, "active");
-assert.ok(fixedFuelCellModel.forecastAt(new Date(2026, 6, 9, 10)).medianW > 600);
-assert.equal(fixedFuelCellModel.forecastAt(new Date(2026, 6, 9, 20)).medianW, 0);
+assert.equal(automatedFuelCellModel.influence, "active");
+assert.equal(automatedFuelCellModel.method, "observed");
+assert.ok(automatedFuelCellModel.forecastAt(new Date(2026, 6, 9, 10)).medianW > 600);
+assert.equal(automatedFuelCellModel.forecastAt(new Date(2026, 6, 9, 20)).medianW, 0);
 const observedFuelCellModel = buildFuelCellGenerationModel(cleanConfig({
-  fuelCell: { generationModel: "automatic", plannerInfluence: "observe" },
+  fuelCell: { includeInAdaptiveCharging: false },
 }), fuelCellSamples, new Date(2026, 6, 9, 9));
 assert.equal(observedFuelCellModel.ready, true);
 assert.equal(observedFuelCellModel.influence, "observe");
 const immatureFuelCellModel = buildFuelCellGenerationModel(cleanConfig({
-  fuelCell: { generationModel: "automatic", plannerInfluence: "active" },
+  fuelCell: { includeInAdaptiveCharging: true },
 }), fuelCellSamples.filter((sample) => new Date(sample.timestamp).getDate() <= 3), new Date(2026, 6, 9, 9));
 assert.equal(immatureFuelCellModel.ready, false);
 assert.equal(immatureFuelCellModel.influence, "observe");
@@ -189,7 +295,7 @@ const denseFuelCellSamples = fuelCellSamples.flatMap((sample) => [
   { ...sample, timestamp: new Date(new Date(sample.timestamp).getTime() + 10 * 60_000).toISOString() },
 ]);
 const denseFuelCellModel = buildFuelCellGenerationModel(cleanConfig({
-  fuelCell: { generationModel: "automatic", plannerInfluence: "observe" },
+  fuelCell: { includeInAdaptiveCharging: false },
 }), denseFuelCellSamples, new Date(2026, 6, 9, 9));
 assert.equal(
   denseFuelCellModel.forecastAt(new Date(2026, 6, 9, 10)).medianW,
@@ -291,6 +397,37 @@ try {
   await rm(migrationDir, { recursive: true, force: true });
 }
 
+const fuelCellControlMigrationDir = await mkdtemp(path.join(os.tmpdir(), "fuel-cell-control-migration-"));
+try {
+  await writeFile(path.join(fuelCellControlMigrationDir, "config.json"), JSON.stringify({
+    fuelCell: {
+      automation: {
+        enabled: true,
+        includeInAdaptiveCharging: true,
+        schedules: [{ label: "Morning", days: [1], start: "08:00" }],
+      },
+      gasCo2KgPerM3: 2.21,
+    },
+  }));
+  await writeFile(path.join(fuelCellControlMigrationDir, "fuel-cell-automation-state.json"), JSON.stringify({
+    lastCommand: "start",
+  }));
+  await migrateLegacyFuelCellControlData(fuelCellControlMigrationDir);
+  const migratedFuelCellConfig = JSON.parse(await readFile(
+    path.join(fuelCellControlMigrationDir, "config.json"),
+    "utf8",
+  ));
+  assert.equal(migratedFuelCellConfig.fuelCell.includeInAdaptiveCharging, true);
+  assert.equal("automation" in migratedFuelCellConfig.fuelCell, false);
+  assert.equal(migratedFuelCellConfig.fuelCell.gasCo2KgPerM3, 2.21);
+  await assert.rejects(
+    readFile(path.join(fuelCellControlMigrationDir, "fuel-cell-automation-state.json"), "utf8"),
+    { code: "ENOENT" },
+  );
+} finally {
+  await rm(fuelCellControlMigrationDir, { recursive: true, force: true });
+}
+
 const batteryModelMigrationDir = await mkdtemp(path.join(os.tmpdir(), "battery-model-migration-"));
 try {
   const legacyState = {
@@ -352,12 +489,13 @@ const activeBatteryModelMigrationDir = await mkdtemp(
   path.join(os.tmpdir(), "active-battery-model-migration-"),
 );
 try {
+  const activeMigrationSlotEnd = new Date(Date.now() + 60 * 60_000).toISOString();
   await writeFile(
     path.join(activeBatteryModelMigrationDir, "adaptive-charging-state.json"),
     JSON.stringify({
       owner: "adaptiveCharging",
       plan: { available: true, plannedChargeKwh: 1.2 },
-      activeSlot: { targetWh: 900, end: "2026-07-20T01:30:00.000Z" },
+      activeSlot: { targetWh: 900, end: activeMigrationSlotEnd },
       activeChargedKwh: 0.25,
       activeChargeSession: {
         startedAt: "2026-07-10T01:00:00.000Z",
@@ -376,7 +514,7 @@ try {
   assert.equal(activeCanonical.activeSlot.targetWh, 900);
   assert.equal(activeCanonical.activeChargedKwh, 0.25);
   assert.equal(activeCanonical.pendingPlanReason, null);
-  assert.equal(activeCanonical.batteryLearning.switchAfterSlotEnd, "2026-07-20T01:30:00.000Z");
+  assert.equal(activeCanonical.batteryLearning.switchAfterSlotEnd, activeMigrationSlotEnd);
 } finally {
   await rm(activeBatteryModelMigrationDir, { recursive: true, force: true });
 }
@@ -427,8 +565,8 @@ assert.equal(
   "future planning restores home demand during the return buffer",
 );
 const occupancySamples = [
-  { timestamp: "2026-07-12T08:30:00.000Z", houseDemandW: 1200 },
-  { timestamp: "2026-07-12T09:30:00.000Z", houseDemandW: 300 },
+  { timestamp: "2026-07-12T08:30:00.000Z", houseDemandW: 1200, coverageSeconds: { houseDemandKwh: 1800 } },
+  { timestamp: "2026-07-12T09:30:00.000Z", houseDemandW: 300, coverageSeconds: { houseDemandKwh: 1800 } },
 ];
 const homeDemandDays = aggregateDemandDays(occupancySamples, { awayPeriods, occupancy: "home" });
 const awayDemandDays = aggregateDemandDays(occupancySamples, { awayPeriods, occupancy: "away" });
@@ -436,14 +574,30 @@ assert.deepEqual([...homeDemandDays[0].values.values()], [1200], "Away buckets a
 assert.deepEqual([...awayDemandDays[0].values.values()], [300], "Away buckets remain available to Away training");
 assert.equal(filterDemandDaysByOccupancy(homeDemandDays, awayPeriods, "home")[0].values.size, 1);
 
+const directPowerCoverageDays = aggregateDemandDays([{
+  timestamp: "2026-07-12T09:30:00.000Z",
+  houseDemandW: 900,
+  intervalAveragePowerW: { houseDemandW: 1000 },
+  powerCoverageSeconds: { houseDemandW: 1800 },
+  coverageSeconds: { houseDemandKwh: 0 },
+}]);
+const directCoverageTime = new Date("2026-07-12T09:30:00.000Z");
+const directCoverageBucket = directCoverageTime.getHours() * 2 + (directCoverageTime.getMinutes() >= 30 ? 1 : 0);
+assert.equal(
+  directPowerCoverageDays[0].coverageByBucket.get(directCoverageBucket),
+  1800,
+  "Demand learning uses direct power coverage instead of unrelated energy coverage",
+);
+assert.equal(directPowerCoverageDays[0].values.get(directCoverageBucket), 1000);
+
 const awayBucketDate = new Date("2026-07-12T09:30:00.000Z");
 const awayBucket = awayBucketDate.getHours() * 2 + (awayBucketDate.getMinutes() >= 30 ? 1 : 0);
 
 const learnedAway = predictAwayDemand(
   [
-    { timestamp: "2026-07-12T09:30:00.000Z", houseDemandW: 300 },
-    { timestamp: "2026-07-13T09:30:00.000Z", houseDemandW: 400 },
-    { timestamp: "2026-07-14T09:30:00.000Z", houseDemandW: 500 },
+    { timestamp: "2026-07-12T09:30:00.000Z", houseDemandW: 300, coverageSeconds: { houseDemandKwh: 1800 } },
+    { timestamp: "2026-07-13T09:30:00.000Z", houseDemandW: 400, coverageSeconds: { houseDemandKwh: 1800 } },
+    { timestamp: "2026-07-14T09:30:00.000Z", houseDemandW: 500, coverageSeconds: { houseDemandKwh: 1800 } },
   ],
   new Date("2026-07-15T09:30:00.000Z"),
   new Map(),
@@ -1595,6 +1749,63 @@ await enforceAdaptiveChargingSlotEndDeadline(intermediateDeadlineKey, {
 assert.equal(intermediateSuspendCount, 1);
 assert.equal(intermediateDeadlineState.standbyHoldUntil, "2026-07-11T13:00:00.000Z");
 
+const overdueWindowState = {
+  owner: "adaptiveCharging",
+  activePlanCreatedAt: "overdue-window-plan",
+  activeSlot: {
+    start: "2026-07-11T12:00:00.000Z",
+    end: "2026-07-11T12:30:00.000Z",
+    windowEnd: "2026-07-11T13:00:00.000Z",
+    targetWh: 1050,
+  },
+};
+let overdueReleaseCount = 0;
+let overdueSuspendCount = 0;
+await enforceAdaptiveChargingSlotEndDeadline(
+  adaptiveChargingSlotEndKey(overdueWindowState),
+  {
+    now: new Date("2026-07-11T14:00:00.000Z"),
+    readState: async () => overdueWindowState,
+    release: async (state) => {
+      overdueReleaseCount += 1;
+      state.owner = null;
+      state.activeSlot = null;
+    },
+    suspend: async () => { overdueSuspendCount += 1; },
+    writeState: async () => {},
+  },
+);
+assert.equal(overdueReleaseCount, 1);
+assert.equal(overdueSuspendCount, 0);
+
+const failedDeadlineState = {
+  owner: "adaptiveCharging",
+  activePlanCreatedAt: "failed-deadline-plan",
+  activeSlot: {
+    start: "2026-07-11T12:00:00.000Z",
+    end: "2026-07-11T12:30:00.000Z",
+    windowEnd: "2026-07-11T13:00:00.000Z",
+    targetWh: 1050,
+  },
+  log: [],
+};
+let failedDeadlineWriteCount = 0;
+const failedDeadlineResult = await enforceAdaptiveChargingSlotEndDeadline(
+  adaptiveChargingSlotEndKey(failedDeadlineState),
+  {
+    now: new Date("2026-07-11T12:30:00.000Z"),
+    readState: async () => failedDeadlineState,
+    suspend: async () => { throw new Error("mode read-back remained auto"); },
+    writeState: async () => { failedDeadlineWriteCount += 1; },
+  },
+);
+assert.equal(failedDeadlineResult.stopped, false);
+assert.equal(failedDeadlineResult.retryMs, 5000);
+assert.equal(failedDeadlineState.owner, "adaptiveCharging");
+assert.equal(failedDeadlineWriteCount, 1);
+assert.match(failedDeadlineState.log.at(-1).message, /Failed to stop overdue charge/);
+assert.equal(failedDeadlineState.lastResult.kind, "slot-end-retry");
+
 function chronologicalSlot(hour, band, netKwh = 0, highSolarNetKwh = netKwh) {
   const startMs = Date.parse("2026-07-12T00:00:00.000Z") + hour * 3_600_000;
   return {
@@ -1834,6 +2045,7 @@ for (let week = 1; week <= 8; week += 1) {
     demandSamples.push({
       timestamp: new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(bucket / 2), bucket % 2 ? 30 : 0).toISOString(),
       houseDemandW: 1000 + week * 10,
+      coverageSeconds: { houseDemandKwh: 1800 },
     });
   }
 }
@@ -1850,6 +2062,7 @@ for (const year of [2023, 2024, 2025]) {
     multiYearDemandSamples.push({
       timestamp: new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(bucket / 2), bucket % 2 ? 30 : 0).toISOString(),
       houseDemandW: 3000,
+      coverageSeconds: { houseDemandKwh: 1800 },
     });
   }
 }
@@ -1882,6 +2095,7 @@ for (let bucket = 0; bucket < 48; bucket += 1) {
   outOfSeasonDemandSamples.push({
     timestamp: new Date(2025, 0, 13, Math.floor(bucket / 2), bucket % 2 ? 30 : 0).toISOString(),
     houseDemandW: 5000,
+    coverageSeconds: { houseDemandKwh: 1800 },
   });
 }
 const outOfSeasonDemandPrediction = predictHouseDemand(outOfSeasonDemandSamples, new Date(2026, 6, 13));
@@ -1895,6 +2109,7 @@ for (let daysAgo = 1; daysAgo <= 10; daysAgo += 1) {
     youngDemandHistory.push({
       timestamp: new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(bucket / 2), bucket % 2 ? 30 : 0).toISOString(),
       houseDemandW: 900 + daysAgo * 20,
+      coverageSeconds: { houseDemandKwh: 1800 },
     });
   }
 }
@@ -1903,6 +2118,17 @@ assert.equal(youngWeekendPrediction.available, true);
 assert.equal(youngWeekendPrediction.validDayCount, 10);
 assert.equal(youngWeekendPrediction.sameDayTypeDays.length, 3);
 assert.equal(youngWeekendPrediction.usedDayTypeFallback, true);
+
+const indexedYoungDemandDays = aggregateDemandDays(youngDemandHistory);
+const compactYoungDemandHistory = youngDemandHistory.map(({ coverageSeconds, ...sample }) => sample);
+const indexedYoungPrediction = predictHouseDemand(
+  compactYoungDemandHistory,
+  new Date(2026, 6, 12),
+  new Map(),
+  { historicalDays: indexedYoungDemandDays },
+);
+assert.equal(indexedYoungPrediction.available, true);
+assert.equal(indexedYoungPrediction.validDayCount, 10);
 
 const incompleteDemandHistory = youngDemandHistory.filter((sample) => new Date(sample.timestamp).getHours() < 8);
 const incompletePrediction = predictHouseDemand(incompleteDemandHistory, new Date(2026, 6, 12));
@@ -2030,10 +2256,11 @@ const sample = sampleFromStatus({
   circuitCumulativeKwh: { 1: 10, 2: 20 },
 });
 assert.equal(sample.rateYenPerKwh, 40);
-assert.equal(sample.solarSavingYen, 24);
-assert.equal(sample.solarGenerationKwh, 0.6);
-assert.equal(sample.gridImportKwh, 0.1);
-assert.equal(sample.gridExportKwh, 0.05);
+assert.equal(sample.solarSavingYen, undefined);
+assert.equal(sample.solarGenerationKwh, undefined);
+assert.equal(sample.gridImportKwh, undefined);
+assert.equal(sample.gridExportKwh, undefined);
+assert.equal(sample.houseDemandKwh, 0.75);
 assert.equal(sample.circuitPowerW["1"], 120);
 assert.equal(sample.circuitCumulativeKwh["2"], 20.25);
 assert.equal(sample.circuitEnergyKwh["1"], 0.5);
@@ -2102,6 +2329,95 @@ assert.deepEqual(resetFuelCellSample.fuelCellCounterIssues, [
   { counter: "gas", issue: "reset" },
 ]);
 
+assert.deepEqual(
+  cumulativeCounterDeltaResult(11.04, null, COUNTER_POLICIES.grid, 7),
+  { delta: null, issue: null },
+);
+assert.deepEqual(
+  cumulativeCounterDeltaResult(11.04, 0, COUNTER_POLICIES.grid, 7),
+  { delta: null, issue: "invalid-jump" },
+);
+assert.ok(Math.abs(
+  cumulativeCounterDeltaResult(11.04, 11.03, COUNTER_POLICIES.grid, 7).delta - 0.01,
+) < 0.000001);
+
+const counterConfig = { ...migratedFuelCellHosts, smartCosmoEnabled: true, meterHost: "10.0.0.135" };
+const missingCounterSample = sampleFromStatus({
+  read_at: "2026-07-22T10:09:34.000Z",
+  meter: {
+    cumulative_bought: { value: 674.1 },
+    cumulative_sold: { value: null },
+    channel_energy: { decoded: { channels: [
+      { channel: 1, value: null },
+      { channel: 2, value: null },
+    ] } },
+  },
+  energy: { fuel_cells: [{
+    host: "10.0.0.150",
+    source_role: "primary",
+    cumulative_generation: { value: 4.5 },
+    cumulative_gas: { value: null },
+  }] },
+}, counterConfig, {
+  timestamp: "2026-07-22T10:09:27.000Z",
+  meterCounterSourceHost: "10.0.0.135",
+  gridImportCumulativeKwh: 674.1,
+  gridExportCumulativeKwh: 11.04,
+  circuitCumulativeKwh: { 1: 10, 2: 20 },
+  fuelCellCounterSourceHost: "10.0.0.150",
+  fuelCellCumulativeGenerationKwh: 4.5,
+  fuelCellCumulativeGasM3: 1.5,
+});
+assert.equal(missingCounterSample.gridExportKwh, undefined);
+assert.equal(missingCounterSample.fuelCellGasM3, undefined);
+assert.deepEqual(missingCounterSample.circuitCumulativeKwh, {});
+assert.deepEqual(missingCounterSample.circuitEnergyKwh, {});
+
+const recoveredCounterSample = sampleFromStatus({
+  read_at: "2026-07-22T10:09:41.000Z",
+  meter: {
+    cumulative_bought: { value: 674.1 },
+    cumulative_sold: { value: 11.04 },
+    channel_energy: { decoded: { channels: [
+      { channel: 1, value: 10 },
+      { channel: 2, value: 20 },
+    ] } },
+  },
+  energy: { fuel_cells: [{
+    host: "10.0.0.150",
+    source_role: "primary",
+    cumulative_generation: { value: 4.5 },
+    cumulative_gas: { value: 1.5 },
+  }] },
+}, counterConfig, missingCounterSample);
+assert.equal(recoveredCounterSample.gridExportKwh, undefined);
+assert.equal(recoveredCounterSample.fuelCellGasM3, undefined);
+assert.deepEqual(recoveredCounterSample.circuitEnergyKwh, {});
+
+const resumedCounterSample = sampleFromStatus({
+  read_at: "2026-07-22T10:09:48.000Z",
+  meter: {
+    cumulative_bought: { value: 674.11 },
+    cumulative_sold: { value: 11.05 },
+    channel_energy: { decoded: { channels: [
+      { channel: 1, value: 10.01 },
+      { channel: 2, value: 20 },
+    ] } },
+  },
+  energy: { fuel_cells: [{
+    host: "10.0.0.150",
+    source_role: "primary",
+    cumulative_generation: { value: 4.501 },
+    cumulative_gas: { value: 1.501 },
+  }] },
+}, counterConfig, recoveredCounterSample);
+assert.ok(Math.abs(resumedCounterSample.gridExportKwh - 0.01) < 0.000001);
+assert.ok(Math.abs(resumedCounterSample.gridImportKwh - 0.01) < 0.000001);
+assert.ok(Math.abs(resumedCounterSample.fuelCellKwh - 0.001) < 0.000001);
+assert.ok(Math.abs(resumedCounterSample.fuelCellGasM3 - 0.001) < 0.000001);
+assert.ok(Math.abs(resumedCounterSample.circuitEnergyKwh["1"] - 0.01) < 0.000001);
+assert.equal(resumedCounterSample.circuitEnergyKwh["2"], 0);
+
 const offPeakTimestamp = new Date(2026, 4, 31, 1, 0).toISOString();
 const previousOffPeakTimestamp = new Date(2026, 4, 31, 0, 30).toISOString();
 const mixedGridSolarCharge = sampleFromStatus({
@@ -2112,7 +2428,7 @@ const mixedGridSolarCharge = sampleFromStatus({
   },
   meter: { grid_import_power: { value: 700 } },
 }, { ...migrated, rateBands: bands }, { timestamp: previousOffPeakTimestamp });
-assert.equal(mixedGridSolarCharge.offPeakSavingYen, 7);
+assert.equal(mixedGridSolarCharge.offPeakSavingYen, undefined);
 
 const mixedChargeWithoutGridMeter = sampleFromStatus({
   read_at: offPeakTimestamp,
@@ -2121,7 +2437,7 @@ const mixedChargeWithoutGridMeter = sampleFromStatus({
     solar: { instant_power: { value: 600 } },
   },
 }, { ...migrated, rateBands: bands }, { timestamp: previousOffPeakTimestamp });
-assert.equal(mixedChargeWithoutGridMeter.offPeakSavingYen, 4);
+assert.equal(mixedChargeWithoutGridMeter.offPeakSavingYen, undefined);
 
 const smartCosmoDisabledSample = sampleFromStatus({
   read_at: "2026-05-31T12:15:00+09:00",
@@ -2160,6 +2476,75 @@ assert.equal(summary.circuits.find((item) => item.channel === 1).totalKwh, 0.5);
 assert.equal(summary.circuits.find((item) => item.channel === 2).totalKwh, 0.1);
 assert.equal(summary.circuitTotalKwh, 0.6);
 assert.equal(summary.guardTriggerCount, 1);
+
+const discountedSavingsSummary = summarizeSamples([
+  {
+    timestamp: "2026-07-15T01:30:00+09:00",
+    gridImportKwh: 1,
+    batteryChargeKwh: 0.4,
+    rateYenPerKwh: 10,
+  },
+  {
+    timestamp: "2026-07-15T14:30:00+09:00",
+    gridImportKwh: 2,
+    batteryChargeKwh: 0.5,
+    rateYenPerKwh: 25,
+  },
+], { standardRateYenPerKwh: 25 });
+assert.equal(discountedSavingsSummary.totalOffPeakSavingYen, 15);
+assert.equal(discountedSavingsSummary.batteryOffPeakSavingYen, 6);
+assert.equal(discountedSavingsSummary.gridOffPeakSavingYen, 9);
+assert.equal(
+  discountedSavingsSummary.totalOffPeakSavingYen,
+  discountedSavingsSummary.batteryOffPeakSavingYen + discountedSavingsSummary.gridOffPeakSavingYen,
+);
+
+const calendarSavingsSample = (year, month, day, solarSavingYen, solarGenerationKwh) => {
+  const start = new Date(year, month, day);
+  const end = new Date(year, month, day + 1);
+  return {
+    timestamp: new Date(end.getTime() - 1).toISOString(),
+    rollupStart: start.toISOString(),
+    rollupEnd: end.toISOString(),
+    solarSavingYen,
+    offPeakSavingYen: solarSavingYen * 2,
+    solarGenerationKwh,
+    gridImportKwh: solarSavingYen / 10,
+    batteryChargeKwh: solarSavingYen / 20,
+    rateYenPerKwh: 10,
+  };
+};
+const calendarSavingsEnd = new Date(2026, 6, 15, 12);
+const calendarSavings = summarizeCalendarSavings([
+  calendarSavingsSample(2026, 0, 1, 10, 1),
+  calendarSavingsSample(2026, 5, 30, 20, 2),
+  calendarSavingsSample(2026, 6, 1, 30, 3),
+  calendarSavingsSample(2026, 6, 12, 40, 4),
+  calendarSavingsSample(2026, 6, 13, 50, 5),
+  {
+    timestamp: calendarSavingsEnd.toISOString(),
+    rollupStart: new Date(2026, 6, 15, 11, 30).toISOString(),
+    rollupEnd: calendarSavingsEnd.toISOString(),
+    solarSavingYen: 60,
+    offPeakSavingYen: 120,
+    solarGenerationKwh: 6,
+  },
+], { co2TonnesPerKwh: 0.000423, standardRateYenPerKwh: 20 }, calendarSavingsEnd, {
+  solarSavingYen: 61,
+  offPeakSavingYen: 122,
+  co2SavingKg: 2.6,
+});
+assert.equal(calendarSavings.today.solarSavingYen, 61, "today should retain the exact live summary");
+assert.equal(calendarSavings.lastMonth.solarSavingYen, 20, "last month should be a complete calendar month");
+assert.equal(calendarSavings.month.solarSavingYen, 180);
+assert.equal(calendarSavings.year.solarSavingYen, 210);
+assert.equal(calendarSavings.lastMonth.offPeakSavingYen, 40);
+assert.equal(calendarSavings.lastMonth.totalOffPeakSavingYen, 20);
+assert.equal(calendarSavings.lastMonth.batteryOffPeakSavingYen, 10);
+assert.equal(calendarSavings.lastMonth.gridOffPeakSavingYen, 10);
+assert.ok(Math.abs(calendarSavings.lastMonth.co2SavingKg - 0.846) < 0.000001);
+assert.equal(new Date(calendarSavings.lastMonth.start).getMonth(), 5);
+assert.equal(new Date(calendarSavings.lastMonth.end).getMonth(), 6);
 
 const energySourceSummary = summarizeSamples([
   {
@@ -2330,8 +2715,39 @@ const legacyPowerSummary = summarizeSamples([
   { timestamp: "2026-05-31T00:00:00.000Z", gridImportW: 1000, gridExportW: 500 },
   { timestamp: "2026-05-31T00:30:00.000Z", gridImportW: 2000, gridExportW: 1000 },
 ]);
-assert.equal(legacyPowerSummary.gridImportKwh, 1);
-assert.equal(legacyPowerSummary.gridExportKwh, 0.5);
+assert.equal(legacyPowerSummary.gridImportKwh, 0.75);
+assert.equal(legacyPowerSummary.gridExportKwh, 0.375);
+
+const recordingGapSummary = summarizeSamples([
+  { timestamp: "2026-05-31T00:00:00.000Z", gridImportW: 1000, expectedIntervalSeconds: 15 },
+  { timestamp: "2026-05-31T02:00:00.000Z", gridImportW: 1000, expectedIntervalSeconds: 15 },
+]);
+assert.equal(recordingGapSummary.gridImportKwh, 0, "recording gaps must not be filled with invented energy");
+
+const partialRangeReport = aggregateEnergyReportSamples([{
+  timestamp: "2026-05-31T00:30:00.000Z",
+  rollupStart: "2026-05-31T00:00:00.000Z",
+  rollupEnd: "2026-05-31T00:30:00.000Z",
+  gridImportKwh: 0.5,
+  solarGenerationKwh: 0.3,
+  batteryChargeKwh: 0.2,
+  solarSavingYen: 30,
+  offPeakSavingYen: 12,
+  coverageSeconds: { gridImportKwh: 1800, solarGenerationKwh: 1800, batteryChargeKwh: 1800 },
+  energyQuality: { gridImportKwh: "integrated", solarGenerationKwh: "integrated", batteryChargeKwh: "integrated" },
+}], {
+  start: "2026-05-31T00:10:00.000Z",
+  end: "2026-05-31T00:27:00.000Z",
+  bucket: "day",
+});
+assert.ok(Math.abs(partialRangeReport.totals.gridImportKwh - 17 / 60) < 1e-9);
+assert.ok(Math.abs(partialRangeReport.totals.solarSavingYen - 17) < 1e-9);
+assert.ok(Math.abs(partialRangeReport.totals.offPeakSavingYen - 6.8) < 1e-9);
+assert.equal(
+  partialRangeReport.buckets[0].dataQuality.gridImportKwh.coveragePercent,
+  100,
+  "partial calendar buckets report coverage against the selected range",
+);
 
 const rule = cleanAutomationRule({ enabled: true, conditions: { breakerAmps: 40, reserveAmps: 5, source: "houseDemandW" } });
 assert.equal(rule.action, "set-mode");
@@ -2371,7 +2787,7 @@ assert.equal(unavailableDemand.result.skipped, "demand unavailable");
 
 const actualChargingSafe = await evaluateAutomationRule(cleanAutomationRule({
   enabled: true,
-  conditions: { source: "houseDemandW", breakerAmps: 40, reserveAmps: 5, batteryChargingEstimateW: 1000 },
+  conditions: { source: "houseDemandW", breakerAmps: 40, reserveAmps: 5 },
 }), {
   energy: { battery: { operation_mode: { value: "auto" }, instant_power: { value: 600 } } },
   meter: { house_demand_power: { value: 2800 } },
@@ -2381,7 +2797,7 @@ assert.equal(actualChargingSafe.result.actualDemandWithChargingW, 3400);
 
 const gridImportDoesNotDoubleCountCharging = await evaluateAutomationRule(cleanAutomationRule({
   enabled: true,
-  conditions: { source: "gridImportW", breakerAmps: 40, reserveAmps: 5, batteryChargingEstimateW: 1000 },
+  conditions: { source: "gridImportW", breakerAmps: 40, reserveAmps: 5 },
 }), {
   energy: { battery: { operation_mode: { value: "auto" }, instant_power: { value: 600 } } },
   meter: { grid_import_power: { value: 3400 } },
@@ -2389,6 +2805,7 @@ const gridImportDoesNotDoubleCountCharging = await evaluateAutomationRule(cleanA
 assert.equal(gridImportDoesNotDoubleCountCharging.result.skipped, "conditions not met");
 assert.equal(gridImportDoesNotDoubleCountCharging.result.guardDemandW, 3400);
 
+const guardBatteryConfig = { batteryCapabilities: { maximumChargeWatts: 1000 } };
 
 const restoreWouldTrip = await evaluateAutomationRule(cleanAutomationRule({
   enabled: true,
@@ -2397,13 +2814,12 @@ const restoreWouldTrip = await evaluateAutomationRule(cleanAutomationRule({
     breakerAmps: 40,
     source: "houseDemandW",
     reserveAmps: 5,
-    batteryChargingEstimateW: 1000,
     restoreBelowAmps: 30,
   },
 }), {
   energy: { battery: { operation_mode: { value: "standby" }, instant_power: { value: 0 } } },
   meter: { house_demand_power: { value: 2600 } },
-}, new Date("2026-05-31T00:00:00.000Z"));
+}, new Date("2026-05-31T00:00:00.000Z"), () => {}, guardBatteryConfig);
 assert.equal(restoreWouldTrip.result.skipped, "restore would exceed breaker reserve");
 assert.equal(restoreWouldTrip.result.estimatedRestoredDemandW, 3600);
 
@@ -2415,18 +2831,17 @@ const repeatedRestoreLogRule = cleanAutomationRule({
     source: "gridImportW",
     breakerAmps: 40,
     reserveAmps: 5,
-    batteryChargingEstimateW: 1000,
     restoreBelowAmps: 30,
   },
 });
 await evaluateAutomationRule(repeatedRestoreLogRule, {
   energy: { battery: { operation_mode: { value: "standby" }, instant_power: { value: 0 } } },
   meter: { grid_import_power: { value: 3200 } },
-}, new Date("2026-05-31T00:01:00.000Z"));
+}, new Date("2026-05-31T00:01:00.000Z"), () => {}, guardBatteryConfig);
 await evaluateAutomationRule(repeatedRestoreLogRule, {
   energy: { battery: { operation_mode: { value: "standby" }, instant_power: { value: 0 } } },
   meter: { grid_import_power: { value: 3100 } },
-}, new Date("2026-05-31T00:02:00.000Z"));
+}, new Date("2026-05-31T00:02:00.000Z"), () => {}, guardBatteryConfig);
 assert.equal(repeatedRestoreLogRule.log.length, 2);
 assert.match(repeatedRestoreLogRule.log[0].message, /Grid Import \(3200 W\) still exceeds/);
 assert.match(repeatedRestoreLogRule.log[1].message, /Grid Import \(3100 W\) still exceeds/);
@@ -2439,14 +2854,13 @@ const reassertStandbyRule = cleanAutomationRule({
     source: "gridImportW",
     breakerAmps: 40,
     reserveAmps: 5,
-    batteryChargingEstimateW: 1000,
     restoreBelowAmps: 30,
   },
 });
 await evaluateAutomationRule(reassertStandbyRule, {
   energy: { battery: { operation_mode: { value: "auto" }, instant_power: { value: 0 } } },
   meter: { grid_import_power: { value: 2000 } },
-}, new Date("2026-05-31T00:03:00.000Z"), () => {}, null, {
+}, new Date("2026-05-31T00:03:00.000Z"), () => {}, guardBatteryConfig, {
   execute: async (action, payload) => {
     reassertActions.push({ action, payload });
     return { ok: true };
@@ -2464,7 +2878,6 @@ const deferredRestoreRule = cleanAutomationRule({
     source: "gridImportW",
     breakerAmps: 40,
     reserveAmps: 5,
-    batteryChargingEstimateW: 1000,
     restoreBelowAmps: 30,
     restoreDelaySeconds: 30,
   },
@@ -2472,7 +2885,7 @@ const deferredRestoreRule = cleanAutomationRule({
 const deferredRestore = await evaluateAutomationRule(deferredRestoreRule, {
   energy: { battery: { operation_mode: { value: "standby" }, instant_power: { value: 0 } } },
   meter: { grid_import_power: { value: 2000 } },
-}, new Date("2026-05-31T00:01:00.000Z"), () => {}, null, {
+}, new Date("2026-05-31T00:01:00.000Z"), () => {}, guardBatteryConfig, {
   holdStandbyForAdaptiveCharging: true,
   execute: async (action, payload) => deferredRestoreActions.push({ action, payload }),
 });
@@ -2502,6 +2915,8 @@ assert.equal(normalizedNotifications.channels[0].settings.security, "starttls");
 assert.deepEqual(normalizedNotifications.channels[0].settings.recipients, ["one@example.test", "two@example.test"]);
 assert.equal(normalizedNotifications.triggers.scheduleFailed.enabled, false);
 assert.equal(normalizedNotifications.triggers.scheduleFailed.cooldownMinutes, 1);
+assert.equal(normalizedNotifications.triggers.fuelCellHotWaterEmpty.enabled, true);
+assert.equal(normalizedNotifications.triggers.fuelCellHotWaterEmpty.cooldownMinutes, 60);
 assert.equal(normalizedNotifications.triggers.lowBattery.enabled, false);
 assert.equal(normalizedNotifications.triggers.lowBattery.thresholdPercent, 20);
 assert.equal(cleanConfig({ notifications: normalizedNotifications }).notifications.channels[0].id, "mail");
@@ -2607,10 +3022,37 @@ for (let index = 0; index < 2; index += 1) {
   });
 }
 assert.equal(sentMessages.length, 3);
-await notificationService.sendTest();
+for (let index = 0; index < 2; index += 1) {
+  await notificationService.observeCondition({
+    key: "fuel-cell-hot-water-empty-test",
+    active: true,
+    activateAfter: 2,
+    recoverAfter: 2,
+    activeEvent: {
+      type: "fuelCellHotWaterEmpty",
+      title: "Ene-Farm hot-water tank is empty",
+      message: "Tank level is 0/5",
+      dedupeKey: "fuel-cell-hot-water:test:empty",
+    },
+  });
+}
 assert.equal(sentMessages.length, 4);
+await notificationService.observeCondition({
+  key: "fuel-cell-hot-water-empty-test",
+  active: true,
+  activateAfter: 2,
+  activeEvent: {
+    type: "fuelCellHotWaterEmpty",
+    title: "Ene-Farm hot-water tank is empty",
+    message: "Tank level is 0/5",
+    dedupeKey: "fuel-cell-hot-water:test:empty",
+  },
+});
+assert.equal(sentMessages.length, 4, "an empty tank should notify only once until it recovers");
+await notificationService.sendTest();
+assert.equal(sentMessages.length, 5);
 assert.match(sentMessages.at(-1).message.subject, /Test notification/);
-assert.equal((await notificationService.view()).deliveries.length, 4);
+assert.equal((await notificationService.view()).deliveries.length, 5);
 await notificationService.updateSecret({ channelId: "primary-email", clearPassword: true });
 assert.equal((await notificationService.view()).passwordConfigured, false);
 await rm(notificationDir, { recursive: true, force: true });

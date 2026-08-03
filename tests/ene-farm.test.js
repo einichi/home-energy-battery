@@ -45,4 +45,5 @@ for (const [edt, expected] of [[0x00, "grid_connected_reverse_flow_allowed"], [0
   assert.equal(decoded.human, expected);
 }
 
+
 console.log("Ene-Farm protocol tests passed");

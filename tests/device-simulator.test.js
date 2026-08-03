@@ -69,11 +69,17 @@ const unavailablePrimary = await simulator.execute("energy-status", {
 });
 assert.equal(unavailablePrimary.fuel_cells[0].cumulative_generation.value, null);
 assert.equal(unavailablePrimary.fuel_cells[1].instant_power.value, 650);
+assert.ok(unavailablePrimary.errors.some((error) => error.host === "10.250.0.30" && error.epc === "0xC5"));
 
 simulator.failNext("meter-status", { message: "simulated meter timeout" });
 await assert.rejects(() => simulator.execute("meter-status", { host: "10.250.0.20" }), /simulated meter timeout/);
 assert.equal((await simulator.execute("meter-status", { host: "10.250.0.20" })).grid_import_power.value, 920);
 assert.ok(simulator.calls.some((call) => call.command === "charge" && call.args["target-wh"] === 1096));
+
+simulator.rejectNext("set-mode");
+const rejectedWrite = await simulator.execute("set-mode", { host: "10.250.0.10" }, ["standby"]);
+assert.deepEqual(rejectedWrite, { ok: false, acknowledged: false, esv: "SetC_SNA" });
+assert.equal(simulator.snapshot().battery.operationMode, "auto", "rejected writes must not mutate device state");
 
 const exportSimulator = createDeviceSimulator({ scenario: "solar-export" });
 const exportMeter = await exportSimulator.execute("meter-status", { host: "10.250.0.20" });

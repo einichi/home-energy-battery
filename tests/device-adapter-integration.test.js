@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { SCHEMA_VERSION } from "../lib/history-store.js";
 
 const dataDir = await mkdtemp(path.join(os.tmpdir(), "device-adapter-integration-"));
 let child = null;
@@ -58,6 +59,7 @@ try {
       DEVICE_COMMAND_ADAPTER_MODULE: path.resolve("tests/support/device-simulator.js"),
       DEVICE_SIMULATOR_SCENARIO: "normal",
       SCHEDULE_CHECK_INTERVAL_MS: "50",
+      AUTOMATION_CHECK_INTERVAL_MS: "50",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -65,6 +67,36 @@ try {
   child.stderr.on("data", (chunk) => { output += chunk; });
 
   await waitFor(async () => (await fetch(`${baseUrl}/api/config`)).ok);
+  const indexResponse = await fetch(`${baseUrl}/`);
+  assert.equal(indexResponse.status, 200);
+  assert.match(indexResponse.headers.get("content-security-policy") ?? "", /default-src 'self'/);
+  assert.equal(indexResponse.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(indexResponse.headers.get("x-frame-options"), "DENY");
+
+  const invalidContentType = await fetch(`${baseUrl}/api/config`, {
+    method: "PUT",
+    headers: { "content-type": "text/plain" },
+    body: "{}",
+  });
+  assert.equal(invalidContentType.status, 415);
+
+  const crossOriginMutation = await fetch(`${baseUrl}/api/config`, {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      origin: "https://attacker.example",
+    },
+    body: "{}",
+  });
+  assert.equal(crossOriginMutation.status, 403);
+
+  const oversizedMutation = await fetch(`${baseUrl}/api/config`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ padding: "x".repeat(1024 * 1024 + 1) }),
+  });
+  assert.equal(oversizedMutation.status, 413);
+
   const configured = await request(baseUrl, "/api/config", {
     method: "PUT",
     body: {
@@ -84,6 +116,14 @@ try {
 
   const initial = await request(baseUrl, "/api/status");
   assert.equal(initial.response.status, 200, `initial status failed: ${JSON.stringify(initial.payload)}\n${output}`);
+  assert.deepEqual(Object.keys(initial.payload.savingsPeriods), ["today", "lastMonth", "month", "year"]);
+  assert.equal(typeof initial.payload.savingsPeriods.year.solarSavingYen, "number");
+  assert.equal(typeof initial.payload.savingsPeriods.year.totalOffPeakSavingYen, "number");
+  assert.equal(
+    initial.payload.savingsPeriods.today.totalOffPeakSavingYen,
+    initial.payload.savingsPeriods.today.batteryOffPeakSavingYen
+      + initial.payload.savingsPeriods.today.gridOffPeakSavingYen,
+  );
   assert.equal(initial.payload.energy.battery.remaining_percent.value, 62);
   assert.equal(initial.payload.energy.solar.instant_power.value, 850);
   assert.equal(initial.payload.meter.house_demand_power.value, 1410);
@@ -93,16 +133,11 @@ try {
   assert.equal(initial.payload.energy.fuel_cells[0].hot_water_level.value, 4);
   assert.equal(initial.payload.energy.fuel_cells[1].source_role, "proxy");
 
-  const manualGeneration = await request(baseUrl, "/api/actions/fuel-cell-start", {
+  assert.equal((await request(baseUrl, "/api/fuel-cell-automation")).response.status, 404);
+  assert.equal((await request(baseUrl, "/api/actions/fuel-cell-start", {
     method: "POST",
-    body: { host: "10.250.0.10" },
-  });
-  assert.equal(manualGeneration.response.status, 200);
-  assert.equal(manualGeneration.payload.host, "10.250.0.30");
-  assert.equal(manualGeneration.payload.epc, "0xCA");
-  assert.equal(manualGeneration.payload.requested, "on");
-  const startingFuelCell = await request(baseUrl, "/api/status");
-  assert.equal(startingFuelCell.payload.energy.fuel_cells[0].generation_status.value, "starting");
+    body: {},
+  })).response.status, 404);
 
   const charge = await request(baseUrl, "/api/actions/charge", {
     method: "POST",
@@ -144,6 +179,48 @@ try {
     return schedules.payload.find((item) => item.id === schedule.payload.id)?.lastResult?.ok === true;
   });
   assert.equal((await request(baseUrl, "/api/status")).payload.energy.battery.operation_mode.value, "auto");
+
+  const manualBackup = await request(baseUrl, "/api/database-backups", {
+    method: "POST",
+    body: {},
+  });
+  assert.equal(manualBackup.response.status, 201, JSON.stringify(manualBackup.payload));
+  const compatible = manualBackup.payload.backups.find((item) => item.kind === "manual");
+  assert.equal(compatible.compatible, true);
+
+  const incompatibleFilename = compatible.filename.replace(/^history-v\d+-/, "history-v4-");
+  await copyFile(
+    path.join(dataDir, "backups", compatible.filename),
+    path.join(dataDir, "backups", incompatibleFilename),
+  );
+  const backupInventory = await request(baseUrl, "/api/database-backups");
+  assert.equal(backupInventory.payload.schemaVersion, SCHEMA_VERSION);
+  const incompatible = backupInventory.payload.backups.find((item) => item.filename === incompatibleFilename);
+  assert.equal(incompatible.compatible, false);
+  assert.equal(incompatible.schemaVersion, 4);
+  const incompatibleRestore = await request(
+    baseUrl,
+    `/api/database-backups/${encodeURIComponent(incompatibleFilename)}/restore`,
+    { method: "POST", body: {} },
+  );
+  assert.equal(incompatibleRestore.response.status, 409);
+
+  const restored = await request(
+    baseUrl,
+    `/api/database-backups/${encodeURIComponent(compatible.filename)}/restore`,
+    { method: "POST", body: {} },
+  );
+  assert.equal(restored.response.status, 200, `${JSON.stringify(restored.payload)}\n${output}`);
+  assert.ok(restored.payload.backups.some((item) => item.kind === "pre-restore"));
+  assert.equal((await request(baseUrl, "/api/status")).response.status, 200);
+
+  const deleted = await request(
+    baseUrl,
+    `/api/database-backups/${encodeURIComponent(incompatibleFilename)}`,
+    { method: "DELETE" },
+  );
+  assert.equal(deleted.response.status, 200);
+  assert.equal(deleted.payload.backups.some((item) => item.filename === incompatibleFilename), false);
 } finally {
   if (child && child.exitCode === null) {
     child.kill("SIGTERM");

@@ -19,7 +19,14 @@ import {
   migrateHistoryDatabase,
   normalizeRetentionPolicy,
 } from "./lib/history-store.js";
-import { backupDatabaseBeforeUpgrade } from "./lib/database-upgrade.js";
+import {
+  backupDatabaseBeforeUpgrade,
+  backupDatabaseManually,
+  cleanupExtractedDatabaseBackup,
+  deleteDatabaseBackup,
+  extractAndValidateDatabaseBackup,
+  listDatabaseBackups,
+} from "./lib/database-upgrade.js";
 import {
   applicableGasDiscount,
   applicableGasTariffBand,
@@ -28,6 +35,14 @@ import {
   normalizeGasTariffPayload,
   validBillingMonth,
 } from "./lib/gas-tariffs.js";
+import {
+  COUNTER_POLICIES,
+  cumulativeCounterDeltaResult,
+  finiteCounterMap,
+} from "./lib/counter-utils.js";
+import { timestampConsole } from "./lib/console-timestamps.js";
+
+timestampConsole();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 8787);
@@ -40,9 +55,11 @@ const ADAPTIVE_CHARGING_DIR = path.join(DATA_DIR, "adaptive-charging");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 const DATABASE_BACKUP_DIR = path.join(DATA_DIR, "backups");
 const CLI_TIMEOUT_MS = Number(process.env.CLI_TIMEOUT_MS ?? 15000);
+const CLI_QUEUE_TIMEOUT_MS = Math.max(30_000, CLI_TIMEOUT_MS * 4);
+const CLI_QUEUE_STARVATION_MS = Math.max(15_000, CLI_TIMEOUT_MS * 2);
 const CLI_FILE = "home-energy-battery-node.js";
 const SCHEDULE_CHECK_INTERVAL_MS = Number(process.env.SCHEDULE_CHECK_INTERVAL_MS ?? 15_000);
-const AUTOMATION_CHECK_INTERVAL_MS = 30_000;
+const AUTOMATION_CHECK_INTERVAL_MS = Math.max(50, Number(process.env.AUTOMATION_CHECK_INTERVAL_MS ?? 30_000));
 const SOLAR_FORECAST_REFRESH_MS = 3 * 60 * 60_000;
 const SOLAR_FORECAST_MAX_AGE_MS = 6 * 60 * 60_000;
 const ADAPTIVE_CHARGING_PREWINDOW_MS = 30 * 60_000;
@@ -55,6 +72,8 @@ const ADAPTIVE_CHARGING_SOLAR_HEADROOM_CLEAR_CHECKS = 2;
 const ADAPTIVE_CHARGING_BREAKER_SAFETY_MARGIN_W = 200;
 const ADAPTIVE_CHARGING_BREAKER_WAIT_LOG_MS = 5 * 60_000;
 const ADAPTIVE_CHARGING_MIN_EXECUTABLE_CHARGE_WH = 50;
+const OPERATION_MODE_VERIFY_ATTEMPTS = 4;
+const OPERATION_MODE_VERIFY_DELAY_MS = 750;
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
 const ADAPTIVE_CHARGE_SESSION_LIMIT = 30;
 const ADAPTIVE_CHARGE_SAMPLE_LIMIT = 500;
@@ -124,9 +143,7 @@ const DEFAULT_CONFIG = {
   fuelCellProxyHosts: [],
   fuelCellEnabled: true,
   fuelCell: {
-    generationModel: "automatic",
-    plannerInfluence: "observe",
-    fixedWindows: [],
+    includeInAdaptiveCharging: false,
     gasCo2KgPerM3: 2.21,
     tariff: {
       provider: "tokyo-gas",
@@ -170,16 +187,37 @@ const DEFAULT_CONFIG = {
   language: "en",
 };
 
-let cliQueue = Promise.resolve();
+const cliQueue = [];
+let cliQueueRunning = false;
+let cliQueueSequence = 0;
+let configMutationQueue = Promise.resolve();
+let adaptiveChargingStateWriteQueue = Promise.resolve();
+let scheduleMutationQueue = Promise.resolve();
 let scheduleTimer = null;
 let automationTimer = null;
 let recorderTimer = null;
 let retentionTimer = null;
+let retentionRunPromise = null;
+let backgroundProcessesEnabled = false;
 let adaptiveChargingSlotEndTimer = null;
 let adaptiveChargingSlotEndTimerKey = null;
 let applicationStarted = false;
 let serverListening = false;
 let startupPromise = null;
+let databaseOperation = {
+  busy: false,
+  type: null,
+  filename: null,
+  phase: "idle",
+  percent: 0,
+  processed: 0,
+  total: 0,
+  unit: null,
+  startedAt: null,
+  completedAt: null,
+  error: null,
+  result: null,
+};
 let databaseUpgrade = {
   required: false,
   state: "checking",
@@ -210,6 +248,8 @@ const notificationService = createNotificationService({
 let cliTimingSequence = 0;
 const recentCliTimings = [];
 let lastRecordedSample = null;
+let latestStatusSnapshot = null;
+let statusRefreshPromise = null;
 let adaptiveChargingHistoryCache = null;
 let adaptiveChargingDemandProfileIndexPromise = null;
 const runningScheduleIds = new Set();
@@ -236,7 +276,19 @@ function runCli(command, args = {}, positional = []) {
   return new Promise((resolve, reject) => {
     execFile(process.execPath, execArgs, { timeout: CLI_TIMEOUT_MS }, (error, stdout, stderr) => {
       if (error) {
-        reject(new Error((stderr || error.message).trim()));
+        const details = [];
+        if (stderr?.trim()) details.push(stderr.trim());
+        if (error.killed || error.signal) {
+          details.push(`CLI ${command} exceeded ${CLI_TIMEOUT_MS}ms or was terminated (${error.signal ?? "unknown signal"})`);
+        } else if (error.message) {
+          details.push(error.message.trim());
+        }
+        if (stdout?.trim()) details.push(`stdout: ${jsonSnippet(stdout.trim())}`);
+        const failure = new Error([...new Set(details)].join("\n") || `CLI ${command} failed`);
+        failure.cause = error;
+        failure.command = command;
+        failure.args = execArgs.slice(1);
+        reject(failure);
         return;
       }
       try {
@@ -278,17 +330,38 @@ async function configureDeviceCommandAdapter() {
   setDeviceCommandExecutor(execute);
 }
 
-function runCliQueued(command, args = {}, positional = []) {
-  const task = cliQueue.then(async () => {
+function cliCommandPriority(command) {
+  if (["set-mode", "charge", "discharge", "vendor-profile", "discharge-limit", "osaifu-charge-window", "osaifu-discharge-window", "raw-set"].includes(command)) return 0;
+  if (["energy-status", "meter-status"].includes(command)) return 10;
+  if (["discover", "probe", "inspect-host", "dump-eoj", "dump-vendor"].includes(command)) return 30;
+  return 20;
+}
+
+async function runNextCliTask() {
+  if (cliQueueRunning || !cliQueue.length) return;
+  cliQueueRunning = true;
+  const now = Date.now();
+  cliQueue.sort((left, right) => {
+    const leftStarved = now - left.queuedAt >= CLI_QUEUE_STARVATION_MS;
+    const rightStarved = now - right.queuedAt >= CLI_QUEUE_STARVATION_MS;
+    if (leftStarved !== rightStarved) return leftStarved ? -1 : 1;
+    if (leftStarved) return left.sequence - right.sequence;
+    return left.priority - right.priority || left.sequence - right.sequence;
+  });
+  const queued = cliQueue.shift();
+  clearTimeout(queued.queueTimeout);
+  try {
     const startedMs = Date.now();
     const context = {
-      command,
-      host: args.host || args["battery-host"] || args["solar-host"] || null,
+      command: queued.command,
+      host: queued.args.host || queued.args["battery-host"] || queued.args["solar-host"] || null,
       startedAt: new Date(startedMs).toISOString(),
     };
     activeCliContext = context;
     try {
-      return await deviceCommandExecutor(command, args, positional);
+      queued.resolve(await deviceCommandExecutor(queued.command, queued.args, queued.positional));
+    } catch (error) {
+      queued.reject(error);
     } finally {
       recentCliTimings.push({
         ...context,
@@ -298,8 +371,42 @@ function runCliQueued(command, args = {}, positional = []) {
       if (recentCliTimings.length > 100) recentCliTimings.shift();
       if (activeCliContext === context) activeCliContext = null;
     }
+  } finally {
+    cliQueueRunning = false;
+    queueMicrotask(runNextCliTask);
+  }
+}
+
+function runCliQueued(command, args = {}, positional = [], options = {}) {
+  const priority = Number.isFinite(Number(options.priority)) ? Number(options.priority) : cliCommandPriority(command);
+  if (cliQueue.length >= 100 && priority > 0) {
+    return Promise.reject(new Error(`device command queue is full; ${command} was not queued`));
+  }
+  let queued;
+  const task = new Promise((resolve, reject) => {
+    queued = {
+      command,
+      args,
+      positional,
+      priority,
+      sequence: ++cliQueueSequence,
+      queuedAt: Date.now(),
+      queueTimeout: null,
+      resolve,
+      reject,
+    };
+    cliQueue.push(queued);
   });
-  cliQueue = task.catch(() => {});
+  const queueTimeoutMs = Number.isFinite(Number(options.queueTimeoutMs))
+    ? Math.max(1, Number(options.queueTimeoutMs))
+    : CLI_QUEUE_TIMEOUT_MS;
+  queued.queueTimeout = setTimeout(() => {
+    const index = cliQueue.indexOf(queued);
+    if (index < 0) return;
+    cliQueue.splice(index, 1);
+    queued.reject(new Error(`CLI ${command} timed out after waiting ${queueTimeoutMs}ms in the device command queue`));
+  }, queueTimeoutMs);
+  runNextCliTask();
   return task;
 }
 
@@ -309,14 +416,9 @@ async function ensureDataDir() {
 }
 
 function numericMetric(item) {
-  if (item?.value === null || item?.value === undefined || item.value === "") return null;
+  if (item?.value === null || item?.value === undefined || item.value === "" || typeof item.value === "boolean") return null;
   const value = Number(item?.value);
   return Number.isFinite(value) ? value : null;
-}
-
-function strongestFuelCellWatts(fuelCells = []) {
-  const values = fuelCells.map((cell) => numericMetric(cell.instant_power)).filter((value) => value !== null);
-  return values.length ? Math.max(...values) : null;
 }
 
 function primaryFuelCell(fuelCells = []) {
@@ -327,21 +429,6 @@ function selectedFuelCellReading(fuelCells = []) {
   const primary = primaryFuelCell(fuelCells);
   if (numericMetric(primary?.instant_power) !== null || primary?.generation_status?.value) return primary;
   return fuelCells.find((cell) => cell.source_role === "proxy" && (numericMetric(cell.instant_power) !== null || cell.generation_status?.value)) ?? primary;
-}
-
-function cumulativeCounterDeltaResult(current, previous, maximum = 1_000_000, maxDelta = 10) {
-  const now = Number(current);
-  const before = Number(previous);
-  if (!Number.isFinite(now) || !Number.isFinite(before)) return { delta: null, issue: null };
-  if (now >= before) {
-    const delta = now - before;
-    return delta <= maxDelta ? { delta, issue: null } : { delta: null, issue: "invalid-jump" };
-  }
-  if (before > maximum * 0.9 && now < maximum * 0.1) {
-    const delta = maximum - before + now;
-    return delta <= maxDelta ? { delta, issue: "rollover" } : { delta: null, issue: "invalid-jump" };
-  }
-  return { delta: null, issue: "reset" };
 }
 
 function circuitLabelFor(channel, labels = {}) {
@@ -364,53 +451,60 @@ function normalizeCircuitLabels(value = {}) {
 }
 
 function circuitChannelMap(channels = []) {
-  const out = {};
-  for (const channel of channels) {
-    const id = Number(channel?.channel);
-    const value = Number(channel?.value);
-    if (!Number.isInteger(id) || id < 1 || id > 252) continue;
-    out[String(id)] = Number.isFinite(value) ? value : null;
-  }
-  return out;
+  return finiteCounterMap(channels);
 }
 
 function circuitCumulativeMap(channels = []) {
-  const out = {};
-  for (const channel of channels) {
-    const id = Number(channel?.channel);
-    const value = Number(channel?.value);
-    if (!Number.isInteger(id) || id < 1 || id > 252) continue;
-    out[String(id)] = Number.isFinite(value) ? value : null;
-  }
-  return out;
+  return finiteCounterMap(channels);
 }
 
-function circuitEnergyDeltaKwh(current, previous) {
-  if (!previous || current === null || current === undefined) return null;
-  const now = Number(current);
-  const before = Number(previous);
-  if (!Number.isFinite(now) || !Number.isFinite(before)) return null;
-  const delta = now - before;
-  return delta >= 0 ? delta : null;
+function circuitEnergyDeltaKwh(current, previous, elapsedSeconds = null) {
+  return cumulativeCounterDeltaResult(current, previous, COUNTER_POLICIES.circuit, elapsedSeconds).delta;
 }
 
-function circuitKwhForSample(sample, channel, previousSample) {
+function intervalOverlapFraction(sample, directKey, previousSample, range = {}, usePrevious = true) {
+  const explicitStart = sample.rollupStart ?? sample.energyIntervalStart?.[directKey];
+  if (!explicitStart && !usePrevious) return 1;
+  const intervalStartMs = new Date(
+    explicitStart ?? previousSample?.timestamp,
+  ).getTime();
+  const intervalEndMs = new Date(sample.rollupEnd ?? sample.timestamp).getTime();
+  if (!Number.isFinite(intervalStartMs) || !Number.isFinite(intervalEndMs) || intervalEndMs <= intervalStartMs) return 1;
+  const startMs = Number.isFinite(range.startMs) ? range.startMs : intervalStartMs;
+  const endMs = Number.isFinite(range.endMs) ? range.endMs : intervalEndMs;
+  const overlapMs = Math.max(0, Math.min(intervalEndMs, endMs) - Math.max(intervalStartMs, startMs));
+  return overlapMs / (intervalEndMs - intervalStartMs);
+}
+
+function circuitKwhForSample(sample, channel, previousSample, range = {}) {
   const id = String(channel);
   const direct = Number(sample.circuitEnergyKwh?.[id]);
-  if (Number.isFinite(direct)) return direct;
+  if (Number.isFinite(direct)) return direct * intervalOverlapFraction(sample, `circuit:${id}`, previousSample, range, false);
+  const elapsedSeconds = previousSample?.timestamp && sample?.timestamp
+    ? Math.max(0, (new Date(sample.timestamp).getTime() - new Date(previousSample.timestamp).getTime()) / 1000)
+    : null;
   const cumulative = circuitEnergyDeltaKwh(
     sample.circuitCumulativeKwh?.[id],
     previousSample?.circuitCumulativeKwh?.[id],
+    elapsedSeconds,
   );
-  if (cumulative !== null) return cumulative;
+  if (cumulative !== null) return cumulative * intervalOverlapFraction(sample, `circuit:${id}`, previousSample, range, false);
   if (!previousSample?.timestamp || !sample?.timestamp) return 0;
   const watts = Number(sample.circuitPowerW?.[id]);
-  if (!Number.isFinite(watts)) return 0;
-  const deltaHours = Math.max(0, Math.min(1, (new Date(sample.timestamp).getTime() - new Date(previousSample.timestamp).getTime()) / 3_600_000));
-  return deltaHours * (Math.max(0, watts) / 1000);
+  const previousWatts = Number(previousSample.circuitPowerW?.[id]);
+  if (!Number.isFinite(watts) || !Number.isFinite(previousWatts)) return 0;
+  const elapsedMs = new Date(sample.timestamp).getTime() - new Date(previousSample.timestamp).getTime();
+  const expectedSeconds = Number(sample.expectedIntervalSeconds);
+  const maximumGapMs = Number.isFinite(expectedSeconds)
+    ? Math.max(90_000, Math.min(2 * 60 * 60_000, expectedSeconds * 2.5 * 1000))
+    : 35 * 60_000;
+  if (!Number.isFinite(elapsedMs) || elapsedMs <= 0 || elapsedMs > maximumGapMs) return 0;
+  const averageWatts = (Math.max(0, watts) + Math.max(0, previousWatts)) / 2;
+  return elapsedMs / 3_600_000 * averageWatts / 1000
+    * intervalOverlapFraction(sample, `circuit:${id}`, previousSample, range);
 }
 
-function summarizeCircuits(samples, config = DEFAULT_CONFIG) {
+function summarizeCircuits(samples, config = DEFAULT_CONFIG, range = {}) {
   const ids = new Set();
   for (const sample of samples) {
     for (const key of Object.keys(sample.circuitPowerW ?? {})) ids.add(key);
@@ -421,7 +515,7 @@ function summarizeCircuits(samples, config = DEFAULT_CONFIG) {
     .map((id) => {
       const channel = Number(id);
       const totalKwh = samples.reduce(
-        (sum, sample, index) => sum + circuitKwhForSample(sample, id, samples[index - 1]),
+        (sum, sample, index) => sum + circuitKwhForSample(sample, id, samples[index - 1], range),
         0,
       );
       const latestWatts = [...samples]
@@ -577,6 +671,12 @@ function adaptiveChargingHistorySample(sample) {
     compact[key] = sample[key];
     if (sample[key] !== null) hasAdaptiveChargingMetric = true;
   }
+  for (const key of [
+    "rollupStart", "rollupEnd", "rollupResolution", "expectedIntervalSeconds",
+    "intervalAveragePowerW", "powerCoverageSeconds", "coverageSeconds",
+  ]) {
+    if (sample[key] !== undefined) compact[key] = sample[key];
+  }
   return hasAdaptiveChargingMetric ? compact : null;
 }
 
@@ -683,33 +783,61 @@ function emptyAdaptiveChargingDemandProfileIndex() {
 }
 
 function addSampleToAdaptiveChargingDemandProfileIndex(index, sample) {
-  const demand = Number(sample?.houseDemandW);
+  const demand = Number(sample?.intervalAveragePowerW?.houseDemandW ?? sample?.houseDemandW);
   const time = new Date(sample?.timestamp);
   if (!Number.isFinite(demand) || Number.isNaN(time.getTime())) return;
   const key = localDayKey(time);
   const bucket = halfHourIndex(time);
   const day = index.days[key] ?? {
-    sums: Array(48).fill(0),
-    counts: Array(48).fill(0),
+    weightedSums: Array(48).fill(0),
+    coverageSeconds: Array(48).fill(0),
   };
-  day.sums[bucket] = Number(day.sums[bucket] ?? 0) + demand;
-  day.counts[bucket] = Number(day.counts[bucket] ?? 0) + 1;
+  const coverageSeconds = Math.min(1800, Math.max(0,
+    Number(sample?.powerCoverageSeconds?.houseDemandW
+      ?? sample?.coverageSeconds?.houseDemandKwh
+      ?? sample?.expectedIntervalSeconds
+      ?? 0),
+  ));
+  if (coverageSeconds <= 0) return;
+  day.weightedSums[bucket] = Number(day.weightedSums[bucket] ?? 0) + demand * coverageSeconds;
+  day.coverageSeconds[bucket] = Math.min(
+    1800,
+    Number(day.coverageSeconds[bucket] ?? 0) + coverageSeconds,
+  );
   index.days[key] = day;
+}
+
+function demandDayCoverage(coverageByBucket) {
+  const seconds = [...coverageByBucket.values()].reduce(
+    (sum, value) => sum + Math.min(1800, Number(value) || 0),
+    0,
+  );
+  const daytimeSeconds = [...coverageByBucket]
+    .filter(([bucket]) => bucket >= 12 && bucket < 36)
+    .reduce((sum, [, value]) => sum + Math.min(1800, Number(value) || 0), 0);
+  return {
+    coverage: seconds / (48 * 1800),
+    daytimeCoverage: daytimeSeconds / (24 * 1800),
+  };
 }
 
 function adaptiveChargingDemandProfileDays(index) {
   return Object.entries(index.days).map(([key, day]) => {
     const values = new Map();
+    const coverageByBucket = new Map();
     for (let bucket = 0; bucket < 48; bucket += 1) {
-      const count = Number(day.counts?.[bucket] ?? 0);
-      const sum = Number(day.sums?.[bucket] ?? 0);
-      if (count > 0 && Number.isFinite(sum)) values.set(bucket, sum / count);
+      const seconds = Number(day.coverageSeconds?.[bucket] ?? 0);
+      const weightedSum = Number(day.weightedSums?.[bucket] ?? 0);
+      if (seconds > 0 && Number.isFinite(weightedSum)) {
+        values.set(bucket, weightedSum / seconds);
+        coverageByBucket.set(bucket, Math.min(1800, seconds));
+      }
     }
     return {
       key,
       date: new Date(`${key}T00:00:00`),
-      coverage: values.size / 48,
-      daytimeCoverage: [...values.keys()].filter((bucket) => bucket >= 12 && bucket < 36).length / 24,
+      ...demandDayCoverage(coverageByBucket),
+      coverageByBucket,
       values,
     };
   }).filter((day) => !Number.isNaN(day.date.getTime()));
@@ -853,6 +981,33 @@ async function migrateLegacyAdaptiveChargingData(dataDir = DATA_DIR, logger = co
   }
 }
 
+async function migrateLegacyFuelCellControlData(dataDir = DATA_DIR) {
+  await mkdir(dataDir, { recursive: true });
+  const configFile = path.join(dataDir, "config.json");
+  if (await pathExists(configFile)) {
+    const parsed = parseJsonWithContext(await readFile(configFile, "utf8"), configFile);
+    const fuelCell = parsed.fuelCell;
+    if (fuelCell && typeof fuelCell === "object" && !Array.isArray(fuelCell)) {
+      let changed = false;
+      if (!Object.prototype.hasOwnProperty.call(fuelCell, "includeInAdaptiveCharging")) {
+        if (Object.prototype.hasOwnProperty.call(fuelCell.automation ?? {}, "includeInAdaptiveCharging")) {
+          fuelCell.includeInAdaptiveCharging = fuelCell.automation.includeInAdaptiveCharging === true;
+        } else if (Object.prototype.hasOwnProperty.call(fuelCell, "plannerInfluence")) {
+          fuelCell.includeInAdaptiveCharging = fuelCell.plannerInfluence === "active";
+        }
+      }
+      for (const key of ["automation", "generationModel", "plannerInfluence", "fixedWindows"]) {
+        if (Object.prototype.hasOwnProperty.call(fuelCell, key)) {
+          delete fuelCell[key];
+          changed = true;
+        }
+      }
+      if (changed) await writeJsonFileAtomic(configFile, parsed);
+    }
+  }
+  await rm(path.join(dataDir, "fuel-cell-automation-state.json"), { force: true });
+}
+
 async function migrateBatteryLearningState(dataDir = DATA_DIR, logger = console) {
   const stateFile = path.join(dataDir, "adaptive-charging-state.json");
   let text;
@@ -903,13 +1058,6 @@ async function migrateBatteryLearningState(dataDir = DATA_DIR, logger = console)
   await writeJsonFileAtomic(stateFile, cleanAdaptiveChargingState(migrated));
   logger.info?.(`Adaptive Charging battery model migrated to version ${BATTERY_LEARNING_MODEL_VERSION}; backup saved at ${backupFile}`);
   return { migrated: true, migratedAt };
-}
-
-async function writeJsonLinesAtomic(file, rows) {
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  const body = rows.map((row) => JSON.stringify(row)).join("\n");
-  await writeFile(tmp, body + (rows.length ? "\n" : ""));
-  await rename(tmp, file);
 }
 
 function cleanBatteryLearningCoefficient(value = {}) {
@@ -999,6 +1147,7 @@ function cleanAdaptiveChargingState(value = {}) {
     ? { ...value.plan, ...discountedPlanStatus(value.plan) }
     : value.plan ?? null;
   return {
+    revision: Math.max(0, Math.floor(Number(value.revision) || 0)),
     forecast: value.forecast ?? null,
     plan,
     owner: value.owner === "adaptiveCharging" ? "adaptiveCharging" : null,
@@ -1185,8 +1334,17 @@ async function readAdaptiveChargingState() {
   }
 }
 
-async function writeAdaptiveChargingState(state) {
-  const cleaned = cleanAdaptiveChargingState({ ...state, updatedAt: new Date().toISOString() });
+async function commitAdaptiveChargingState(state) {
+  const current = await readAdaptiveChargingState();
+  const expectedRevision = Math.max(0, Math.floor(Number(state?.revision) || 0));
+  if (current.revision !== expectedRevision) {
+    throw new Error(`stale Adaptive Charging state revision ${expectedRevision}; current revision is ${current.revision}`);
+  }
+  const cleaned = cleanAdaptiveChargingState({
+    ...state,
+    revision: expectedRevision + 1,
+    updatedAt: new Date().toISOString(),
+  });
   await ensureDataDir();
   await writeJsonFileAtomic(ADAPTIVE_CHARGING_STATE_FILE, cleaned);
   if (historyStore.isReady()) {
@@ -1212,6 +1370,12 @@ async function writeAdaptiveChargingState(state) {
   }
   syncAdaptiveChargingSlotEndTimer(cleaned);
   return cleaned;
+}
+
+function writeAdaptiveChargingState(state) {
+  const task = adaptiveChargingStateWriteQueue.then(() => commitAdaptiveChargingState(state));
+  adaptiveChargingStateWriteQueue = task.catch(() => {});
+  return task;
 }
 
 function appendAdaptiveChargingLog(state, message, kind = "info", at = new Date()) {
@@ -1378,7 +1542,7 @@ function adaptiveChargingView(config, state, rules = [], now = new Date()) {
 }
 
 function recordFuelCellPlanForecast(plan, now = new Date()) {
-  if (!historyStore.isReady() || !plan?.fuelCellModel || plan.fuelCellModel.method === "off") return 0;
+  if (!historyStore.isReady() || !plan?.fuelCellModel) return 0;
   historyStore.settleFuelCellForecastOutcomes(now);
   return historyStore.recordFuelCellForecasts((plan.timeline ?? []).map((interval) => ({
     start: interval.start,
@@ -2057,10 +2221,16 @@ function filterDemandDaysByOccupancy(days, awayPeriods = [], occupancy = "home")
       const away = isAwayAt(demandDayBucketMidpoint(day, bucket), awayPeriods);
       return occupancy === "away" ? away : !away;
     }));
+    const sourceCoverage = day.coverageByBucket instanceof Map
+      ? day.coverageByBucket
+      : new Map([...day.values.keys()].map((bucket) => [bucket, 1800]));
+    const coverageByBucket = new Map(
+      [...sourceCoverage].filter(([bucket]) => values.has(bucket)),
+    );
     return {
       ...day,
-      coverage: values.size / 48,
-      daytimeCoverage: [...values.keys()].filter((bucket) => bucket >= 12 && bucket < 36).length / 24,
+      ...demandDayCoverage(coverageByBucket),
+      coverageByBucket,
       values,
     };
   }).filter((day) => day.values.size > 0);
@@ -2069,7 +2239,7 @@ function filterDemandDaysByOccupancy(days, awayPeriods = [], occupancy = "home")
 function aggregateDemandDays(samples, { awayPeriods = [], occupancy = "all" } = {}) {
   const days = new Map();
   for (const sample of samples) {
-    const demand = Number(sample.houseDemandW);
+    const demand = Number(sample.intervalAveragePowerW?.houseDemandW ?? sample.houseDemandW);
     const time = new Date(sample.timestamp);
     if (!Number.isFinite(demand) || Number.isNaN(time.getTime())) continue;
     const away = isAwayAt(time.getTime(), awayPeriods);
@@ -2078,17 +2248,31 @@ function aggregateDemandDays(samples, { awayPeriods = [], occupancy = "all" } = 
     if (!days.has(key)) days.set(key, { key, date: new Date(time.getFullYear(), time.getMonth(), time.getDate()), buckets: new Map() });
     const day = days.get(key);
     const index = halfHourIndex(time);
-    const bucket = day.buckets.get(index) ?? { sum: 0, count: 0 };
-    bucket.sum += demand;
-    bucket.count += 1;
+    const seconds = Math.min(1800, Math.max(0,
+      Number(sample.powerCoverageSeconds?.houseDemandW
+        ?? sample.coverageSeconds?.houseDemandKwh
+        ?? sample.expectedIntervalSeconds
+        ?? 0),
+    ));
+    if (seconds <= 0) continue;
+    const bucket = day.buckets.get(index) ?? { weightedSum: 0, coverageSeconds: 0 };
+    bucket.weightedSum += demand * seconds;
+    bucket.coverageSeconds = Math.min(1800, bucket.coverageSeconds + seconds);
     day.buckets.set(index, bucket);
   }
-  return [...days.values()].map((day) => ({
-    ...day,
-    coverage: day.buckets.size / 48,
-    daytimeCoverage: [...day.buckets.keys()].filter((index) => index >= 12 && index < 36).length / 24,
-    values: new Map([...day.buckets].map(([index, bucket]) => [index, bucket.sum / bucket.count])),
-  }));
+  return [...days.values()].map((day) => {
+    const coverageByBucket = new Map(
+      [...day.buckets].map(([index, bucket]) => [index, bucket.coverageSeconds]),
+    );
+    return {
+      ...day,
+      ...demandDayCoverage(coverageByBucket),
+      coverageByBucket,
+      values: new Map([...day.buckets].map(
+        ([index, bucket]) => [index, bucket.weightedSum / bucket.coverageSeconds],
+      )),
+    };
+  }).filter((day) => day.values.size > 0);
 }
 
 function percentile(values, fraction) {
@@ -2098,27 +2282,14 @@ function percentile(values, fraction) {
   return sorted[index];
 }
 
-function fixedFuelCellWindowAt(config, date) {
-  const windows = config.fuelCell?.fixedWindows ?? [];
-  const minute = date.getHours() * 60 + date.getMinutes();
-  const index = windows.findIndex((window) => {
-    if (!window.days?.includes(date.getDay())) return false;
-    const start = minutesOfDay(window.start);
-    const end = minutesOfDay(window.end);
-    if (start === null || end === null || start === end) return false;
-    return start < end ? minute >= start && minute < end : minute >= start || minute < end;
-  });
-  return index >= 0 ? { ...windows[index], index } : null;
-}
-
 function monthDistance(left, right) {
   const raw = Math.abs(left.getMonth() - right.getMonth());
   return Math.min(raw, 12 - raw);
 }
 
 function buildFuelCellGenerationModel(config, samples = [], now = new Date(), options = {}) {
-  const method = config.fuelCell?.generationModel ?? "automatic";
-  const requestedInfluence = config.fuelCell?.plannerInfluence ?? "observe";
+  const method = "observed";
+  const requestedInfluence = config.fuelCell?.includeInAdaptiveCharging ? "active" : "observe";
   const temperatureByDay = options.temperatureByDay instanceof Map ? options.temperatureByDay : new Map();
   const awayPeriods = Array.isArray(options.awayPeriods) ? options.awayPeriods : [];
   const powerSamples = samples.map((sample) => ({
@@ -2153,21 +2324,6 @@ function buildFuelCellGenerationModel(config, samples = [], now = new Date(), op
     }])),
   }));
   const validDays = dailyBuckets.filter((day) => day.buckets.size >= 16);
-  const completedFixedRunKeys = new Set();
-  for (const day of dailyBuckets) {
-    for (const [windowIndex] of (config.fuelCell?.fixedWindows ?? []).entries()) {
-      const expectedBuckets = [];
-      for (let bucket = 0; bucket < 48; bucket += 1) {
-        const bucketDate = new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate(), Math.floor(bucket / 2), bucket % 2 ? 30 : 0);
-        if (fixedFuelCellWindowAt(config, bucketDate)?.index === windowIndex) expectedBuckets.push(bucket);
-      }
-      const generatedBuckets = expectedBuckets.filter((bucket) => Number(day.values.get(bucket)?.watts) > 25).length;
-      if (expectedBuckets.length >= 2 && generatedBuckets / expectedBuckets.length >= 0.8) {
-        completedFixedRunKeys.add(`${day.key}:${windowIndex}`);
-      }
-    }
-  }
-  const completedFixedRuns = completedFixedRunKeys.size;
   const currentDayType = now.getDay() === 0 || now.getDay() === 6;
   const currentAway = isAwayAt(now.getTime(), awayPeriods, { forecast: true });
   const currentTemperature = finiteNumberOrNull(temperatureByDay.get(localDayKey(now)));
@@ -2177,34 +2333,25 @@ function buildFuelCellGenerationModel(config, samples = [], now = new Date(), op
     return weekend === currentDayType && day.away === currentAway && monthDistance(day.date, now) <= 2 && temperatureMatches;
   });
   const blockers = [];
-  if (method === "fixed" && completedFixedRuns < 3) blockers.push(`${3 - completedFixedRuns} more comparable fixed generation runs required`);
-  if (method === "automatic" && validDays.length < 7) blockers.push(`${7 - validDays.length} more valid observation days required`);
-  if (method === "automatic" && comparableDays.length < 4) blockers.push(`${4 - comparableDays.length} more comparable observation days required`);
-  if (method === "off") blockers.push("Ene-Farm generation model is off");
+  if (validDays.length < 7) blockers.push(`${7 - validDays.length} more valid observation days required`);
+  if (comparableDays.length < 4) blockers.push(`${4 - comparableDays.length} more comparable observation days required`);
   const ready = blockers.length === 0;
   const influencesPlanner = requestedInfluence === "active" && ready;
   const latest = powerSamples.at(-1) ?? null;
 
   const forecastAt = (date) => {
-    if (method === "off") return { p20W: 0, medianW: 0, p80W: 0, sampleCount: 0 };
-    const fixedWindow = method === "fixed" ? fixedFuelCellWindowAt(config, date) : null;
-    if (method === "fixed" && !fixedWindow) return { p20W: 0, medianW: 0, p80W: 0, sampleCount: 0 };
     const bucket = halfHourIndex(date);
     const targetWeekend = date.getDay() === 0 || date.getDay() === 6;
     const targetAway = isAwayAt(date.getTime(), awayPeriods, { forecast: true });
     const targetTemperature = finiteNumberOrNull(temperatureByDay.get(localDayKey(date)));
     let candidates = dailyBuckets.filter((day) => day.values.has(bucket));
-    if (method === "fixed") {
-      candidates = candidates.filter((day) => fixedFuelCellWindowAt(config, new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate(), date.getHours(), date.getMinutes())));
-    } else {
-      const comparable = candidates.filter((day) => {
-        const weekend = day.date.getDay() === 0 || day.date.getDay() === 6;
-        const temperatureMatches = targetTemperature === null || day.temperatureC === null || Math.abs(day.temperatureC - targetTemperature) <= 6;
-        return weekend === targetWeekend && day.away === targetAway && monthDistance(day.date, date) <= 2 && temperatureMatches;
-      });
-      if (comparable.length >= 4) candidates = comparable;
-    }
-    if (method === "automatic" && latest?.state && Math.abs(date.getTime() - now.getTime()) <= 2 * 60 * 60_000) {
+    const comparable = candidates.filter((day) => {
+      const weekend = day.date.getDay() === 0 || day.date.getDay() === 6;
+      const temperatureMatches = targetTemperature === null || day.temperatureC === null || Math.abs(day.temperatureC - targetTemperature) <= 6;
+      return weekend === targetWeekend && day.away === targetAway && monthDistance(day.date, date) <= 2 && temperatureMatches;
+    });
+    if (comparable.length >= 4) candidates = comparable;
+    if (latest?.state && Math.abs(date.getTime() - now.getTime()) <= 2 * 60 * 60_000) {
       const sameRecentState = candidates.filter((day) => day.values.get(bucket)?.state === latest.state);
       if (sameRecentState.length >= 4) candidates = sameRecentState;
     }
@@ -2224,7 +2371,6 @@ function buildFuelCellGenerationModel(config, samples = [], now = new Date(), op
     blockers,
     validObservationDays: validDays.length,
     comparableDays: comparableDays.length,
-    completedFixedRuns,
     recentState: latest?.state ?? null,
     forecastAt,
   };
@@ -2676,7 +2822,10 @@ function predictHouseDemand(samples, targetDate = new Date(), temperatureByDay =
     occupancy,
   );
   const recordedDayMap = new Map(historicalDays.map((day) => [day.key, day]));
-  for (const day of aggregateDemandDays(samples, { awayPeriods, occupancy })) recordedDayMap.set(day.key, day);
+  for (const day of aggregateDemandDays(samples, { awayPeriods, occupancy })) {
+    const existing = recordedDayMap.get(day.key);
+    if (!existing || day.coverage >= existing.coverage) recordedDayMap.set(day.key, day);
+  }
   const recordedDays = [...recordedDayMap.values()];
   const validDays = recordedDays.filter((day) => day.daytimeCoverage >= 0.8);
   const recentCandidates = validDays
@@ -3034,7 +3183,13 @@ function buildAdaptiveChargingPlan({
   if (!Number.isFinite(soc)) return unavailable("battery state of charge is unavailable");
   const batteryModel = effectiveBatteryLearningModel(config, state);
   const capacityKwh = Number(batteryModel.capacityKwh);
-  const dischargeLimit = Number(config.settingCache?.discharge_limit?.lastKnown?.decoded?.percent ?? 20);
+  const cachedDischargeLimit = config.settingCache?.discharge_limit;
+  const dischargeLimit = Number(cachedDischargeLimit?.lastKnown?.decoded?.percent);
+  const dischargeLimitReadAt = new Date(cachedDischargeLimit?.lastReadAt).getTime();
+  if (!Number.isFinite(dischargeLimit)) return unavailable("battery discharge limit is unavailable");
+  if (!Number.isFinite(dischargeLimitReadAt) || now.getTime() - dischargeLimitReadAt > 24 * 60 * 60_000) {
+    return unavailable("battery discharge limit has not been read successfully in the last 24 hours");
+  }
   const initialStoredKwh = capacityKwh * soc / 100;
   const dischargeFloorKwh = capacityKwh * Math.max(0, dischargeLimit) / 100;
   const calibration = learnedSolarFactor(samples, state.historicalWeather, config);
@@ -3174,6 +3329,8 @@ function buildAdaptiveChargingPlan({
     targetSunset: new Date(sunset.timestamp).toISOString(),
     forecastFetchedAt: state.forecast?.fetchedAt ?? null,
     currentSocPercent: soc,
+    dischargeLimitPercent: dischargeLimit,
+    dischargeLimitReadAt: new Date(dischargeLimitReadAt).toISOString(),
     targetSocPercent: Number(config.adaptiveCharging.targetSocPercent),
     expectedSunsetSocPercent: capacityKwh ? Math.min(100, optimized.expectedEndStoredKwh / capacityKwh * 100) : null,
     predictedSolarKwh,
@@ -3189,7 +3346,6 @@ function buildAdaptiveChargingPlan({
       blockers: fuelCellModel.blockers,
       validObservationDays: fuelCellModel.validObservationDays,
       comparableDays: fuelCellModel.comparableDays,
-      completedFixedRuns: fuelCellModel.completedFixedRuns,
     },
     chargePerformance,
     batteryModel,
@@ -3236,6 +3392,10 @@ function sampleFromStatus(status, config, previousSample) {
   // Convert the large live status payload into one compact time-series sample.
   // We store only normalized values that graphs and savings calculations need.
   const timestamp = status.read_at ?? new Date().toISOString();
+  const previousTimestamp = previousSample?.timestamp ?? null;
+  const elapsedSeconds = previousTimestamp
+    ? Math.max(0, (new Date(timestamp).getTime() - new Date(previousTimestamp).getTime()) / 1000)
+    : 0;
   const batteryPowerW = numericMetric(status.energy?.battery?.instant_power);
   const solarPowerW = config.solarEnabled === false ? null : numericMetric(status.energy?.solar?.instant_power);
   const fuelCells = config.fuelCellEnabled === false ? [] : (status.energy?.fuel_cells ?? []);
@@ -3251,12 +3411,21 @@ function sampleFromStatus(status, config, previousSample) {
     ? fuelCellPrimary?.host ?? null
     : null;
   const sameCounterSource = counterSourceHost && counterSourceHost === previousSample?.fuelCellCounterSourceHost;
-  const cumulativeMaximum = 0xffff_ffff / 1000;
   const electricityCounter = sameCounterSource
-    ? cumulativeCounterDeltaResult(fuelCellCumulativeGenerationKwh, previousSample?.fuelCellCumulativeGenerationKwh, cumulativeMaximum, 10)
+    ? cumulativeCounterDeltaResult(
+      fuelCellCumulativeGenerationKwh,
+      previousSample?.fuelCellCumulativeGenerationKwh,
+      COUNTER_POLICIES.fuelCellElectricity,
+      elapsedSeconds,
+    )
     : { delta: null, issue: null };
   const gasCounter = sameCounterSource
-    ? cumulativeCounterDeltaResult(fuelCellCumulativeGasM3, previousSample?.fuelCellCumulativeGasM3, cumulativeMaximum, 5)
+    ? cumulativeCounterDeltaResult(
+      fuelCellCumulativeGasM3,
+      previousSample?.fuelCellCumulativeGasM3,
+      COUNTER_POLICIES.fuelCellGas,
+      elapsedSeconds,
+    )
     : { delta: null, issue: null };
   const fuelCellKwh = electricityCounter.delta;
   const fuelCellGasM3 = gasCounter.delta;
@@ -3264,6 +3433,29 @@ function sampleFromStatus(status, config, previousSample) {
   const houseDemandW = config.smartCosmoEnabled === false ? null : numericMetric(status.meter?.house_demand_power);
   const gridImportW = config.smartCosmoEnabled === false ? null : numericMetric(status.meter?.grid_import_power);
   const gridExportW = config.smartCosmoEnabled === false ? null : numericMetric(status.meter?.grid_export_power);
+  const gridImportCumulativeKwh = config.smartCosmoEnabled === false ? null : numericMetric(status.meter?.cumulative_bought);
+  const gridExportCumulativeKwh = config.smartCosmoEnabled === false ? null : numericMetric(status.meter?.cumulative_sold);
+  const meterCounterSourceHost = gridImportCumulativeKwh !== null || gridExportCumulativeKwh !== null
+    ? config.meterHost
+    : null;
+  const sameMeterCounterSource = meterCounterSourceHost
+    && meterCounterSourceHost === previousSample?.meterCounterSourceHost;
+  const gridImportCounter = sameMeterCounterSource
+    ? cumulativeCounterDeltaResult(
+      gridImportCumulativeKwh,
+      previousSample?.gridImportCumulativeKwh,
+      COUNTER_POLICIES.grid,
+      elapsedSeconds,
+    )
+    : { delta: null, issue: null };
+  const gridExportCounter = sameMeterCounterSource
+    ? cumulativeCounterDeltaResult(
+      gridExportCumulativeKwh,
+      previousSample?.gridExportCumulativeKwh,
+      COUNTER_POLICIES.grid,
+      elapsedSeconds,
+    )
+    : { delta: null, issue: null };
   const stateOfChargePercent = numericMetric(status.energy?.battery?.remaining_percent);
   const circuitPowerW = config.smartCosmoEnabled === false
     ? {}
@@ -3272,40 +3464,60 @@ function sampleFromStatus(status, config, previousSample) {
     ? {}
     : circuitCumulativeMap(status.meter?.channel_energy?.decoded?.channels);
   const circuitEnergyKwh = {};
+  const circuitCounterIssues = [];
   for (const id of Object.keys({ ...circuitPowerW, ...circuitCumulativeKwh })) {
-    const cumulative = circuitEnergyDeltaKwh(circuitCumulativeKwh[id], previousSample?.circuitCumulativeKwh?.[id]);
-    if (cumulative !== null) {
-      circuitEnergyKwh[id] = cumulative;
-    } else if (previousSample?.timestamp) {
-      const deltaHours = Math.max(0, Math.min(1, (new Date(timestamp).getTime() - new Date(previousSample.timestamp).getTime()) / 3_600_000));
-      const watts = Number(circuitPowerW[id]);
-      if (Number.isFinite(watts)) circuitEnergyKwh[id] = deltaHours * (Math.max(0, watts) / 1000);
-    }
+    const result = cumulativeCounterDeltaResult(
+      circuitCumulativeKwh[id],
+      previousSample?.circuitCumulativeKwh?.[id],
+      COUNTER_POLICIES.circuit,
+      elapsedSeconds,
+    );
+    if (result.delta !== null) circuitEnergyKwh[id] = result.delta;
+    if (result.issue) circuitCounterIssues.push({ channel: Number(id), issue: result.issue });
   }
   const rateBand = rateForTimestamp(config.rateBands, timestamp, config.standardRateYenPerKwh);
   const activeRate = rateBand.yenPerKwh;
   const highestRate = maxDailyRate(config.rateBands, config.standardRateYenPerKwh);
-  const deltaHours = previousSample
-    ? Math.max(0, Math.min(1, (new Date(timestamp).getTime() - new Date(previousSample.timestamp).getTime()) / 3_600_000))
-    : 0;
-  const intervalSeconds = deltaHours * 3600;
+  const maximumGapSeconds = Math.max(90, Number(config.updateIntervalSeconds) * 2.5);
+  const intervalSeconds = elapsedSeconds <= maximumGapSeconds ? elapsedSeconds : 0;
   const fuelCellOperatingSeconds = ["generating", "starting", "stopping", "idling"].includes(previousSample?.fuelCellGenerationState)
     ? intervalSeconds
     : 0;
   const fuelCellStartCount = fuelCellGenerationState === "generating" && previousSample?.fuelCellGenerationState !== "generating" ? 1 : 0;
-  const offPeakSavingsEnabled = config.rateMode !== "simple" || config.offPeakSavingsEnabled === true;
-  // Grid import is already net of on-site generation, so it is the best cap on
-  // how much of the battery's charging power can be attributed to bought energy.
-  // When no grid meter is available, subtract solar as a conservative fallback.
-  const gridChargingW = gridImportW === null
-    ? Math.max(0, Number(batteryPowerW) - Math.max(0, Number(solarPowerW) || 0))
-    : Math.min(Math.max(0, Number(batteryPowerW) || 0), Math.max(0, gridImportW));
-  const offPeakSavingW = offPeakSavingsEnabled && batteryPowerW > 0 ? gridChargingW : 0;
-  const solarGenerationKwh = deltaHours * (Math.max(0, solarPowerW ?? 0) / 1000);
-  const gridImportKwh = deltaHours * (Math.max(0, gridImportW ?? 0) / 1000);
-  const gridExportKwh = deltaHours * (Math.max(0, gridExportW ?? 0) / 1000);
-  const offPeakSavingYen = deltaHours * (offPeakSavingW / 1000) * Math.max(0, highestRate - activeRate);
-  const solarSavingYen = solarGenerationKwh * activeRate;
+  const exactCircuitValues = Object.values(circuitEnergyKwh).filter(Number.isFinite);
+  const exactHouseDemandKwh = exactCircuitValues.length > 0
+    && exactCircuitValues.length === Object.values(circuitCumulativeKwh).filter(Number.isFinite).length
+    ? exactCircuitValues.reduce((sum, value) => sum + value, 0)
+    : null;
+  const coverageSeconds = {};
+  const energyQuality = {};
+  const energyIntervalStart = {};
+  if (gridImportCounter.delta !== null) {
+    coverageSeconds.gridImportKwh = intervalSeconds;
+    energyQuality.gridImportKwh = "counter";
+    if (previousTimestamp) energyIntervalStart.gridImportKwh = previousTimestamp;
+  }
+  if (gridExportCounter.delta !== null) {
+    coverageSeconds.gridExportKwh = intervalSeconds;
+    energyQuality.gridExportKwh = "counter";
+    if (previousTimestamp) energyIntervalStart.gridExportKwh = previousTimestamp;
+  }
+  if (exactHouseDemandKwh !== null) {
+    coverageSeconds.houseDemandKwh = intervalSeconds;
+    energyQuality.houseDemandKwh = "counter";
+    if (previousTimestamp) energyIntervalStart.houseDemandKwh = previousTimestamp;
+  }
+  if (fuelCellKwh !== null) {
+    coverageSeconds.fuelCellKwh = intervalSeconds;
+    energyQuality.fuelCellKwh = "counter";
+    if (previousTimestamp) energyIntervalStart.fuelCellKwh = previousTimestamp;
+  }
+  for (const id of Object.keys(circuitEnergyKwh)) {
+    const key = `circuit:${id}`;
+    coverageSeconds[key] = intervalSeconds;
+    energyQuality[key] = "counter";
+    if (previousTimestamp) energyIntervalStart[key] = previousTimestamp;
+  }
   return {
     timestamp,
     batteryPowerW,
@@ -3339,15 +3551,26 @@ function sampleFromStatus(status, config, previousSample) {
     fuelCellStartCount,
     gridExportW,
     gridImportW,
+    gridImportCumulativeKwh,
+    gridExportCumulativeKwh,
+    meterCounterSourceHost,
+    meterCounterIssues: [
+      ...(gridImportCounter.issue ? [{ counter: "import", issue: gridImportCounter.issue }] : []),
+      ...(gridExportCounter.issue ? [{ counter: "export", issue: gridExportCounter.issue }] : []),
+    ],
     circuitPowerW,
     circuitCumulativeKwh,
     circuitEnergyKwh,
-    solarGenerationKwh,
-    gridImportKwh,
-    gridExportKwh,
-    offPeakSavingYen,
-    solarSavingYen,
+    circuitCounterIssues,
+    ...(gridImportCounter.delta !== null ? { gridImportKwh: gridImportCounter.delta } : {}),
+    ...(gridExportCounter.delta !== null ? { gridExportKwh: gridExportCounter.delta } : {}),
+    ...(exactHouseDemandKwh !== null ? { houseDemandKwh: exactHouseDemandKwh } : {}),
+    coverageSeconds,
+    energyQuality,
+    energyIntervalStart,
+    expectedIntervalSeconds: Number(config.updateIntervalSeconds),
     rateYenPerKwh: activeRate,
+    maximumRateYenPerKwh: highestRate,
     rateLabel: rateBand.label || null,
   };
 }
@@ -3415,41 +3638,117 @@ async function recordStatusSample(status, config) {
 
 async function recordGuardTriggerSample(at = new Date()) {
   await ensureDataDir();
-  historyStore.appendSample({
-    timestamp: at.toISOString(),
-    guardTriggerCount: 1,
+  const timestamp = at.toISOString();
+  historyStore.recordEvent({
+    eventKey: `automation:guard-trigger:${timestamp}`,
+    at: timestamp,
+    category: "automation",
+    type: "guard-trigger",
+    message: "Charging Demand Guard entered Standby",
   });
 }
 
-function sampleSolarGenerationKwh(sample) {
+function sampleSolarGenerationKwh(sample, previousSample = null, range = {}) {
   const direct = finiteNumberOrNull(sample.solarGenerationKwh);
-  if (Number.isFinite(direct)) return direct;
-  const solarSavingYen = finiteNumberOrNull(sample.solarSavingYen);
-  const rateYenPerKwh = finiteNumberOrNull(sample.rateYenPerKwh);
-  if (Number.isFinite(solarSavingYen) && Number.isFinite(rateYenPerKwh) && rateYenPerKwh > 0) {
-    return solarSavingYen / rateYenPerKwh;
+  if (Number.isFinite(direct)) {
+    return direct * intervalOverlapFraction(sample, "solarGenerationKwh", previousSample, range, false);
   }
   return 0;
 }
 
-function samplePowerKwh(sample, directKey, wattsKey, previousSample) {
+function samplePowerKwh(sample, directKey, wattsKey, previousSample, range = {}) {
   const direct = finiteNumberOrNull(sample[directKey]);
-  if (Number.isFinite(direct)) return direct;
+  if (Number.isFinite(direct)) return direct * intervalOverlapFraction(sample, directKey, previousSample, range, false);
   if (!previousSample?.timestamp || !sample?.timestamp) return 0;
   const watts = finiteNumberOrNull(sample[wattsKey]);
-  if (!Number.isFinite(watts)) return 0;
-  const deltaHours = Math.max(0, Math.min(1, (new Date(sample.timestamp).getTime() - new Date(previousSample.timestamp).getTime()) / 3_600_000));
-  return deltaHours * (Math.max(0, watts) / 1000);
+  const previousWatts = finiteNumberOrNull(previousSample[wattsKey]);
+  if (!Number.isFinite(watts) || !Number.isFinite(previousWatts)) return 0;
+  const elapsedMs = new Date(sample.timestamp).getTime() - new Date(previousSample.timestamp).getTime();
+  const expectedSeconds = Number(sample.expectedIntervalSeconds);
+  const maximumGapMs = Number.isFinite(expectedSeconds)
+    ? Math.max(90_000, Math.min(2 * 60 * 60_000, expectedSeconds * 2.5 * 1000))
+    : 35 * 60_000;
+  if (!Number.isFinite(elapsedMs) || elapsedMs <= 0 || elapsedMs > maximumGapMs) return 0;
+  const averageWatts = (Math.max(0, watts) + Math.max(0, previousWatts)) / 2;
+  return elapsedMs / 3_600_000 * averageWatts / 1000
+    * intervalOverlapFraction(sample, directKey, previousSample, range);
 }
 
 function hasPowerSample(sample, directKey, wattsKey, previousSample) {
   if (Number.isFinite(finiteNumberOrNull(sample?.[directKey]))) return true;
-  return Boolean(previousSample?.timestamp
-    && sample?.timestamp
-    && Number.isFinite(finiteNumberOrNull(sample?.[wattsKey])));
+  if (!previousSample?.timestamp || !sample?.timestamp) return false;
+  if (!Number.isFinite(finiteNumberOrNull(sample?.[wattsKey]))
+    || !Number.isFinite(finiteNumberOrNull(previousSample?.[wattsKey]))) return false;
+  const elapsedMs = new Date(sample.timestamp).getTime() - new Date(previousSample.timestamp).getTime();
+  const expectedSeconds = Number(sample.expectedIntervalSeconds);
+  const maximumGapMs = Number.isFinite(expectedSeconds)
+    ? Math.max(90_000, Math.min(2 * 60 * 60_000, expectedSeconds * 2.5 * 1000))
+    : 35 * 60_000;
+  return Number.isFinite(elapsedMs) && elapsedMs > 0 && elapsedMs <= maximumGapMs;
 }
 
-function summarizeEnergySources(samples, config, solarGenerationKwh, gridExportKwh, fuelCellKwh) {
+function energyMetricQuality(samples, key, range = {}) {
+  const qualities = new Set();
+  let coverageSeconds = 0;
+  for (let index = 0; index < samples.length; index += 1) {
+    const sample = samples[index];
+    const previous = samples[index - 1];
+    const fraction = intervalOverlapFraction(sample, key, previous, range, false);
+    const seconds = Number(sample.coverageSeconds?.[key]);
+    if (Number.isFinite(seconds)) coverageSeconds += Math.max(0, seconds) * fraction;
+    const quality = sample.energyQuality?.[key];
+    if (quality) qualities.add(quality);
+  }
+  const requestedSeconds = Number.isFinite(range.startMs) && Number.isFinite(range.endMs)
+    ? Math.max(0, (range.endMs - range.startMs) / 1000)
+    : null;
+  return {
+    quality: qualities.size === 1 ? [...qualities][0] : qualities.size > 1 ? "mixed" : "unavailable",
+    coverageSeconds,
+    coveragePercent: requestedSeconds > 0 ? Math.min(100, coverageSeconds / requestedSeconds * 100) : null,
+  };
+}
+
+function sampleDiscountSavings(sample, previousSample, config = DEFAULT_CONFIG, range = {}) {
+  const standardRate = configNumber(
+    config.standardRateYenPerKwh,
+    DEFAULT_CONFIG.standardRateYenPerKwh,
+    0,
+    1000,
+  );
+  const recordedRate = finiteNumberOrNull(sample.rateYenPerKwh);
+  const activeRate = recordedRate ?? rateForTimestamp(
+    config.rateBands,
+    sample.timestamp,
+    standardRate,
+  ).yenPerKwh;
+  const savingPerKwh = Math.max(0, standardRate - activeRate);
+  if (savingPerKwh === 0) {
+    return { totalYen: 0, batteryYen: 0, gridYen: 0 };
+  }
+
+  const hasGridImport = hasPowerSample(sample, "gridImportKwh", "gridImportW", previousSample);
+  const hasBatteryCharge = hasPowerSample(sample, "batteryChargeKwh", "batteryPowerW", previousSample);
+  const gridImportKwh = hasGridImport
+    ? samplePowerKwh(sample, "gridImportKwh", "gridImportW", previousSample, range)
+    : null;
+  const batteryChargeKwh = hasBatteryCharge
+    ? samplePowerKwh(sample, "batteryChargeKwh", "batteryPowerW", previousSample, range)
+    : 0;
+  const gridFundedBatteryKwh = gridImportKwh === null
+    ? batteryChargeKwh
+    : Math.min(batteryChargeKwh, gridImportKwh);
+  const totalDiscountedKwh = gridImportKwh ?? gridFundedBatteryKwh;
+  const batteryYen = gridFundedBatteryKwh * savingPerKwh;
+  const totalYen = totalDiscountedKwh * savingPerKwh;
+  return {
+    totalYen,
+    batteryYen,
+    gridYen: Math.max(0, totalYen - batteryYen),
+  };
+}
+
+function summarizeEnergySources(samples, config, solarGenerationKwh, gridExportKwh, fuelCellKwh, range = {}) {
   const standardRate = configNumber(
     config.standardRateYenPerKwh,
     DEFAULT_CONFIG.standardRateYenPerKwh,
@@ -3463,6 +3762,7 @@ function summarizeEnergySources(samples, config, solarGenerationKwh, gridExportK
         "gridImportKwh",
         "gridImportW",
         samples[index - 1],
+        range,
       );
       const recordedRate = Number(sample.rateYenPerKwh);
       const activeRate = Number.isFinite(recordedRate)
@@ -3495,32 +3795,42 @@ function summarizeEnergySources(samples, config, solarGenerationKwh, gridExportK
 }
 
 function summarizeSamples(samples, config = DEFAULT_CONFIG, extras = {}) {
-  const solarGenerationKwh = samples.reduce((sum, sample) => sum + sampleSolarGenerationKwh(sample), 0);
+  const range = { startMs: extras.startMs, endMs: extras.endMs };
+  const solarGenerationKwh = samples.reduce(
+    (sum, sample, index) => sum + sampleSolarGenerationKwh(sample, samples[index - 1], range),
+    0,
+  );
   const gridImportKwh = samples.reduce(
-    (sum, sample, index) => sum + samplePowerKwh(sample, "gridImportKwh", "gridImportW", samples[index - 1]),
+    (sum, sample, index) => sum + samplePowerKwh(sample, "gridImportKwh", "gridImportW", samples[index - 1], range),
     0,
   );
   const gridExportKwh = samples.reduce(
-    (sum, sample, index) => sum + samplePowerKwh(sample, "gridExportKwh", "gridExportW", samples[index - 1]),
+    (sum, sample, index) => sum + samplePowerKwh(sample, "gridExportKwh", "gridExportW", samples[index - 1], range),
     0,
   );
   const houseDemandKwh = samples.reduce(
-    (sum, sample, index) => sum + samplePowerKwh(sample, "houseDemandKwh", "houseDemandW", samples[index - 1]),
+    (sum, sample, index) => sum + samplePowerKwh(sample, "houseDemandKwh", "houseDemandW", samples[index - 1], range),
     0,
   );
   const fuelCellKwh = samples.reduce(
-    (sum, sample, index) => sum + samplePowerKwh(sample, "fuelCellKwh", "fuelCellPowerW", samples[index - 1]),
+    (sum, sample, index) => sum + samplePowerKwh(sample, "fuelCellKwh", "fuelCellPowerW", samples[index - 1], range),
     0,
   );
-  const circuits = summarizeCircuits(samples, config);
+  const circuits = summarizeCircuits(samples, config, range);
   const battery = samples.reduce(
     (acc, sample, index) => {
-      const charged = samplePowerKwh(sample, "batteryChargeKwh", "batteryPowerW", samples[index - 1]);
+      const charged = samplePowerKwh(sample, "batteryChargeKwh", "batteryPowerW", samples[index - 1], range);
+      const dischargeSample = { ...sample, batteryPowerW: -Number(sample.batteryPowerW) };
+      const previous = samples[index - 1];
+      const previousDischargeSample = previous
+        ? { ...previous, batteryPowerW: -Number(previous.batteryPowerW) }
+        : null;
       const discharged = samplePowerKwh(
-        { ...sample, batteryPowerW: -Number(sample.batteryPowerW) },
+        dischargeSample,
         "batteryDischargeKwh",
         "batteryPowerW",
-        samples[index - 1],
+        previousDischargeSample,
+        range,
       );
       acc.chargedKwh += charged;
       acc.dischargedKwh += discharged;
@@ -3545,13 +3855,42 @@ function summarizeSamples(samples, config = DEFAULT_CONFIG, extras = {}) {
     solarGenerationKwh,
     gridExportKwh,
     fuelCellKwh,
+    range,
+  );
+  const dataQuality = Object.fromEntries([
+    "houseDemandKwh",
+    "solarGenerationKwh",
+    "gridImportKwh",
+    "gridExportKwh",
+    "fuelCellKwh",
+    "batteryChargeKwh",
+    "batteryDischargeKwh",
+  ].map((key) => [key, energyMetricQuality(samples, key, range)]));
+  const solarSavingYen = samples.reduce((sum, sample, index) => (
+    sum + Number(sample.solarSavingYen ?? 0)
+      * intervalOverlapFraction(sample, "solarGenerationKwh", samples[index - 1], range, false)
+  ), 0);
+  const offPeakSavingYen = samples.reduce((sum, sample, index) => (
+    sum + Number(sample.offPeakSavingYen ?? 0)
+      * intervalOverlapFraction(sample, "batteryChargeKwh", samples[index - 1], range, false)
+  ), 0);
+  const discountedSavings = samples.reduce(
+    (totals, sample, index) => {
+      const savings = sampleDiscountSavings(sample, samples[index - 1], config, range);
+      totals.totalOffPeakSavingYen += savings.totalYen;
+      totals.batteryOffPeakSavingYen += savings.batteryYen;
+      totals.gridOffPeakSavingYen += savings.gridYen;
+      return totals;
+    },
+    { totalOffPeakSavingYen: 0, batteryOffPeakSavingYen: 0, gridOffPeakSavingYen: 0 },
   );
   return {
     sampleCount: samples.length,
     start: samples[0]?.timestamp ?? null,
     end: samples[samples.length - 1]?.timestamp ?? null,
-    offPeakSavingYen: samples.reduce((sum, sample) => sum + Number(sample.offPeakSavingYen ?? 0), 0),
-    solarSavingYen: samples.reduce((sum, sample) => sum + Number(sample.solarSavingYen ?? 0), 0),
+    offPeakSavingYen,
+    ...discountedSavings,
+    solarSavingYen,
     solarGenerationKwh,
     gridImportKwh,
     gridExportKwh,
@@ -3566,7 +3905,51 @@ function summarizeSamples(samples, config = DEFAULT_CONFIG, extras = {}) {
     co2SavingKg: solarGenerationKwh * co2TonnesPerKwh * 1000,
     guardTriggerCount,
     energySources,
+    dataQuality,
   };
+}
+
+function calendarSavingsRanges(end = new Date()) {
+  const rangeEnd = new Date(end);
+  if (!Number.isFinite(rangeEnd.getTime())) throw new Error("a valid savings period end is required");
+  const today = new Date(rangeEnd.getFullYear(), rangeEnd.getMonth(), rangeEnd.getDate());
+  const thisMonth = new Date(rangeEnd.getFullYear(), rangeEnd.getMonth(), 1);
+  const lastMonth = new Date(rangeEnd.getFullYear(), rangeEnd.getMonth() - 1, 1);
+  return {
+    today: { startMs: today.getTime(), endMs: rangeEnd.getTime() },
+    lastMonth: { startMs: lastMonth.getTime(), endMs: thisMonth.getTime() },
+    month: {
+      startMs: thisMonth.getTime(),
+      endMs: rangeEnd.getTime(),
+    },
+    year: {
+      startMs: new Date(rangeEnd.getFullYear(), 0, 1).getTime(),
+      endMs: rangeEnd.getTime(),
+    },
+  };
+}
+
+function compactSavingsSummary(summary, range) {
+  return {
+    start: new Date(range.startMs).toISOString(),
+    end: new Date(range.endMs).toISOString(),
+    solarSavingYen: Number(summary?.solarSavingYen ?? 0),
+    co2SavingKg: Number(summary?.co2SavingKg ?? 0),
+    offPeakSavingYen: Number(summary?.offPeakSavingYen ?? 0),
+    totalOffPeakSavingYen: Number(summary?.totalOffPeakSavingYen ?? 0),
+    batteryOffPeakSavingYen: Number(summary?.batteryOffPeakSavingYen ?? 0),
+    gridOffPeakSavingYen: Number(summary?.gridOffPeakSavingYen ?? 0),
+  };
+}
+
+function summarizeCalendarSavings(samples, config = DEFAULT_CONFIG, end = new Date(), todaySummary = null) {
+  const ranges = calendarSavingsRanges(end);
+  return Object.fromEntries(Object.entries(ranges).map(([period, range]) => {
+    const summary = period === "today" && todaySummary
+      ? todaySummary
+      : summarizeSamples(samples, config, range);
+    return [period, compactSavingsSummary(summary, range)];
+  }));
 }
 
 function normalizeReportBucket(value) {
@@ -3630,6 +4013,9 @@ function emptyReportBucket(start, bucket) {
     batteryDischargedKwh: 0,
     solarSavingYen: 0,
     offPeakSavingYen: 0,
+    totalOffPeakSavingYen: 0,
+    batteryOffPeakSavingYen: 0,
+    gridOffPeakSavingYen: 0,
     co2SavingKg: 0,
     peakDemandW: null,
     _valid: {
@@ -3641,6 +4027,8 @@ function emptyReportBucket(start, bucket) {
       batteryChargedKwh: 0,
       batteryDischargedKwh: 0,
     },
+    _coverageSeconds: {},
+    _qualities: {},
   };
 }
 
@@ -3650,9 +4038,21 @@ function addReportEnergy(bucket, key, value, valid) {
   bucket._valid[key] += 1;
 }
 
-function finalizeReportBucket(bucket, previousBucket) {
+function addReportQuality(bucket, key, sample, previousSample, range) {
+  const fraction = intervalOverlapFraction(sample, key, previousSample, range, false);
+  const seconds = Number(sample.coverageSeconds?.[key]);
+  if (Number.isFinite(seconds)) {
+    bucket._coverageSeconds[key] = Number(bucket._coverageSeconds[key] ?? 0) + Math.max(0, seconds) * fraction;
+  }
+  const quality = sample.energyQuality?.[key];
+  if (quality) bucket._qualities[key] = [...new Set([...(bucket._qualities[key] ?? []), quality])];
+}
+
+function finalizeReportBucket(bucket, previousBucket, selectedRange = {}) {
   const out = { ...bucket };
   delete out._valid;
+  delete out._coverageSeconds;
+  delete out._qualities;
   for (const key of [
     "houseDemandKwh",
     "solarGenerationKwh",
@@ -3673,6 +4073,24 @@ function finalizeReportBucket(bucket, previousBucket) {
     Number.isFinite(out.houseDemandDeltaKwh) && Number.isFinite(out.previousHouseDemandKwh) && out.previousHouseDemandKwh !== 0
       ? (out.houseDemandDeltaKwh / out.previousHouseDemandKwh) * 100
       : null;
+  const bucketStartMs = new Date(bucket.start).getTime();
+  const bucketEndMs = new Date(bucket.end).getTime();
+  const selectedStartMs = Number.isFinite(selectedRange.startMs)
+    ? Math.max(bucketStartMs, selectedRange.startMs)
+    : bucketStartMs;
+  const selectedEndMs = Number.isFinite(selectedRange.endMs)
+    ? Math.min(bucketEndMs, selectedRange.endMs)
+    : bucketEndMs;
+  const bucketSeconds = Math.max(0, (selectedEndMs - selectedStartMs) / 1000);
+  out.dataQuality = Object.fromEntries(Object.keys(bucket._valid).map((key) => {
+    const qualities = bucket._qualities[key] ?? [];
+    const coverageSeconds = Number(bucket._coverageSeconds[key] ?? 0);
+    return [key, {
+      quality: qualities.length === 1 ? qualities[0] : qualities.length > 1 ? "mixed" : "unavailable",
+      coverageSeconds,
+      coveragePercent: bucketSeconds > 0 ? Math.min(100, coverageSeconds / bucketSeconds * 100) : null,
+    }];
+  }));
   return out;
 }
 
@@ -3698,6 +4116,9 @@ function summarizeReportBuckets(buckets) {
     batteryDischargedKwh: sum("batteryDischargedKwh"),
     solarSavingYen: buckets.reduce((total, bucket) => total + Number(bucket.solarSavingYen ?? 0), 0),
     offPeakSavingYen: buckets.reduce((total, bucket) => total + Number(bucket.offPeakSavingYen ?? 0), 0),
+    totalOffPeakSavingYen: buckets.reduce((total, bucket) => total + Number(bucket.totalOffPeakSavingYen ?? 0), 0),
+    batteryOffPeakSavingYen: buckets.reduce((total, bucket) => total + Number(bucket.batteryOffPeakSavingYen ?? 0), 0),
+    gridOffPeakSavingYen: buckets.reduce((total, bucket) => total + Number(bucket.gridOffPeakSavingYen ?? 0), 0),
     co2SavingKg: buckets.reduce((total, bucket) => total + Number(bucket.co2SavingKg ?? 0), 0),
     peakDemandW: peaks.length ? Math.max(...peaks) : null,
     solarCoveragePercent:
@@ -3730,49 +4151,70 @@ function createEnergyReportAccumulator({ start, end, bucket = "day", config = DE
         prev = sample;
         return "before";
       }
-      if (time >= endMs) return "after";
-      const bucketStart = startOfReportBucket(new Date(time), bucketMode);
+      const intervalStartMs = new Date(
+        sample.rollupStart
+          ?? Object.values(sample.energyIntervalStart ?? {}).sort()[0]
+          ?? prev?.timestamp,
+      ).getTime();
+      if (time >= endMs && (!Number.isFinite(intervalStartMs) || intervalStartMs >= endMs)) return "after";
+      const bucketStart = startOfReportBucket(new Date(Math.max(startMs, time - 1)), bucketMode);
       const key = reportBucketKey(bucketStart, bucketMode);
       if (!byKey.has(key)) byKey.set(key, emptyReportBucket(bucketStart, bucketMode));
       const row = byKey.get(key);
       row.sampleCount += Number(sample.rollupSampleCount ?? 1) || 1;
+      const reportRange = {
+        startMs: Math.max(startMs, bucketStart.getTime()),
+        endMs: Math.min(endMs, endOfReportBucket(bucketStart, bucketMode).getTime()),
+      };
       addReportEnergy(
         row,
         "houseDemandKwh",
-        samplePowerKwh(sample, "houseDemandKwh", "houseDemandW", prev),
+        samplePowerKwh(sample, "houseDemandKwh", "houseDemandW", prev, reportRange),
         hasPowerSample(sample, "houseDemandKwh", "houseDemandW", prev),
       );
+      addReportQuality(row, "houseDemandKwh", sample, prev, reportRange);
       addReportEnergy(
         row,
         "gridImportKwh",
-        samplePowerKwh(sample, "gridImportKwh", "gridImportW", prev),
+        samplePowerKwh(sample, "gridImportKwh", "gridImportW", prev, reportRange),
         hasPowerSample(sample, "gridImportKwh", "gridImportW", prev),
       );
+      addReportQuality(row, "gridImportKwh", sample, prev, reportRange);
       addReportEnergy(
         row,
         "gridExportKwh",
-        samplePowerKwh(sample, "gridExportKwh", "gridExportW", prev),
+        samplePowerKwh(sample, "gridExportKwh", "gridExportW", prev, reportRange),
         hasPowerSample(sample, "gridExportKwh", "gridExportW", prev),
       );
+      addReportQuality(row, "gridExportKwh", sample, prev, reportRange);
       addReportEnergy(
         row,
         "fuelCellKwh",
-        samplePowerKwh(sample, "fuelCellKwh", "fuelCellPowerW", prev),
+        samplePowerKwh(sample, "fuelCellKwh", "fuelCellPowerW", prev, reportRange),
         hasPowerSample(sample, "fuelCellKwh", "fuelCellPowerW", prev),
       );
+      addReportQuality(row, "fuelCellKwh", sample, prev, reportRange);
       addReportEnergy(
         row,
         "batteryChargedKwh",
-        samplePowerKwh(sample, "batteryChargeKwh", "batteryPowerW", prev),
+        samplePowerKwh(sample, "batteryChargeKwh", "batteryPowerW", prev, reportRange),
         hasPowerSample(sample, "batteryChargeKwh", "batteryPowerW", prev),
       );
+      addReportQuality(row, "batteryChargeKwh", sample, prev, reportRange);
       addReportEnergy(
         row,
         "batteryDischargedKwh",
-        samplePowerKwh({ ...sample, batteryPowerW: -Number(sample.batteryPowerW) }, "batteryDischargeKwh", "batteryPowerW", prev),
+        samplePowerKwh(
+          { ...sample, batteryPowerW: -Number(sample.batteryPowerW) },
+          "batteryDischargeKwh",
+          "batteryPowerW",
+          prev ? { ...prev, batteryPowerW: -Number(prev.batteryPowerW) } : null,
+          reportRange,
+        ),
         hasPowerSample(sample, "batteryDischargeKwh", "batteryPowerW", prev),
       );
-      const solarGenerationKwh = sampleSolarGenerationKwh(sample);
+      addReportQuality(row, "batteryDischargeKwh", sample, prev, reportRange);
+      const solarGenerationKwh = sampleSolarGenerationKwh(sample, prev, reportRange);
       addReportEnergy(
         row,
         "solarGenerationKwh",
@@ -3780,8 +4222,15 @@ function createEnergyReportAccumulator({ start, end, bucket = "day", config = DE
         Number.isFinite(finiteNumberOrNull(sample.solarGenerationKwh))
           || hasPowerSample(sample, "solarGenerationKwh", "solarPowerW", prev),
       );
-      row.solarSavingYen += Number(sample.solarSavingYen ?? 0) || 0;
-      row.offPeakSavingYen += Number(sample.offPeakSavingYen ?? 0) || 0;
+      addReportQuality(row, "solarGenerationKwh", sample, prev, reportRange);
+      row.solarSavingYen += (Number(sample.solarSavingYen ?? 0) || 0)
+        * intervalOverlapFraction(sample, "solarGenerationKwh", prev, reportRange, false);
+      row.offPeakSavingYen += (Number(sample.offPeakSavingYen ?? 0) || 0)
+        * intervalOverlapFraction(sample, "batteryChargeKwh", prev, reportRange, false);
+      const discountedSavings = sampleDiscountSavings(sample, prev, config, reportRange);
+      row.totalOffPeakSavingYen += discountedSavings.totalYen;
+      row.batteryOffPeakSavingYen += discountedSavings.batteryYen;
+      row.gridOffPeakSavingYen += discountedSavings.gridYen;
       row.co2SavingKg += solarGenerationKwh * co2TonnesPerKwh * 1000;
       const demand = Number(sample.peakHouseDemandW ?? sample.houseDemandW);
       if (Number.isFinite(demand)) row.peakDemandW = Math.max(row.peakDemandW ?? demand, demand);
@@ -3794,7 +4243,7 @@ function createEnergyReportAccumulator({ start, end, bucket = "day", config = DE
       while (cursor.getTime() < endMs) {
         const key = reportBucketKey(cursor, bucketMode);
         const raw = byKey.get(key) ?? emptyReportBucket(cursor, bucketMode);
-        buckets.push(finalizeReportBucket(raw, buckets.at(-1)));
+        buckets.push(finalizeReportBucket(raw, buckets.at(-1), { startMs, endMs }));
         cursor = endOfReportBucket(cursor, bucketMode);
       }
       return {
@@ -4164,18 +4613,37 @@ async function readHistoryRange(start, end, config = DEFAULT_CONFIG) {
     throw new Error("valid start and end date/time are required");
   }
   const samples = await readHistorySamplesInRange(startMs, endMs);
+  const summarySamples = historyStore.querySamples(startMs, endMs, { resolution: "interval" });
   const guardTriggerSampleTimes = new Set(
     samples
       .filter((sample) => Number(sample.guardTriggerCount ?? 0) > 0 && sample.timestamp)
       .map((sample) => sample.timestamp),
   );
+  const guardEvents = historyStore.eventsBetween("automation", startMs, endMs, ["guard-trigger"]);
+  const persistedGuardTimes = new Set(guardEvents.map((event) => event.at));
   const guardTriggerCount = countGuardTriggersForRange(
     await readAutomationRules(),
     new Date(startMs).toISOString(),
     new Date(endMs).toISOString(),
-    { excludeTimes: guardTriggerSampleTimes },
-  );
-  return { samples, summary: summarizeSamples(samples, config, { guardTriggerCount }) };
+    { excludeTimes: new Set([...guardTriggerSampleTimes, ...persistedGuardTimes]) },
+  ) + guardEvents.length;
+  return {
+    samples,
+    summary: summarizeSamples(summarySamples, config, { guardTriggerCount, startMs, endMs }),
+  };
+}
+
+function readCalendarSavings(end, config = DEFAULT_CONFIG, todaySummary = null) {
+  const ranges = calendarSavingsRanges(end);
+  const completedDayEndMs = ranges.today.startMs - 1;
+  const earliestDailyStartMs = Math.min(ranges.lastMonth.startMs, ranges.year.startMs);
+  const samples = [
+    ...(completedDayEndMs >= earliestDailyStartMs
+      ? historyStore.querySamples(earliestDailyStartMs, completedDayEndMs, { resolution: "interval" })
+      : []),
+    ...historyStore.querySamples(ranges.today.startMs, ranges.today.endMs, { resolution: "interval" }),
+  ];
+  return summarizeCalendarSavings(samples, config, end, todaySummary);
 }
 
 async function readEnergyReport(start, end, bucket, config = DEFAULT_CONFIG) {
@@ -4227,6 +4695,17 @@ async function readSchedules() {
 async function writeSchedules(schedules) {
   await ensureDataDir();
   await writeJsonFileAtomic(SCHEDULES_FILE, schedules);
+}
+
+function mutateSchedules(mutator) {
+  const task = scheduleMutationQueue.then(async () => {
+    const schedules = await readSchedules();
+    const result = await mutator(schedules);
+    await writeSchedules(schedules);
+    return result;
+  });
+  scheduleMutationQueue = task.catch(() => {});
+  return task;
 }
 
 function normalizeHostList(value) {
@@ -4338,21 +4817,11 @@ function normalizeAdaptiveCharging(value = {}) {
 }
 
 function normalizeFuelCellConfig(value = {}) {
-  const fixedWindows = (Array.isArray(value.fixedWindows) ? value.fixedWindows : [])
-    .map((window) => ({
-      days: [...new Set((Array.isArray(window.days) ? window.days : []).map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))].sort(),
-      start: isValidTime(window.start) ? window.start : "00:00",
-      end: isValidTime(window.end) ? window.end : "00:00",
-      label: String(window.label ?? "").trim().slice(0, 80),
-    }))
-    .filter((window) => window.days.length && window.start !== window.end);
   const tariff = value.tariff ?? {};
   const region = String(tariff.region ?? "tokyo").trim();
   const discount = String(tariff.equipmentDiscount ?? "").trim();
   return {
-    generationModel: ["automatic", "fixed", "off"].includes(value.generationModel) ? value.generationModel : "automatic",
-    plannerInfluence: value.plannerInfluence === "active" ? "active" : "observe",
-    fixedWindows,
+    includeInAdaptiveCharging: configBool(value.includeInAdaptiveCharging, false),
     gasCo2KgPerM3: configNumber(value.gasCo2KgPerM3, 2.21, 0, 100),
     tariff: {
       provider: String(tariff.provider ?? "tokyo-gas").trim() || "tokyo-gas",
@@ -4474,8 +4943,11 @@ async function readConfig() {
     const text = await readFile(CONFIG_FILE, "utf8");
     const parsed = parseJsonWithContext(text, CONFIG_FILE);
     const cleaned = cleanConfig(parsed);
+    const legacyFuelCellConfig = parsed.fuelCell && ["automation", "generationModel", "plannerInfluence", "fixedWindows"]
+      .some((key) => Object.prototype.hasOwnProperty.call(parsed.fuelCell, key));
     if (Object.prototype.hasOwnProperty.call(parsed, "automation")
-      || Object.prototype.hasOwnProperty.call(parsed, "historyRetentionDays")) {
+      || Object.prototype.hasOwnProperty.call(parsed, "historyRetentionDays")
+      || legacyFuelCellConfig) {
       await writeJsonFileAtomic(CONFIG_FILE, cleaned);
     }
     return cleaned;
@@ -4485,9 +4957,8 @@ async function readConfig() {
   }
 }
 
-async function writeConfig(config) {
-  const previous = await readConfig().catch(() => cleanConfig(DEFAULT_CONFIG));
-  const cleaned = cleanConfig({ ...previous, ...config });
+async function commitConfig(previous, config) {
+  const cleaned = cleanConfig(config);
   await ensureDataDir();
   const hostKeys = ["batteryHost", "meterHost", "meterEoj", "solarHost"];
   const hostChanged = hostKeys.some((key) => previous[key] !== cleaned[key])
@@ -4505,7 +4976,7 @@ async function writeConfig(config) {
     batteryCapabilities: previous.batteryCapabilities,
     adaptiveCharging: previous.adaptiveCharging,
     fuelCellEnabled: previous.fuelCellEnabled,
-    fuelCell: previous.fuelCell,
+    fuelCellForecastInfluence: previous.fuelCell?.includeInAdaptiveCharging,
   }) !== JSON.stringify({
     batteryHost: cleaned.batteryHost,
     meterHost: cleaned.meterHost,
@@ -4519,7 +4990,7 @@ async function writeConfig(config) {
     batteryCapabilities: cleaned.batteryCapabilities,
     adaptiveCharging: cleaned.adaptiveCharging,
     fuelCellEnabled: cleaned.fuelCellEnabled,
-    fuelCell: cleaned.fuelCell,
+    fuelCellForecastInfluence: cleaned.fuelCell?.includeInAdaptiveCharging,
   });
   if (adaptiveChargingInputsChanged) {
     const state = await readAdaptiveChargingState();
@@ -4570,23 +5041,25 @@ async function writeConfig(config) {
     await writeAdaptiveChargingState(state);
   }
   await writeJsonFileAtomic(CONFIG_FILE, cleaned);
-  if (hostChanged) lastRecordedSample = null;
+  if (hostChanged) {
+    lastRecordedSample = null;
+    invalidateStatusSnapshot();
+  }
   return cleaned;
 }
 
-async function migrateBatteryCapabilitiesFromGuard() {
-  const config = await readConfig();
-  if (Number.isFinite(Number(config.batteryCapabilities?.maximumChargeWatts))) return config;
-  const rules = await readAutomationRules();
-  const legacy = rules.find((rule) => rule.type === "backup-demand-guard")?.conditions?.batteryChargingEstimateW;
-  if (!Number.isFinite(Number(legacy)) || Number(legacy) <= 0) return config;
-  return writeConfig({
-    ...config,
-    batteryCapabilities: {
-      ...config.batteryCapabilities,
-      maximumChargeWatts: Number(legacy),
-    },
+function updateConfig(mutator) {
+  const task = configMutationQueue.then(async () => {
+    const previous = await readConfig().catch(() => cleanConfig(DEFAULT_CONFIG));
+    const proposed = await mutator(structuredClone(previous));
+    return commitConfig(previous, proposed);
   });
+  configMutationQueue = task.catch(() => {});
+  return task;
+}
+
+function writeConfig(config) {
+  return updateConfig((previous) => ({ ...previous, ...config }));
 }
 
 async function readAutomationRules() {
@@ -4701,18 +5174,35 @@ function json(res, status, body) {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
+    ...securityHeaders(),
   });
   res.end(payload);
 }
 
 function text(res, status, body, type = "text/plain; charset=utf-8") {
-  res.writeHead(status, { "content-type": type });
+  res.writeHead(status, { "content-type": type, ...securityHeaders() });
   res.end(body);
 }
 
+function securityHeaders() {
+  return {
+    "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+  };
+}
+
 async function readBody(req) {
+  const contentType = String(req.headers["content-type"] ?? "").split(";", 1)[0].trim().toLowerCase();
+  if (contentType !== "application/json") throw requestError(415, "request body must use application/json");
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let bytes = 0;
+  for await (const chunk of req) {
+    bytes += chunk.length;
+    if (bytes > 1_048_576) throw requestError(413, "request body exceeds 1 MiB limit");
+    chunks.push(chunk);
+  }
   const textBody = Buffer.concat(chunks).toString("utf8");
   if (!textBody) return {};
   return parseJsonWithContext(textBody, `${req.method} ${req.url} request body`);
@@ -4722,6 +5212,18 @@ function requestError(statusCode, message) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+function requestHasValidOrigin(req) {
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return true;
+  if (String(req.headers["sec-fetch-site"] ?? "").toLowerCase() === "cross-site") return false;
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === String(req.headers.host ?? "");
+  } catch {
+    return false;
+  }
 }
 
 function awayTimestamp(value, label) {
@@ -4809,13 +5311,6 @@ function fuelCellArgs(config = {}) {
   };
 }
 
-function parseRawHex(raw) {
-  // The CLI reports raw EDT payloads as strings. Convert them back to Buffer
-  // when the server needs to do small decodes itself.
-  if (!raw || !/^0x[0-9a-fA-F]+$/.test(raw)) return null;
-  return Buffer.from(raw.slice(2), "hex");
-}
-
 function isDocumentationHost(host) {
   return /^(192\.0\.2|198\.51\.100|203\.0\.113)\.\d{1,3}$/.test(String(host ?? ""));
 }
@@ -4851,14 +5346,16 @@ async function settingWithCache(config, key, reader) {
   const cached = config.settingCache?.[key] ?? null;
   const data = await reader();
   if (data && !data.error && (data.raw || data.decoded)) {
-    config.settingCache = {
-      ...(config.settingCache ?? {}),
-      [key]: {
-        lastKnown: data,
-        lastReadAt: new Date().toISOString(),
+    await updateConfig((current) => ({
+      ...current,
+      settingCache: {
+        ...(current.settingCache ?? {}),
+        [key]: {
+          lastKnown: data,
+          lastReadAt: new Date().toISOString(),
+        },
       },
-    };
-    await writeConfig(config);
+    }));
     return { ...data, available: true };
   }
   return {
@@ -4958,29 +5455,73 @@ async function readAllStatus(onProbeComplete = () => {}) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   status.savings = (await readHistoryRange(today.toISOString(), status.read_at, config)).summary;
+  status.savingsPeriods = readCalendarSavings(status.read_at, config, status.savings);
   return status;
+}
+
+function statusSnapshotAgeMs(now = Date.now()) {
+  const readAt = new Date(latestStatusSnapshot?.read_at).getTime();
+  return Number.isFinite(readAt) ? Math.max(0, now - readAt) : Number.POSITIVE_INFINITY;
+}
+
+async function refreshStatusSnapshot(onProbeComplete = () => {}) {
+  if (statusRefreshPromise) return statusRefreshPromise;
+  statusRefreshPromise = readAllStatus(onProbeComplete)
+    .then((status) => {
+      latestStatusSnapshot = status;
+      return status;
+    })
+    .finally(() => {
+      statusRefreshPromise = null;
+    });
+  return statusRefreshPromise;
+}
+
+async function getStatusSnapshot({ maxAgeMs = 0, force = false, onProbeComplete = () => {} } = {}) {
+  if (!force && latestStatusSnapshot && statusSnapshotAgeMs() <= Math.max(0, Number(maxAgeMs) || 0)) {
+    return latestStatusSnapshot;
+  }
+  return refreshStatusSnapshot(onProbeComplete);
+}
+
+function invalidateStatusSnapshot() {
+  latestStatusSnapshot = null;
 }
 
 function deviceStatusFailures(status, config) {
   const failures = [];
   const energyError = status.energy?.error;
+  const propertyErrors = Array.isArray(status.energy?.errors) ? status.energy.errors : [];
+  const errorsForHost = (host) => propertyErrors
+    .filter((item) => item?.host === host && item?.error)
+    .map((item) => `${item.epc ?? "property"}: ${item.error}`);
   if (config.batteryHost && !isDocumentationHost(config.batteryHost)) {
-    const error = energyError ?? status.energy?.battery?.error;
-    if (error) failures.push(`Battery: ${error}`);
+    const errors = [energyError ?? status.energy?.battery?.error, ...errorsForHost(config.batteryHost)].filter(Boolean);
+    if (errors.length) failures.push(`Battery: ${errors.join(", ")}`);
   }
   if (config.smartCosmoEnabled && config.meterHost && !isDocumentationHost(config.meterHost)) {
-    if (status.meter?.error) failures.push(`Smart Cosmo: ${status.meter.error}`);
+    const errors = [
+      status.meter?.error,
+      ...(Array.isArray(status.meter?.errors) ? status.meter.errors.map((item) => `${item.epc ?? "property"}: ${item.error}`) : []),
+    ].filter(Boolean);
+    if (errors.length) failures.push(`Smart Cosmo: ${errors.join(", ")}`);
   }
   if (config.solarEnabled && config.solarHost && !isDocumentationHost(config.solarHost)) {
-    const error = energyError ?? status.energy?.solar?.error;
-    if (error) failures.push(`Solar: ${error}`);
+    const errors = [energyError ?? status.energy?.solar?.error, ...errorsForHost(config.solarHost)].filter(Boolean);
+    if (errors.length) failures.push(`Solar: ${errors.join(", ")}`);
   }
   if (config.fuelCellEnabled && config.fuelCellHosts.some((host) => !isDocumentationHost(host))) {
     const fuelCellErrors = (status.energy?.fuel_cells ?? status.energy?.fuelCells ?? [])
       .map((item) => item?.error)
       .filter(Boolean);
+    const configuredHosts = new Set(config.fuelCellHosts);
+    const propertyFuelCellErrors = propertyErrors
+      .filter((item) => configuredHosts.has(item?.host) && item?.error)
+      .map((item) => `${item.host} ${item.epc ?? "property"}: ${item.error}`);
     if (energyError) failures.push(`Ene-Farm: ${energyError}`);
-    else if (fuelCellErrors.length) failures.push(`Ene-Farm: ${fuelCellErrors.join(", ")}`);
+    else if (fuelCellErrors.length || propertyFuelCellErrors.length) {
+      failures.push(`Ene-Farm: ${[...fuelCellErrors, ...propertyFuelCellErrors].join(", ")}`);
+    }
   }
   return [...new Set(failures)];
 }
@@ -5034,61 +5575,191 @@ function observeBatterySocNotifications(status, config) {
   });
 }
 
+function fuelCellHotWaterEmptyNotificationActive(primary) {
+  const hotWaterLevel = numericMetric(primary?.hot_water_level);
+  const generationState = primary?.generation_status?.value ?? null;
+  if (!Number.isFinite(hotWaterLevel) || !generationState) return null;
+  return hotWaterLevel <= 0 && generationState !== "generating";
+}
+
+function observeFuelCellHotWaterNotifications(status, config) {
+  if (config.fuelCellEnabled === false || !config.fuelCellPrimaryHost) {
+    notificationService.observeCondition({ key: "fuel-cell-hot-water-empty", active: false });
+    return;
+  }
+  const primary = primaryFuelCell(status.energy?.fuel_cells ?? status.energy?.fuelCells ?? []);
+  const active = fuelCellHotWaterEmptyNotificationActive(primary);
+  if (active === null) return;
+  notificationService.observeCondition({
+    key: "fuel-cell-hot-water-empty",
+    active,
+    activateAfter: 2,
+    recoverAfter: 2,
+    activeEvent: {
+      type: "fuelCellHotWaterEmpty",
+      severity: "warning",
+      title: "Ene-Farm hot-water tank is empty",
+      message: "The Ene-Farm hot-water level remained at 0/5 for two background polls.",
+      dedupeKey: "fuel-cell-hot-water:empty",
+    },
+  });
+}
+
+const DEVICE_ACTIONS = new Set([
+  "vendor-profile",
+  "discharge-limit",
+  "osaifu-charge-window",
+  "osaifu-discharge-window",
+  "set-mode",
+  "charge",
+  "discharge",
+]);
+
 async function executeAction(action, payload = {}) {
   // Settings and direct actions share this path so scheduled jobs exercise the
   // same validation and CLI writes as button clicks in the UI.
   const config = await readConfig();
-  if (action === "fuel-cell-start") {
-    if (config.fuelCellEnabled === false) throw new Error("Ene-Farm is disabled");
-    const fuelCellHost = String(config.fuelCellPrimaryHost ?? "").trim();
-    if (!fuelCellHost) throw new Error("Ene-Farm primary device is not configured");
-    const result = await runCliQueued("fuel-cell-generation", { host: fuelCellHost }, ["on"]);
-    if (historyStore.isReady()) {
-      const at = new Date().toISOString();
-      historyStore.recordEvent({
-        eventKey: `fuelCell:manual-generation-request:${at}`,
-        at,
-        category: "fuelCell",
-        type: "manual-generation-request",
-        message: "Manual Ene-Farm generation requested",
-        payload: { host: fuelCellHost },
-      });
-    }
-    return result;
-  }
   const host = hostFrom(payload, config);
   switch (action) {
     case "vendor-profile":
       if (!payload.mode) throw new Error("mode is required");
-      return runCliQueued("vendor-profile", { host }, [payload.mode]);
+      return assertDeviceCommandResult(
+        await runCliQueued("vendor-profile", { host }, [payload.mode]),
+        `charging profile ${payload.mode}`,
+      );
     case "discharge-limit":
-      return runCliQueued("discharge-limit", { host }, [
-        numberInRange(payload.percent, "percent", 0, 100, 10),
-      ]);
+      return assertDeviceCommandResult(
+        await runCliQueued("discharge-limit", { host }, [
+          numberInRange(payload.percent, "percent", 0, 100, 10),
+        ]),
+        "discharge limit",
+      );
     case "osaifu-charge-window": {
       const startHour = numberInRange(payload.startHour, "startHour", 0, 23);
       const endHour = numberInRange(payload.endHour, "endHour", 0, 23);
-      return runCliQueued("osaifu-charge-window", { host }, [startHour, endHour]);
+      return assertDeviceCommandResult(
+        await runCliQueued("osaifu-charge-window", { host }, [startHour, endHour]),
+        "osaifu charge window",
+      );
     }
     case "osaifu-discharge-window": {
       const startHour = numberInRange(payload.startHour, "startHour", 0, 23);
       const endHour = numberInRange(payload.endHour, "endHour", 0, 23);
-      return runCliQueued("osaifu-discharge-window", { host }, [startHour, endHour]);
+      return assertDeviceCommandResult(
+        await runCliQueued("osaifu-discharge-window", { host }, [startHour, endHour]),
+        "osaifu discharge window",
+      );
     }
     case "set-mode":
       if (!payload.mode) throw new Error("mode is required");
-      return runCliQueued("set-mode", { host }, [payload.mode]);
+      return verifyBatteryOperationMode(
+        assertDeviceCommandResult(
+          await runCliQueued("set-mode", { host }, [payload.mode]),
+          `operation mode ${payload.mode}`,
+        ),
+        host,
+        payload.mode,
+      );
     case "charge":
     case "discharge": {
       const args = { host };
       if (payload.targetWh !== undefined && payload.targetWh !== "") {
         args["target-wh"] = numberInRange(payload.targetWh, "targetWh", 0, 999999999);
       }
-      return runCliQueued(action, args);
+      return assertDeviceCommandResult(
+        await runCliQueued(action, args),
+        `${action} request`,
+      );
     }
     default:
-      throw new Error(`unknown action: ${action}`);
+      throw requestError(404, `unknown action: ${action}`);
   }
+}
+
+function assertDeviceCommandResult(result, description = "device command") {
+  if (!result || typeof result !== "object") {
+    throw new Error(`${description} returned no acknowledgement`);
+  }
+  const failures = [];
+  if (result.error) failures.push(result.error);
+  if (result.ok === false) failures.push(result.esv ? `rejected with ${result.esv}` : "was rejected");
+  for (const write of Array.isArray(result.results) ? result.results : []) {
+    if (write?.ok === false) failures.push(`${write.epc ?? "write"} rejected with ${write.esv ?? "unknown ESV"}`);
+  }
+  if (failures.length) throw new Error(`${description} failed: ${failures.join("; ")}`);
+  invalidateStatusSnapshot();
+  return {
+    ...result,
+    acknowledged: result.acknowledged === true
+      || result.ok === true
+      || (Array.isArray(result.results) && result.results.length > 0),
+  };
+}
+
+const BATTERY_OPERATION_MODE_BY_EDT = new Map([
+  [0x40, "other"],
+  [0x41, "rapid_charging"],
+  [0x42, "charging"],
+  [0x43, "discharging"],
+  [0x44, "standby"],
+  [0x45, "test"],
+  [0x46, "auto"],
+  [0x47, "restart"],
+  [0x48, "capacity_recalculation"],
+]);
+
+function batteryOperationModeFromReadback(status) {
+  const decoded = status?.battery?.operation_mode?.value
+    ?? status?.battery?.operation_mode?.human
+    ?? null;
+  if (decoded !== null) return decoded;
+  const rawMatch = String(status?.raw ?? "").match(/^0x([0-9a-f]{2})$/i);
+  if (!rawMatch) return null;
+  return BATTERY_OPERATION_MODE_BY_EDT.get(Number.parseInt(rawMatch[1], 16)) ?? null;
+}
+
+async function verifyBatteryOperationMode(result, host, expectedMode, {
+  attempts = OPERATION_MODE_VERIFY_ATTEMPTS,
+  delayMs = OPERATION_MODE_VERIFY_DELAY_MS,
+  readStatus = () => runCliQueued(
+    "raw-get",
+    { host, eoj: "0x027D01", timeout: 3 },
+    ["0xDA"],
+    { priority: 0 },
+  ),
+  wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+} = {}) {
+  const normalizedExpected = String(expectedMode).toLowerCase().replaceAll("-", "_");
+  let actualMode = null;
+  let lastReadError = null;
+  const maximumAttempts = Math.max(1, Math.floor(Number(attempts) || 1));
+  for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+    try {
+      const status = await readStatus();
+      actualMode = batteryOperationModeFromReadback(status);
+      const normalizedActual = actualMode === null
+        ? null
+        : String(actualMode).toLowerCase().replaceAll("-", "_");
+      if (normalizedActual === normalizedExpected) {
+        return { ...result, verified: true, readBack: { operationMode: actualMode, attempts: attempt } };
+      }
+      lastReadError = null;
+    } catch (error) {
+      lastReadError = error;
+      break;
+    }
+    if (attempt < maximumAttempts && delayMs > 0) await wait(delayMs);
+  }
+  if (lastReadError) {
+    throw new Error(
+      `operation mode ${expectedMode} was acknowledged but verification failed after ${maximumAttempts} attempts: ${lastReadError.message}`,
+      { cause: lastReadError },
+    );
+  }
+  if (!actualMode) {
+    throw new Error(`operation mode ${expectedMode} was acknowledged but could not be verified after ${maximumAttempts} attempts`);
+  }
+  throw new Error(`operation mode ${expectedMode} was acknowledged but still read back as ${actualMode} after ${maximumAttempts} attempts`);
 }
 
 function parseRunAt(schedule) {
@@ -5114,10 +5785,12 @@ function isDue(schedule, now) {
     const days = Array.isArray(schedule.days) && schedule.days.length ? schedule.days : ALL_DAYS;
     if (!days.includes(now.getDay())) return false;
     const current = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}`;
-    const todayKey = now.toISOString().slice(0, 10);
-    return schedule.time === current && schedule.lastRunDate !== todayKey;
+    const todayKey = localDayKey(now);
+    return schedule.time === current
+      && schedule.lastRunDate !== todayKey
+      && schedule.lastAttemptDate !== todayKey;
   }
-  return schedule.runAt && new Date(schedule.runAt) <= now;
+  return schedule.runAt && new Date(schedule.runAt) <= now && !schedule.executionIntent;
 }
 
 function clearStaleScheduleRuns(schedules, activeIds = runningScheduleIds) {
@@ -5134,47 +5807,73 @@ function clearStaleScheduleRuns(schedules, activeIds = runningScheduleIds) {
 async function runDueSchedules() {
   const config = await readConfig();
   if (config.adaptiveCharging?.enabled && config.solarEnabled !== false && config.rateMode !== "simple") return;
-  const schedules = await readSchedules();
-  const now = new Date();
-  let changed = clearStaleScheduleRuns(schedules);
-  if (changed) {
-    console.warn("scheduler: cleared stale running state from persisted schedule data");
-    await writeSchedules(schedules);
-  }
-  for (const schedule of schedules) {
-    if (!isDue(schedule, now)) continue;
-    runningScheduleIds.add(schedule.id);
-    schedule.running = true;
-    schedule.runningSince = now.toISOString();
-    changed = true;
-    await writeSchedules(schedules);
-    try {
-      const result = await executeAction(schedule.action, schedule.payload);
-      schedule.lastResult = { ok: true, at: new Date().toISOString(), result };
-      if (schedule.repeat === "daily") {
-        schedule.lastRunDate = now.toISOString().slice(0, 10);
-      } else {
-        schedule.enabled = false;
-        schedule.completed = true;
-      }
-    } catch (err) {
-      schedule.lastResult = { ok: false, at: new Date().toISOString(), error: err.message };
-      notificationService.enqueue({
-        type: "scheduleFailed",
-        severity: "error",
-        title: "Scheduled battery action failed",
-        message: `${schedule.repeat === "daily" ? `Daily ${schedule.time}` : schedule.runAt} ${schedule.action} failed: ${err.message}`,
-        dedupeKey: `schedule-failed:${schedule.id}`,
-      });
-    } finally {
-      runningScheduleIds.delete(schedule.id);
-      schedule.running = false;
-      schedule.runningSince = null;
-      changed = true;
-      await writeSchedules(schedules);
+  const rules = await readAutomationRules();
+  const guardOwner = rules.find(
+    (rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore,
+  );
+  await mutateSchedules(async (schedules) => {
+    const now = new Date();
+    if (clearStaleScheduleRuns(schedules)) {
+      console.warn("scheduler: cleared stale running state from persisted schedule data");
     }
-  }
-  if (changed) await writeSchedules(schedules);
+    for (const schedule of schedules) {
+      if (!isDue(schedule, now)) continue;
+      const attemptAt = new Date().toISOString();
+      const attemptDate = localDayKey(now);
+      schedule.lastAttemptDate = attemptDate;
+      schedule.executionIntent = {
+        id: randomUUID(),
+        state: guardOwner ? "blocked" : "pending",
+        attemptedAt: attemptAt,
+        action: schedule.action,
+        payload: schedule.payload,
+      };
+      if (guardOwner) {
+        schedule.lastResult = {
+          ok: false,
+          skipped: "Charging Demand Guard owns Standby operation mode",
+          at: attemptAt,
+        };
+        schedule.executionIntent.state = "blocked";
+        continue;
+      }
+      runningScheduleIds.add(schedule.id);
+      schedule.running = true;
+      schedule.runningSince = attemptAt;
+      await writeSchedules(schedules);
+      try {
+        const result = await executeAction(schedule.action, schedule.payload);
+        schedule.lastResult = { ok: true, at: new Date().toISOString(), result };
+        schedule.executionIntent.state = "acknowledged";
+        schedule.executionIntent.completedAt = schedule.lastResult.at;
+        if (schedule.repeat === "daily") schedule.lastRunDate = attemptDate;
+        else {
+          schedule.enabled = false;
+          schedule.completed = true;
+        }
+      } catch (err) {
+        schedule.lastResult = { ok: false, at: new Date().toISOString(), error: err.message };
+        schedule.executionIntent.state = /timed? out|timeout/i.test(err.message) ? "unknown" : "failed";
+        schedule.executionIntent.completedAt = schedule.lastResult.at;
+        if (schedule.repeat !== "daily") {
+          schedule.enabled = false;
+          schedule.completed = true;
+        }
+        notificationService.enqueue({
+          type: "scheduleFailed",
+          severity: "error",
+          title: "Scheduled battery action failed",
+          message: `${schedule.repeat === "daily" ? `Daily ${schedule.time}` : schedule.runAt} ${schedule.action} failed: ${err.message}`,
+          dedupeKey: `schedule-failed:${schedule.id}:${attemptDate}`,
+        });
+      } finally {
+        runningScheduleIds.delete(schedule.id);
+        schedule.running = false;
+        schedule.runningSince = null;
+        await writeSchedules(schedules);
+      }
+    }
+  });
 }
 
 function cleanAutomationRuleConfig(input = {}) {
@@ -5189,7 +5888,6 @@ function cleanAutomationRuleConfig(input = {}) {
       breakerAmps: configNumber(conditions.breakerAmps, DEFAULT_GUARD_CONDITIONS.breakerAmps, 1, 400),
       breakerVoltage: configNumber(conditions.breakerVoltage, DEFAULT_GUARD_CONDITIONS.breakerVoltage, 1, 1000),
       reserveAmps: configNumber(conditions.reserveAmps, DEFAULT_GUARD_CONDITIONS.reserveAmps, 0, 200),
-      batteryChargingEstimateW: configNumber(conditions.batteryChargingEstimateW, 1000, 0, 20000),
       restoreBelowAmps: configNumber(conditions.restoreBelowAmps, Math.max(1, DEFAULT_GUARD_CONDITIONS.breakerAmps - 10), 1, 400),
       restoreDelaySeconds: configNumber(conditions.restoreDelaySeconds, 300, 0, 86400),
     },
@@ -5310,10 +6008,8 @@ async function evaluateAutomationRule(
   const actualDemandWithChargingW = Number.isFinite(batteryChargingW) ? demandW + batteryChargingW : null;
   const guardDemandW = rule.conditions.source === "gridImportW" ? demandW : actualDemandWithChargingW;
   const maximumChargeWatts = Number(config?.batteryCapabilities?.maximumChargeWatts);
-  const batteryChargingEstimateW = Number.isFinite(maximumChargeWatts) && maximumChargeWatts > 0
-    ? maximumChargeWatts
-    : rule.conditions.batteryChargingEstimateW;
-  const estimatedRestoredDemandW = demandW + batteryChargingEstimateW;
+  const maximumChargeWattsAvailable = Number.isFinite(maximumChargeWatts) && maximumChargeWatts > 0;
+  const estimatedRestoredDemandW = maximumChargeWattsAvailable ? demandW + maximumChargeWatts : null;
   const restoreLimitW = rule.conditions.restoreBelowAmps * rule.conditions.breakerVoltage;
   const demandLabel = automationDemandLabel(rule.conditions.source);
 
@@ -5372,6 +6068,18 @@ async function evaluateAutomationRule(
   }
 
   if (rule.state?.awaitingRestore && demandW <= restoreLimitW) {
+    if (!maximumChargeWattsAvailable) {
+      const changed = Boolean(rule.state.restoreSince);
+      rule.state = { ...rule.state, restoreSince: null };
+      return {
+        changed,
+        result: {
+          skipped: "maximum battery charge watts unavailable; remaining in Standby",
+          demandW,
+          breakerLimitW,
+        },
+      };
+    }
     if (estimatedRestoredDemandW > breakerLimitW) {
       rule.state = { ...rule.state, restoreSince: null };
       return { changed: true, result: { skipped: "restore would exceed breaker reserve", demandW, estimatedRestoredDemandW, breakerLimitW } };
@@ -5747,10 +6455,29 @@ async function enforceAdaptiveChargingSlotEndDeadline(expectedKey, {
   if (remainingMs > 0) return { stopped: false, remainingMs };
   const windowEndMs = new Date(state.activeSlot?.windowEnd).getTime();
   const slotEndMs = new Date(state.activeSlot?.end).getTime();
-  const windowEnded = Number.isFinite(windowEndMs) && Number.isFinite(slotEndMs) && slotEndMs >= windowEndMs;
+  const windowEnded = Number.isFinite(windowEndMs)
+    && (now.getTime() >= windowEndMs || (Number.isFinite(slotEndMs) && slotEndMs >= windowEndMs));
   const reason = windowEnded ? "Planned discounted window ended" : "Planned charging slot ended";
-  if (windowEnded) await release(state, reason, now);
-  else await suspend(state, reason, now, null, undefined, state.activeSlot?.windowEnd);
+  try {
+    if (windowEnded) await release(state, reason, now);
+    else await suspend(state, reason, now, null, undefined, state.activeSlot?.windowEnd);
+  } catch (error) {
+    appendAdaptiveChargingLog(
+      state,
+      `Failed to stop overdue charge after ${reason.toLowerCase()}: ${error.message}; retrying`,
+      "error",
+      now,
+    );
+    state.lastResult = {
+      ok: false,
+      at: now.toISOString(),
+      error: error.message,
+      kind: "slot-end-retry",
+      reason: reason.toLowerCase(),
+    };
+    await writeState(state);
+    return { stopped: false, retryMs: ADAPTIVE_CHARGING_SLOT_END_RETRY_MS, error: error.message };
+  }
   finalizeExpiredAdaptiveChargingWindow(state, state.activeWindowExecution?.latestSocPercent, now);
   state.lastResult = {
     ok: true,
@@ -5770,20 +6497,28 @@ function clearAdaptiveChargingSlotEndTimer() {
 
 function armAdaptiveChargingSlotEndTimer(key, delayMs) {
   adaptiveChargingSlotEndTimerKey = key;
-  adaptiveChargingSlotEndTimer = setTimeout(() => {
-    adaptiveChargingSlotEndTimer = null;
-    adaptiveChargingSlotEndTimerKey = null;
+  const timer = setTimeout(() => {
     enforceAdaptiveChargingSlotEndDeadline(key)
       .then((result) => {
-        if (Number.isFinite(result.remainingMs) && result.remainingMs > 0) {
-          armAdaptiveChargingSlotEndTimer(key, Math.min(result.remainingMs, MAX_TIMER_DELAY_MS));
+        if (adaptiveChargingSlotEndTimer !== timer) return;
+        adaptiveChargingSlotEndTimer = null;
+        adaptiveChargingSlotEndTimerKey = null;
+        const retryDelayMs = Number.isFinite(result.remainingMs) && result.remainingMs > 0
+          ? result.remainingMs
+          : result.retryMs;
+        if (Number.isFinite(retryDelayMs) && retryDelayMs > 0) {
+          armAdaptiveChargingSlotEndTimer(key, Math.min(retryDelayMs, MAX_TIMER_DELAY_MS));
         }
       })
       .catch((err) => {
+        if (adaptiveChargingSlotEndTimer !== timer) return;
+        adaptiveChargingSlotEndTimer = null;
+        adaptiveChargingSlotEndTimerKey = null;
         logDetailedError("adaptive-charging-slot-end", err);
         armAdaptiveChargingSlotEndTimer(key, ADAPTIVE_CHARGING_SLOT_END_RETRY_MS);
       });
   }, Math.max(0, Math.min(delayMs, MAX_TIMER_DELAY_MS)));
+  adaptiveChargingSlotEndTimer = timer;
   if (typeof adaptiveChargingSlotEndTimer.unref === "function") adaptiveChargingSlotEndTimer.unref();
 }
 
@@ -6534,7 +7269,12 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
   )) {
     const completedSlot = state.activeSlot;
     let stopReason = "Planned charge target reached";
-    if (activeExpired) stopReason = "Planned discounted window ended";
+    if (activeExpired) {
+      const activeWindowEndMs = new Date(completedSlot?.windowEnd).getTime();
+      stopReason = Number.isFinite(activeWindowEndMs) && now.getTime() < activeWindowEndMs
+        ? "Planned charging slot ended"
+        : "Planned discounted window ended";
+    }
     else if (activePlanStopReason) stopReason = activePlanStopReason;
     else if (!liveImportSafety.available) {
       const interruption = breakerReserveInterrupted
@@ -6571,19 +7311,36 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
       && Number.isFinite(completedWindowEndMs)
       && completedWindowEndMs > now.getTime(),
     );
-    if (breakerReserveInterrupted) {
-      await suspendAdaptiveChargeInStandby(state, stopReason, now);
-    } else if (holdStandbyUntilWindowEnd) {
-      await suspendAdaptiveChargeInStandby(
+    try {
+      if (breakerReserveInterrupted) {
+        await suspendAdaptiveChargeInStandby(state, stopReason, now);
+      } else if (holdStandbyUntilWindowEnd) {
+        await suspendAdaptiveChargeInStandby(
+          state,
+          stopReason,
+          now,
+          null,
+          executeAction,
+          completedSlot.windowEnd,
+        );
+      } else {
+        await releaseAdaptiveCharge(state, stopReason, now);
+      }
+    } catch (error) {
+      appendAdaptiveChargingLog(
         state,
-        stopReason,
+        `Failed to stop active charge after ${stopReason.toLowerCase()}: ${error.message}; will retry on the next check`,
+        "error",
         now,
-        null,
-        executeAction,
-        completedSlot.windowEnd,
       );
-    } else {
-      await releaseAdaptiveCharge(state, stopReason, now);
+      state.lastResult = {
+        ok: false,
+        at: now.toISOString(),
+        error: error.message,
+        kind: "charge-stop-retry",
+        reason: stopReason.toLowerCase(),
+      };
+      return writeAdaptiveChargingState(state);
     }
     if (activeEnergyTargetReached || activeSocTargetReached) {
       state.plan = consumeCompletedAdaptiveChargingSlot(state.plan, completedSlot);
@@ -6770,11 +7527,14 @@ async function runAutomationRules(context = {}) {
   const statusReadStartedAt = Date.now();
   const cliSequenceStart = cliTimingSequence;
   const probeTimings = [];
-  const status = await readAllStatus((probe) => {
-    probeTimings.push(probe);
-    context.statusProbeCompletionLatency = probeTimings.map(
-      ({ label, durationMs }) => `${label}=${durationMs}ms`,
-    );
+  const status = await getStatusSnapshot({
+    maxAgeMs: Math.min(5_000, Math.max(0, Number(config.updateIntervalSeconds) * 1000 || 0)),
+    onProbeComplete: (probe) => {
+      probeTimings.push(probe);
+      context.statusProbeCompletionLatency = probeTimings.map(
+        ({ label, durationMs }) => `${label}=${durationMs}ms`,
+      );
+    },
   });
   const statusReadDurationMs = Date.now() - statusReadStartedAt;
   if (statusReadDurationMs > AUTOMATION_CHECK_INTERVAL_MS) {
@@ -7356,6 +8116,65 @@ function startScheduler() {
   runAutomationRulesScheduled().catch((err) => logDetailedError("automation", err));
 }
 
+function stopApplicationBackgroundProcesses() {
+  backgroundProcessesEnabled = false;
+  if (scheduleTimer) clearInterval(scheduleTimer);
+  if (automationTimer) clearInterval(automationTimer);
+  if (recorderTimer) clearTimeout(recorderTimer);
+  if (retentionTimer) clearInterval(retentionTimer);
+  scheduleTimer = null;
+  automationTimer = null;
+  recorderTimer = null;
+  retentionTimer = null;
+  clearAdaptiveChargingSlotEndTimer();
+}
+
+async function runRetentionMaintenance() {
+  if (retentionRunPromise) return retentionRunPromise;
+  retentionRunPromise = (async () => {
+    try {
+      const config = await readConfig();
+      if (config.retention.automaticMaintenance) await trimHistory(config.retention);
+      try {
+        await updateCurrentGasTariff(config);
+      } catch (error) {
+        logDetailedError("gas-tariff", error);
+      }
+    } catch (err) {
+      logDetailedError("retention", err);
+    } finally {
+      retentionRunPromise = null;
+    }
+  })();
+  return retentionRunPromise;
+}
+
+function startApplicationBackgroundProcesses() {
+  backgroundProcessesEnabled = true;
+  readAdaptiveChargingState()
+    .then((state) => syncAdaptiveChargingSlotEndTimer(state))
+    .catch((error) => logDetailedError("adaptive-charging-slot-end-startup", error));
+  startScheduler();
+  startBackgroundRecorder();
+  retentionTimer = setInterval(runRetentionMaintenance, 24 * 60 * 60_000);
+  retentionTimer.unref?.();
+  void runRetentionMaintenance();
+}
+
+async function waitForDatabaseWriters(timeoutMs = 60_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (automationRunInProgress
+    || cliQueueRunning
+    || runningScheduleIds.size > 0
+    || retentionRunPromise
+    || statusRefreshPromise) {
+    if (Date.now() >= deadline) {
+      throw new Error("Timed out waiting for active application work before database restore");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 function anyDeviceConfigured(config) {
   // A real device is any host that isn't blank or one of the placeholder
   // documentation addresses shipped in DEFAULT_CONFIG.
@@ -7375,10 +8194,12 @@ function startBackgroundRecorder() {
   // timer (rescheduled after each read completes) guarantees reads never
   // overlap, even if one takes longer than the configured interval.
   const scheduleNext = (intervalMs) => {
+    if (!backgroundProcessesEnabled) return;
     recorderTimer = setTimeout(tick, intervalMs);
     if (typeof recorderTimer.unref === "function") recorderTimer.unref();
   };
   async function tick() {
+    if (!backgroundProcessesEnabled) return;
     let intervalMs = DEFAULT_CONFIG.updateIntervalSeconds * 1000;
     try {
       const config = await readConfig();
@@ -7387,9 +8208,10 @@ function startBackgroundRecorder() {
       if (discoveryInProgress()) {
         console.warn(`recorder: discovery is running (${discoveryRunContext.label}); skipping this poll`);
       } else if (anyDeviceConfigured(config)) {
-        const status = await readAllStatus();
+        const status = await getStatusSnapshot({ maxAgeMs: Math.max(0, intervalMs - 1) });
         observeDeviceNotifications(status, config);
         observeBatterySocNotifications(status, config);
+        observeFuelCellHotWaterNotifications(status, config);
       }
     } catch (err) {
       logDetailedError("recorder", err);
@@ -7400,7 +8222,268 @@ function startBackgroundRecorder() {
   tick();
 }
 
+function databaseOperationProgress(patch) {
+  Object.assign(databaseOperation, patch);
+}
+
+async function databaseBackupsView() {
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    operation: { ...databaseOperation },
+    backups: await listDatabaseBackups({
+      backupDir: DATABASE_BACKUP_DIR,
+      currentVersion: SCHEMA_VERSION,
+    }),
+  };
+}
+
+async function withDatabaseOperation(type, filename, operation) {
+  if (databaseOperation.busy) {
+    throw requestError(409, `Database ${databaseOperation.type} is already running`);
+  }
+  databaseOperation = {
+    busy: true,
+    type,
+    filename: filename ?? null,
+    phase: "preparing",
+    percent: 0,
+    processed: 0,
+    total: 0,
+    unit: null,
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+    error: null,
+    result: null,
+  };
+  try {
+    const result = await operation((progress) => databaseOperationProgress(progress));
+    databaseOperationProgress({
+      busy: false,
+      phase: "complete",
+      percent: 100,
+      completedAt: new Date().toISOString(),
+      result,
+    });
+    return result;
+  } catch (error) {
+    databaseOperationProgress({
+      busy: false,
+      phase: "failed",
+      completedAt: new Date().toISOString(),
+      error: error.message,
+      result: null,
+    });
+    throw error;
+  }
+}
+
+async function manualDatabaseBackup() {
+  return withDatabaseOperation("backup", null, async (onProgress) => {
+    const result = await backupDatabaseManually({
+      databaseFile: historyStore.databaseFile,
+      backupDir: DATABASE_BACKUP_DIR,
+      sourceVersion: SCHEMA_VERSION,
+      onProgress,
+    });
+    historyStore.recordEvent({
+      eventKey: `database:manual-backup:${result.filename}`,
+      at: new Date().toISOString(),
+      category: "database",
+      type: "manual-backup",
+      message: `Manual database backup created: ${result.filename}`,
+      payload: {
+        filename: result.filename,
+        compressedBytes: result.compressedBytes,
+        durationMs: result.durationMs,
+        schemaVersion: SCHEMA_VERSION,
+      },
+    });
+    return {
+      filename: result.filename,
+      compressedBytes: result.compressedBytes,
+      durationMs: result.durationMs,
+      schemaVersion: SCHEMA_VERSION,
+    };
+  });
+}
+
+async function compatibleBackup(filename) {
+  if (path.basename(filename) !== filename || !filename.endsWith(".sqlite.zst")) {
+    throw requestError(400, "Invalid database backup filename");
+  }
+  const backups = await listDatabaseBackups({
+    backupDir: DATABASE_BACKUP_DIR,
+    currentVersion: SCHEMA_VERSION,
+  });
+  const backup = backups.find((item) => item.filename === filename);
+  if (!backup) throw requestError(404, "Database backup not found");
+  if (!backup.compatible) {
+    throw requestError(409, `Backup schema v${backup.schemaVersion ?? "unknown"} cannot be restored by application schema v${SCHEMA_VERSION}`);
+  }
+  return { ...backup, path: path.join(DATABASE_BACKUP_DIR, filename) };
+}
+
+async function restoreDatabaseBackup(filename) {
+  const backup = await compatibleBackup(filename);
+  return withDatabaseOperation("restore", filename, async (onProgress) => {
+    let extracted = null;
+    let originalMoved = false;
+    let backgroundStopped = false;
+    let databaseReady = true;
+    const databaseFile = historyStore.databaseFile;
+    const originalFile = `${databaseFile}.restore-original-${randomUUID()}.tmp`;
+    try {
+      extracted = await extractAndValidateDatabaseBackup({
+        backupFile: backup.path,
+        workingDir: DATA_DIR,
+        onProgress,
+      });
+      if (extracted.schemaVersion !== SCHEMA_VERSION) {
+        throw requestError(409, `Backup contains schema v${extracted.schemaVersion}; application requires schema v${SCHEMA_VERSION}`);
+      }
+
+      onProgress({ phase: "safety-backup", percent: 0, processed: 0, total: 0, unit: null });
+      const safetyBackup = await backupDatabaseManually({
+        databaseFile,
+        backupDir: DATABASE_BACKUP_DIR,
+        sourceVersion: SCHEMA_VERSION,
+        beforeRestore: true,
+        onProgress(progress) {
+          onProgress({ ...progress, phase: `safety-${progress.phase}` });
+        },
+      });
+
+      onProgress({ phase: "stopping", percent: 0, processed: 0, total: 0, unit: null });
+      stopApplicationBackgroundProcesses();
+      backgroundStopped = true;
+      await waitForDatabaseWriters();
+      historyStore.close();
+      databaseReady = false;
+      await Promise.all([
+        rm(`${databaseFile}-wal`, { force: true }),
+        rm(`${databaseFile}-shm`, { force: true }),
+      ]);
+
+      onProgress({ phase: "restoring", percent: 50, processed: 1, total: 2, unit: "files" });
+      await rename(databaseFile, originalFile);
+      originalMoved = true;
+      await rename(extracted.snapshotFile, databaseFile);
+      extracted = null;
+      await historyStore.initialize();
+      databaseReady = true;
+      await rm(originalFile, { force: true });
+      originalMoved = false;
+      lastRecordedSample = historyStore.latestSample();
+      latestStatusSnapshot = null;
+      statusRefreshPromise = null;
+      adaptiveChargingHistoryCache = null;
+      adaptiveChargingDemandProfileIndexPromise = null;
+      try {
+        historyStore.recordEvent({
+          eventKey: `database:restore:${filename}:${new Date().toISOString()}`,
+          at: new Date().toISOString(),
+          category: "database",
+          type: "manual-restore",
+          message: `Database restored from ${filename}`,
+          payload: {
+            filename,
+            schemaVersion: SCHEMA_VERSION,
+            safetyBackupFilename: safetyBackup.filename,
+          },
+        });
+      } catch (error) {
+        logDetailedError("database-restore-event", error);
+      }
+      onProgress({ phase: "restarting", percent: 100, processed: 2, total: 2, unit: "files" });
+      return {
+        filename,
+        schemaVersion: SCHEMA_VERSION,
+        safetyBackupFilename: safetyBackup.filename,
+      };
+    } catch (error) {
+      if (originalMoved) {
+        try {
+          historyStore.close();
+          databaseReady = false;
+          await Promise.all([
+            rm(databaseFile, { force: true }),
+            rm(`${databaseFile}-wal`, { force: true }),
+            rm(`${databaseFile}-shm`, { force: true }),
+          ]);
+          await rename(originalFile, databaseFile);
+          originalMoved = false;
+          await historyStore.initialize();
+          databaseReady = true;
+          lastRecordedSample = historyStore.latestSample();
+        } catch (rollbackError) {
+          logDetailedError("database-restore-rollback", rollbackError);
+          throw new Error(`${error.message}; database rollback also failed: ${rollbackError.message}`);
+        }
+      } else if (!databaseReady) {
+        try {
+          await historyStore.initialize();
+          databaseReady = true;
+          lastRecordedSample = historyStore.latestSample();
+        } catch (reopenError) {
+          logDetailedError("database-restore-reopen", reopenError);
+          throw new Error(`${error.message}; database reopen also failed: ${reopenError.message}`);
+        }
+      }
+      throw error;
+    } finally {
+      if (extracted?.snapshotFile) await cleanupExtractedDatabaseBackup(extracted.snapshotFile);
+      if (backgroundStopped && databaseReady) startApplicationBackgroundProcesses();
+    }
+  });
+}
+
+async function removeDatabaseBackup(filename) {
+  if (path.basename(filename) !== filename || !filename.endsWith(".sqlite.zst")) {
+    throw requestError(400, "Invalid database backup filename");
+  }
+  const backups = await listDatabaseBackups({ backupDir: DATABASE_BACKUP_DIR, currentVersion: SCHEMA_VERSION });
+  if (!backups.some((item) => item.filename === filename)) throw requestError(404, "Database backup not found");
+  return withDatabaseOperation("delete", filename, async (onProgress) => {
+    onProgress({ phase: "deleting", percent: 50, processed: 0, total: 1, unit: "files" });
+    await deleteDatabaseBackup({ backupDir: DATABASE_BACKUP_DIR, filename });
+    onProgress({ phase: "deleting", percent: 100, processed: 1, total: 1, unit: "files" });
+    return { filename };
+  });
+}
+
 async function api(req, res, url) {
+  if (req.method === "GET" && url.pathname === "/api/database-backups") {
+    return json(res, 200, await databaseBackupsView());
+  }
+  if (databaseOperation.busy) {
+    return json(res, 503, {
+      error: `Database ${databaseOperation.type} is in progress`,
+      operation: { ...databaseOperation },
+    });
+  }
+  if (req.method === "POST" && url.pathname === "/api/database-backups") {
+    await readBody(req);
+    await manualDatabaseBackup();
+    return json(res, 201, await databaseBackupsView());
+  }
+  if (url.pathname.startsWith("/api/database-backups/")) {
+    const encodedFilename = url.pathname.slice("/api/database-backups/".length).split("/")[0];
+    let filename;
+    try {
+      filename = decodeURIComponent(encodedFilename);
+    } catch {
+      throw requestError(400, "Invalid database backup filename");
+    }
+    if (req.method === "POST" && url.pathname.endsWith("/restore")) {
+      await readBody(req);
+      await restoreDatabaseBackup(filename);
+      return json(res, 200, await databaseBackupsView());
+    }
+    if (req.method === "DELETE" && !url.pathname.endsWith("/restore")) {
+      await removeDatabaseBackup(filename);
+      return json(res, 200, await databaseBackupsView());
+    }
+  }
   if (req.method === "GET" && url.pathname === "/api/notifications") {
     return json(res, 200, await notificationService.view());
   }
@@ -7495,7 +8578,9 @@ async function api(req, res, url) {
         error: `discovery is running (${discoveryRunContext.label}); status polling is paused`,
       });
     }
-    return json(res, 200, await readAllStatus());
+    const config = await readConfig();
+    const maxAgeMs = Math.max(5, Number(config.updateIntervalSeconds) || DEFAULT_CONFIG.updateIntervalSeconds) * 1000;
+    return json(res, 200, await getStatusSnapshot({ maxAgeMs }));
   }
   if (req.method === "GET" && url.pathname === "/api/history") {
     const config = await readConfig();
@@ -7680,8 +8765,10 @@ async function api(req, res, url) {
   if (req.method === "POST" && url.pathname.startsWith("/api/actions/")) {
     const body = await readBody(req);
     const action = url.pathname.replace("/api/actions/", "");
-    if (action !== "fuel-cell-start") await pauseAdaptiveChargingForManualAction(action);
-    return json(res, 200, await executeAction(action, body));
+    if (!DEVICE_ACTIONS.has(action)) throw requestError(404, `unknown action: ${action}`);
+    await pauseAdaptiveChargingForManualAction(action);
+    const result = await executeAction(action, body);
+    return json(res, 200, result);
   }
   if (req.method === "GET" && url.pathname === "/api/schedules") {
     return json(res, 200, await readSchedules());
@@ -7739,9 +8826,9 @@ async function api(req, res, url) {
       lastResult: null,
     };
     schedule.runAt = parseRunAt(schedule);
-    const schedules = await readSchedules();
-    schedules.push(schedule);
-    await writeSchedules(schedules);
+    await mutateSchedules((schedules) => {
+      schedules.push(schedule);
+    });
     return json(res, 201, schedule);
   }
   if (req.method === "PATCH" && url.pathname.startsWith("/api/schedules/")) {
@@ -7750,20 +8837,25 @@ async function api(req, res, url) {
     }
     const id = url.pathname.split("/").pop();
     const body = await readBody(req);
-    const schedules = await readSchedules();
-    const schedule = schedules.find((item) => item.id === id);
+    const schedule = await mutateSchedules((schedules) => {
+      const existing = schedules.find((item) => item.id === id);
+      if (!existing) return null;
+      Object.assign(existing, body);
+      if ("runAt" in body || "time" in body || "repeat" in body) existing.runAt = parseRunAt(existing);
+      return existing;
+    });
     if (!schedule) return json(res, 404, { error: "schedule not found" });
-    Object.assign(schedule, body);
-    if ("runAt" in body || "time" in body || "repeat" in body) schedule.runAt = parseRunAt(schedule);
-    await writeSchedules(schedules);
     return json(res, 200, schedule);
   }
   if (req.method === "DELETE" && url.pathname.startsWith("/api/schedules/")) {
     const id = url.pathname.split("/").pop();
-    const schedules = await readSchedules();
-    const next = schedules.filter((item) => item.id !== id);
-    await writeSchedules(next);
-    return json(res, 200, { ok: next.length !== schedules.length });
+    const deleted = await mutateSchedules((schedules) => {
+      const index = schedules.findIndex((item) => item.id === id);
+      if (index < 0) return false;
+      schedules.splice(index, 1);
+      return true;
+    });
+    return json(res, 200, { ok: deleted });
   }
   return json(res, 404, { error: "not found" });
 }
@@ -7772,7 +8864,9 @@ async function serveStatic(res, pathname) {
   const filePath = path.join(__dirname, "public", pathname === "/" ? "index.html" : pathname);
   const resolved = path.resolve(filePath);
   const publicDir = path.resolve(__dirname, "public");
-  if (!resolved.startsWith(publicDir)) return text(res, 403, "Forbidden");
+  if (resolved !== publicDir && !resolved.startsWith(`${publicDir}${path.sep}`)) {
+    return text(res, 403, "Forbidden");
+  }
   try {
     const data = await readFile(resolved);
     const ext = path.extname(resolved);
@@ -7813,13 +8907,13 @@ async function serveDatabaseUpgradeStatic(res, pathname) {
 async function initializeApplication() {
   if (applicationStarted) return;
   await migrateLegacyAdaptiveChargingData();
+  await migrateLegacyFuelCellControlData();
   const batteryLearningMigration = await migrateBatteryLearningState();
   await historyStore.initialize();
   if (batteryLearningMigration.migrated) {
     historyStore.tagEventsBefore("adaptiveCharging", batteryLearningMigration.migratedAt, { modelVersion: 1 });
   }
   lastRecordedSample = historyStore.latestSample();
-  await migrateBatteryCapabilitiesFromGuard();
   const startupConfig = await readConfig();
   const startupAdaptiveChargingState = await readAdaptiveChargingState();
   await refreshBatteryLearning(startupConfig, startupAdaptiveChargingState);
@@ -7847,24 +8941,7 @@ async function initializeApplication() {
       payload: delivery,
     });
   }
-  startScheduler();
-  startBackgroundRecorder();
-  const runRetention = async () => {
-    try {
-      const config = await readConfig();
-      if (config.retention.automaticMaintenance) await trimHistory(config.retention);
-      try {
-        await updateCurrentGasTariff(config);
-      } catch (error) {
-        logDetailedError("gas-tariff", error);
-      }
-    } catch (err) {
-      logDetailedError("retention", err);
-    }
-  };
-  retentionTimer = setInterval(runRetention, 24 * 60 * 60_000);
-  retentionTimer.unref?.();
-  void runRetention();
+  startApplicationBackgroundProcesses();
   applicationStarted = true;
 }
 
@@ -7903,9 +8980,19 @@ async function performDatabaseUpgrade(backupRequested) {
       databaseUpgrade.phase = "migrating";
       databaseUpgrade.percent = 0;
       await migrateHistoryDatabase(DATA_DIR, {
-        onProgress({ fromVersion, toVersion }) {
+        onProgress(progress) {
+          const { fromVersion, toVersion } = progress;
           databaseUpgrade.sourceVersion = fromVersion;
           databaseUpgrade.migratingToVersion = toVersion;
+          if (progress.phase === "compacting") {
+            databaseUpgrade.phase = "compacting";
+            databaseUpgrade.percent = progress.percent;
+            databaseUpgrade.processed = progress.processed;
+            databaseUpgrade.total = progress.total;
+            databaseUpgrade.unit = progress.unit;
+            return;
+          }
+          databaseUpgrade.phase = "migrating";
           databaseUpgrade.percent = Math.round(((toVersion - originalSourceVersion) / (SCHEMA_VERSION - originalSourceVersion)) * 100);
           databaseUpgrade.processed = toVersion - originalSourceVersion;
           databaseUpgrade.total = SCHEMA_VERSION - originalSourceVersion;
@@ -7947,6 +9034,9 @@ async function performDatabaseUpgrade(backupRequested) {
 export const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   try {
+    if (!requestHasValidOrigin(req)) {
+      return json(res, 403, { error: "cross-origin state-changing requests are not allowed" });
+    }
     if (req.method === "GET" && url.pathname === "/api/database-upgrade/status") {
       const incompatible = databaseUpgrade.state === "invalid" || databaseUpgrade.state === "newer";
       return json(res, incompatible ? 409 : 200, databaseUpgradeView());
@@ -7983,6 +9073,7 @@ export {
   applySolarForecastBias,
   applyInterruptedChargeCap,
   aggregateEnergyReportSamples,
+  assertDeviceCommandResult,
   beginAdaptiveChargingBreakerRecovery,
   buildAdaptiveChargingPlan,
   buildAdaptiveChargingTimelineView,
@@ -8012,9 +9103,11 @@ export {
   forecastHourForInterval,
   forecastIsFresh,
   fuelCellGasUsageByBillingPeriod,
+  fuelCellHotWaterEmptyNotificationActive,
   learnedSolarFactor,
   extractBatteryLearningObservations,
   migrateLegacyAdaptiveChargingData,
+  migrateLegacyFuelCellControlData,
   migrateBatteryLearningState,
   logAdaptiveChargingInitialHeadroomWait,
   logAdaptiveChargingBreakerWait,
@@ -8044,6 +9137,7 @@ export {
   rateForTimestamp,
   readAdaptiveChargingDemandProfileDays,
   recoverConcatenatedJsonValue,
+  runCliQueued,
   sampleFromStatus,
   setDeviceCommandExecutor,
   shouldTriggerDemandGuard,
@@ -8055,11 +9149,13 @@ export {
   adaptiveChargingAvailability,
   adaptiveChargingBaseAvailability,
   solarPowerFromIrradiance,
+  summarizeCalendarSavings,
   summarizeSamples,
   suspendAdaptiveChargeInStandby,
   summarizeCircuits,
   syncAdaptiveChargingWindowExecution,
   updateAdaptiveChargingSolarHeadroomHold,
+  verifyBatteryOperationMode,
   predictHouseDemand,
 };
 

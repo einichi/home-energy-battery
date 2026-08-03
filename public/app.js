@@ -2,6 +2,8 @@ import {
   decimateTimeSeries,
   nextHalfHourBoundary,
   pruneTrendPoints,
+  trendAxisLabelOptions,
+  trendAxisTicks,
   trendSamplePoints,
 } from "./chart-utils.js";
 
@@ -58,10 +60,12 @@ const state = {
   awayPeriodsView: null,
   awayFromSetByNow: false,
   notifications: null,
+  databaseBackups: null,
   isComposing: false,
   discoveryInProgress: false,
   staticCircuitOrderKey: null,
   staticCircuitOrder: [],
+  offPeakSavingsView: "total",
 };
 
 const TREND_LABEL_KEYS = {
@@ -99,6 +103,7 @@ const NOTIFICATION_TRIGGER_DEFINITIONS = [
   { id: "adaptiveChargingUnavailable", labelKey: "triggerAdaptiveChargingUnavailable" },
   { id: "adaptiveChargingRecovered", labelKey: "triggerAdaptiveChargingRecovered" },
   { id: "adaptiveChargingWindowShortfall", labelKey: "triggerAdaptiveChargingWindowShortfall" },
+  { id: "fuelCellHotWaterEmpty", labelKey: "triggerFuelCellHotWaterEmpty" },
   { id: "lowBattery", labelKey: "triggerLowBattery", threshold: true },
 ];
 
@@ -240,7 +245,7 @@ const I18N = {
     lastYear: "Last year",
     energyReports: "Energy Reports",
     exactUsageReports: "Energy Usage",
-    reportsHelp: "Compare exact usage totals by day, week, or month.",
+    reportsHelp: "Compare recorded energy totals by day, week, or month.",
     reportMode: "Report mode",
     dailyReport: "Daily",
     weeklyReport: "Weekly",
@@ -256,7 +261,7 @@ const I18N = {
     sentToGrid: "Sent to grid",
     peakDemand: "Peak Demand",
     usageTrend: "Usage Trend",
-    exactKwhTable: "Exact kWh by Period",
+    exactKwhTable: "Energy by Period",
     period: "Period",
     change: "Change",
     noReportData: "No report data loaded yet.",
@@ -288,7 +293,11 @@ const I18N = {
     solarGeneration: "Solar Generation",
     solarSavings: "Estimated Solar Savings",
     co2Savings: "CO2 Savings",
-    offPeakSavings: "Estimated Off-Peak Charge Savings",
+    offPeakSavings: "Off-Peak Savings",
+    offPeakSavingsView: "Off-peak savings view",
+    offPeakSavingsTotal: "Total",
+    offPeakSavingsGrid: "Grid",
+    offPeakSavingsBattery: "Charge",
     powerImported: "Power Imported",
     powerExported: "Power Exported",
     guardTriggerCount: "Demand Guard Triggers",
@@ -314,9 +323,6 @@ const I18N = {
     hotWaterLevel: "Hot water level",
     hotWaterPercent: "{percent}% full (approx)",
     hotWaterLevelHelp: "Water at approximately 45°C or hotter",
-    startManualFuelCellGeneration: "Start Manual Generation",
-    confirmManualFuelCellGeneration: "Start manual Ene-Farm generation? Startup may take approximately 40 minutes and will consume gas.",
-    manualFuelCellGenerationRequested: "Manual Ene-Farm generation requested",
     electricityToday: "Electricity today",
     gasToday: "Gas today",
     operatingTime: "Operating time",
@@ -399,6 +405,7 @@ const I18N = {
     triggerAdaptiveChargingUnavailable: "Adaptive Charging unavailable",
     triggerAdaptiveChargingRecovered: "Adaptive Charging recovered",
     triggerAdaptiveChargingWindowShortfall: "Charging-window shortfall",
+    triggerFuelCellHotWaterEmpty: "Ene-Farm hot-water tank empty",
     triggerLowBattery: "Low battery SOC",
     notificationSocThreshold: "SOC threshold (%)",
     saveNotifications: "Save Notifications",
@@ -432,6 +439,7 @@ const I18N = {
     cancel: "Cancel",
     status: "Status",
     scheduled: "Scheduled",
+    observed: "Observed behaviour",
     active: "Active",
     edit: "Edit",
     delete: "Delete",
@@ -634,18 +642,53 @@ const I18N = {
     saveRetention: "Save Retention",
     trimHistoryNow: "Trim history now",
     historyTrimmed: "History trimmed",
+    databaseBackups: "Database Backups",
+    databaseBackupsHelp: "Create, restore, or delete local compressed database backups.",
+    createDatabaseBackup: "Create Backup",
+    databaseRestoreSafetyHelp: "Restoring automatically creates a safety backup of the current database first. Only backups matching this application database version can be restored.",
+    currentDatabaseVersion: "Current application DB version",
+    backupCreated: "Created",
+    backupType: "Type",
+    backupVersion: "DB Version",
+    backupSize: "Size",
+    actions: "Actions",
+    restoreBackup: "Restore",
+    deleteBackup: "Delete",
+    noDatabaseBackups: "No database backups have been created.",
+    backupTypeManual: "Manual",
+    backupTypePreUpgrade: "Before upgrade",
+    backupTypePreRestore: "Before restore",
+    backupTypeUnknown: "Unknown",
+    incompatibleBackup: "Backup DB version v{version} does not match current application DB version v{currentVersion}",
+    unknownBackupVersion: "Backup DB version is unknown",
+    confirmRestoreDatabase: "Restore {filename}? The current database will be backed up first and briefly unavailable.",
+    confirmDeleteDatabaseBackup: "Permanently delete {filename}?",
+    databaseBackupCreated: "Database backup created",
+    databaseBackupDeleted: "Database backup deleted",
+    databaseBackupRestored: "Database restored",
+    databaseOperationPreparing: "Preparing",
+    databaseOperationCopying: "Copying database",
+    databaseOperationValidating: "Validating backup",
+    databaseOperationCompressing: "Compressing backup",
+    databaseOperationDecompressing: "Decompressing backup",
+    databaseOperationSafetyBackup: "Backing up current database",
+    databaseOperationStopping: "Pausing application",
+    databaseOperationRestoring: "Restoring database",
+    databaseOperationRestarting: "Restarting application",
+    databaseOperationDeleting: "Deleting backup",
+    databaseOperationComplete: "Complete",
+    databaseOperationFailed: "Failed",
     installedEquipment: "Installed Equipment",
     solarEnabled: "Show solar generation",
     fuelCellEnabled: "Show Ene-Farm generation and status",
     fuelCellPrimaryHost: "Ene-Farm primary device",
     fuelCellProxyHosts: "Smart Cosmo fallback proxies",
     fuelCellSettings: "Ene-Farm",
-    fuelCellSettingsHelp: "Configure reporting, gas estimates, and read-only generation forecasts.",
-    generationModel: "Generation model",
-    automaticOmakase: "Automatic / Omakase",
-    fixedSchedule: "Fixed schedule",
+    fuelCellSettingsHelp: "Configure forecasting, reporting, and gas estimates.",
+    fuelCellForecastSettings: "Adaptive Charging Forecast",
+    fuelCellForecastSettingsHelp: "Uses validated observations of Ene-Farm generation when planning battery charging. The application never controls the Ene-Farm.",
+    includeFuelCellInAdaptiveCharging: "Include predicted Ene-Farm generation in Adaptive Charging",
     plannerInfluence: "Planner influence",
-    observeOnly: "Observe only",
     active: "Active",
     off: "Off",
     gasCo2Factor: "City gas emissions (kg-CO2/m³)",
@@ -663,11 +706,9 @@ const I18N = {
     eneFarmCombinedDiscount: "Ene-Farm + Combined bath/floor discount",
     eneFarmOnlyGasAssumption: "Cost estimates treat recorded Ene-Farm gas as the household's total gas use for the billing period. Gas used by cooktops, heaters, boilers, or other appliances is not included.",
     gasSeasonAutomaticHelp: "Tokyo Gas winter rates are selected automatically for December through April billing months.",
-    generationModelDeviceHelp: "ECHONET reports whether the Ene-Farm is generating, but not its configured mode or schedule. These settings describe the configuration selected on the Ene-Farm itself.",
     marginalRateOverride: "Marginal rate override (yen/m³)",
     automaticTariffUpdates: "Automatically import monthly Tokyo Gas tariffs",
-    fixedGenerationWindows: "Fixed generation windows",
-    addWindow: "Add Window",
+    addStartTime: "Add Start Time",
     saveFuelCellSettings: "Save Ene-Farm Settings",
     gasTariffData: "Gas Tariff Data",
     billingMonth: "Billing month",
@@ -679,7 +720,6 @@ const I18N = {
     exactCounter: "Exact counter",
     integratedEstimate: "Integrated estimate",
     mixedQuality: "Mixed exact and estimated data",
-    plannerObserveReason: "Observe mode: forecasts are compared with outcomes but do not change charging.",
     battery: "Battery",
     homePowerMeter: "Home power meter",
     solar: "Solar",
@@ -747,6 +787,9 @@ const I18N = {
     readingDevices: "Reading devices",
     unavailable: "Unavailable",
     today: "Today",
+    lastMonth: "Last month",
+    thisMonthToDate: "This month (to date)",
+    thisYearToDate: "This year (to date)",
     selectedRange: "Selected range",
     notSet: "Not set",
     rangeTotal: "Total over range",
@@ -754,6 +797,13 @@ const I18N = {
     batteryChargedLabel: "Charged",
     batteryDischargedLabel: "Discharged",
     databaseSize: "Database size",
+    databaseMainSize: "Main database",
+    databaseWalSize: "Write-ahead log",
+    averageSampleSize: "Average raw sample",
+    estimatedDailyGrowth: "Estimated daily growth",
+    databaseSchemaVersion: "Database schema",
+    lastDatabaseCompaction: "Last compaction",
+    neverCompacted: "Not compacted yet",
     daysRecorded: "Days recorded",
     samplesRecorded: "Samples recorded",
     now: "Now",
@@ -859,7 +909,7 @@ const I18N = {
     sentToGrid: "送電量",
     peakDemand: "最大需要",
     usageTrend: "使用量トレンド",
-    exactKwhTable: "期間別の正確なkWh",
+    exactKwhTable: "期間別エネルギー",
     period: "期間",
     change: "増減",
     noReportData: "レポートデータはまだ読み込まれていません。",
@@ -891,7 +941,11 @@ const I18N = {
     solarGeneration: "太陽光発電",
     solarSavings: "太陽光の推定節約額",
     co2Savings: "CO2削減量",
-    offPeakSavings: "夜間充電の推定節約額",
+    offPeakSavings: "時間帯別料金の節約額",
+    offPeakSavingsView: "時間帯別料金の節約額表示",
+    offPeakSavingsTotal: "合計",
+    offPeakSavingsGrid: "買電",
+    offPeakSavingsBattery: "充電",
     powerImported: "買電量",
     powerExported: "売電量",
     guardTriggerCount: "ブレーカー落ちガード作動回数",
@@ -917,9 +971,6 @@ const I18N = {
     hotWaterLevel: "残湯量",
     hotWaterPercent: "{percent}%（目安）",
     hotWaterLevelHelp: "約45℃以上のお湯の目安",
-    startManualFuelCellGeneration: "手動発電を開始",
-    confirmManualFuelCellGeneration: "エネファームの手動発電を開始しますか？ 起動には約40分かかる場合があり、ガスを使用します。",
-    manualFuelCellGenerationRequested: "エネファームの手動発電を要求しました",
     electricityToday: "本日の発電量",
     gasToday: "本日のガス使用量",
     operatingTime: "運転時間",
@@ -1000,6 +1051,7 @@ const I18N = {
     triggerAdaptiveChargingUnavailable: "適応充電が利用不可",
     triggerAdaptiveChargingRecovered: "適応充電が復旧",
     triggerAdaptiveChargingWindowShortfall: "充電時間帯の不足",
+    triggerFuelCellHotWaterEmpty: "エネファーム貯湯量が空",
     triggerLowBattery: "蓄電池残量低下",
     notificationSocThreshold: "充電率しきい値 (%)",
     saveNotifications: "通知設定を保存",
@@ -1033,6 +1085,7 @@ const I18N = {
     cancel: "キャンセル",
     status: "状態",
     scheduled: "予定",
+    observed: "実績ベース",
     active: "外出中",
     edit: "編集",
     delete: "削除",
@@ -1235,18 +1288,53 @@ const I18N = {
     saveRetention: "保存期間設定を保存",
     trimHistoryNow: "データを今すぐトリム",
     historyTrimmed: "履歴をトリムしました",
+    databaseBackups: "データベースバックアップ",
+    databaseBackupsHelp: "ローカルの圧縮データベースバックアップを作成、復元、削除します。",
+    createDatabaseBackup: "バックアップを作成",
+    databaseRestoreSafetyHelp: "復元前に現在のデータベースを自動的に安全バックアップします。このアプリと同じデータベースバージョンのバックアップのみ復元できます。",
+    currentDatabaseVersion: "現在のアプリDBバージョン",
+    backupCreated: "作成日時",
+    backupType: "種類",
+    backupVersion: "DBバージョン",
+    backupSize: "サイズ",
+    actions: "操作",
+    restoreBackup: "復元",
+    deleteBackup: "削除",
+    noDatabaseBackups: "データベースバックアップはありません。",
+    backupTypeManual: "手動",
+    backupTypePreUpgrade: "アップグレード前",
+    backupTypePreRestore: "復元前",
+    backupTypeUnknown: "不明",
+    incompatibleBackup: "バックアップのDBバージョンv{version}は現在のアプリDBバージョンv{currentVersion}と一致しません",
+    unknownBackupVersion: "バックアップのDBバージョンが不明です",
+    confirmRestoreDatabase: "{filename}を復元しますか？ 現在のデータベースを先にバックアップし、一時的に利用できなくなります。",
+    confirmDeleteDatabaseBackup: "{filename}を完全に削除しますか？",
+    databaseBackupCreated: "データベースバックアップを作成しました",
+    databaseBackupDeleted: "データベースバックアップを削除しました",
+    databaseBackupRestored: "データベースを復元しました",
+    databaseOperationPreparing: "準備中",
+    databaseOperationCopying: "データベースをコピー中",
+    databaseOperationValidating: "バックアップを検証中",
+    databaseOperationCompressing: "バックアップを圧縮中",
+    databaseOperationDecompressing: "バックアップを展開中",
+    databaseOperationSafetyBackup: "現在のデータベースをバックアップ中",
+    databaseOperationStopping: "アプリケーションを一時停止中",
+    databaseOperationRestoring: "データベースを復元中",
+    databaseOperationRestarting: "アプリケーションを再開中",
+    databaseOperationDeleting: "バックアップを削除中",
+    databaseOperationComplete: "完了",
+    databaseOperationFailed: "失敗",
     installedEquipment: "設置済み設備",
     solarEnabled: "太陽光発電を表示",
     fuelCellEnabled: "エネファーム発電・状態を表示",
     fuelCellPrimaryHost: "エネファーム本体",
     fuelCellProxyHosts: "スマートコスモのフォールバック",
     fuelCellSettings: "エネファーム",
-    fuelCellSettingsHelp: "レポート、ガス料金推定、読み取り専用の発電予測を設定します。",
-    generationModel: "発電モデル",
-    automaticOmakase: "自動・おまかせ",
-    fixedSchedule: "固定スケジュール",
+    fuelCellSettingsHelp: "発電予測、レポート、ガス料金推定を設定します。",
+    fuelCellForecastSettings: "アダプティブ充電の発電予測",
+    fuelCellForecastSettingsHelp: "検証済みのエネファーム発電実績を蓄電池の充電計画に使用します。アプリケーションからエネファームを操作することはありません。",
+    includeFuelCellInAdaptiveCharging: "エネファーム発電予測をアダプティブ充電に反映する",
     plannerInfluence: "充電計画への反映",
-    observeOnly: "観察のみ",
     active: "有効",
     off: "無効",
     gasCo2Factor: "都市ガス排出係数 (kg-CO2/m³)",
@@ -1264,11 +1352,9 @@ const I18N = {
     eneFarmCombinedDiscount: "エネファーム + セット割",
     eneFarmOnlyGasAssumption: "料金推定では、請求期間中に記録したエネファームのガス使用量を家庭全体の使用量として扱います。ガスコンロ、暖房、給湯器など他の機器が使用するガスは含まれません。",
     gasSeasonAutomaticHelp: "東京ガスの冬期料金は12月〜4月検針分に自動適用されます。",
-    generationModelDeviceHelp: "ECHONETから取得できるのは発電動作の状態で、設定済みの発電モードや時間帯は取得できません。ここではエネファーム本体で選択した設定を記録します。",
     marginalRateOverride: "従量単価の上書き (円/m³)",
     automaticTariffUpdates: "東京ガスの月別料金を自動取得",
-    fixedGenerationWindows: "固定発電時間帯",
-    addWindow: "時間帯を追加",
+    addStartTime: "開始時刻を追加",
     saveFuelCellSettings: "エネファーム設定を保存",
     gasTariffData: "ガス料金データ",
     billingMonth: "請求月",
@@ -1280,7 +1366,6 @@ const I18N = {
     exactCounter: "積算値",
     integratedEstimate: "積算推定",
     mixedQuality: "積算値と推定値の混在",
-    plannerObserveReason: "観察モード：予測と実績を比較しますが、充電計画には反映しません。",
     battery: "蓄電池",
     homePowerMeter: "家庭内電力メーター",
     solar: "太陽光",
@@ -1348,6 +1433,9 @@ const I18N = {
     readingDevices: "機器を読み取り中",
     unavailable: "取得不可",
     today: "今日",
+    lastMonth: "先月",
+    thisMonthToDate: "今月（今日まで）",
+    thisYearToDate: "今年（今日まで）",
     selectedRange: "選択範囲",
     notSet: "未設定",
     rangeTotal: "期間合計",
@@ -1355,6 +1443,13 @@ const I18N = {
     batteryChargedLabel: "充電",
     batteryDischargedLabel: "放電",
     databaseSize: "データベースサイズ",
+    databaseMainSize: "メインデータベース",
+    databaseWalSize: "先行書き込みログ",
+    averageSampleSize: "生サンプルの平均サイズ",
+    estimatedDailyGrowth: "1日の推定増加量",
+    databaseSchemaVersion: "データベーススキーマ",
+    lastDatabaseCompaction: "最終圧縮",
+    neverCompacted: "未圧縮",
     daysRecorded: "記録日数",
     samplesRecorded: "記録サンプル数",
     now: "現在",
@@ -1466,6 +1561,7 @@ function setLanguage(language) {
   drawGraphAnalysis();
   renderDashboardWidgetControls(state.config ?? {});
   if (state.notifications) renderNotificationView(state.notifications);
+  if (state.databaseBackups) renderDatabaseBackups(state.databaseBackups);
   if (state.adaptiveChargingStatus) renderAdaptiveChargingStatus(state.adaptiveChargingStatus);
   else if (state.awayPeriodsView) renderAwayPeriods(state.awayPeriodsView);
   setPage(state.currentPage);
@@ -1849,16 +1945,6 @@ function sampleValueForTrend(name, sample) {
   return Number.isFinite(value) ? value : null;
 }
 
-function pushSampleToTrends(sample, options = {}) {
-  const time = new Date(sample.timestamp).getTime();
-  for (const channel of Object.keys(sample.circuitPowerW ?? {})) {
-    ensureCircuitTrendConfig(channel);
-  }
-  for (const name of Object.keys(TREND_CONFIG)) {
-    pushTrend(name, sampleValueForTrend(name, sample), time, options);
-  }
-}
-
 function ensureCircuitTrendConfigsForSamples(samples = []) {
   for (const sample of samples) {
     for (const channel of Object.keys(sample.circuitPowerW ?? {})) {
@@ -2238,23 +2324,25 @@ function drawTrendCanvas(name, canvas, points, hover, horizonMs, options = {}) {
     : Number.isFinite(windowEndMs)
       ? windowEndMs - horizonMs
       : null;
-  const firstLabel = Number.isFinite(windowStartMs)
-    ? new Date(windowStartMs).toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : state.historyMode
-      ? t("selectedRange")
-      : t("minAgo");
-  const lastLabel = Number.isFinite(windowEndMs)
-    ? new Date(windowEndMs).toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : t("now");
-  ctx.fillText(firstLabel, pad.left, height - 14);
-  ctx.textAlign = "right";
-  ctx.fillText(lastLabel, width - pad.right, height - 14);
+  const axisTicks = trendAxisTicks(windowStartMs, windowEndMs, chartWidth);
+  const axisLabelOptions = trendAxisLabelOptions(horizonMs);
+  if (axisTicks.length) {
+    axisTicks.forEach((timestamp, index) => {
+      const ratio = index / (axisTicks.length - 1);
+      if (index === 0) ctx.textAlign = "left";
+      else if (index === axisTicks.length - 1) ctx.textAlign = "right";
+      else ctx.textAlign = "center";
+      ctx.fillText(
+        new Date(timestamp).toLocaleString([], axisLabelOptions),
+        pad.left + chartWidth * ratio,
+        height - 14,
+      );
+    });
+  } else {
+    ctx.fillText(state.historyMode ? t("selectedRange") : t("minAgo"), pad.left, height - 14);
+    ctx.textAlign = "right";
+    ctx.fillText(t("now"), width - pad.right, height - 14);
+  }
   ctx.textAlign = "center";
   ctx.fillText(t("timeAxis"), pad.left + chartWidth / 2, height - 3);
 
@@ -2465,15 +2553,6 @@ function setBar(selector, percent) {
   el.style.width = `${Math.max(0, Math.min(100, percent))}%`;
 }
 
-function setPowerBar(selector, watts, maxWatts = 3000) {
-  const el = $(selector);
-  if (!el) return;
-  const percent = Math.max(-100, Math.min(100, (watts / maxWatts) * 100));
-  el.style.width = `${Math.abs(percent)}%`;
-  el.style.marginLeft = percent < 0 ? `${50 - Math.abs(percent) / 2}%` : "50%";
-  el.classList.toggle("negative", percent < 0);
-}
-
 function selectHourOptions(select) {
   select.innerHTML = "";
   const current = document.createElement("option");
@@ -2508,7 +2587,7 @@ function operationModeOptions() {
 function rateBandRow(band = {}, index = 0) {
   return `
     <div class="rate-band-row" data-rate-band="${index}">
-      <label><span>${t("rateBandLabel")}</span><input data-rate-field="label" value="${band.label ?? ""}" /></label>
+      <label><span>${t("rateBandLabel")}</span><input data-rate-field="label" value="${escapeHtml(band.label ?? "")}" /></label>
       <label><span>${t("rateBandPrice")}</span><input data-rate-field="yenPerKwh" type="number" min="0" step="0.01" value="${band.yenPerKwh ?? ""}" /></label>
       <label><span>${t("rateBandStart")}</span><input data-rate-field="start" type="time" value="${band.start ?? "00:00"}" /></label>
       <label><span>${t("rateBandEnd")}</span><input data-rate-field="end" type="time" value="${band.end ?? "00:00"}" /></label>
@@ -2646,7 +2725,6 @@ function defaultAutomationRule() {
       breakerAmps: 40,
       breakerVoltage: 100,
       reserveAmps: 5,
-      batteryChargingEstimateW: state.config?.batteryCapabilities?.maximumChargeWatts ?? 1000,
       restoreBelowAmps: 30,
       restoreDelaySeconds: 300,
     },
@@ -4090,50 +4168,6 @@ function collectRetentionConfig() {
   };
 }
 
-function fuelCellDayLabel(day) {
-  const date = new Date(2026, 0, 4 + Number(day));
-  return new Intl.DateTimeFormat(state.language === "ja" ? "ja-JP" : "en-US", { weekday: "short" }).format(date);
-}
-
-function addFuelCellFixedWindow(window = {}) {
-  const root = $("#fuelCellFixedWindows");
-  if (!root) return;
-  const row = document.createElement("div");
-  row.className = "fixed-window-row";
-  row.innerHTML = `
-    <label><span>${t("label")}</span><input data-fuel-cell-window="label" value="${escapeHtml(window.label ?? "")}" /></label>
-    <label><span>${t("start")}</span><input data-fuel-cell-window="start" type="time" value="${window.start ?? "08:00"}" /></label>
-    <label><span>${t("end")}</span><input data-fuel-cell-window="end" type="time" value="${window.end ?? "18:00"}" /></label>
-    <button type="button" class="delete" data-remove-fuel-cell-window>${t("remove")}</button>
-    <div class="fixed-window-days">${Array.from({ length: 7 }, (_, day) => `<label><input data-fuel-cell-day="${day}" type="checkbox" ${(window.days ?? [0,1,2,3,4,5,6]).includes(day) ? "checked" : ""} />${fuelCellDayLabel(day)}</label>`).join("")}</div>`;
-  root.append(row);
-}
-
-function renderFuelCellFixedWindows(windows = []) {
-  const root = $("#fuelCellFixedWindows");
-  if (!root) return;
-  root.replaceChildren();
-  for (const window of windows) addFuelCellFixedWindow(window);
-  if (!windows.length) addFuelCellFixedWindow();
-}
-
-function collectFuelCellFixedWindows() {
-  return $$("#fuelCellFixedWindows .fixed-window-row").map((row) => ({
-    label: row.querySelector('[data-fuel-cell-window="label"]').value,
-    start: row.querySelector('[data-fuel-cell-window="start"]').value,
-    end: row.querySelector('[data-fuel-cell-window="end"]').value,
-    days: Array.from(row.querySelectorAll("[data-fuel-cell-day]:checked")).map((input) => Number(input.dataset.fuelCellDay)),
-  })).filter((window) => window.days.length && window.start && window.end && window.start !== window.end);
-}
-
-function updateFuelCellModelControls() {
-  const model = $("#fuelCellGenerationModel")?.value ?? "automatic";
-  $("#fuelCellFixedSchedule")?.classList.toggle("hidden", model !== "fixed");
-  const influence = $("#fuelCellPlannerInfluence");
-  if (influence) influence.disabled = model === "off";
-  setText("#fuelCellInfluenceStatus", model === "off" ? t("off") : influence?.value === "active" ? t("active") : t("plannerObserveReason"));
-}
-
 async function loadFuelCellTariffMonth() {
   const month = $("#fuelCellTariffMonth")?.value;
   if (!month) return;
@@ -4170,8 +4204,7 @@ function updateConfigControls(config) {
   $("#configSmartCosmoEnabled").checked = config.smartCosmoEnabled !== false;
   $("#configFuelCellEnabled").checked = config.fuelCellEnabled !== false;
   const fuelCell = config.fuelCell ?? {};
-  $("#fuelCellGenerationModel").value = fuelCell.generationModel ?? "automatic";
-  $("#fuelCellPlannerInfluence").value = fuelCell.plannerInfluence ?? "observe";
+  $("#fuelCellIncludeInAdaptiveCharging").checked = fuelCell.includeInAdaptiveCharging === true;
   $("#fuelCellGasCo2").value = fuelCell.gasCo2KgPerM3 ?? 2.21;
   $("#fuelCellTariffProvider").value = fuelCell.tariff?.provider ?? "tokyo-gas";
   $("#fuelCellTariffRegion").value = fuelCell.tariff?.region ?? "tokyo";
@@ -4182,8 +4215,6 @@ function updateConfigControls(config) {
   $("#fuelCellDiscount").value = fuelCell.tariff?.equipmentDiscount ?? "";
   $("#fuelCellMarginalRate").value = fuelCell.tariff?.marginalRateOverrideYenPerM3 ?? "";
   $("#fuelCellTariffAutomatic").checked = fuelCell.tariff?.automaticUpdates === true;
-  renderFuelCellFixedWindows(fuelCell.fixedWindows ?? []);
-  updateFuelCellModelControls();
   if (!$("#fuelCellTariffMonth").value) $("#fuelCellTariffMonth").value = new Date().toISOString().slice(0, 7);
   const rateMode = rateModeFromConfig(config);
   const modeInput = document.querySelector(
@@ -4205,7 +4236,6 @@ function updateConfigControls(config) {
   $("#automaticRetention").checked = retention.automaticMaintenance !== false;
   $("#batteryUsableCapacity").value = config.batteryCapabilities?.usableCapacityKwh ?? "";
   $("#batteryMaximumChargeWatts").value = config.batteryCapabilities?.maximumChargeWatts
-    ?? state.automationRules.find((rule) => rule.type === "backup-demand-guard")?.conditions?.batteryChargingEstimateW
     ?? "";
   $("#adaptiveChargingEnabled").checked = config.adaptiveCharging?.enabled === true;
   $("#adaptiveChargingLatitude").value = config.adaptiveCharging?.latitude ?? "";
@@ -4287,18 +4317,6 @@ function renderFuelCellHotWater(fuelCells = []) {
   tank.setAttribute("aria-valuetext", levelText);
   tank.style.setProperty("--tank-fill", `${percent ?? 0}%`);
   tank.classList.toggle("is-unavailable", percent === null);
-  const startButton = $("#fuelCellManualStart");
-  if (!startButton) return;
-  const generationState = primary?.generation_status?.value ?? null;
-  const canStart = generationState === "stopped" || generationState === "idling";
-  startButton.disabled = !canStart;
-  startButton.textContent = generationState === "starting"
-    ? t("fuelCellStateStarting")
-    : generationState === "generating"
-      ? t("fuelCellStateGenerating")
-      : generationState === "stopping"
-        ? t("fuelCellStateStopping")
-        : t("startManualFuelCellGeneration");
 }
 
 function renderCircuitWidgets(data) {
@@ -4518,7 +4536,6 @@ function renderDashboard(data, options = {}) {
   renderFuelCellHotWater(fuelCells);
   setText("#solarSavings", yen(Number(data.savings?.solarSavingYen)));
   setText("#co2Savings", co2Saved(Number(data.savings?.co2SavingKg)));
-  setText("#offPeakSavings", yen(Number(data.savings?.offPeakSavingYen)));
   setText("#powerImported", energyKwh(Number(data.savings?.gridImportKwh)));
   setText("#powerExported", energyKwh(Number(data.savings?.gridExportKwh)));
   setText(
@@ -4542,6 +4559,8 @@ function renderDashboard(data, options = {}) {
     "#offPeakSavingsPeriod",
     summaryPeriod,
   );
+  renderSavingsPeriodBreakdown(data.savingsPeriods);
+  renderOffPeakSavings(data.savings, data.savingsPeriods);
   setText("#powerImportedPeriod", summaryPeriod);
   setText("#powerExportedPeriod", summaryPeriod);
   setText("#guardTriggerCountPeriod", summaryPeriod);
@@ -4585,6 +4604,45 @@ function renderFuelCellSummary(summary) {
   renderFuelCellStateStrip("#fuelCellStatusStateStrip", summary.transitions, summary.start, summary.end, summary.stateIntervals);
   renderFuelCellStateAxis(summary.start, summary.end);
   renderFuelCellStateStrip("#fuelCellDashboardStateStrip", summary.transitions, summary.start, summary.end, summary.stateIntervals);
+}
+
+function renderSavingsPeriodBreakdown(periods = {}) {
+  const hidden = state.historyMode || !periods?.lastMonth || !periods?.month || !periods?.year;
+  $$(".savings-period-breakdown").forEach((element) => element.classList.toggle("hidden", hidden));
+  if (hidden) return;
+  const metrics = [
+    { prefix: "solarSavings", key: "solarSavingYen", format: yen },
+    { prefix: "co2Savings", key: "co2SavingKg", format: co2Saved },
+  ];
+  for (const { prefix, key, format } of metrics) {
+    for (const { id, key: periodKey } of [
+      { id: "LastMonth", key: "lastMonth" },
+      { id: "Month", key: "month" },
+      { id: "Year", key: "year" },
+    ]) {
+      const value = Number(periods[periodKey]?.[key]);
+      setText(`#${prefix}${id}`, format(value));
+    }
+  }
+}
+
+function renderOffPeakSavings(summary = {}, periods = {}) {
+  const metricKey = {
+    total: "totalOffPeakSavingYen",
+    grid: "gridOffPeakSavingYen",
+    battery: "batteryOffPeakSavingYen",
+  }[state.offPeakSavingsView] ?? "totalOffPeakSavingYen";
+  setText("#offPeakSavings", yen(Number(summary?.[metricKey])));
+  for (const { id, key } of [
+    { id: "LastMonth", key: "lastMonth" },
+    { id: "Month", key: "month" },
+    { id: "Year", key: "year" },
+  ]) {
+    setText(`#offPeakSavings${id}`, yen(Number(periods?.[key]?.[metricKey])));
+  }
+  $$('input[name="offPeakSavingsView"]').forEach((input) => {
+    input.checked = input.value === state.offPeakSavingsView;
+  });
 }
 
 async function refreshFuelCellSummary({ start = null, end = null, graph = false } = {}) {
@@ -4892,7 +4950,7 @@ function renderReportRows(report) {
   for (const bucket of buckets) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${bucket.label}</td>
+      <td>${escapeHtml(bucket.label)}</td>
       <td data-report-feature="smart-cosmo">${energyKwh(Number(bucket.houseDemandKwh))}</td>
       <td data-report-feature="smart-cosmo">${formatReportDelta(bucket)}</td>
       <td data-report-feature="solar">${energyKwh(Number(bucket.solarGenerationKwh))}</td>
@@ -5234,19 +5292,33 @@ function renderSchedules(schedules) {
         : schedule.lastResult.error
       : t("waiting");
     const toggleLabel = schedule.enabled === false ? t("resume") : t("pause");
-    const toggleButton = schedule.completed
-      ? ""
-      : `<button class="ghost" data-toggle-enabled="${schedule.id}" data-enabled="${schedule.enabled === false ? "true" : "false"}">${toggleLabel}</button>`;
-    tr.innerHTML = `
-      <td>${scheduleWhen(schedule)}</td>
-      <td>${actionLabel(schedule.action)}</td>
-      <td>${schedule.repeat === "daily" ? `${scheduleDays(schedule)}<br>` : ""}${schedulePayloadDetails(schedule)}</td>
-      <td>${status}</td>
-      <td class="schedule-actions">
-        ${toggleButton}
-        <button class="delete" data-delete="${schedule.id}">Delete</button>
-      </td>
-    `;
+    const whenCell = document.createElement("td");
+    whenCell.textContent = scheduleWhen(schedule);
+    const actionCell = document.createElement("td");
+    actionCell.textContent = actionLabel(schedule.action);
+    const detailsCell = document.createElement("td");
+    if (schedule.repeat === "daily") {
+      detailsCell.append(document.createTextNode(scheduleDays(schedule)), document.createElement("br"));
+    }
+    detailsCell.append(document.createTextNode(schedulePayloadDetails(schedule)));
+    const statusCell = document.createElement("td");
+    statusCell.textContent = status;
+    const actionsCell = document.createElement("td");
+    actionsCell.className = "schedule-actions";
+    if (!schedule.completed) {
+      const toggleButton = document.createElement("button");
+      toggleButton.className = "ghost";
+      toggleButton.dataset.toggleEnabled = schedule.id;
+      toggleButton.dataset.enabled = schedule.enabled === false ? "true" : "false";
+      toggleButton.textContent = toggleLabel;
+      actionsCell.append(toggleButton);
+    }
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "delete";
+    deleteButton.dataset.delete = schedule.id;
+    deleteButton.textContent = t("delete");
+    actionsCell.append(deleteButton);
+    tr.append(whenCell, actionCell, detailsCell, statusCell, actionsCell);
     rows.append(tr);
   }
   updateScheduleAdaptiveChargingState();
@@ -5402,6 +5474,7 @@ async function hydrateSettingsView() {
     refreshAdaptiveCharging(),
     refreshHistoryStats(),
     refreshNotifications(),
+    refreshDatabaseBackups(),
   ]);
   for (const result of results) {
     if (result.status === "rejected") toast(result.reason.message);
@@ -5422,6 +5495,20 @@ async function refreshHistoryStats() {
   try {
     const stats = await api("/api/history/stats");
     setText("#historyStatSize", formatBytes(Number(stats.sizeBytes)));
+    setText("#historyStatMainSize", formatBytes(Number(stats.fileSizes?.mainBytes)));
+    setText("#historyStatWalSize", formatBytes(Number(stats.fileSizes?.walBytes)));
+    setText("#historyStatAverageSample", formatBytes(Number(stats.averageSampleBytes)));
+    setText("#historyStatDailyGrowth", formatBytes(Number(stats.estimatedDailyGrowthBytes)));
+    setText("#historyStatSchema", `v${Number(stats.schemaVersion ?? 0)}`);
+    setText(
+      "#historyStatCompaction",
+      stats.lastCompaction?.completedAt
+        ? `${formatDateTime(stats.lastCompaction.completedAt)} · ${formatBytes(
+          Math.max(0, Number(stats.lastCompaction.sourceSamplePayloadBytes ?? 0)
+            - Number(stats.lastCompaction.compactSamplePayloadBytes ?? 0)),
+        )}`
+        : t("neverCompacted"),
+    );
     setText(
       "#historyStatDays",
       new Intl.NumberFormat(state.language === "ja" ? "ja-JP" : "en-US", {
@@ -5441,6 +5528,150 @@ async function refreshHistoryStats() {
   } catch (err) {
     toast(err.message);
   }
+}
+
+function databaseBackupTypeLabel(kind) {
+  return t({
+    manual: "backupTypeManual",
+    "pre-upgrade": "backupTypePreUpgrade",
+    "pre-restore": "backupTypePreRestore",
+  }[kind] ?? "backupTypeUnknown");
+}
+
+function databaseOperationLabel(phase = "idle") {
+  if (String(phase).startsWith("safety-")) return t("databaseOperationSafetyBackup");
+  return t({
+    preparing: "databaseOperationPreparing",
+    copying: "databaseOperationCopying",
+    validating: "databaseOperationValidating",
+    compressing: "databaseOperationCompressing",
+    decompressing: "databaseOperationDecompressing",
+    "safety-backup": "databaseOperationSafetyBackup",
+    stopping: "databaseOperationStopping",
+    restoring: "databaseOperationRestoring",
+    restarting: "databaseOperationRestarting",
+    deleting: "databaseOperationDeleting",
+    complete: "databaseOperationComplete",
+    failed: "databaseOperationFailed",
+  }[phase] ?? "databaseOperationPreparing");
+}
+
+function renderDatabaseBackupProgress(operation = {}) {
+  const root = $("#databaseBackupProgress");
+  if (!root) return;
+  const visible = operation.busy || ["complete", "failed"].includes(operation.phase);
+  root.classList.toggle("hidden", !visible);
+  if (!visible) return;
+  const percent = Math.max(0, Math.min(100, Number(operation.percent) || 0));
+  setText("#databaseBackupProgressLabel", operation.error || databaseOperationLabel(operation.phase));
+  setText("#databaseBackupProgressPercent", `${Math.round(percent)}%`);
+  $("#databaseBackupProgressBar").value = percent;
+  const processed = Number(operation.processed);
+  const total = Number(operation.total);
+  const detail = Number.isFinite(processed) && Number.isFinite(total) && total > 0
+    ? operation.unit === "bytes"
+      ? `${formatBytes(processed)} / ${formatBytes(total)}`
+      : `${processed.toLocaleString()} / ${total.toLocaleString()} ${operation.unit ?? ""}`.trim()
+    : operation.filename ?? "";
+  setText("#databaseBackupProgressDetail", detail);
+}
+
+function renderDatabaseBackups(view) {
+  state.databaseBackups = view;
+  const rows = $("#databaseBackupRows");
+  if (!rows) return;
+  const busy = view?.operation?.busy === true;
+  const currentVersion = Number.isInteger(view?.schemaVersion) ? view.schemaVersion : null;
+  setText("#currentDatabaseVersion", Number.isInteger(currentVersion) ? `v${currentVersion}` : "--");
+  $("#createDatabaseBackupBtn").disabled = busy;
+  renderDatabaseBackupProgress(view?.operation ?? {});
+  rows.replaceChildren();
+  const backups = view?.backups ?? [];
+  if (!backups.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 5;
+    cell.className = "empty-state";
+    cell.textContent = t("noDatabaseBackups");
+    row.append(cell);
+    rows.append(row);
+    return;
+  }
+  for (const backup of backups) {
+    const row = document.createElement("tr");
+    const created = document.createElement("td");
+    const filename = document.createElement("strong");
+    filename.textContent = backup.filename;
+    const date = document.createElement("small");
+    date.textContent = new Date(backup.createdAt ?? backup.modifiedAt).toLocaleString();
+    created.append(filename, date);
+    const kind = document.createElement("td");
+    kind.textContent = databaseBackupTypeLabel(backup.kind);
+    const version = document.createElement("td");
+    version.textContent = Number.isInteger(backup.schemaVersion) ? `v${backup.schemaVersion}` : "--";
+    const size = document.createElement("td");
+    size.textContent = formatBytes(Number(backup.sizeBytes));
+    const actions = document.createElement("td");
+    actions.className = "database-backup-actions";
+    const restore = document.createElement("button");
+    restore.type = "button";
+    restore.className = "ghost";
+    restore.dataset.databaseBackupAction = "restore";
+    restore.dataset.databaseBackupFilename = backup.filename;
+    restore.textContent = t("restoreBackup");
+    const compatible = backup.compatible === true
+      && Number.isInteger(backup.schemaVersion)
+      && Number.isInteger(currentVersion)
+      && backup.schemaVersion === currentVersion;
+    restore.disabled = busy || !compatible;
+    if (!compatible) {
+      restore.title = Number.isInteger(backup.schemaVersion)
+        ? template("incompatibleBackup", {
+          version: backup.schemaVersion,
+          currentVersion: Number.isInteger(currentVersion) ? currentVersion : "--",
+        })
+        : t("unknownBackupVersion");
+      row.classList.add("database-backup-incompatible");
+    }
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "delete";
+    remove.dataset.databaseBackupAction = "delete";
+    remove.dataset.databaseBackupFilename = backup.filename;
+    remove.textContent = t("deleteBackup");
+    remove.disabled = busy;
+    actions.append(restore, remove);
+    row.append(created, kind, version, size, actions);
+    rows.append(row);
+  }
+}
+
+async function refreshDatabaseBackups() {
+  const view = await api("/api/database-backups");
+  renderDatabaseBackups(view);
+  return view;
+}
+
+async function runDatabaseOperation(request, successKey, { reload = false } = {}) {
+  let settled = false;
+  let result;
+  let failure;
+  request.then((value) => {
+    settled = true;
+    result = value;
+  }, (error) => {
+    settled = true;
+    failure = error;
+  });
+  while (!settled) {
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await refreshDatabaseBackups().catch(() => {});
+  }
+  if (failure) throw failure;
+  renderDatabaseBackups(result);
+  toast(t(successKey));
+  if (reload) window.location.reload();
+  return result;
 }
 
 async function mutate(path, body, success) {
@@ -5470,19 +5701,6 @@ function initForms() {
   $("#settingsPage")?.addEventListener("compositionend", () => {
     state.isComposing = false;
   });
-  $("#fuelCellManualStart")?.addEventListener("click", async (event) => {
-    if (!window.confirm(t("confirmManualFuelCellGeneration"))) return;
-    const button = event.currentTarget;
-    button.disabled = true;
-    try {
-      await api("/api/actions/fuel-cell-start", { method: "POST", body: {} });
-      toast(t("manualFuelCellGenerationRequested"));
-      await refreshAll();
-    } catch (err) {
-      toast(err.message);
-      if (state.status) renderDashboard(state.status, { recordTrend: false });
-    }
-  });
   ["#chargeStart", "#chargeEnd", "#dischargeStart", "#dischargeEnd"].forEach(
     (selector) => selectHourOptions($(selector)),
   );
@@ -5495,6 +5713,12 @@ function initForms() {
   renderReportQuickRanges("day");
   setDefaultReportRange("day");
   setLiveModeButton();
+  $$('input[name="offPeakSavingsView"]').forEach((input) => {
+    input.addEventListener("change", () => {
+      state.offPeakSavingsView = input.value;
+      renderOffPeakSavings(state.status?.savings, state.status?.savingsPeriods);
+    });
+  });
   $$("[data-range-ms]").forEach((button) => {
     button.addEventListener("click", () => {
       setHistoryRange(Number(button.dataset.rangeMs));
@@ -5689,23 +5913,13 @@ function initForms() {
       toast(err.message);
     }
   });
-  $("#fuelCellGenerationModel")?.addEventListener("change", updateFuelCellModelControls);
-  $("#fuelCellPlannerInfluence")?.addEventListener("change", updateFuelCellModelControls);
-  $("#addFuelCellWindow")?.addEventListener("click", () => addFuelCellFixedWindow());
-  $("#fuelCellFixedWindows")?.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-remove-fuel-cell-window]");
-    if (!button) return;
-    button.closest(".fixed-window-row")?.remove();
-  });
   $("#fuelCellConfigForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const optional = (selector) => $(selector).value === "" ? null : $(selector).value;
     try {
       const config = await api("/api/config", { method: "PUT", body: {
         fuelCell: {
-          generationModel: $("#fuelCellGenerationModel").value,
-          plannerInfluence: $("#fuelCellPlannerInfluence").value,
-          fixedWindows: collectFuelCellFixedWindows(),
+          includeInAdaptiveCharging: $("#fuelCellIncludeInAdaptiveCharging").checked,
           gasCo2KgPerM3: $("#fuelCellGasCo2").value,
           tariff: {
             provider: $("#fuelCellTariffProvider").value,
@@ -6001,6 +6215,51 @@ function initForms() {
     }
   });
 
+  $("#createDatabaseBackupBtn")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      await runDatabaseOperation(
+        api("/api/database-backups", { method: "POST", body: {} }),
+        "databaseBackupCreated",
+      );
+    } catch (err) {
+      toast(err.message);
+      await refreshDatabaseBackups().catch(() => {});
+    } finally {
+      button.disabled = state.databaseBackups?.operation?.busy === true;
+    }
+  });
+
+  $("#databaseBackupRows")?.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-database-backup-action]");
+    if (!button || button.disabled) return;
+    const filename = button.dataset.databaseBackupFilename;
+    const action = button.dataset.databaseBackupAction;
+    if (action === "restore"
+      && !window.confirm(template("confirmRestoreDatabase", { filename }))) return;
+    if (action === "delete"
+      && !window.confirm(template("confirmDeleteDatabaseBackup", { filename }))) return;
+    button.disabled = true;
+    try {
+      if (action === "restore") {
+        await runDatabaseOperation(
+          api(`/api/database-backups/${encodeURIComponent(filename)}/restore`, { method: "POST", body: {} }),
+          "databaseBackupRestored",
+          { reload: true },
+        );
+      } else {
+        await runDatabaseOperation(
+          api(`/api/database-backups/${encodeURIComponent(filename)}`, { method: "DELETE" }),
+          "databaseBackupDeleted",
+        );
+      }
+    } catch (err) {
+      toast(err.message);
+      await refreshDatabaseBackups().catch(() => {});
+    }
+  });
+
   async function saveNotificationSettings(showToast = true) {
     const config = collectNotificationConfig();
     const view = await api("/api/notifications", {
@@ -6171,8 +6430,6 @@ function initForms() {
         breakerAmps: $("#automationBreakerAmps").value,
         breakerVoltage: existing?.conditions?.breakerVoltage ?? 100,
         reserveAmps: $("#automationReserveAmps").value,
-        batteryChargingEstimateW: state.config?.batteryCapabilities?.maximumChargeWatts
-          ?? $("#batteryMaximumChargeWatts").value,
         restoreBelowAmps: $("#automationRestoreBelow").value,
         restoreDelaySeconds: $("#automationRestoreDelay").value,
       },
@@ -6419,29 +6676,41 @@ function renderDiscovery(result) {
     el.innerHTML = `<p>${t("noDevicesFound")}</p>`;
     return;
   }
-  const rows = result.discovered
-    .map(
-      (device) => `
-    <tr>
-      <td>${device.host}</td>
-      <td>${device.roles.map(localizeRole).join(", ")}</td>
-      <td>${device.instances.length}</td>
-    </tr>
-  `,
-    )
-    .join("");
-  el.innerHTML = `
-    <div class="table-wrap discovery-table">
-      <table>
-        <thead>
-          <tr><th>${t("address")}</th><th>${t("likelyRole")}</th><th>${t("services")}</th></tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
-    <button id="applyDiscoveryBtn" class="ghost" type="button">${t("useSuggestedAddresses")}</button>
-  `;
-  $("#applyDiscoveryBtn").addEventListener("click", () => {
+  el.replaceChildren();
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap discovery-table";
+  const table = document.createElement("table");
+  const header = document.createElement("tr");
+  for (const label of [t("address"), t("likelyRole"), t("services")]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    header.append(th);
+  }
+  const thead = document.createElement("thead");
+  thead.append(header);
+  const tbody = document.createElement("tbody");
+  for (const device of result.discovered) {
+    const row = document.createElement("tr");
+    for (const value of [
+      device.host,
+      device.roles.map(localizeRole).join(", "),
+      String(device.instances.length),
+    ]) {
+      const td = document.createElement("td");
+      td.textContent = value;
+      row.append(td);
+    }
+    tbody.append(row);
+  }
+  table.append(thead, tbody);
+  wrap.append(table);
+  const applyButton = document.createElement("button");
+  applyButton.id = "applyDiscoveryBtn";
+  applyButton.className = "ghost";
+  applyButton.type = "button";
+  applyButton.textContent = t("useSuggestedAddresses");
+  el.append(wrap, applyButton);
+  applyButton.addEventListener("click", () => {
     updateConfigControls(result.suggestedConfig);
     toast(t("suggestedLoaded"));
   });

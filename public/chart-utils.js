@@ -83,6 +83,32 @@ export function trendSamplePoints(sample, rangeStartMs = -Infinity, rangeEndMs =
   ];
 }
 
+export function trendAxisLabelOptions(horizonMs) {
+  if (Number(horizonMs) >= 24 * 60 * 60 * 1000) {
+    return {
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    };
+  }
+  return {
+    hour: "2-digit",
+    minute: "2-digit",
+  };
+}
+
+export function trendAxisTicks(startMs, endMs, chartWidth) {
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+    return [];
+  }
+  const tickCount = Number(chartWidth) >= 700 ? 5 : Number(chartWidth) >= 420 ? 3 : 2;
+  return Array.from(
+    { length: tickCount },
+    (_, index) => startMs + ((endMs - startMs) * index) / (tickCount - 1),
+  );
+}
+
 export function pruneTrendPoints(points, cutoffMs) {
   if (!Array.isArray(points) || !Number.isFinite(cutoffMs)) return [];
   const firstRetainedIndex = points.findIndex(

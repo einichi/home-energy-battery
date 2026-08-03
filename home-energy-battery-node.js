@@ -29,7 +29,6 @@ const EPC = {
   FUEL_CELL_RATED_POWER_W: 0xc2,
   FUEL_CELL_CUMULATIVE_GENERATION: 0xc5,
   FUEL_CELL_CUMULATIVE_GAS: 0xc8,
-  FUEL_CELL_GENERATION_SETTING: 0xca,
   FUEL_CELL_GENERATION_STATUS: 0xcb,
   FUEL_CELL_INTERCONNECTION_STATUS: 0xd0,
   FUEL_CELL_HOT_WATER_LEVEL: 0xf4,
@@ -119,7 +118,6 @@ function usage() {
   node home-energy-battery-node.js status --host IP [--instance 1]
   node home-energy-battery-node.js energy-status [--no-solar] [--no-fuel-cell]
   node home-energy-battery-node.js meter-status --host IP [--eoj 0x028701]
-  node home-energy-battery-node.js fuel-cell-generation --host IP [on|off] [--dry-run]
   node home-energy-battery-node.js set-mode --host IP MODE [--instance 1] [--dry-run]
   node home-energy-battery-node.js vendor-profile --host IP [osaifu|eco|backup] [--instance 1] [--dry-run]
   node home-energy-battery-node.js osaifu-charge-window --host IP [START_HOUR END_HOUR] [--instance 1] [--dry-run]
@@ -233,6 +231,14 @@ function propRaw(res, epc) {
   return null;
 }
 
+function acknowledgedSet(res, description) {
+  const esv = res?.message?.esv ?? "unknown ESV";
+  if (esv !== ESV_SET_RES) {
+    throw new Error(`${description} was rejected by the device (${esv})`);
+  }
+  return { ok: true, acknowledged: true, esv };
+}
+
 function decodedOrRawData(res) {
   const data = res?.message?.data;
   if (Buffer.isBuffer(data)) return rawHex(data);
@@ -242,25 +248,6 @@ function decodedOrRawData(res) {
 function mapToHex(map) {
   if (!Array.isArray(map)) return [];
   return map.map((n) => `0x${n.toString(16).padStart(2, "0").toUpperCase()}`);
-}
-
-function decodePropertyMap(raw) {
-  // Property maps have two valid ECHONET Lite encodings: a short explicit list,
-  // or a 16-byte bitmap. Supporting both makes discovery output readable.
-  if (!raw || raw.length === 0) return [];
-  const count = raw[0];
-  if (raw.length === count + 1) return Array.from(raw.slice(1)).sort((a, b) => a - b);
-  if (raw.length === 17) {
-    const epcs = [];
-    for (let low = 0; low < 16; low += 1) {
-      const bitmap = raw[low + 1];
-      for (let high = 0; high < 8; high += 1) {
-        if (bitmap & (1 << high)) epcs.push(0x80 + low + (high << 4));
-      }
-    }
-    return epcs.sort((a, b) => a - b);
-  }
-  return Array.from(raw);
 }
 
 function metric({ host, eoj, epc, name, raw, value = undefined, unit = undefined, human = undefined }) {
@@ -723,31 +710,7 @@ async function cmdRawSet(opts) {
   if (opts["dry-run"]) return { host, eoj: eojHex(eoj), epc: `0x${epc.toString(16)}`, edt: rawHex(edt) };
   return withClient(opts, async (client) => {
     const res = await client.set(host, eoj, epc, edt);
-    return { ok: res.message.esv === ESV_SET_RES, esv: res.message.esv, raw: rawHex(propRaw(res, epc)) };
-  });
-}
-
-async function cmdFuelCellGeneration(opts) {
-  const host = required(opts.host, "--host");
-  const eoj = parseEoj(opts.eoj ?? FUEL_CELL_EOJ);
-  const requested = String(required(opts._[1], "on or off")).toLowerCase();
-  const edtValue = requested === "on" ? 0x41 : requested === "off" ? 0x42 : null;
-  if (edtValue === null) throw new Error("fuel-cell-generation must be on or off");
-  const edt = Buffer.from([edtValue]);
-  const out = {
-    host,
-    eoj: eojHex(eoj),
-    epc: "0xCA",
-    name: "fuel_cell_generation_setting",
-    requested,
-    edt: rawHex(edt),
-  };
-  if (opts["dry-run"]) return out;
-  return withClient(opts, async (client) => {
-    const res = await client.set(host, eoj, EPC.FUEL_CELL_GENERATION_SETTING, edt);
-    const esv = res.message.esv;
-    if (esv !== ESV_SET_RES) throw new Error(`Ene-Farm rejected the generation ${requested} request (${esv})`);
-    return { ok: true, esv, ...out };
+    return { ...acknowledgedSet(res, `raw write to 0x${epc.toString(16).padStart(2, "0").toUpperCase()}`), raw: rawHex(propRaw(res, epc)) };
   });
 }
 
@@ -790,11 +753,18 @@ async function cmdEnergyStatus(opts) {
   const fuelCellPrimaryHost = opts["fuel-cell-primary-host"] ?? legacyFuelCellHosts[0] ?? "192.0.2.30";
   const fuelCellProxyHosts = values(opts["fuel-cell-proxy-host"], legacyFuelCellHosts.slice(1));
   return withClient(opts, async (client) => {
+    const errors = [];
     async function read(host, eoj, epc) {
       try {
         const res = await client.get(host, parseEoj(eoj), epc);
         return propRaw(res, epc);
-      } catch {
+      } catch (err) {
+        errors.push({
+          host,
+          eoj,
+          epc: `0x${epc.toString(16).padStart(2, "0").toUpperCase()}`,
+          error: err.message,
+        });
         return null;
       }
     }
@@ -806,6 +776,7 @@ async function cmdEnergyStatus(opts) {
     const batteryWorking = await read(batteryHost, STORAGE_BATTERY_EOJ, EPC.WORKING_STATUS);
     const batteryVendorProfile = await read(batteryHost, STORAGE_BATTERY_EOJ, EPC.VENDOR_PROFILE);
     const out = {
+      errors,
       solar: solarEnabled ? {
         instant_power: decodeUnsigned({
           host: solarHost,
@@ -954,10 +925,18 @@ async function cmdMeterStatus(opts) {
       try {
         const res = await client.get(host, eoj, epc);
         return propRaw(res, epc);
-      } catch {
+      } catch (err) {
+        errors.push({
+          host,
+          eoj: eojText,
+          epc: `0x${epc.toString(16).padStart(2, "0").toUpperCase()}`,
+          error: err.message,
+        });
         return null;
       }
     }
+
+    const errors = [];
 
     // Some controller/meters expose both long-term import/export counters and
     // instantaneous values. The dashboard cares mostly about the instantaneous
@@ -975,6 +954,7 @@ async function cmdMeterStatus(opts) {
     const houseDemandWatts = sumInstantPowerChannels(channelPower);
 
     return {
+      errors,
       host,
       eoj: eojHex(eoj),
       grid_net_power: decodeSignedW({
@@ -1069,7 +1049,7 @@ async function setOperationMode(opts, mode) {
   if (opts["dry-run"]) return { host, eoj: eojHex(eoj), epc: "0xDA", edt: rawHex(edt), mode };
   return withClient(opts, async (client) => {
     const res = await client.set(host, eoj, EPC.OPERATION_MODE, edt);
-    return { ok: res.message.esv === ESV_SET_RES, esv: res.message.esv, mode };
+    return { ...acknowledgedSet(res, `operation mode ${mode} request`), mode };
   });
 }
 
@@ -1114,8 +1094,7 @@ async function cmdVendorProfile(opts) {
   return withClient(opts, async (client) => {
     const res = await client.set(host, eoj, EPC.VENDOR_PROFILE, edt);
     return {
-      ok: res.message.esv === ESV_SET_RES,
-      esv: res.message.esv,
+      ...acknowledgedSet(res, `charging profile ${mode} request`),
       host,
       eoj: eojHex(eoj),
       epc: "0xF0",
@@ -1175,8 +1154,7 @@ async function cmdOsaifuWindow(opts, kind) {
   return withClient(opts, async (client) => {
     const res = await client.set(host, eoj, epc, edt);
     return {
-      ok: res.message.esv === ESV_SET_RES,
-      esv: res.message.esv,
+      ...acknowledgedSet(res, `${name} request`),
       ...out,
       raw: rawHex(edt),
     };
@@ -1225,8 +1203,7 @@ async function cmdDischargeLimit(opts) {
   return withClient(opts, async (client) => {
     const res = await client.set(host, eoj, EPC.VENDOR_DISCHARGE_LIMIT, edt);
     return {
-      ok: res.message.esv === ESV_SET_RES,
-      esv: res.message.esv,
+      ...acknowledgedSet(res, `discharge limit ${percent}% request`),
       host,
       eoj: eojHex(eoj),
       epc: "0xF6",
@@ -1255,9 +1232,10 @@ async function cmdChargeLike(opts, mode) {
     const results = [];
     for (const write of writes) {
       const res = await client.set(host, eoj, write.epc, write.edt);
-      results.push({ epc: `0x${write.epc.toString(16)}`, ok: res.message.esv === ESV_SET_RES, esv: res.message.esv });
+      const epc = `0x${write.epc.toString(16).padStart(2, "0").toUpperCase()}`;
+      results.push({ epc, ...acknowledgedSet(res, `${mode} write ${epc}`) });
     }
-    return { host, eoj: eojHex(eoj), results };
+    return { ok: true, acknowledged: true, host, eoj: eojHex(eoj), results };
   });
 }
 
@@ -1289,7 +1267,6 @@ async function main() {
     status: cmdStatus,
     "energy-status": cmdEnergyStatus,
     "meter-status": cmdMeterStatus,
-    "fuel-cell-generation": cmdFuelCellGeneration,
     "set-mode": cmdSetMode,
     "vendor-profile": cmdVendorProfile,
     "osaifu-charge-window": (o) => cmdOsaifuWindow(o, "charge"),

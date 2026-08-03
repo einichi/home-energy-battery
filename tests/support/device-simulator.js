@@ -191,7 +191,11 @@ export function createDeviceSimulator(options = {}) {
   }
 
   function failNext(command, { host = null, message = `${command} simulated failure`, times = 1 } = {}) {
-    faults.push({ command, host, message, remaining: Math.max(1, Number(times) || 1) });
+    faults.push({ command, host, message, kind: "throw", remaining: Math.max(1, Number(times) || 1) });
+  }
+
+  function rejectNext(command, { host = null, esv = "SetC_SNA", times = 1 } = {}) {
+    faults.push({ command, host, esv, kind: "reject", remaining: Math.max(1, Number(times) || 1) });
   }
 
   function setState(patch) {
@@ -280,7 +284,22 @@ export function createDeviceSimulator(options = {}) {
     const primaryHost = String(args["fuel-cell-primary-host"] ?? state.fuelCell.primaryHost);
     const proxyHosts = normalizedHostList(args["fuel-cell-proxy-host"] ?? state.fuelCell.proxyHosts)
       .filter((host) => host !== primaryHost);
+    const errors = [];
+    const addUnavailableErrors = (host, eoj, epcs) => {
+      for (const epc of epcs) errors.push({ host, eoj, epc, error: `${host} simulated timeout` });
+    };
+    if (!batteryAvailable) {
+      addUnavailableErrors(batteryHost, BATTERY_EOJ, ["0xD3", "0xE4", "0x80", "0xDA", "0xCF", "0xF0"]);
+    }
+    if (solarEnabled && !solarAvailable) addUnavailableErrors(solarHost, SOLAR_EOJ, ["0xE0"]);
+    if (!hostAvailable(primaryHost)) {
+      addUnavailableErrors(primaryHost, FUEL_CELL_EOJ, ["0xC4", "0xCB", "0xC2", "0xC5", "0xC8", "0xD0", "0xF4"]);
+    }
+    for (const host of proxyHosts) {
+      if (!hostAvailable(host)) addUnavailableErrors(host, FUEL_CELL_EOJ, ["0xC4", "0xCB"]);
+    }
     return {
+      errors,
       solar: solarEnabled ? {
         instant_power: metric({ host: solarHost, eoj: SOLAR_EOJ, epc: "0xE0", name: "solar_instant_power", value: solarAvailable ? state.solar.instantPowerW : null, unit: "W", raw: solarAvailable ? rawUnsigned(state.solar.instantPowerW, 2) : null }),
       } : null,
@@ -350,6 +369,7 @@ export function createDeviceSimulator(options = {}) {
     const fault = faults.find((item) => item.remaining > 0 && item.command === command && (!item.host || item.host === args.host));
     if (fault) {
       fault.remaining -= 1;
+      if (fault.kind === "reject") return { ok: false, acknowledged: false, esv: fault.esv };
       throw new Error(fault.message);
     }
 
@@ -376,20 +396,6 @@ export function createDeviceSimulator(options = {}) {
         state.battery.instantPowerW = (charging ? 1 : -1) * state.battery.chargePowerWatts;
         state.battery.targetWh = args["target-wh"] === undefined ? null : Number(args["target-wh"]);
         return { host: args.host ?? state.battery.host, eoj: BATTERY_EOJ, results: [{ epc: charging ? "0xD8" : "0xD6", ok: true, esv: "Set_Res" }, { epc: "0xDA", ok: true, esv: "Set_Res" }] };
-      }
-      case "fuel-cell-generation": {
-        const requested = String(positional[0]);
-        state.fuelCell.generationStatus = requested === "on" ? "starting" : "stopping";
-        state.fuelCell.instantPowerW = 0;
-        return {
-          ok: true,
-          esv: "Set_Res",
-          host: args.host ?? state.fuelCell.primaryHost,
-          eoj: FUEL_CELL_EOJ,
-          epc: "0xCA",
-          requested,
-          edt: requested === "on" ? "0x41" : "0x42",
-        };
       }
       case "raw-get": return clone(rawGet(args, positional));
       case "raw-set": return { ok: true, esv: "Set_Res", host: args.host, eoj: args.eoj ?? BATTERY_EOJ, epc: positional[0], raw: positional[1] };
@@ -435,6 +441,7 @@ export function createDeviceSimulator(options = {}) {
     setState,
     setHostAvailable,
     failNext,
+    rejectNext,
     advance,
     calls,
   };
