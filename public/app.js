@@ -4603,7 +4603,6 @@ function renderFuelCellSummary(summary) {
   if (summary.currentState) setText("#fuelCellStatus", displayValue(summary.currentState));
   renderFuelCellStateStrip("#fuelCellStatusStateStrip", summary.transitions, summary.start, summary.end, summary.stateIntervals);
   renderFuelCellStateAxis(summary.start, summary.end);
-  renderFuelCellStateStrip("#fuelCellDashboardStateStrip", summary.transitions, summary.start, summary.end, summary.stateIntervals);
 }
 
 function renderSavingsPeriodBreakdown(periods = {}) {
