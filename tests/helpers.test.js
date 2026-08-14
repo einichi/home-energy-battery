@@ -74,6 +74,7 @@ import {
   adaptiveChargingSlotEndDelayMs,
   adaptiveChargingSlotEndKey,
   preserveInterruptedAdaptiveCharge,
+  recordAdaptiveChargingSolarHeadroomInterruption,
   recordAdaptiveChargingWindowInterruption,
   adaptiveChargingTimezoneError,
   awayPeriodContains,
@@ -1128,6 +1129,49 @@ assert.equal("capacityKwh" in completedChargeSession, false);
 assert.equal(completedChargeSession.modelVersion, 2);
 assert.equal(completedChargeState.chargingPerformance.sessionCount, 1);
 assert.equal(completedChargeState.activeChargeSession, null);
+
+const boundaryEstimatedChargeState = {
+  activeChargedKwh: 0.9,
+  activeChargeSession: {
+    startedAt: "2026-07-11T03:30:00.000Z",
+    requestedWh: 1000,
+    startSocPercent: 20,
+    latestSocPercent: 38,
+    latestChargingW: 2192,
+    lastSampleAt: "2026-07-11T03:57:00.000Z",
+    slotEnd: "2026-07-11T04:00:00.000Z",
+  },
+  chargingPerformance: cleanAdaptiveChargingPerformance(),
+};
+const boundaryEstimatedChargeSession = finalizeAdaptiveChargeSession(
+  boundaryEstimatedChargeState,
+  "Planned discounted window ended",
+  new Date("2026-07-11T04:00:00.000Z"),
+);
+assert.equal(boundaryEstimatedChargeSession.deliveredWh, 1000);
+assert.equal(boundaryEstimatedChargeSession.estimatedDeliveryWh, 100);
+
+const nonBoundaryChargeState = {
+  activeChargedKwh: 0.9,
+  activeChargeSession: {
+    startedAt: "2026-07-11T03:30:00.000Z",
+    requestedWh: 1000,
+    startSocPercent: 20,
+    latestSocPercent: 38,
+    latestChargingW: 2192,
+    lastSampleAt: "2026-07-11T03:57:00.000Z",
+    slotEnd: "2026-07-11T04:00:00.000Z",
+  },
+  chargingPerformance: cleanAdaptiveChargingPerformance(),
+};
+const nonBoundaryChargeSession = finalizeAdaptiveChargeSession(
+  nonBoundaryChargeState,
+  "Charging Demand Guard interrupted Adaptive Charging",
+  new Date("2026-07-11T04:00:00.000Z"),
+);
+assert.equal(nonBoundaryChargeSession.deliveredWh, 900);
+assert.equal(nonBoundaryChargeSession.estimatedDeliveryWh, 0);
+
 const executionOccurrence = {
   start: "2026-07-11T11:00:00.000Z",
   end: "2026-07-11T13:00:00.000Z",
@@ -1189,6 +1233,8 @@ assert.equal(executionSummary.plannedWh, 1000);
 assert.equal(executionSummary.deliveredWh, 600);
 assert.equal(executionSummary.unmetWh, 400);
 assert.equal(executionSummary.interruptionCount, 1);
+assert.equal(executionSummary.estimatedDeliveryWh, 0);
+assert.equal(executionSummary.solarHeadroomInterruptionCount, 0);
 assert.equal(executionSummary.startSocPercent, 20);
 assert.equal(executionSummary.endSocPercent, 31);
 assert.equal(executionState.windowSummaries.length, 1);
@@ -1203,6 +1249,11 @@ const persistedAdaptiveChargingExecution = cleanAdaptiveChargingState({
 });
 assert.equal(persistedAdaptiveChargingExecution.breakerRecovery.consecutiveSafeChecks, 1);
 assert.equal(persistedAdaptiveChargingExecution.windowSummaries[0].unmetWh, 400);
+const solarHeadroomExecution = {
+  activeWindowExecution: { solarHeadroomInterruptionCount: 0 },
+};
+assert.equal(recordAdaptiveChargingSolarHeadroomInterruption(solarHeadroomExecution), 1);
+assert.equal(solarHeadroomExecution.activeWindowExecution.solarHeadroomInterruptionCount, 1);
 const optimizedSlots = optimizeDiscountedChargeSlots({
   config: adaptiveChargingConfig,
   start: new Date(2026, 6, 11, 23, 0),

@@ -1161,6 +1161,8 @@ function cleanAdaptiveChargingState(value = {}) {
       requestedWh: Math.max(0, Math.round(Number(value.activeChargeSession.requestedWh) || 0)),
       startSocPercent: finiteNumberOrNull(value.activeChargeSession.startSocPercent),
       latestSocPercent: finiteNumberOrNull(value.activeChargeSession.latestSocPercent),
+      latestChargingW: finiteNumberOrNull(value.activeChargeSession.latestChargingW),
+      lastSampleAt: value.activeChargeSession.lastSampleAt ?? null,
       slotStart: value.activeChargeSession.slotStart ?? null,
       slotEnd: value.activeChargeSession.slotEnd ?? null,
       label: value.activeChargeSession.label ?? null,
@@ -1209,7 +1211,12 @@ function cleanAdaptiveChargingState(value = {}) {
         yenPerKwh: finiteNumberOrNull(value.activeWindowExecution.yenPerKwh),
         plannedWh: Math.max(0, Math.round(Number(value.activeWindowExecution.plannedWh) || 0)),
         deliveredWh: Math.max(0, Math.round(Number(value.activeWindowExecution.deliveredWh) || 0)),
+        estimatedDeliveryWh: Math.max(0, Math.round(Number(value.activeWindowExecution.estimatedDeliveryWh) || 0)),
         interruptionCount: Math.max(0, Math.round(Number(value.activeWindowExecution.interruptionCount) || 0)),
+        solarHeadroomInterruptionCount: Math.max(
+          0,
+          Math.round(Number(value.activeWindowExecution.solarHeadroomInterruptionCount) || 0),
+        ),
         startSocPercent: finiteNumberOrNull(value.activeWindowExecution.startSocPercent),
         latestSocPercent: finiteNumberOrNull(value.activeWindowExecution.latestSocPercent),
         startedTrackingAt: value.activeWindowExecution.startedTrackingAt ?? null,
@@ -1226,8 +1233,13 @@ function cleanAdaptiveChargingState(value = {}) {
         yenPerKwh: finiteNumberOrNull(summary.yenPerKwh),
         plannedWh: Math.max(0, Math.round(Number(summary.plannedWh) || 0)),
         deliveredWh: Math.max(0, Math.round(Number(summary.deliveredWh) || 0)),
+        estimatedDeliveryWh: Math.max(0, Math.round(Number(summary.estimatedDeliveryWh) || 0)),
         unmetWh: Math.max(0, Math.round(Number(summary.unmetWh) || 0)),
         interruptionCount: Math.max(0, Math.round(Number(summary.interruptionCount) || 0)),
+        solarHeadroomInterruptionCount: Math.max(
+          0,
+          Math.round(Number(summary.solarHeadroomInterruptionCount) || 0),
+        ),
         startSocPercent: finiteNumberOrNull(summary.startSocPercent),
         endSocPercent: finiteNumberOrNull(summary.endSocPercent),
         completedAt: summary.completedAt ?? null,
@@ -1280,6 +1292,7 @@ function cleanAdaptiveChargingPerformance(value = {}) {
       endSocPercent: finiteNumberOrNull(session.endSocPercent),
       socDeltaPercent: finiteNumberOrNull(session.socDeltaPercent),
       averageChargeWatts: finiteNumberOrNull(session.averageChargeWatts),
+      estimatedDeliveryWh: Math.max(0, Math.round(Number(session.estimatedDeliveryWh) || 0)),
       modelVersion: Number(session.modelVersion) || BATTERY_LEARNING_MODEL_VERSION,
     }))
     .filter((session) => session.startedAt && session.endedAt)
@@ -6189,6 +6202,8 @@ function startAdaptiveChargeSession(state, slot, soc, now = new Date()) {
     requestedWh: Math.max(0, Math.round(Number(slot?.targetWh) || 0)),
     startSocPercent: finiteNumberOrNull(soc),
     latestSocPercent: finiteNumberOrNull(soc),
+    latestChargingW: null,
+    lastSampleAt: null,
     slotStart: slot?.start ?? null,
     slotEnd: slot?.end ?? null,
     label: slot?.label ?? null,
@@ -6224,8 +6239,13 @@ function finalizeAdaptiveChargingWindowExecution(state, endSocPercent = null, no
     yenPerKwh: active.yenPerKwh,
     plannedWh: active.plannedWh,
     deliveredWh: active.deliveredWh,
+    estimatedDeliveryWh: Math.max(0, Math.round(Number(active.estimatedDeliveryWh) || 0)),
     unmetWh: Math.max(0, active.plannedWh - active.deliveredWh),
     interruptionCount: active.interruptionCount,
+    solarHeadroomInterruptionCount: Math.max(
+      0,
+      Math.round(Number(active.solarHeadroomInterruptionCount) || 0),
+    ),
     startSocPercent: active.startSocPercent,
     endSocPercent: endSoc,
     completedAt: now.toISOString(),
@@ -6239,7 +6259,7 @@ function finalizeAdaptiveChargingWindowExecution(state, endSocPercent = null, no
   state.activeWindowExecution = null;
   appendAdaptiveChargingLog(
     state,
-    `${active.label || "Discounted window"} summary: ${summary.plannedWh} Wh planned, ${summary.deliveredWh} Wh delivered, ${summary.unmetWh} Wh unmet, ${summary.interruptionCount} breaker interruptions, SOC ${summary.startSocPercent ?? "--"}% to ${summary.endSocPercent ?? "--"}%`,
+    `${active.label || "Discounted window"} summary: ${summary.plannedWh} Wh planned, ${summary.deliveredWh} Wh delivered${summary.estimatedDeliveryWh > 0 ? ` (${summary.estimatedDeliveryWh} Wh estimated at exact boundaries)` : ""}, ${summary.unmetWh} Wh unmet, ${summary.interruptionCount} breaker interruptions, ${summary.solarHeadroomInterruptionCount} solar-headroom pauses, SOC ${summary.startSocPercent ?? "--"}% to ${summary.endSocPercent ?? "--"}%`,
     summary.unmetWh > 0 ? "warning" : "summary",
     now,
   );
@@ -6266,7 +6286,9 @@ function syncAdaptiveChargingWindowExecution(state, occurrence, plan, soc, now =
       yenPerKwh: Number(occurrence.band?.yenPerKwh),
       plannedWh: remainingWh,
       deliveredWh: 0,
+      estimatedDeliveryWh: 0,
       interruptionCount: 0,
+      solarHeadroomInterruptionCount: 0,
       startSocPercent: finiteNumberOrNull(soc),
       latestSocPercent: finiteNumberOrNull(soc),
       startedTrackingAt: now.toISOString(),
@@ -6296,9 +6318,19 @@ function recordAdaptiveChargingWindowInterruption(state) {
   return state.activeWindowExecution.interruptionCount;
 }
 
+function recordAdaptiveChargingSolarHeadroomInterruption(state) {
+  if (!state.activeWindowExecution) return 0;
+  state.activeWindowExecution.solarHeadroomInterruptionCount = Math.max(
+    0,
+    Math.round(Number(state.activeWindowExecution.solarHeadroomInterruptionCount) || 0),
+  ) + 1;
+  return state.activeWindowExecution.solarHeadroomInterruptionCount;
+}
+
 function recordAdaptiveChargeSample(state, status, now = new Date()) {
   if (state.owner !== "adaptiveCharging") return false;
-  const batteryChargingW = batteryChargingWatts(status) ?? 0;
+  const observedChargingW = batteryChargingWatts(status);
+  const batteryChargingW = observedChargingW ?? 0;
   if (state.activeLastCheckedAt) {
     const elapsedHours = Math.max(
       0,
@@ -6310,6 +6342,10 @@ function recordAdaptiveChargeSample(state, status, now = new Date()) {
   const soc = numericMetric(status.energy?.battery?.remaining_percent);
   if (!state.activeChargeSession) startAdaptiveChargeSession(state, state.activeSlot, soc, now);
   if (Number.isFinite(soc)) state.activeChargeSession.latestSocPercent = soc;
+  if (Number.isFinite(observedChargingW)) {
+    state.activeChargeSession.latestChargingW = observedChargingW;
+    state.activeChargeSession.lastSampleAt = now.toISOString();
+  }
   if (batteryChargingW > 0) {
     const houseDemandW = numericMetric(status.meter?.house_demand_power);
     const gridImportW = numericMetric(status.meter?.grid_import_power);
@@ -6324,10 +6360,29 @@ function recordAdaptiveChargeSample(state, status, now = new Date()) {
   return true;
 }
 
+function adaptiveChargeBoundaryTailWh(state, active, reason, now = new Date()) {
+  if (!["Planned charging slot ended", "Planned discounted window ended"].includes(reason)) return 0;
+  const chargingW = Number(active.latestChargingW);
+  const lastSampleMs = new Date(active.lastSampleAt).getTime();
+  const slotEndMs = new Date(active.slotEnd).getTime();
+  if (!(chargingW > 0) || !Number.isFinite(lastSampleMs)) return 0;
+  const estimateEndMs = Number.isFinite(slotEndMs)
+    ? Math.min(now.getTime(), slotEndMs)
+    : now.getTime();
+  const elapsedMs = Math.max(0, estimateEndMs - lastSampleMs);
+  const measuredWh = Math.max(0, Number(state.activeChargedKwh) * 1000);
+  const remainingWh = Math.max(0, Number(active.requestedWh) - measuredWh);
+  return Math.min(remainingWh, chargingW * elapsedMs / 3_600_000);
+}
+
 function finalizeAdaptiveChargeSession(state, reason, now = new Date()) {
   const active = state.activeChargeSession;
   if (!active) return null;
-  const deliveredWh = Math.max(0, Math.round(Number(state.activeChargedKwh) * 1000));
+  const estimatedDeliveryWh = adaptiveChargeBoundaryTailWh(state, active, reason, now);
+  const deliveredWh = Math.max(
+    0,
+    Math.round(Number(state.activeChargedKwh) * 1000 + estimatedDeliveryWh),
+  );
   const startSocPercent = finiteNumberOrNull(active.startSocPercent);
   const endSocPercent = finiteNumberOrNull(active.latestSocPercent);
   const socDeltaPercent = Number.isFinite(startSocPercent) && Number.isFinite(endSocPercent)
@@ -6345,6 +6400,7 @@ function finalizeAdaptiveChargeSession(state, reason, now = new Date()) {
     endSocPercent: Number.isFinite(endSocPercent) ? endSocPercent : null,
     socDeltaPercent,
     averageChargeWatts,
+    estimatedDeliveryWh: Math.max(0, Math.round(estimatedDeliveryWh)),
     modelVersion: BATTERY_LEARNING_MODEL_VERSION,
   };
   state.chargingPerformance = cleanAdaptiveChargingPerformance({
@@ -6353,6 +6409,10 @@ function finalizeAdaptiveChargeSession(state, reason, now = new Date()) {
   });
   if (state.activeWindowExecution) {
     state.activeWindowExecution.deliveredWh += deliveredWh;
+    state.activeWindowExecution.estimatedDeliveryWh = Math.max(
+      0,
+      Math.round(Number(state.activeWindowExecution.estimatedDeliveryWh) || 0),
+    ) + session.estimatedDeliveryWh;
     state.activeWindowExecution.latestSocPercent = endSocPercent;
     state.activeWindowExecution.updatedAt = now.toISOString();
   }
@@ -7296,6 +7356,7 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
     }
     else if (liveExportNeedsHeadroom) {
       const interruption = preserveInterruptedAdaptiveCharge(state, now);
+      if (interruption) recordAdaptiveChargingSolarHeadroomInterruption(state);
       stopReason = interruption
         ? `Live grid export indicates solar needs battery headroom after ${interruption.deliveredWh} Wh; ${interruption.remainingWh} Wh remains in this charge`
         : "Live grid export indicates solar needs battery headroom";
@@ -7488,11 +7549,14 @@ function observeAdaptiveChargingNotifications(config, adaptiveChargingState) {
 
   const summary = adaptiveChargingState.windowSummaries?.at(-1);
   if (summary?.unmetWh >= 50) {
+    const estimatedDeliveryText = summary.estimatedDeliveryWh > 0
+      ? ` ${summary.estimatedDeliveryWh} Wh of delivery was estimated between the final sample and exact charge boundaries.`
+      : "";
     notificationService.enqueue({
       type: "adaptiveChargingWindowShortfall",
       severity: "warning",
       title: "Discounted charging window ended with a shortfall",
-      message: `${summary.label || "Discounted window"} planned ${summary.plannedWh} Wh and delivered ${summary.deliveredWh} Wh, leaving ${summary.unmetWh} Wh unmet. Breaker interruptions: ${summary.interruptionCount}. SOC: ${summary.startSocPercent ?? "--"}% to ${summary.endSocPercent ?? "--"}%.`,
+      message: `${summary.label || "Discounted window"} planned ${summary.plannedWh} Wh and delivered ${summary.deliveredWh} Wh, leaving ${summary.unmetWh} Wh unmet.${estimatedDeliveryText} Breaker interruptions: ${summary.interruptionCount}. Solar-headroom pauses: ${summary.solarHeadroomInterruptionCount ?? 0}. SOC: ${summary.startSocPercent ?? "--"}% to ${summary.endSocPercent ?? "--"}%.`,
       occurredAt: summary.completedAt,
       dedupeKey: `adaptive-charging-window:${summary.key}`,
       once: true,
@@ -9145,6 +9209,7 @@ export {
   adaptiveChargingPlanRefreshDecision,
   adaptiveChargingPlanLogMessage,
   preserveInterruptedAdaptiveCharge,
+  recordAdaptiveChargingSolarHeadroomInterruption,
   recordAdaptiveChargingWindowInterruption,
   adaptiveChargingAvailability,
   adaptiveChargingBaseAvailability,

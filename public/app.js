@@ -577,7 +577,9 @@ const I18N = {
     remainingShortfall: "Remaining shortfall",
     recentWindowResults: "Recent window results",
     deliveredCharge: "Delivered charge",
+    boundaryDeliveryEstimate: "{value} Wh estimated at boundaries",
     breakerInterruptions: "Breaker interruptions",
+    solarHeadroomPauses: "Solar-headroom pauses",
     startingSoc: "Starting SOC",
     endingSoc: "Ending SOC",
     inProgress: "In progress",
@@ -1223,7 +1225,9 @@ const I18N = {
     remainingShortfall: "残り不足量",
     recentWindowResults: "最近の時間帯実績",
     deliveredCharge: "実績充電量",
+    boundaryDeliveryEstimate: "境界時刻の推定 {value} Wh",
     breakerInterruptions: "ブレーカー中断回数",
+    solarHeadroomPauses: "太陽光余力による一時停止",
     startingSoc: "開始時充電率",
     endingSoc: "終了時充電率",
     inProgress: "実行中",
@@ -3782,14 +3786,24 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
     card.append(heading);
     const metrics = document.createElement("dl");
     metrics.className = "adaptive-charging-window-metrics adaptive-charging-result-metrics";
+    const estimatedDeliveryWh = Number(execution.estimatedDeliveryWh || 0);
+    const deliveredCharge = estimatedDeliveryWh > 0
+      ? `${Number(execution.deliveredWh || 0)} Wh (${template("boundaryDeliveryEstimate", { value: estimatedDeliveryWh })})`
+      : `${Number(execution.deliveredWh || 0)} Wh`;
     const values = [
       [t("plannedCharge"), `${Number(execution.plannedWh || 0)} Wh`],
-      [t("deliveredCharge"), `${Number(execution.deliveredWh || 0)} Wh`],
+      [t("deliveredCharge"), deliveredCharge],
       [t("remainingShortfall"), `${Number(execution.unmetWh || 0)} Wh`],
       [t("breakerInterruptions"), String(Number(execution.interruptionCount || 0))],
       [t("startingSoc"), formatAdaptiveChargingPercent(execution.startSocPercent)],
       [t("endingSoc"), formatAdaptiveChargingPercent(execution.endSocPercent)],
     ];
+    if (Number(execution.solarHeadroomInterruptionCount || 0) > 0) {
+      values.splice(4, 0, [
+        t("solarHeadroomPauses"),
+        String(Number(execution.solarHeadroomInterruptionCount)),
+      ]);
+    }
     for (const [label, value] of values) {
       const metric = document.createElement("div");
       const term = document.createElement("dt");
