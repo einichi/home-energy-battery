@@ -1195,6 +1195,35 @@ label {
   gap: 6px;
 }
 
+.circuit-label-title {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.circuit-label-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.config-form .circuit-dashboard-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 42px;
+  padding: 0 2px;
+  white-space: nowrap;
+}
+
+.circuit-dashboard-toggle input {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .primary-column {
   grid-column: 1;
 }

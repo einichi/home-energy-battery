@@ -277,6 +277,7 @@ const I18N = {
     circuitSortByNumber: "Circuit number",
     circuitSortByCurrent: "Current demand (highest first)",
     circuitSortByAccumulated: "Accumulated energy (highest first)",
+    showCircuitOnDashboard: "Dashboard",
     saveCircuitSettings: "Save Circuit Settings",
     circuitSettingsSaved: "Circuit settings saved",
     noCircuitData: "No circuit data available yet.",
@@ -927,6 +928,7 @@ const I18N = {
     circuitSortByNumber: "回路番号",
     circuitSortByCurrent: "現在の需要（多い順）",
     circuitSortByAccumulated: "累積使用電力量（多い順）",
+    showCircuitOnDashboard: "ダッシュボード",
     saveCircuitSettings: "回路設定を保存",
     circuitSettingsSaved: "回路設定を保存しました",
     noCircuitData: "回路データはまだありません。",
@@ -4097,13 +4099,22 @@ function collectDashboardWidgetControls() {
 }
 
 function circuitLabelIds(config = state.config ?? {}, status = state.status) {
-  const ids = new Set([...Object.keys(config.circuitLabels ?? {}), ...circuitIdsFromStatus(status)]);
+  const ids = new Set([
+    ...Object.keys(config.circuitLabels ?? {}),
+    ...Object.keys(config.circuitDashboardVisibility ?? {}),
+    ...circuitIdsFromStatus(status),
+  ]);
   return [...ids].filter((id) => Number.isInteger(Number(id))).sort((a, b) => Number(a) - Number(b));
+}
+
+function circuitDashboardVisible(channel, config = state.config ?? {}) {
+  return config.circuitDashboardVisibility?.[String(channel)] !== false;
 }
 
 function circuitLabelsAreBeingEdited() {
   const form = $("#circuitLabelsForm");
-  return form?.dataset.dirty === "true" || document.activeElement?.matches("[data-circuit-label]");
+  return form?.dataset.dirty === "true"
+    || document.activeElement?.matches("[data-circuit-label], [data-circuit-dashboard-visible]");
 }
 
 function renderCircuitLabelControls(config = state.config ?? {}, options = {}) {
@@ -4114,35 +4125,53 @@ function renderCircuitLabelControls(config = state.config ?? {}, options = {}) {
   $$("[data-circuit-label]").forEach((input) => {
     existingValues[input.dataset.circuitLabel] = input.value;
   });
-  const activeInput = document.activeElement?.matches("[data-circuit-label]")
+  const existingVisibility = {};
+  $$("[data-circuit-dashboard-visible]").forEach((input) => {
+    existingVisibility[input.dataset.circuitDashboardVisible] = input.checked;
+  });
+  const activeInput = document.activeElement?.matches("[data-circuit-label], [data-circuit-dashboard-visible]")
     ? document.activeElement
     : null;
-  const activeId = activeInput?.dataset.circuitLabel;
-  const activeSelection = activeInput
+  const activeLabelId = activeInput?.dataset.circuitLabel;
+  const activeVisibilityId = activeInput?.dataset.circuitDashboardVisible;
+  const activeSelection = activeLabelId
     ? { start: activeInput.selectionStart, end: activeInput.selectionEnd }
     : null;
   const ids = new Set(circuitLabelIds(config));
   if (preserveExisting) {
     for (const id of Object.keys(existingValues)) ids.add(id);
+    for (const id of Object.keys(existingVisibility)) ids.add(id);
   }
   const sortedIds = [...ids].filter((id) => Number.isInteger(Number(id))).sort((a, b) => Number(a) - Number(b));
   root.innerHTML = sortedIds.length
     ? ""
     : `<p class="empty-state">${t("noCircuitData")}</p>`;
   for (const id of sortedIds) {
-    const row = document.createElement("label");
+    const row = document.createElement("div");
     row.className = "circuit-label-row";
     row.innerHTML = `
-      <span>${t("circuit")} ${id}</span>
-      <input data-circuit-label="${id}" maxlength="80" />
+      <span class="circuit-label-title">${t("circuit")} ${id}</span>
+      <div class="circuit-label-input-row">
+        <input data-circuit-label="${id}" maxlength="80" aria-label="${t("circuit")} ${id}" />
+        <label class="circuit-dashboard-toggle">
+          <input type="checkbox" data-circuit-dashboard-visible="${id}" />
+          <span>${t("showCircuitOnDashboard")}</span>
+        </label>
+      </div>
     `;
-    row.querySelector("input").value = preserveExisting && Object.hasOwn(existingValues, id)
+    row.querySelector("[data-circuit-label]").value = preserveExisting && Object.hasOwn(existingValues, id)
       ? existingValues[id]
       : config.circuitLabels?.[id] ?? "";
+    row.querySelector("[data-circuit-dashboard-visible]").checked = preserveExisting
+      && Object.hasOwn(existingVisibility, id)
+      ? existingVisibility[id]
+      : circuitDashboardVisible(id, config);
     root.append(row);
   }
-  if (activeId) {
-    const nextActive = root.querySelector(`[data-circuit-label="${activeId}"]`);
+  if (activeLabelId || activeVisibilityId) {
+    const nextActive = activeLabelId
+      ? root.querySelector(`[data-circuit-label="${activeLabelId}"]`)
+      : root.querySelector(`[data-circuit-dashboard-visible="${activeVisibilityId}"]`);
     nextActive?.focus();
     if (nextActive && activeSelection) {
       nextActive.setSelectionRange(activeSelection.start, activeSelection.end);
@@ -4157,6 +4186,14 @@ function collectCircuitLabels() {
     if (value) labels[input.dataset.circuitLabel] = value;
   });
   return labels;
+}
+
+function collectCircuitDashboardVisibility() {
+  const visibility = {};
+  $$("[data-circuit-dashboard-visible]").forEach((input) => {
+    visibility[input.dataset.circuitDashboardVisible] = input.checked;
+  });
+  return visibility;
 }
 
 function setRetentionControl(inputSelector, indefiniteSelector, value, fallback) {
@@ -4347,17 +4384,19 @@ function renderCircuitWidgets(data) {
   }
   const wattsByChannel = circuitWattsFromStatus(data);
   const summaries = circuitSummaryMap(data.savings ?? {});
-  const ids = circuitOrderForData(data);
+  const allIds = circuitOrderForData(data);
+  const ids = allIds.filter((id) => circuitDashboardVisible(id));
   const staticRenderKey = state.historyMode
     ? JSON.stringify({
         dataset: state.staticCircuitOrderKey,
         language: state.language,
         labels: ids.map((id) => [id, circuitLabel(id)]),
+        visible: ids,
       })
     : null;
 
   if (staticRenderKey && grid.dataset.staticRenderKey === staticRenderKey) {
-    updateCircuitGraphPicker(ids, { ordered: true });
+    updateCircuitGraphPicker(allIds, { ordered: true });
     return;
   }
 
@@ -4398,7 +4437,7 @@ function renderCircuitWidgets(data) {
     canvas.addEventListener("pointermove", (event) => handleTrendPointer(graphName, event));
     canvas.addEventListener("pointerleave", () => clearTrendPointer(graphName));
   }
-  updateCircuitGraphPicker(ids, { ordered: true });
+  updateCircuitGraphPicker(allIds, { ordered: true });
   drawAllTrends();
 }
 
@@ -5884,7 +5923,7 @@ function initForms() {
   });
 
   $("#circuitLabelsForm")?.addEventListener("input", (event) => {
-    if (event.target.matches("[data-circuit-label]")) {
+    if (event.target.matches("[data-circuit-label], [data-circuit-dashboard-visible]")) {
       event.currentTarget.dataset.dirty = "true";
     }
   });
@@ -5914,6 +5953,7 @@ function initForms() {
       retention: state.config?.retention,
       dashboardWidgets: state.config?.dashboardWidgets,
       circuitLabels: state.config?.circuitLabels,
+      circuitDashboardVisibility: state.config?.circuitDashboardVisibility,
       circuitSortMode: state.config?.circuitSortMode,
       language: state.language,
     };
@@ -5969,6 +6009,7 @@ function initForms() {
         method: "PUT",
         body: {
           circuitLabels: collectCircuitLabels(),
+          circuitDashboardVisibility: collectCircuitDashboardVisibility(),
           circuitSortMode: $("#circuitSortMode").value,
           dashboardWidgets: state.config?.dashboardWidgets,
         },

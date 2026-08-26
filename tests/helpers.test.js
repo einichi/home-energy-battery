@@ -344,6 +344,7 @@ assert.equal(simple.updateIntervalSeconds, 15);
 assert.equal(simple.co2TonnesPerKwh, 0.000423);
 assert.equal(simple.smartCosmoEnabled, true);
 assert.deepEqual(simple.circuitLabels, {});
+assert.deepEqual(simple.circuitDashboardVisibility, {});
 assert.equal(simple.circuitSortMode, "number");
 assert.equal(rateForTimestamp(simple.rateBands, "2026-05-31T23:30:00+09:00").yenPerKwh, 42);
 assert.equal(simple.dashboardWidgets.length, 23);
@@ -2206,6 +2207,12 @@ assert.equal(cleanConfig({ smartCosmoEnabled: false }).smartCosmoEnabled, false)
 assert.equal(cleanConfig({ co2TonnesPerKwh: 0.0005 }).co2TonnesPerKwh, 0.0005);
 assert.deepEqual(normalizeCircuitLabels({ 1: "Kitchen", 2: "", bad: "Nope", 253: "Too high" }), { 1: "Kitchen" });
 assert.deepEqual(cleanConfig({ circuitLabels: [{ channel: 6, label: "EV charger" }] }).circuitLabels, { 6: "EV charger" });
+assert.deepEqual(cleanConfig({
+  circuitDashboardVisibility: { 1: false, 2: true, bad: false, 253: false },
+}).circuitDashboardVisibility, { 1: false, 2: true });
+assert.deepEqual(cleanConfig({
+  circuitDashboardVisibility: [{ channel: 6, visible: false }, { channel: 7 }],
+}).circuitDashboardVisibility, { 6: false, 7: true });
 assert.equal(cleanConfig({ circuitSortMode: "energy" }).circuitSortMode, "current");
 assert.equal(cleanConfig({ circuitSortMode: "current" }).circuitSortMode, "current");
 assert.equal(cleanConfig({ circuitSortMode: "accumulated" }).circuitSortMode, "accumulated");

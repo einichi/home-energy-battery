@@ -135,6 +135,7 @@ const DEFAULT_CONFIG = {
   meterEoj: "0x028701",
   smartCosmoEnabled: true,
   circuitLabels: {},
+  circuitDashboardVisibility: {},
   circuitSortMode: "number",
   solarHost: "192.0.2.10",
   solarEnabled: true,
@@ -446,6 +447,19 @@ function normalizeCircuitLabels(value = {}) {
     const label = String(labelRaw ?? "").trim();
     if (!Number.isInteger(channel) || channel < 1 || channel > 252 || !label) continue;
     out[String(channel)] = label.slice(0, 80);
+  }
+  return out;
+}
+
+function normalizeCircuitDashboardVisibility(value = {}) {
+  const out = {};
+  const entries = Array.isArray(value)
+    ? value.map((item) => [item?.channel, item?.visible])
+    : Object.entries(value ?? {});
+  for (const [channelRaw, visibleRaw] of entries) {
+    const channel = Number(channelRaw);
+    if (!Number.isInteger(channel) || channel < 1 || channel > 252) continue;
+    out[String(channel)] = configBool(visibleRaw, true);
   }
   return out;
 }
@@ -4924,6 +4938,9 @@ function cleanConfig(input = {}) {
     meterEoj: String(input.meterEoj ?? DEFAULT_CONFIG.meterEoj).trim() || DEFAULT_CONFIG.meterEoj,
     smartCosmoEnabled: configBool(input.smartCosmoEnabled, DEFAULT_CONFIG.smartCosmoEnabled),
     circuitLabels: normalizeCircuitLabels(input.circuitLabels ?? DEFAULT_CONFIG.circuitLabels),
+    circuitDashboardVisibility: normalizeCircuitDashboardVisibility(
+      input.circuitDashboardVisibility ?? DEFAULT_CONFIG.circuitDashboardVisibility,
+    ),
     circuitSortMode: normalizeCircuitSortMode(input.circuitSortMode),
     solarHost: String(input.solarHost ?? input.batteryHost ?? DEFAULT_CONFIG.solarHost).trim(),
     solarEnabled: configBool(input.solarEnabled, DEFAULT_CONFIG.solarEnabled),
