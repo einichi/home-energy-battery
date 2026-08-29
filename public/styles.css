@@ -477,7 +477,17 @@ label {
 }
 
 .fuel-cell-hot-water-widget {
+  grid-column: span 2;
+  grid-template-rows: auto 1fr;
   align-content: stretch;
+}
+
+.fuel-cell-hot-water-body {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.8fr) minmax(0, 1.2fr);
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
 }
 
 .fuel-cell-tank-display {
@@ -603,6 +613,10 @@ label {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.2;
+}
+
+.fuel-cell-hot-water-trend {
+  height: 78px;
 }
 
 .fuel-cell-state-strip {
@@ -2851,8 +2865,13 @@ td code {
   }
 
   .fuel-cell-operation-widget,
-  .fuel-cell-state-widget {
+  .fuel-cell-state-widget,
+  .fuel-cell-hot-water-widget {
     grid-column: span 1;
+  }
+
+  .fuel-cell-hot-water-body {
+    grid-template-columns: 1fr;
   }
 
   .fuel-cell-operation-widget {
