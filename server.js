@@ -3604,6 +3604,29 @@ function sampleFromStatus(status, config, previousSample) {
 
 async function recordStatusSample(status, config) {
   const sample = sampleFromStatus(status, config, lastRecordedSample);
+  const hotWaterLevel = Number.isInteger(sample.fuelCellHotWaterLevel)
+    ? sample.fuelCellHotWaterLevel
+    : null;
+  const previousHotWaterLevel = Number.isInteger(lastRecordedSample?.fuelCellHotWaterLevel)
+    ? lastRecordedSample.fuelCellHotWaterLevel
+    : null;
+  if (hotWaterLevel !== null && hotWaterLevel !== previousHotWaterLevel) {
+    const firstObservation = previousHotWaterLevel === null;
+    historyStore.recordEvent({
+      eventKey: `fuelCell:hot-water:${sample.timestamp}:${hotWaterLevel}`,
+      at: sample.timestamp,
+      category: "fuelCell",
+      type: firstObservation ? "hot-water-level-observed" : "hot-water-level-transition",
+      message: firstObservation
+        ? `Ene-Farm hot-water level observed at ${hotWaterLevel}/5`
+        : `Ene-Farm hot-water level changed from ${previousHotWaterLevel}/5 to ${hotWaterLevel}/5`,
+      payload: {
+        from: previousHotWaterLevel,
+        to: hotWaterLevel,
+        sourceHost: sample.fuelCellSourceHost,
+      },
+    });
+  }
   if (sample.fuelCellGenerationState && sample.fuelCellGenerationState !== lastRecordedSample?.fuelCellGenerationState) {
     historyStore.recordEvent({
       eventKey: `fuelCell:state:${sample.timestamp}:${sample.fuelCellGenerationState}`,
@@ -8693,6 +8716,10 @@ async function api(req, res, url) {
     const samples = await readHistorySamplesInRange(startMs, endMs);
     const allTransitions = historyStore.eventsBetween("fuelCell", 0, endMs)
       .filter((event) => event.type === "state-transition");
+    const rangeStateTransitions = allTransitions.filter((event) => {
+      const atMs = new Date(event.at).getTime();
+      return Number.isFinite(atMs) && atMs >= startMs && atMs <= endMs;
+    });
     const latestStateTransition = allTransitions.at(-1) ?? null;
     const lastStopTransition = allTransitions.findLast((event) => event.payload?.to === "stopped") ?? null;
     const readingDay = config.fuelCell?.tariff?.meterReadingDay ?? 1;
@@ -8709,7 +8736,7 @@ async function api(req, res, url) {
     if (lastStopTransition?.at) summary.lastStopAt = lastStopTransition.at;
     return json(res, 200, {
       ...summary,
-      transitions: historyStore.eventsBetween("fuelCell", startMs, endMs),
+      transitions: rangeStateTransitions,
       configured: config.fuelCellEnabled !== false,
       estimateNotice: "All costs and savings are estimates. Check your provider statement for accurate billing information.",
     });

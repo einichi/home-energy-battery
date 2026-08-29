@@ -85,8 +85,8 @@ try {
   await mkdir(path.join(dataDir, "history"), { recursive: true });
   await mkdir(path.join(dataDir, "adaptive-charging"), { recursive: true });
   const legacy = [
-    sample("2024-01-01T00:00:00.000Z", { houseDemandW: 1000, solarPowerW: null }),
-    sample("2024-01-01T00:30:00.000Z", { houseDemandW: 2000, solarPowerW: 500 }),
+    sample("2024-01-01T00:00:00.000Z", { houseDemandW: 1000, solarPowerW: null, fuelCellHotWaterLevel: 2 }),
+    sample("2024-01-01T00:30:00.000Z", { houseDemandW: 2000, solarPowerW: 500, fuelCellHotWaterLevel: 4 }),
     sample("2024-01-01T01:00:00.000Z", { houseDemandW: null, solarPowerW: null }),
   ];
   await writeFile(
@@ -121,6 +121,9 @@ try {
   assert.equal(interval[1].powerCoverageSeconds.houseDemandW, 1800);
   assert.equal(interval[1].intervalAveragePowerW.houseDemandW, 1500);
   assert.equal(interval[1].solarGenerationKwh, undefined);
+  assert.equal(interval[0].fuelCellHotWaterLevel, 2);
+  assert.equal(interval[1].fuelCellHotWaterLevel, 4);
+  assert.equal(interval[2].fuelCellHotWaterLevel, null);
   assert.equal(interval[2].houseDemandKwh, undefined);
 
   const oversizedRange = store.querySamples(
@@ -213,6 +216,25 @@ try {
   store.close();
 } finally {
   await rm(dataDir, { recursive: true, force: true });
+}
+
+const hotWaterRollupDir = await mkdtemp(path.join(os.tmpdir(), "history-store-hot-water-"));
+try {
+  const store = createHistoryStore({ dataDir: hotWaterRollupDir, logger: { log() {}, warn() {} } });
+  await store.initialize();
+  store.appendSample(sample("2026-01-01T00:00:00.000Z", { fuelCellHotWaterLevel: 4 }));
+  store.appendSample(sample("2026-01-01T00:10:00.000Z", { fuelCellHotWaterLevel: null }));
+  store.appendSample(sample("2026-01-01T00:30:00.000Z", { fuelCellHotWaterLevel: 3 }));
+  const intervals = store.querySamples(
+    Date.parse("2026-01-01T00:00:00.000Z"),
+    Date.parse("2026-01-01T01:00:00.000Z"),
+    { resolution: "interval" },
+  );
+  assert.equal(intervals[0].fuelCellHotWaterLevel, null, "an unavailable final reading creates a graph gap");
+  assert.equal(intervals[1].fuelCellHotWaterLevel, 3);
+  store.close();
+} finally {
+  await rm(hotWaterRollupDir, { recursive: true, force: true });
 }
 
 const partialRollupDir = await mkdtemp(path.join(os.tmpdir(), "history-store-partial-"));

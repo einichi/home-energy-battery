@@ -74,8 +74,18 @@ const TREND_LABEL_KEYS = {
   solarPower: "solarGeneration",
   houseDemandPower: "houseDemand",
   fuelCellPower: "fuelCellGeneration",
+  fuelCellHotWater: "fuelCellHotWater",
   gridExportPower: "gridExport",
   gridImportPower: "gridImport",
+};
+
+const GRAPH_FEATURES = {
+  solarPower: "solar",
+  fuelCellPower: "fuel-cell",
+  fuelCellHotWater: "fuel-cell",
+  houseDemandPower: "smart-cosmo",
+  gridExportPower: "smart-cosmo",
+  gridImportPower: "smart-cosmo",
 };
 
 const CIRCUIT_GRAPH_PREFIX = "circuit:";
@@ -191,6 +201,16 @@ const TREND_CONFIG = {
     fill: "rgba(124, 58, 237, 0.13)",
     includeZero: true,
     max: 800,
+  },
+  fuelCellHotWater: {
+    canvas: "#fuelCellHotWaterTrend",
+    horizonMs: POWER_TREND_MS,
+    color: "#0891b2",
+    fill: "rgba(8, 145, 178, 0.14)",
+    min: 0,
+    max: 5,
+    step: true,
+    axisLabelKey: "hotWaterLevel",
   },
   gridExportPower: {
     canvas: "#gridExportPowerTrend",
@@ -323,6 +343,7 @@ const I18N = {
     fuelCellHotWater: "Ene-Farm Hot Water",
     hotWaterLevel: "Hot water level",
     hotWaterPercent: "{percent}% full (approx)",
+    hotWaterLevelReading: "Level {level}/5",
     hotWaterLevelHelp: "Water at approximately 45°C or hotter",
     electricityToday: "Electricity today",
     gasToday: "Gas today",
@@ -974,6 +995,7 @@ const I18N = {
     fuelCellHotWater: "エネファーム残湯量",
     hotWaterLevel: "残湯量",
     hotWaterPercent: "{percent}%（目安）",
+    hotWaterLevelReading: "レベル {level}/5",
     hotWaterLevelHelp: "約45℃以上のお湯の目安",
     electricityToday: "本日の発電量",
     gasToday: "本日のガス使用量",
@@ -1945,6 +1967,7 @@ function sampleValueForTrend(name, sample) {
     gridExportPower: sample.gridExportW,
     gridImportPower: sample.gridImportW,
     fuelCellPower: sample.fuelCellPowerW,
+    fuelCellHotWater: sample.fuelCellHotWaterLevel,
   }[name];
   if (raw === null || raw === undefined || raw === "") return null;
   const value = Number(raw);
@@ -2239,7 +2262,12 @@ function drawTrendCanvas(name, canvas, points, hover, horizonMs, options = {}) {
   const pad = { top: 10, right: 8, bottom: 28, left: 48 };
   const chartWidth = Math.max(1, width - pad.left - pad.right);
   const chartHeight = Math.max(1, height - pad.top - pad.bottom);
-  const unit = name === "batterySoc" ? "%" : "W";
+  const unit = name === "batterySoc" ? "%" : name === "fuelCellHotWater" ? "" : "W";
+  const axisTitle = config.axisLabelKey
+    ? t(config.axisLabelKey)
+    : unit === "%"
+      ? t("percentAxis")
+      : t("wattsAxis");
 
   const configuredIntervalMs = Math.max(
     5,
@@ -2317,7 +2345,7 @@ function drawTrendCanvas(name, canvas, points, hover, horizonMs, options = {}) {
   ctx.rotate(-Math.PI / 2);
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(unit === "%" ? t("percentAxis") : t("wattsAxis"), 0, 0);
+  ctx.fillText(axisTitle, 0, 0);
   ctx.restore();
 
   ctx.textBaseline = "alphabetic";
@@ -2390,19 +2418,34 @@ function drawTrendCanvas(name, canvas, points, hover, horizonMs, options = {}) {
   }
   if (segment.length) segments.push(segment);
 
+  const traceLine = (plotted) => {
+    ctx.moveTo(plotted[0].x, plotted[0].y);
+    for (let index = 1; index < plotted.length; index += 1) {
+      const previous = plotted[index - 1];
+      const point = plotted[index];
+      if (config.step) ctx.lineTo(point.x, previous.y);
+      ctx.lineTo(point.x, point.y);
+    }
+  };
+
   for (const plotted of segments) {
     if (plotted.length > 1) {
       ctx.beginPath();
       ctx.moveTo(plotted[0].x, height - pad.bottom);
-      for (const point of plotted) ctx.lineTo(point.x, point.y);
+      ctx.lineTo(plotted[0].x, plotted[0].y);
+      for (let index = 1; index < plotted.length; index += 1) {
+        const previous = plotted[index - 1];
+        const point = plotted[index];
+        if (config.step) ctx.lineTo(point.x, previous.y);
+        ctx.lineTo(point.x, point.y);
+      }
       ctx.lineTo(plotted[plotted.length - 1].x, height - pad.bottom);
       ctx.closePath();
       ctx.fillStyle = config.fill;
       ctx.fill();
 
       ctx.beginPath();
-      ctx.moveTo(plotted[0].x, plotted[0].y);
-      for (const point of plotted.slice(1)) ctx.lineTo(point.x, point.y);
+      traceLine(plotted);
       ctx.strokeStyle = config.color;
       ctx.lineWidth = 2;
       ctx.lineJoin = "round";
@@ -2453,6 +2496,19 @@ function ensureTrendTooltip() {
   return tooltip;
 }
 
+function hoveredTrendPoint(name, points, targetTime) {
+  if (TREND_CONFIG[name]?.step) {
+    return points.findLast((point) => point.time <= targetTime) ?? points[0];
+  }
+  return points.reduce(
+    (best, point) =>
+      Math.abs(point.time - targetTime) < Math.abs(best.time - targetTime)
+        ? point
+        : best,
+    points[0],
+  );
+}
+
 function handleTrendPointer(name, event) {
   const config = TREND_CONFIG[name];
   const canvas = $(config.canvas);
@@ -2475,18 +2531,11 @@ function handleTrendPointer(name, event) {
     Math.min(rect.width - pad.right, event.clientX - rect.left),
   );
   const targetTime = start + ((x - pad.left) / chartWidth) * horizonMs;
-  const nearest = points.reduce(
-    (best, point) =>
-      Math.abs(point.time - targetTime) < Math.abs(best.time - targetTime)
-        ? point
-        : best,
-    points[0],
-  );
+  const nearest = hoveredTrendPoint(name, points, targetTime);
   state.trendHover[name] = nearest;
   drawTrend(name);
   const tooltip = ensureTrendTooltip();
-  const unit = name === "batterySoc" ? "%" : "W";
-  tooltip.textContent = `${new Date(nearest.time).toLocaleString()} · ${Math.round(nearest.value)} ${unit}`;
+  tooltip.textContent = `${new Date(nearest.time).toLocaleString()} · ${trendTooltipValue(name, nearest.value)}`;
   tooltip.style.left = `${Math.min(window.innerWidth - 260, event.clientX + 12)}px`;
   tooltip.style.top = `${Math.max(8, event.clientY + 12)}px`;
   tooltip.classList.remove("hidden");
@@ -2514,6 +2563,14 @@ function drawGraphAnalysis(options = {}) {
   );
 }
 
+function trendTooltipValue(name, value) {
+  if (name === "fuelCellHotWater") {
+    const level = Math.max(0, Math.min(5, Math.round(value)));
+    return `${template("hotWaterPercent", { percent: level * 20 })} · ${template("hotWaterLevelReading", { level })}`;
+  }
+  return `${Math.round(value)} ${name === "batterySoc" ? "%" : "W"}`;
+}
+
 function handleGraphPointer(event) {
   const graphName = state.activeGraph;
   const canvas = $("#graphAnalysisTrend");
@@ -2530,18 +2587,11 @@ function handleGraphPointer(event) {
     Math.min(rect.width - pad.right, event.clientX - rect.left),
   );
   const targetTime = start + ((x - pad.left) / chartWidth) * state.graphHistoryHorizonMs;
-  const nearest = points.reduce(
-    (best, point) =>
-      Math.abs(point.time - targetTime) < Math.abs(best.time - targetTime)
-        ? point
-        : best,
-    points[0],
-  );
+  const nearest = hoveredTrendPoint(graphName, points, targetTime);
   state.graphHover = nearest;
   drawGraphAnalysis();
   const tooltip = ensureTrendTooltip();
-  const unit = graphName === "batterySoc" ? "%" : "W";
-  tooltip.textContent = `${new Date(nearest.time).toLocaleString()} · ${Math.round(nearest.value)} ${unit}`;
+  tooltip.textContent = `${new Date(nearest.time).toLocaleString()} · ${trendTooltipValue(graphName, nearest.value)}`;
   tooltip.style.left = `${Math.min(window.innerWidth - 260, event.clientX + 12)}px`;
   tooltip.style.top = `${Math.max(8, event.clientY + 12)}px`;
   tooltip.classList.remove("hidden");
@@ -3997,6 +4047,9 @@ function applyGraphMenuOrder(widgets) {
       const button = submenu.querySelector(`[data-graph-page="${widget.id}"]`);
       if (button) submenu.append(button);
     });
+  const fuelCellPowerButton = submenu.querySelector('[data-graph-page="fuelCellPower"]');
+  const hotWaterButton = submenu.querySelector('[data-graph-page="fuelCellHotWater"]');
+  if (fuelCellPowerButton && hotWaterButton) fuelCellPowerButton.after(hotWaterButton);
   const circuitButton = submenu.querySelector('[data-graph-page="circuits"]');
   if (circuitButton) submenu.append(circuitButton);
 }
@@ -4328,6 +4381,16 @@ function featureEnabled(features = {}, feature) {
   return true;
 }
 
+function graphFeature(name) {
+  if (isCircuitGraph(name)) return "smart-cosmo";
+  return GRAPH_FEATURES[name] ?? null;
+}
+
+function graphEnabled(name, features = state.config ?? state.status?.features ?? {}) {
+  const feature = graphFeature(name);
+  return feature ? featureEnabled(features, feature) : true;
+}
+
 function applyFeatureVisibility(features = {}) {
   // Hide optional equipment/widgets for homes without the corresponding device
   // or calculation enabled.
@@ -4340,6 +4403,9 @@ function applyFeatureVisibility(features = {}) {
     );
   }
   syncDashboardWidgetVisibility();
+  if (state.currentPage === "graph" && !graphEnabled(state.activeGraph, features)) {
+    setPage("dashboard");
+  }
 }
 
 function strongestFuelCellWatts(fuelCells) {
@@ -4362,12 +4428,13 @@ function renderFuelCellHotWater(fuelCells = []) {
   const levelText = percent === null ? t("unavailable") : template("hotWaterPercent", { percent });
   setText("#fuelCellHotWaterLevel", levelText);
   const tank = $("#fuelCellHotWaterTank");
-  if (!tank) return;
+  if (!tank) return level;
   tank.setAttribute("aria-label", t("hotWaterLevel"));
   tank.setAttribute("aria-valuenow", level === null ? "0" : String(level));
   tank.setAttribute("aria-valuetext", levelText);
   tank.style.setProperty("--tank-fill", `${percent ?? 0}%`);
   tank.classList.toggle("is-unavailable", percent === null);
+  return level;
 }
 
 function renderCircuitWidgets(data) {
@@ -4586,7 +4653,7 @@ function renderDashboard(data, options = {}) {
     Number.isFinite(fuelCellWatts) ? `${fuelCellWatts} W` : "-- W",
   );
   setText("#fuelCellStatus", fuelStatuses.map(displayValue).join(", ") || "--");
-  renderFuelCellHotWater(fuelCells);
+  const fuelCellHotWaterLevel = renderFuelCellHotWater(fuelCells);
   setText("#solarSavings", yen(Number(data.savings?.solarSavingYen)));
   setText("#co2Savings", co2Saved(Number(data.savings?.co2SavingKg)));
   setText("#powerImported", energyKwh(Number(data.savings?.gridImportKwh)));
@@ -4633,6 +4700,7 @@ function renderDashboard(data, options = {}) {
     pushTrend("gridExportPower", Number(gridExportWatts), now);
     pushTrend("gridImportPower", Number(gridImportWatts), now);
     pushTrend("fuelCellPower", Number(fuelCellWatts), now);
+    pushTrend("fuelCellHotWater", fuelCellHotWaterLevel, now);
     for (const [channel, wattsValue] of Object.entries(circuitWattsFromStatus(data))) {
       ensureCircuitTrendConfig(channel);
       pushTrend(circuitGraphName(channel), Number(wattsValue), now, { draw: false });
@@ -4848,6 +4916,7 @@ async function openGraphPage(name) {
     ensureCircuitTrendConfig(circuitGraphChannel(graphName));
   }
   if (!TREND_CONFIG[graphName]) return;
+  if (!graphEnabled(graphName)) return;
   state.activeGraph = graphName;
   if (isCircuitGraph(graphName)) state.activeCircuit = circuitGraphChannel(graphName);
   updateCircuitGraphPicker(circuitIdsFromStatus());
