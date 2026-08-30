@@ -15,6 +15,8 @@ import {
 } from "../lib/counter-utils.js";
 import {
   activeAdaptiveChargingSlotStopReason,
+  adaptiveChargingExportEvidence,
+  adaptiveChargingTimingProfile,
   advanceAdaptiveChargingBreakerRecovery,
   aggregateDemandDays,
   applySolarForecastBias,
@@ -23,6 +25,7 @@ import {
   assertDeviceCommandResult,
   beginAdaptiveChargingBreakerRecovery,
   buildBatteryLearningModel,
+  buildBatteryChargePowerCurve,
   buildFuelCellGenerationModel,
   buildAdaptiveChargingTimelineView,
   batteryLearningModelSwitchDue,
@@ -42,6 +45,8 @@ import {
   dailySolarForecastIssues,
   effectiveBatteryLearningModel,
   effectiveAdaptiveChargeWatts,
+  estimateChargeDurationMs,
+  estimateDeliverableChargeWh,
   executeAdaptiveChargeStart,
   enforceAdaptiveChargingSlotEndDeadline,
   evaluateAutomationRule,
@@ -99,6 +104,7 @@ import {
   suspendAdaptiveChargeInStandby,
   syncAdaptiveChargingWindowExecution,
   updateAdaptiveChargingSolarHeadroomHold,
+  updateAdaptiveChargingExportConfirmation,
   verifyBatteryOperationMode,
 } from "../server.js";
 
@@ -465,7 +471,7 @@ try {
     path.join(batteryModelMigrationDir, "adaptive-charging-state.json"),
     "utf8",
   ));
-  assert.equal(canonical.batteryLearning.version, 2);
+  assert.equal(canonical.batteryLearning.version, 3);
   assert.equal(canonical.plan, null);
   assert.equal(canonical.pendingPlanReason, "battery model migration");
   assert.equal(canonical.learnedConversionActive, undefined);
@@ -499,6 +505,13 @@ try {
       plan: { available: true, plannedChargeKwh: 1.2 },
       activeSlot: { targetWh: 900, end: activeMigrationSlotEnd },
       activeChargedKwh: 0.25,
+      batteryLearning: {
+        version: 2,
+        migratedAt: "2026-07-19T00:00:00.000Z",
+        charge: { source: "learned", activeWhPerSocPoint: 52 },
+        discharge: { source: "configured", activeWhPerSocPoint: 54 },
+        power: { source: "configured", activeWatts: 2192 },
+      },
       activeChargeSession: {
         startedAt: "2026-07-10T01:00:00.000Z",
         requestedWh: 900,
@@ -516,6 +529,9 @@ try {
   assert.equal(activeCanonical.activeSlot.targetWh, 900);
   assert.equal(activeCanonical.activeChargedKwh, 0.25);
   assert.equal(activeCanonical.pendingPlanReason, null);
+  assert.equal(activeCanonical.batteryLearning.version, 3);
+  assert.equal(activeCanonical.batteryLearning.charge.source, "learned");
+  assert.equal(activeCanonical.batteryLearning.charge.activeWhPerSocPoint, 52);
   assert.equal(activeCanonical.batteryLearning.switchAfterSlotEnd, activeMigrationSlotEnd);
 } finally {
   await rm(activeBatteryModelMigrationDir, { recursive: true, force: true });
@@ -861,6 +877,165 @@ assert.deepEqual(updateAdaptiveChargingSolarHeadroomHold(solarHeadroomState, fal
 });
 assert.equal(solarHeadroomState.solarHeadroomHoldUntil, null);
 assert.equal(solarHeadroomState.solarHeadroomClearChecks, 0);
+
+const chargeCurveEvidence = [
+  ...Array.from({ length: 60 }, (_, index) => ({
+    at: new Date(Date.parse("2026-07-20T01:00:00.000Z") + index * 30_000).toISOString(),
+    socPercent: 80 + index % 5,
+    batteryChargingW: 1700,
+    sessionId: `session-${index % 3}`,
+    day: index % 2 ? "2026-07-20" : "2026-07-21",
+  })),
+  ...Array.from({ length: 60 }, (_, index) => ({
+    at: new Date(Date.parse("2026-07-22T01:00:00.000Z") + index * 30_000).toISOString(),
+    socPercent: 85 + index % 5,
+    batteryChargingW: 1400,
+    sessionId: `session-${index % 3}`,
+    day: index % 2 ? "2026-07-22" : "2026-07-23",
+  })),
+  ...Array.from({ length: 60 }, (_, index) => ({
+    at: new Date(Date.parse("2026-07-24T01:00:00.000Z") + index * 30_000).toISOString(),
+    socPercent: 90 + index % 5,
+    batteryChargingW: 1000,
+    sessionId: `session-${index % 3}`,
+    day: index % 2 ? "2026-07-24" : "2026-07-25",
+  })),
+  ...Array.from({ length: 60 }, (_, index) => ({
+    at: new Date(Date.parse("2026-07-26T01:00:00.000Z") + index * 30_000).toISOString(),
+    socPercent: 95 + index % 5,
+    batteryChargingW: 500,
+    sessionId: `session-${index % 3}`,
+    day: index % 2 ? "2026-07-26" : "2026-07-27",
+  })),
+];
+const learnedChargeCurve = buildBatteryChargePowerCurve(chargeCurveEvidence, 2192, {
+  source: "configured",
+  activeWatts: 2192,
+  candidateWatts: 2192,
+  sampleCount: 120,
+  sessionCount: 3,
+  distinctDays: 2,
+  dispersionPercent: 0,
+  blockers: [],
+});
+assert.deepEqual(learnedChargeCurve.map((band) => Math.round(band.activeWatts)), [2192, 1700, 1400, 1000, 500]);
+assert.ok(learnedChargeCurve.slice(1).every((band) => band.source === "learned"));
+const sparseChargeCurve = buildBatteryChargePowerCurve(chargeCurveEvidence.slice(0, 20), 2192, {
+  source: "configured",
+  activeWatts: 2192,
+  candidateWatts: 2192,
+  blockers: [],
+});
+assert.equal(sparseChargeCurve[1].source, "configured");
+assert.match(sparseChargeCurve[1].blockers.join("; "), /more samples required/);
+
+const taperedDurationMs = estimateChargeDurationMs({
+  targetWh: 2989,
+  startSocPercent: 42,
+  whPerSocPoint: 54,
+  powerCurve: learnedChargeCurve,
+  fallbackWatts: 2192,
+});
+assert.ok(taperedDurationMs > 2989 / 2192 * 3_600_000);
+assert.ok(taperedDurationMs < 2 * 3_600_000);
+assert.ok(estimateDeliverableChargeWh({
+  durationMs: taperedDurationMs,
+  startSocPercent: 42,
+  whPerSocPoint: 54,
+  powerCurve: learnedChargeCurve,
+  fallbackWatts: 2192,
+}) >= 2988);
+const taperedTiming = adaptiveChargingTimingProfile({
+  requiredWh: 2989,
+  startSocPercent: 42,
+  whPerSocPoint: 54,
+  powerCurve: learnedChargeCurve,
+  fallbackWatts: 2192,
+  windowDurationMs: 2 * 3_600_000,
+});
+assert.ok(taperedTiming.timingReserveMs >= 5 * 60_000);
+assert.ok(taperedTiming.scheduledDurationMs > taperedDurationMs);
+assert.equal(taperedTiming.timeConstrainedWh, 0);
+const taperWindowStart = Date.parse("2026-08-30T02:00:00.000Z");
+const taperWindowEnd = taperWindowStart + 2 * 3_600_000;
+const taperTimeline = Array.from({ length: 4 }, (_, index) => ({
+  startMs: taperWindowStart + index * 1_800_000,
+  endMs: taperWindowStart + (index + 1) * 1_800_000,
+  netKwh: 0,
+  highSolarNetKwh: 0,
+  chargeCapacityKwh: 1.096,
+  band: { label: "Daytime", yenPerKwh: 12.6 },
+  rateWindowStartMs: taperWindowStart,
+  rateWindowEndMs: taperWindowEnd,
+}));
+const taperPlan = planChronologicalDiscountedCharging({
+  timeline: taperTimeline,
+  currentStoredKwh: 5.4 * 0.42,
+  capacityKwh: 5.4,
+  dischargeFloorKwh: 0.54,
+  maximumTargetPercent: 42 + 2989 / 54,
+  maximumChargeWatts: 2192,
+  chargePowerCurve: learnedChargeCurve,
+  chargeWhPerSocPoint: 54,
+  chargeToStoredRatio: 1,
+});
+assert.ok(Math.abs(taperPlan.plannedChargeKwh - 2.989) < 0.005);
+assert.ok(new Date(taperPlan.slots[0].start).getTime() < taperWindowEnd - 2989 / 2192 * 3_600_000);
+assert.equal(Math.round(taperPlan.slots.reduce((sum, slot) => sum + slot.targetWh, 0)), 2989);
+const unvalidatedCurve = learnedChargeCurve.map((band) => (
+  band.minSoc >= 80 ? { ...band, source: "configured", activeWatts: 2192 } : band
+));
+const conservativeTaperPlan = planChronologicalDiscountedCharging({
+  timeline: taperTimeline,
+  currentStoredKwh: 5.4 * 0.42,
+  capacityKwh: 5.4,
+  dischargeFloorKwh: 0.54,
+  maximumTargetPercent: 42 + 2989 / 54,
+  maximumChargeWatts: 2192,
+  chargePowerCurve: unvalidatedCurve,
+  chargeWhPerSocPoint: 54,
+  chargeToStoredRatio: 1,
+});
+assert.equal(new Date(conservativeTaperPlan.slots[0].start).getTime(), taperWindowStart);
+assert.equal(Math.round(conservativeTaperPlan.slots.reduce((sum, slot) => sum + slot.targetWh, 0)), 2989);
+
+const exportStatus = {
+  meter: {
+    grid_export_power: { value: 150 },
+    grid_import_power: { value: 0 },
+    house_demand_power: { value: 368 },
+  },
+  energy: {
+    battery: { instant_power: { value: 2192 } },
+    solar: { instant_power: { value: 510 } },
+    fuel_cells: [],
+  },
+};
+const contradictoryExport = adaptiveChargingExportEvidence(exportStatus);
+assert.equal(contradictoryExport.coherent, false);
+const exportState = {};
+assert.equal(updateAdaptiveChargingExportConfirmation(exportState, contradictoryExport, modelSwitchNow).rejected, true);
+const coherentExport = adaptiveChargingExportEvidence({
+  ...exportStatus,
+  energy: { ...exportStatus.energy, battery: { instant_power: { value: 0 } } },
+});
+assert.equal(coherentExport.coherent, true);
+assert.equal(updateAdaptiveChargingExportConfirmation(exportState, coherentExport, modelSwitchNow).pending, true);
+assert.equal(updateAdaptiveChargingExportConfirmation(
+  exportState,
+  coherentExport,
+  new Date(modelSwitchNow.getTime() + 30_000),
+).confirmed, true);
+const meterOnlyExport = { aboveThreshold: true, balanceAvailable: false, coherent: false, gridExportW: 120 };
+const meterOnlyState = {};
+assert.equal(updateAdaptiveChargingExportConfirmation(meterOnlyState, meterOnlyExport, modelSwitchNow).confirmed, false);
+assert.equal(updateAdaptiveChargingExportConfirmation(meterOnlyState, meterOnlyExport, new Date(modelSwitchNow.getTime() + 30_000)).confirmed, false);
+assert.equal(updateAdaptiveChargingExportConfirmation(meterOnlyState, meterOnlyExport, new Date(modelSwitchNow.getTime() + 60_000)).confirmed, true);
+assert.equal(updateAdaptiveChargingExportConfirmation(
+  meterOnlyState,
+  { aboveThreshold: false, balanceAvailable: false, coherent: false, gridExportW: 0 },
+  new Date(modelSwitchNow.getTime() + 90_000),
+).cleared, true);
 assert.ok(discountedBandOccurrences(adaptiveChargingConfig, prewindowNow).length >= 2);
 
 const learnedChargingPerformance = cleanAdaptiveChargingPerformance({
@@ -1127,7 +1302,7 @@ assert.equal(completedChargeSession.deliveredWh, 1000);
 assert.equal(completedChargeSession.averageChargeWatts, 1000);
 assert.equal("estimatedStorageEfficiencyPercent" in completedChargeSession, false);
 assert.equal("capacityKwh" in completedChargeSession, false);
-assert.equal(completedChargeSession.modelVersion, 2);
+assert.equal(completedChargeSession.modelVersion, 3);
 assert.equal(completedChargeState.chargingPerformance.sessionCount, 1);
 assert.equal(completedChargeState.activeChargeSession, null);
 

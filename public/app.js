@@ -524,6 +524,11 @@ const I18N = {
     chargeEnergyModel: "Charge energy model",
     dischargeEnergyModel: "Discharge energy model",
     chargePowerModel: "Charge power model",
+    chargeCurveBand: "SOC {min}–{max}%: {value}",
+    timingReserve: "Timing reserve",
+    schedulingPower: "Scheduling power",
+    timeConstrainedShortfall: "Time-constrained shortfall",
+    conservativeTaperScheduling: "full-window fallback while taper learning completes",
     batteryModelLearning: "Learning",
     batteryModelValidating: "Validating",
     batteryModelActive: "Learned model active",
@@ -1174,6 +1179,11 @@ const I18N = {
     chargeEnergyModel: "充電エネルギーモデル",
     dischargeEnergyModel: "放電エネルギーモデル",
     chargePowerModel: "充電電力モデル",
+    chargeCurveBand: "SOC {min}–{max}%: {value}",
+    timingReserve: "時間余裕",
+    schedulingPower: "計画用充電電力",
+    timeConstrainedShortfall: "時間制約による不足",
+    conservativeTaperScheduling: "高SOC域の学習完了まで全時間帯を使用",
     batteryModelLearning: "学習中",
     batteryModelValidating: "検証中",
     batteryModelActive: "学習済みモデルを使用中",
@@ -3628,7 +3638,7 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
     active: "batteryModelActive",
     degraded: "batteryModelDegraded",
   }[batteryModel.status] ?? "batteryModelLearning";
-  $("#adaptiveChargingBatteryModelStatus").textContent = `${t(statusKey)} · v${batteryModel.version ?? 2}`;
+  $("#adaptiveChargingBatteryModelStatus").textContent = `${t(statusKey)} · v${batteryModel.version ?? 3}`;
   const optionalNumber = (value) => value === null || value === undefined || value === ""
     ? Number.NaN
     : Number(value);
@@ -3703,6 +3713,20 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
     powerParts.push(template("batteryModelDemotedAt", { value: formatAdaptiveChargingDateTime(power.demotedAt) }));
   }
   if (power.blockers?.length) powerParts.push(power.blockers.map(batteryModelBlockerText).join("; "));
+  for (const band of power.curve ?? []) {
+    const bandCandidate = optionalNumber(band.candidateWatts);
+    const bandActive = optionalNumber(band.activeWatts);
+    const value = band.source === "learned" && Number.isFinite(bandActive)
+      ? template("learnedModelValue", { value: `${Math.round(bandActive)} W` })
+      : Number.isFinite(bandCandidate)
+        ? template("candidateModelValue", { value: `${Math.round(bandCandidate)} W` })
+        : `${Math.round(bandActive || configuredPower)} W (${t("batteryModelLearning")})`;
+    powerParts.push(template("chargeCurveBand", {
+      min: Math.round(Number(band.minSoc)),
+      max: Math.round(Number(band.maxSoc)),
+      value,
+    }));
+  }
   $("#adaptiveChargingPowerModel").textContent = powerParts.join(" · ") || "--";
   $("#adaptiveChargingConfidence").textContent = `${state.config?.adaptiveCharging?.forecastMarginPercent ?? 10}% · ${plan.solarCalibration?.learned ? t("calibratedForecast") : t("initialForecastModel")}`;
   const fuelCellModel = plan.fuelCellModel;
@@ -3785,8 +3809,17 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
     addMetric(t("plannedCharge"), formatAdaptiveChargingKwh(windowPlan.plannedChargeKwh));
     addMetric(t("expectedStoredCharge"), formatAdaptiveChargingKwh(windowPlan.plannedStoredChargeKwh));
     addMetric(t("solarHeadroom"), formatAdaptiveChargingKwh(windowPlan.solarHeadroomKwh));
+    if (Number.isFinite(Number(windowPlan.schedulingWatts))) {
+      addMetric(t("schedulingPower"), `${Math.round(Number(windowPlan.schedulingWatts))} W`);
+    }
+    if (Number.isFinite(Number(windowPlan.timingReserveMs))) {
+      addMetric(t("timingReserve"), `${Math.round(Number(windowPlan.timingReserveMs) / 60_000)} min`);
+    }
     if (Number(windowPlan.unmetChargeKwh) > 0.0001) {
       addMetric(t("remainingShortfall"), formatAdaptiveChargingKwh(windowPlan.unmetChargeKwh), true);
+    }
+    if (Number(windowPlan.timeConstrainedWh) > 0) {
+      addMetric(t("timeConstrainedShortfall"), `${Math.round(Number(windowPlan.timeConstrainedWh))} Wh`, true);
     }
     card.append(metrics);
 
@@ -3795,6 +3828,7 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
     if (Number(windowPlan.backfillForLaterKwh) > 0.0001) {
       notes.push(`${t("laterWindowBackfill")} · ${formatAdaptiveChargingKwh(windowPlan.backfillForLaterKwh)}`);
     }
+    if (windowPlan.unvalidatedTaper) notes.push(t("conservativeTaperScheduling"));
     if (notes.length) {
       const note = document.createElement("p");
       note.className = "adaptive-charging-window-note";

@@ -225,6 +225,16 @@ try {
   store.appendSample(sample("2026-01-01T00:00:00.000Z", { fuelCellHotWaterLevel: 4 }));
   store.appendSample(sample("2026-01-01T00:10:00.000Z", { fuelCellHotWaterLevel: null }));
   store.appendSample(sample("2026-01-01T00:30:00.000Z", { fuelCellHotWaterLevel: 3 }));
+  store.appendSample(sample("2026-01-01T01:00:00.000Z", { stateOfChargePercent: 82, batteryPowerW: 1700 }));
+  store.appendSample(sample("2026-01-01T01:00:30.000Z", { stateOfChargePercent: 83, batteryPowerW: 1650 }));
+  const curveSamples = store.batteryChargeCurveSamples([{
+    startedAt: "2026-01-01T01:00:00.000Z",
+    endedAt: "2026-01-01T01:01:00.000Z",
+  }]);
+  assert.deepEqual(curveSamples.map(({ socPercent, batteryChargingW }) => ({ socPercent, batteryChargingW })), [
+    { socPercent: 82, batteryChargingW: 1700 },
+    { socPercent: 83, batteryChargingW: 1650 },
+  ]);
   const intervals = store.querySamples(
     Date.parse("2026-01-01T00:00:00.000Z"),
     Date.parse("2026-01-01T01:00:00.000Z"),

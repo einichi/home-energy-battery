@@ -69,6 +69,12 @@ const ADAPTIVE_CHARGING_SLOT_END_RETRY_MS = 5_000;
 const ADAPTIVE_CHARGING_BREAKER_RETRY_COOLDOWN_MS = 3 * 60_000;
 const ADAPTIVE_CHARGING_BREAKER_SAFE_CHECKS = 3;
 const ADAPTIVE_CHARGING_SOLAR_HEADROOM_CLEAR_CHECKS = 2;
+const ADAPTIVE_CHARGING_EXPORT_COHERENT_CHECKS = 2;
+const ADAPTIVE_CHARGING_EXPORT_METER_ONLY_CHECKS = 3;
+const ADAPTIVE_CHARGING_EXPORT_THRESHOLD_W = 50;
+const ADAPTIVE_CHARGING_TIMING_RESERVE_MIN_MS = 5 * 60_000;
+const ADAPTIVE_CHARGING_TIMING_RESERVE_MAX_MS = 15 * 60_000;
+const ADAPTIVE_CHARGING_TIMING_RESERVE_FRACTION = 0.1;
 const ADAPTIVE_CHARGING_BREAKER_SAFETY_MARGIN_W = 200;
 const ADAPTIVE_CHARGING_BREAKER_WAIT_LOG_MS = 5 * 60_000;
 const ADAPTIVE_CHARGING_MIN_EXECUTABLE_CHARGE_WH = 50;
@@ -77,7 +83,18 @@ const OPERATION_MODE_VERIFY_DELAY_MS = 750;
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
 const ADAPTIVE_CHARGE_SESSION_LIMIT = 30;
 const ADAPTIVE_CHARGE_SAMPLE_LIMIT = 500;
-const BATTERY_LEARNING_MODEL_VERSION = 2;
+const BATTERY_LEARNING_MODEL_VERSION = 3;
+const BATTERY_CHARGE_CURVE_BANDS = [
+  { minSoc: 0, maxSoc: 80 },
+  { minSoc: 80, maxSoc: 85 },
+  { minSoc: 85, maxSoc: 90 },
+  { minSoc: 90, maxSoc: 95 },
+  { minSoc: 95, maxSoc: 100 },
+];
+const BATTERY_CURVE_MIN_SAMPLES = 60;
+const BATTERY_CURVE_MIN_SESSIONS = 3;
+const BATTERY_CURVE_MIN_DAYS = 2;
+const BATTERY_CURVE_MAX_DISPERSION_PERCENT = 20;
 const BATTERY_LEARNING_MIN_OBSERVATIONS = 10;
 const BATTERY_LEARNING_MIN_DAYS = 7;
 const BATTERY_LEARNING_MIN_SOC_POINTS = 300;
@@ -732,17 +749,23 @@ async function readBatteryLearningHistory(now = new Date()) {
 
 async function refreshBatteryLearning(config, state, now = new Date()) {
   const rollups = await readBatteryLearningHistory(now);
+  const curveSamples = historyStore.isReady()
+    ? historyStore.batteryChargeCurveSamples(state.chargingPerformance?.sessions ?? [])
+    : [];
   const previous = state.batteryLearning ?? cleanBatteryLearningModel();
   const model = buildBatteryLearningModel(config, rollups, {
     ...previous,
     performance: state.chargingPerformance,
-  }, now);
+  }, now, { curveSamples });
   const transitions = [];
   for (const key of ["charge", "discharge", "power"]) {
     if (previous[key]?.source !== model[key]?.source) {
       transitions.push(`${key} model ${model[key].source === "learned" ? "activated" : "returned to configured fallback"}`);
     }
   }
+  const previousCurveSources = (previous.power?.curve ?? []).map((band) => band.source).join(":");
+  const curveSources = (model.power?.curve ?? []).map((band) => band.source).join(":");
+  if (previousCurveSources !== curveSources) transitions.push("charge-power curve confidence changed");
   if (transitions.length) {
     const message = `${transitions.join("; ")}; battery model version ${BATTERY_LEARNING_MODEL_VERSION}`;
     appendAdaptiveChargingLog(state, message, model.status === "degraded" ? "warning" : "learning", now);
@@ -766,6 +789,7 @@ async function refreshBatteryLearning(config, state, now = new Date()) {
       model.charge.source,
       model.discharge.source,
       model.power.source,
+      curveSources,
     ].join(":");
     historyStore.recordEvent({
       eventKey: `adaptiveCharging:battery-model-snapshot:v${BATTERY_LEARNING_MODEL_VERSION}:${snapshotKey}`,
@@ -1035,9 +1059,10 @@ async function migrateBatteryLearningState(dataDir = DATA_DIR, logger = console)
   if (Number(parsed.batteryLearning?.version) === BATTERY_LEARNING_MODEL_VERSION) {
     return { migrated: false, migratedAt: parsed.batteryLearning.migratedAt ?? null };
   }
+  const sourceVersion = Math.max(1, Math.round(Number(parsed.batteryLearning?.version) || 1));
   const migratedAt = new Date().toISOString();
   const migrationDir = path.join(dataDir, "adaptive-charging", "migrations");
-  const backupFile = path.join(migrationDir, "adaptive-charging-state-model-v1.json");
+  const backupFile = path.join(migrationDir, `adaptive-charging-state-model-v${sourceVersion}.json`);
   await mkdir(migrationDir, { recursive: true });
   if (!(await pathExists(backupFile))) {
     const backupTmp = `${backupFile}.${process.pid}.${Date.now()}.tmp`;
@@ -1048,7 +1073,7 @@ async function migrateBatteryLearningState(dataDir = DATA_DIR, logger = console)
     ...(parsed.chargingPerformance ?? {}),
     sessions: (parsed.chargingPerformance?.sessions ?? []).map((session) => {
       const { estimatedStorageEfficiencyPercent, ...rawSession } = session;
-      return { ...rawSession, modelVersion: 1 };
+      return { ...rawSession, modelVersion: Number(session.modelVersion) || sourceVersion };
     }),
   };
   const ownerActive = parsed.owner === "adaptiveCharging";
@@ -1062,8 +1087,19 @@ async function migrateBatteryLearningState(dataDir = DATA_DIR, logger = console)
     pendingPlanRequestId: deferModelSwitch ? null : `battery-model-migration:${migratedAt}`,
     pendingPlanRequestedAt: deferModelSwitch ? null : migratedAt,
     chargingPerformance,
-    windowSummaries: (parsed.windowSummaries ?? []).map((summary) => ({ ...summary, modelVersion: 1 })),
-    batteryLearning: cleanBatteryLearningModel({ migratedAt, switchAfterSlotEnd }),
+    windowSummaries: (parsed.windowSummaries ?? []).map((summary) => ({
+      ...summary,
+      modelVersion: Number(summary.modelVersion) || sourceVersion,
+    })),
+    batteryLearning: cleanBatteryLearningModel({
+      ...(sourceVersion >= 2 ? parsed.batteryLearning : {}),
+      migratedAt,
+      switchAfterSlotEnd,
+      power: {
+        ...(sourceVersion >= 2 ? parsed.batteryLearning?.power : {}),
+        curve: [],
+      },
+    }),
   };
   if (!ownerActive && migrated.activeChargeSession) {
     const { capacityKwh, ...activeChargeSession } = migrated.activeChargeSession;
@@ -1117,6 +1153,19 @@ function cleanBatteryLearningCoefficient(value = {}) {
 }
 
 function cleanBatteryLearningPower(value = {}) {
+  const curve = (Array.isArray(value.curve) ? value.curve : []).map((band) => ({
+    minSoc: Math.max(0, Math.min(100, Number(band.minSoc) || 0)),
+    maxSoc: Math.max(0, Math.min(100, Number(band.maxSoc) || 0)),
+    source: band.source === "learned" ? "learned" : "configured",
+    configuredWatts: finiteNumberOrNull(band.configuredWatts),
+    candidateWatts: finiteNumberOrNull(band.candidateWatts),
+    activeWatts: finiteNumberOrNull(band.activeWatts),
+    sampleCount: Math.max(0, Math.round(Number(band.sampleCount) || 0)),
+    sessionCount: Math.max(0, Math.round(Number(band.sessionCount) || 0)),
+    distinctDays: Math.max(0, Math.round(Number(band.distinctDays) || 0)),
+    dispersionPercent: finiteNumberOrNull(band.dispersionPercent),
+    blockers: Array.isArray(band.blockers) ? band.blockers.map(String) : [],
+  })).filter((band) => band.maxSoc > band.minSoc);
   return {
     source: value.source === "learned" ? "learned" : "configured",
     configuredWatts: finiteNumberOrNull(value.configuredWatts),
@@ -1134,6 +1183,7 @@ function cleanBatteryLearningPower(value = {}) {
       : null,
     demotedAt: value.demotedAt ?? null,
     demotionReason: value.demotionReason ?? null,
+    curve,
   };
 }
 
@@ -1264,6 +1314,16 @@ function cleanAdaptiveChargingState(value = {}) {
     pausedUntil: value.pausedUntil ?? null,
     solarHeadroomHoldUntil: value.solarHeadroomHoldUntil ?? null,
     solarHeadroomClearChecks: Math.max(0, Math.round(Number(value.solarHeadroomClearChecks) || 0)),
+    exportConfirmation: {
+      count: Math.max(0, Math.round(Number(value.exportConfirmation?.count) || 0)),
+      coherent: value.exportConfirmation?.coherent === true,
+      firstSeenAt: value.exportConfirmation?.firstSeenAt ?? null,
+      lastSeenAt: value.exportConfirmation?.lastSeenAt ?? null,
+      lastRejectedAt: value.exportConfirmation?.lastRejectedAt ?? null,
+      lastRejectedLogAt: value.exportConfirmation?.lastRejectedLogAt ?? null,
+      lastGridExportW: finiteNumberOrNull(value.exportConfirmation?.lastGridExportW),
+      lastBalanceResidualW: finiteNumberOrNull(value.exportConfirmation?.lastBalanceResidualW),
+    },
     lastResult: value.lastResult ?? null,
     lastForecastError: value.lastForecastError ?? null,
     historicalWeatherFetchedAt: value.historicalWeatherFetchedAt ?? null,
@@ -1284,6 +1344,7 @@ function cleanAdaptiveChargingPerformance(value = {}) {
     .map((sample) => ({
       at: sample.at ?? null,
       batteryChargingW: Number(sample.batteryChargingW),
+      socPercent: finiteNumberOrNull(sample.socPercent),
       houseDemandW: sample.houseDemandW === null || sample.houseDemandW === undefined
         ? null
         : Number(sample.houseDemandW),
@@ -1558,6 +1619,7 @@ function adaptiveChargingView(config, state, rules = [], now = new Date()) {
     interruptedCharge: state.interruptedCharge,
     breakerRecovery: state.breakerRecovery,
     standbyHoldUntil: state.standbyHoldUntil,
+    exportConfirmation: state.exportConfirmation,
     activeWindowExecution: state.activeWindowExecution,
     windowSummaries: state.windowSummaries ?? [],
     chargingPerformance: state.chargingPerformance,
@@ -1982,6 +2044,8 @@ function planChronologicalDiscountedCharging({
   dischargeFloorKwh,
   maximumTargetPercent = 100,
   maximumChargeWatts,
+  chargePowerCurve = [],
+  chargeWhPerSocPoint,
   chargeToStoredRatio = 1,
 } = {}) {
   const chargeConversion = Math.min(1.5, Math.max(0.5, Number(chargeToStoredRatio) || 1));
@@ -2045,11 +2109,34 @@ function planChronologicalDiscountedCharging({
         headroomTargetKwh,
         baseTargetStoredKwh + Math.max(0, Number(targetBoosts[windowIndex]) || 0),
       );
+      const requiredChargeWh = Math.max(0, targetStoredKwh - noGridStoredKwh) * 1000 / chargeConversion;
+      const windowDurationMs = Math.max(0, window.endMs - window.startMs);
+      const timing = chargePowerCurve.length && Number.isFinite(Number(chargeWhPerSocPoint))
+        ? adaptiveChargingTimingProfile({
+            requiredWh: requiredChargeWh,
+            startSocPercent: capacityKwh ? storedAtStartKwh / capacityKwh * 100 : 0,
+            whPerSocPoint: chargeWhPerSocPoint,
+            powerCurve: chargePowerCurve,
+            fallbackWatts: maximumChargeWatts,
+            windowDurationMs,
+          })
+        : {
+            modeledDurationMs: requiredChargeWh / maximumChargeWatts * 3_600_000,
+            timingReserveMs: 0,
+            scheduledDurationMs: requiredChargeWh / maximumChargeWatts * 3_600_000,
+            schedulingWatts: maximumChargeWatts,
+            unvalidatedTaper: false,
+            physicallyDeliverableWh: maximumChargeWatts * windowDurationMs / 3_600_000,
+            timeConstrainedWh: 0,
+            source: "configured",
+          };
+      const windowSchedulingWatts = timing.schedulingWatts;
       const chargeByIndex = new Map();
       let projectedEndKwh = noGridStoredKwh;
       for (let index = window.endIndex - 1; index >= window.startIndex && projectedEndKwh < targetStoredKwh - 0.0001; index -= 1) {
         const slot = timeline[index];
-        const slotCapacityKwh = Math.max(0, Number(slot.chargeCapacityKwh ?? 0));
+        const slotDurationHours = Math.max(0, slot.endMs - slot.startMs) / 3_600_000;
+        const slotCapacityKwh = Math.max(0, windowSchedulingWatts * slotDurationHours / 1000);
         if (!slotCapacityKwh) continue;
         chargeByIndex.set(index, slotCapacityKwh);
         const fullSlotEndKwh = simulateWindow(chargeByIndex);
@@ -2075,7 +2162,7 @@ function planChronologicalDiscountedCharging({
 
       for (const [index, allocatedKwh] of chargeByIndex) {
         const slot = timeline[index];
-        const durationMs = allocatedKwh * 1000 / maximumChargeWatts * 3_600_000;
+        const durationMs = allocatedKwh * 1000 / windowSchedulingWatts * 3_600_000;
         selectedSlots.push({
           slotId: `${window.configuredStartMs}:${window.configuredEndMs}:${slot.endMs}`,
           start: new Date(slot.endMs - durationMs).toISOString(),
@@ -2084,6 +2171,11 @@ function planChronologicalDiscountedCharging({
           label: window.label,
           demandW: slot.demandW,
           targetWh: Math.max(1, Math.round(allocatedKwh * 1000)),
+          modeledDurationMs: timing.modeledDurationMs,
+          timingReserveMs: timing.timingReserveMs,
+          schedulingWatts: windowSchedulingWatts,
+          schedulingSource: timing.source,
+          unvalidatedTaper: timing.unvalidatedTaper,
           targetSocPercent: capacityKwh ? targetStoredKwh / capacityKwh * 100 : maximumTargetPercent,
           windowStart: new Date(window.configuredStartMs).toISOString(),
           windowEnd: new Date(window.configuredEndMs).toISOString(),
@@ -2095,12 +2187,17 @@ function planChronologicalDiscountedCharging({
       const windowUnmetStoredKwh = Math.max(0, targetStoredKwh - predictedEndStoredKwh);
       const windowUnmetChargeKwh = windowUnmetStoredKwh / chargeConversion;
       const plannedWindowChargeKwh = [...chargeByIndex.values()].reduce((sum, value) => sum + value, 0);
+      const selectedWindowSlots = selectedSlots.filter(
+        (slot) => new Date(slot.windowEnd).getTime() === window.configuredEndMs,
+      );
+      if (selectedWindowSlots.length) {
+        const roundedWindowWh = Math.round(plannedWindowChargeKwh * 1000);
+        const roundedSlotWh = selectedWindowSlots.reduce((sum, slot) => sum + slot.targetWh, 0);
+        selectedWindowSlots.at(-1).targetWh += roundedWindowWh - roundedSlotWh;
+      }
       const plannedWindowStoredChargeKwh = plannedWindowChargeKwh * chargeConversion;
       const requestedKwh = plannedWindowChargeKwh + windowUnmetChargeKwh;
-      const availableChargeKwh = window.slots.reduce(
-        (sum, slot) => sum + Math.max(0, Number(slot.chargeCapacityKwh) || 0),
-        0,
-      );
+      const availableChargeKwh = windowSchedulingWatts * windowDurationMs / 3_600_000 / 1000;
       windowPlans.push({
         start: new Date(window.configuredStartMs).toISOString(),
         end: new Date(window.configuredEndMs).toISOString(),
@@ -2125,6 +2222,12 @@ function planChronologicalDiscountedCharging({
         plannedStoredChargeKwh: plannedWindowStoredChargeKwh,
         unmetChargeKwh: windowUnmetChargeKwh,
         unmetStoredChargeKwh: windowUnmetStoredKwh,
+        modeledChargeDurationMs: timing.modeledDurationMs,
+        timingReserveMs: timing.timingReserveMs,
+        schedulingWatts: windowSchedulingWatts,
+        schedulingSource: timing.source,
+        unvalidatedTaper: timing.unvalidatedTaper,
+        timeConstrainedWh: Math.round(timing.timeConstrainedWh),
       });
       cursor = window.endIndex;
     }
@@ -2143,6 +2246,7 @@ function planChronologicalDiscountedCharging({
       requiredGridChargeKwh: plannedChargeKwh + unmetChargeKwh,
       unmetChargeKwh,
       unmetStoredChargeKwh,
+      timeConstrainedWh: windowPlans.reduce((sum, window) => sum + Number(window.timeConstrainedWh || 0), 0),
       expectedEndStoredKwh: storedKwh,
     };
   };
@@ -2731,7 +2835,84 @@ function batteryLearningPower(performance, configuredWatts, previous = {}, migra
   });
 }
 
-function buildBatteryLearningModel(config, rollups = [], previous = {}, now = new Date()) {
+function buildBatteryChargePowerCurve(samples = [], configuredWatts, plateauModel = {}, previousCurve = []) {
+  const normalized = samples.filter((sample) => Number.isFinite(Number(sample.socPercent))
+    && Number(sample.socPercent) >= 0
+    && Number(sample.socPercent) <= 100
+    && Number.isFinite(Number(sample.batteryChargingW))
+    && Number(sample.batteryChargingW) > 0);
+  let previousCandidate = Number(plateauModel.candidateWatts ?? plateauModel.activeWatts ?? configuredWatts);
+  let previousActive = Number(plateauModel.activeWatts ?? configuredWatts);
+  return BATTERY_CHARGE_CURVE_BANDS.map((definition, index) => {
+    if (index === 0) {
+      return {
+        ...definition,
+        source: plateauModel.source === "learned" ? "learned" : "configured",
+        configuredWatts,
+        candidateWatts: finiteNumberOrNull(plateauModel.candidateWatts),
+        activeWatts: Math.min(configuredWatts, previousActive),
+        sampleCount: plateauModel.sampleCount ?? 0,
+        sessionCount: plateauModel.sessionCount ?? 0,
+        distinctDays: plateauModel.distinctDays ?? 0,
+        dispersionPercent: finiteNumberOrNull(plateauModel.dispersionPercent),
+        blockers: plateauModel.blockers ?? [],
+      };
+    }
+    const bandSamples = normalized.filter((sample) => Number(sample.socPercent) >= definition.minSoc
+      && (Number(sample.socPercent) < definition.maxSoc || definition.maxSoc === 100));
+    const values = bandSamples.map((sample) => Number(sample.batteryChargingW)).sort((a, b) => a - b);
+    const medianWatts = median(values);
+    const q1 = percentile(values, 0.25);
+    const q3 = percentile(values, 0.75);
+    const rawCandidate = Number.isFinite(q1) ? Math.min(configuredWatts, q1) : null;
+    const candidateWatts = Number.isFinite(rawCandidate)
+      ? Math.min(previousCandidate, rawCandidate)
+      : null;
+    if (Number.isFinite(candidateWatts)) previousCandidate = candidateWatts;
+    const sessionCount = new Set(bandSamples.map((sample) => sample.sessionId).filter(Boolean)).size;
+    const distinctDays = new Set(bandSamples.map((sample) => sample.day ?? localDayKey(new Date(sample.at)))).size;
+    const dispersionPercent = Number.isFinite(medianWatts) && medianWatts > 0
+      && Number.isFinite(q1) && Number.isFinite(q3)
+      ? (q3 - q1) / medianWatts * 100
+      : null;
+    const blockers = [];
+    if (values.length < BATTERY_CURVE_MIN_SAMPLES) {
+      blockers.push(`${BATTERY_CURVE_MIN_SAMPLES - values.length} more samples required`);
+    }
+    if (sessionCount < BATTERY_CURVE_MIN_SESSIONS) {
+      blockers.push(`${BATTERY_CURVE_MIN_SESSIONS - sessionCount} more charging sessions required`);
+    }
+    if (distinctDays < BATTERY_CURVE_MIN_DAYS) {
+      blockers.push(`${BATTERY_CURVE_MIN_DAYS - distinctDays} more distinct days required`);
+    }
+    if (!Number.isFinite(dispersionPercent) || dispersionPercent > BATTERY_CURVE_MAX_DISPERSION_PERCENT) {
+      blockers.push(`charge-power dispersion must be within ${BATTERY_CURVE_MAX_DISPERSION_PERCENT}%`);
+    }
+    const previousBand = previousCurve.find((band) => Number(band.minSoc) === definition.minSoc
+      && Number(band.maxSoc) === definition.maxSoc);
+    const qualified = blockers.length === 0 && Number.isFinite(candidateWatts);
+    const source = qualified || previousBand?.source === "learned" ? "learned" : "configured";
+    const learnedActive = qualified ? candidateWatts : finiteNumberOrNull(previousBand?.activeWatts);
+    const activeWatts = source === "learned" && Number.isFinite(learnedActive)
+      ? Math.min(previousActive, learnedActive)
+      : configuredWatts;
+    previousActive = Math.min(previousActive, activeWatts);
+    return {
+      ...definition,
+      source,
+      configuredWatts,
+      candidateWatts,
+      activeWatts: previousActive,
+      sampleCount: values.length,
+      sessionCount,
+      distinctDays,
+      dispersionPercent,
+      blockers,
+    };
+  });
+}
+
+function buildBatteryLearningModel(config, rollups = [], previous = {}, now = new Date(), { curveSamples = [] } = {}) {
   const configuredCapacityKwh = Number(config.batteryCapabilities?.usableCapacityKwh);
   const configuredWhPerSocPoint = configuredCapacityKwh * 1000 / 100;
   const configuredWatts = Number(config.batteryCapabilities?.maximumChargeWatts);
@@ -2740,6 +2921,12 @@ function buildBatteryLearningModel(config, rollups = [], previous = {}, now = ne
   const charge = batteryLearningCoefficient("charge", observations, configuredWhPerSocPoint, previous.charge, migrationAt, now);
   const discharge = batteryLearningCoefficient("discharge", observations, configuredWhPerSocPoint, previous.discharge, migrationAt, now);
   const power = batteryLearningPower(previous.performance ?? {}, configuredWatts, previous.power, migrationAt, now);
+  power.curve = buildBatteryChargePowerCurve(
+    curveSamples,
+    configuredWatts,
+    power,
+    previous.power?.curve ?? [],
+  );
   const sources = [charge.source, discharge.source, power.source];
   const anyDegraded = [charge, discharge, power]
     .some((model) => model.source !== "learned" && model.demotedAt);
@@ -2773,6 +2960,18 @@ function effectiveAdaptiveChargeWatts(config, state = {}) {
     effectiveWatts: learned ? Math.min(configuredWatts, Number(model.activeWatts)) : configuredWatts,
     learned,
     source: learned ? "learned" : "configured",
+    curve: (model?.curve?.length ? model.curve : BATTERY_CHARGE_CURVE_BANDS.map((band) => ({
+      ...band,
+      source: "configured",
+      configuredWatts,
+      candidateWatts: null,
+      activeWatts: configuredWatts,
+      sampleCount: 0,
+      sessionCount: 0,
+      distinctDays: 0,
+      dispersionPercent: null,
+      blockers: band.minSoc >= 80 ? ["charge-power curve is not yet validated"] : [],
+    }))).map((band) => ({ ...band })),
   };
 }
 
@@ -2797,6 +2996,120 @@ function effectiveBatteryLearningModel(config, state = {}) {
     power,
     capacityKwh: discharge.whPerSocPoint * 100 / 1000,
     chargeToStoredRatio: discharge.whPerSocPoint / charge.whPerSocPoint,
+  };
+}
+
+function chargePowerCurveBand(curve = [], socPercent = 0) {
+  const soc = Math.max(0, Math.min(100, Number(socPercent) || 0));
+  return curve.find((band) => soc >= Number(band.minSoc)
+    && (soc < Number(band.maxSoc) || Number(band.maxSoc) === 100)) ?? curve.at(-1) ?? null;
+}
+
+function estimateChargeDurationMs({
+  targetWh,
+  startSocPercent,
+  whPerSocPoint,
+  powerCurve = [],
+  fallbackWatts,
+} = {}) {
+  let remainingWh = Math.max(0, Number(targetWh) || 0);
+  let soc = Math.max(0, Math.min(100, Number(startSocPercent) || 0));
+  const whPerPoint = Math.max(0.001, Number(whPerSocPoint) || 0);
+  let durationMs = 0;
+  let guard = 0;
+  while (remainingWh > 0.001 && guard < 20) {
+    guard += 1;
+    const band = chargePowerCurveBand(powerCurve, soc);
+    const watts = Math.max(1, Number(band?.activeWatts ?? fallbackWatts) || 0);
+    const maxSoc = Math.max(soc, Number(band?.maxSoc ?? 100));
+    const bandWh = Math.max(0, (maxSoc - soc) * whPerPoint);
+    const consumedWh = bandWh > 0 ? Math.min(remainingWh, bandWh) : remainingWh;
+    durationMs += consumedWh / watts * 3_600_000;
+    remainingWh -= consumedWh;
+    soc = maxSoc < 100 ? maxSoc + 0.000001 : 100;
+  }
+  return durationMs;
+}
+
+function estimateDeliverableChargeWh({
+  durationMs,
+  startSocPercent,
+  whPerSocPoint,
+  powerCurve = [],
+  fallbackWatts,
+} = {}) {
+  let remainingMs = Math.max(0, Number(durationMs) || 0);
+  let soc = Math.max(0, Math.min(100, Number(startSocPercent) || 0));
+  const whPerPoint = Math.max(0.001, Number(whPerSocPoint) || 0);
+  let deliveredWh = 0;
+  let guard = 0;
+  while (remainingMs > 0.1 && guard < 20) {
+    guard += 1;
+    const band = chargePowerCurveBand(powerCurve, soc);
+    const watts = Math.max(1, Number(band?.activeWatts ?? fallbackWatts) || 0);
+    const maxSoc = Math.max(soc, Number(band?.maxSoc ?? 100));
+    const bandWh = Math.max(0, (maxSoc - soc) * whPerPoint);
+    const bandDurationMs = bandWh > 0 ? bandWh / watts * 3_600_000 : remainingMs;
+    const usedMs = Math.min(remainingMs, bandDurationMs);
+    const addedWh = watts * usedMs / 3_600_000;
+    deliveredWh += addedWh;
+    remainingMs -= usedMs;
+    soc += addedWh / whPerPoint;
+    if (soc >= 100) break;
+    if (usedMs >= bandDurationMs - 0.1) soc = maxSoc + 0.000001;
+  }
+  return deliveredWh;
+}
+
+function adaptiveChargingTimingProfile({
+  requiredWh,
+  startSocPercent,
+  whPerSocPoint,
+  powerCurve = [],
+  fallbackWatts,
+  windowDurationMs,
+} = {}) {
+  const targetWh = Math.max(0, Number(requiredWh) || 0);
+  const modeledDurationMs = estimateChargeDurationMs({
+    targetWh,
+    startSocPercent,
+    whPerSocPoint,
+    powerCurve,
+    fallbackWatts,
+  });
+  const endSocPercent = Math.min(100, Number(startSocPercent) + targetWh / Math.max(0.001, whPerSocPoint));
+  const unvalidatedTaper = powerCurve.some((band) => Number(band.minSoc) >= 80
+    && band.source !== "learned"
+    && Number(startSocPercent) < Number(band.maxSoc)
+    && endSocPercent > Number(band.minSoc));
+  const timingReserveMs = Math.min(
+    ADAPTIVE_CHARGING_TIMING_RESERVE_MAX_MS,
+    Math.max(ADAPTIVE_CHARGING_TIMING_RESERVE_MIN_MS, modeledDurationMs * ADAPTIVE_CHARGING_TIMING_RESERVE_FRACTION),
+  );
+  const scheduledDurationMs = Math.min(
+    Math.max(0, Number(windowDurationMs) || 0),
+    unvalidatedTaper ? Number(windowDurationMs) : modeledDurationMs + timingReserveMs,
+  );
+  const physicallyDeliverableWh = estimateDeliverableChargeWh({
+    durationMs: windowDurationMs,
+    startSocPercent,
+    whPerSocPoint,
+    powerCurve,
+    fallbackWatts,
+  });
+  const schedulableWh = Math.min(targetWh, physicallyDeliverableWh);
+  const schedulingWatts = scheduledDurationMs > 0
+    ? Math.min(Number(fallbackWatts), schedulableWh / scheduledDurationMs * 3_600_000)
+    : Number(fallbackWatts);
+  return {
+    modeledDurationMs,
+    timingReserveMs,
+    scheduledDurationMs,
+    schedulingWatts: Math.max(1, schedulingWatts || Number(fallbackWatts)),
+    unvalidatedTaper,
+    physicallyDeliverableWh,
+    timeConstrainedWh: Math.max(0, targetWh - physicallyDeliverableWh),
+    source: unvalidatedTaper ? "conservative-fallback" : "soc-curve",
   };
 }
 
@@ -3337,6 +3650,8 @@ function buildAdaptiveChargingPlan({
     dischargeFloorKwh,
     maximumTargetPercent: Number(config.adaptiveCharging.targetSocPercent),
     maximumChargeWatts,
+    chargePowerCurve: chargePerformance.curve,
+    chargeWhPerSocPoint: batteryModel.charge.whPerSocPoint,
     chargeToStoredRatio: batteryModel.chargeToStoredRatio,
   });
   const timelineView = buildAdaptiveChargingTimelineView({
@@ -6393,7 +6708,7 @@ function recordAdaptiveChargeSample(state, status, now = new Date()) {
       ...state.chargingPerformance,
       samples: [
         ...(state.chargingPerformance?.samples ?? []),
-        { at: now.toISOString(), batteryChargingW, houseDemandW, gridImportW },
+        { at: now.toISOString(), batteryChargingW, socPercent: soc, houseDemandW, gridImportW },
       ],
     });
   }
@@ -6642,7 +6957,7 @@ function adaptiveChargingSlotAt(plan, now = new Date()) {
 function capAdaptiveChargingSlotToRemainingTime(slot, maximumChargeWatts, now = new Date()) {
   const endMs = new Date(slot?.end).getTime();
   const nowMs = now.getTime();
-  const maximumWatts = Number(maximumChargeWatts);
+  const maximumWatts = Number(slot?.schedulingWatts ?? maximumChargeWatts);
   if (!Number.isFinite(endMs) || endMs <= nowMs || !Number.isFinite(maximumWatts) || maximumWatts <= 0) {
     return null;
   }
@@ -6763,7 +7078,6 @@ function applyInterruptedChargeCap(plan, interruption, maximumChargeWatts, now =
     return { plan, interruption: null };
   }
   const remainingWh = Math.max(0, Math.round(Number(interruption.remainingWh) || 0));
-  const maximumWatts = Number(maximumChargeWatts);
   let matched = false;
   const slots = (plan.slots ?? []).map((slot) => {
     const sameSlot = interruption.slotId && slot.slotId
@@ -6774,6 +7088,7 @@ function applyInterruptedChargeCap(plan, interruption, maximumChargeWatts, now =
     const targetWh = Math.min(Math.max(0, Math.round(Number(slot.targetWh) || 0)), remainingWh);
     if (!targetWh) return null;
     const endMs = new Date(slot.end).getTime();
+    const maximumWatts = Number(slot.schedulingWatts ?? maximumChargeWatts);
     const durationMs = Number.isFinite(maximumWatts) && maximumWatts > 0
       ? targetWh / maximumWatts * 3_600_000
       : endMs - new Date(slot.start).getTime();
@@ -7128,6 +7443,105 @@ function updateAdaptiveChargingSolarHeadroomHold(state, liveExportNeedsHeadroom,
   return { active: false, released: true, expired: false };
 }
 
+function adaptiveChargingExportEvidence(status) {
+  const gridExportW = numericMetric(status.meter?.grid_export_power);
+  const gridImportW = numericMetric(status.meter?.grid_import_power);
+  const houseDemandW = numericMetric(status.meter?.house_demand_power);
+  const batteryChargingW = batteryChargingWatts(status);
+  const solarW = numericMetric(status.energy?.solar?.instant_power);
+  const fuelCellW = numericMetric(selectedFuelCellReading(status.energy?.fuel_cells ?? [])?.instant_power);
+  const aboveThreshold = Number.isFinite(gridExportW) && gridExportW > ADAPTIVE_CHARGING_EXPORT_THRESHOLD_W;
+  const balanceAvailable = [gridImportW, houseDemandW, batteryChargingW, solarW]
+    .every(Number.isFinite);
+  if (!aboveThreshold) {
+    return { aboveThreshold: false, balanceAvailable, coherent: false, gridExportW, residualW: null };
+  }
+  if (!balanceAvailable) {
+    return { aboveThreshold: true, balanceAvailable: false, coherent: false, gridExportW, residualW: null };
+  }
+  const expectedGridW = houseDemandW + batteryChargingW - solarW - (Number.isFinite(fuelCellW) ? fuelCellW : 0);
+  const measuredGridW = gridImportW - gridExportW;
+  const residualW = Math.abs(expectedGridW - measuredGridW);
+  const toleranceW = Math.max(300, Math.max(Math.abs(expectedGridW), Math.abs(measuredGridW)) * 0.25);
+  return {
+    aboveThreshold: true,
+    balanceAvailable: true,
+    coherent: expectedGridW < -ADAPTIVE_CHARGING_EXPORT_THRESHOLD_W && residualW <= toleranceW,
+    gridExportW,
+    gridImportW,
+    houseDemandW,
+    batteryChargingW,
+    solarW,
+    fuelCellW,
+    expectedGridW,
+    measuredGridW,
+    residualW,
+    toleranceW,
+  };
+}
+
+function updateAdaptiveChargingExportConfirmation(state, evidence, now = new Date()) {
+  const current = state.exportConfirmation ?? {};
+  if (!evidence.aboveThreshold) {
+    const cleared = Number(current.count) > 0;
+    state.exportConfirmation = {
+      count: 0,
+      coherent: false,
+      firstSeenAt: null,
+      lastSeenAt: now.toISOString(),
+      lastRejectedAt: current.lastRejectedAt ?? null,
+      lastRejectedLogAt: current.lastRejectedLogAt ?? null,
+      lastGridExportW: finiteNumberOrNull(evidence.gridExportW),
+      lastBalanceResidualW: null,
+    };
+    return { confirmed: false, pending: false, rejected: false, cleared, requiredChecks: 0 };
+  }
+  if (evidence.balanceAvailable && !evidence.coherent) {
+    state.exportConfirmation = {
+      count: 0,
+      coherent: false,
+      firstSeenAt: null,
+      lastSeenAt: now.toISOString(),
+      lastRejectedAt: now.toISOString(),
+      lastRejectedLogAt: current.lastRejectedLogAt ?? null,
+      lastGridExportW: finiteNumberOrNull(evidence.gridExportW),
+      lastBalanceResidualW: finiteNumberOrNull(evidence.residualW),
+    };
+    return {
+      confirmed: false,
+      pending: false,
+      rejected: true,
+      cleared: false,
+      requiredChecks: ADAPTIVE_CHARGING_EXPORT_COHERENT_CHECKS,
+    };
+  }
+  const coherent = evidence.coherent === true;
+  const compatibleSequence = Number(current.count) > 0 && current.coherent === coherent;
+  const count = compatibleSequence ? Number(current.count) + 1 : 1;
+  const requiredChecks = coherent
+    ? ADAPTIVE_CHARGING_EXPORT_COHERENT_CHECKS
+    : ADAPTIVE_CHARGING_EXPORT_METER_ONLY_CHECKS;
+  state.exportConfirmation = {
+    count,
+    coherent,
+    firstSeenAt: compatibleSequence ? current.firstSeenAt : now.toISOString(),
+    lastSeenAt: now.toISOString(),
+    lastRejectedAt: current.lastRejectedAt ?? null,
+    lastRejectedLogAt: current.lastRejectedLogAt ?? null,
+    lastGridExportW: finiteNumberOrNull(evidence.gridExportW),
+    lastBalanceResidualW: finiteNumberOrNull(evidence.residualW),
+  };
+  return {
+    confirmed: count >= requiredChecks,
+    pending: count < requiredChecks,
+    rejected: false,
+    cleared: false,
+    count,
+    requiredChecks,
+    coherent,
+  };
+}
+
 function adaptiveChargingClock(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "--:--";
@@ -7142,6 +7556,13 @@ function adaptiveChargingPlanLogMessage(plan, trigger, liveSoc) {
   const slots = (plan.slots ?? [])
     .map((slot) => `${adaptiveChargingClock(slot.start)}-${adaptiveChargingClock(slot.end)} ${slot.targetWh} Wh`)
     .join(", ") || "none";
+  const timing = (plan.windows ?? [])
+    .filter((window) => Number(window.plannedChargeKwh) > 0
+      && Number.isFinite(Number(window.schedulingWatts))
+      && Number.isFinite(Number(window.timingReserveMs)))
+    .map((window) => `${window.label} ${Math.round(Number(window.schedulingWatts))} W/${Math.round(Number(window.timingReserveMs) / 60_000)} min reserve/${window.schedulingSource}`)
+    .join(", ");
+  const timingSummary = timing ? `; timing [${timing}]` : "";
   const awaySummary = Number(plan.demandHistory?.awaySlotCount) > 0
     ? `; away demand ${plan.demandHistory.awayConfidence} (${plan.demandHistory.awayComparableDayCount} comparable days, ${plan.demandHistory.awayFallbackSlotCount} fallback slots)`
     : "";
@@ -7153,7 +7574,7 @@ function adaptiveChargingPlanLogMessage(plan, trigger, liveSoc) {
   const fuelCellSummary = fuelCell
     ? `; Ene-Farm ${Number(plan.predictedFuelCellKwh ?? 0).toFixed(2)} kWh median (${fuelCell.method}, ${fuelCell.influence}${fuelCell.blockers?.length ? `; ${fuelCell.blockers.join(", ")}` : ""})`
     : "";
-  return `Plan recalculated (${trigger}): SOC ${Number(liveSoc).toFixed(0)}%; ${Number(plan.predictedSolarKwh).toFixed(2)} kWh solar, ${Number(plan.predictedDemandKwh).toFixed(2)} kWh demand, ${Number(plan.plannedChargeKwh).toFixed(2)} kWh discounted charging; targets [${targets}]; slots [${slots}]${awaySummary}${fuelCellSummary}${batteryModelSummary}${plan.warning ? `; ${plan.warning}` : ""}`;
+  return `Plan recalculated (${trigger}): SOC ${Number(liveSoc).toFixed(0)}%; ${Number(plan.predictedSolarKwh).toFixed(2)} kWh solar, ${Number(plan.predictedDemandKwh).toFixed(2)} kWh demand, ${Number(plan.plannedChargeKwh).toFixed(2)} kWh discounted charging; targets [${targets}]; slots [${slots}]${timingSummary}${awaySummary}${fuelCellSummary}${batteryModelSummary}${plan.warning ? `; ${plan.warning}` : ""}`;
 }
 
 async function evaluateAdaptiveCharging(config, status, rules, now = new Date()) {
@@ -7324,9 +7745,38 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
     syncAdaptiveChargingWindowExecution(state, activeDiscountedWindow, state.plan, soc, now, refreshDecision.refresh);
   }
   else finalizeExpiredAdaptiveChargingWindow(state, soc, now);
-  const gridExportW = numericMetric(status.meter?.grid_export_power);
-  const liveExportNeedsHeadroom = Number.isFinite(gridExportW) && gridExportW > 50;
-  const solarHeadroomHold = updateAdaptiveChargingSolarHeadroomHold(state, liveExportNeedsHeadroom, now);
+  const exportEvidence = adaptiveChargingExportEvidence(status);
+  const exportConfirmation = updateAdaptiveChargingExportConfirmation(state, exportEvidence, now);
+  const liveExportNeedsHeadroom = exportConfirmation.confirmed;
+  const solarHeadroomHold = updateAdaptiveChargingSolarHeadroomHold(state, exportEvidence.aboveThreshold, now);
+  if (exportConfirmation.pending && exportConfirmation.count === 1) {
+    appendAdaptiveChargingLog(
+      state,
+      `Grid export (${Math.round(exportEvidence.gridExportW)} W) is awaiting confirmation (${exportConfirmation.count}/${exportConfirmation.requiredChecks})`,
+      "observe",
+      now,
+    );
+  }
+  if (exportConfirmation.rejected) {
+    const lastRejectedLogMs = new Date(state.exportConfirmation.lastRejectedLogAt).getTime();
+    if (!Number.isFinite(lastRejectedLogMs) || now.getTime() - lastRejectedLogMs >= ADAPTIVE_CHARGING_BREAKER_WAIT_LOG_MS) {
+      appendAdaptiveChargingLog(
+        state,
+        `Rejected incoherent grid export (${Math.round(exportEvidence.gridExportW)} W); calculated grid flow is ${Math.round(exportEvidence.expectedGridW)} W (positive is import) with ${Math.round(exportEvidence.residualW)} W residual`,
+        "observe",
+        now,
+      );
+      state.exportConfirmation.lastRejectedLogAt = now.toISOString();
+    }
+  }
+  if (liveExportNeedsHeadroom && exportConfirmation.count === exportConfirmation.requiredChecks) {
+    appendAdaptiveChargingLog(
+      state,
+      `Grid export (${Math.round(exportEvidence.gridExportW)} W) confirmed after ${exportConfirmation.count} checks; preserving solar headroom`,
+      "stop",
+      now,
+    );
+  }
   if (solarHeadroomHold.released) {
     appendAdaptiveChargingLog(
       state,
@@ -9181,6 +9631,8 @@ export {
   applySolarForecastBias,
   applyInterruptedChargeCap,
   aggregateEnergyReportSamples,
+  adaptiveChargingExportEvidence,
+  adaptiveChargingTimingProfile,
   assertDeviceCommandResult,
   beginAdaptiveChargingBreakerRecovery,
   buildAdaptiveChargingPlan,
@@ -9201,9 +9653,12 @@ export {
   discountedPlanStatus,
   dailySolarForecastIssues,
   buildBatteryLearningModel,
+  buildBatteryChargePowerCurve,
   buildFuelCellGenerationModel,
   effectiveBatteryLearningModel,
   effectiveAdaptiveChargeWatts,
+  estimateChargeDurationMs,
+  estimateDeliverableChargeWh,
   executeAdaptiveChargeStart,
   evaluateAutomationRule,
   finalizeAdaptiveChargeSession,
@@ -9264,6 +9719,7 @@ export {
   summarizeCircuits,
   syncAdaptiveChargingWindowExecution,
   updateAdaptiveChargingSolarHeadroomHold,
+  updateAdaptiveChargingExportConfirmation,
   verifyBatteryOperationMode,
   predictHouseDemand,
 };
