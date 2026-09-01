@@ -2987,6 +2987,8 @@ assert.equal(rule.action, "set-mode");
 assert.equal(rule.payload.mode, "standby");
 assert.equal(rule.restoreAction, "set-mode");
 assert.equal(rule.restorePayload.mode, "auto");
+assert.equal(rule.dashboardWarningEnabled, true);
+assert.equal(cleanAutomationRule({ dashboardWarningEnabled: false }).dashboardWarningEnabled, false);
 assert.equal(cleanAutomationRule({}).conditions.source, "gridImportW");
 const mergedRule = cleanAutomationRule({
   updatedAt: "2026-05-31T00:00:00.000Z",
@@ -3002,6 +3004,7 @@ const ruleConfig = cleanAutomationRuleConfig({
   log: [{ message: "state only" }],
 });
 assert.equal(ruleConfig.id, "rule-1");
+assert.equal(ruleConfig.dashboardWarningEnabled, true);
 assert.equal("state" in ruleConfig, false);
 assert.equal("lastResult" in ruleConfig, false);
 assert.equal("log" in ruleConfig, false);

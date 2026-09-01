@@ -877,6 +877,7 @@ const I18N = {
     automationRules: "Automation Rules",
     backupDemandGuard: "Charging Demand Guard",
     backupGuardEnabled: "Enable charging demand guard",
+    guardDashboardWarningEnabled: "Show breaker-risk warning on Grid Import card",
     breakerAmps: "Breaker amps",
     reserveAmps: "Reserve amps",
     batteryChargeEstimate: "Maximum battery charge watts",
@@ -1532,6 +1533,7 @@ const I18N = {
     automationRules: "自動化ルール",
     backupDemandGuard: "ブレーカー落ちガード",
     backupGuardEnabled: "ブレーカー落ちガードを有効化",
+    guardDashboardWarningEnabled: "買電カードにブレーカー警告を表示",
     breakerAmps: "ブレーカー容量(A)",
     reserveAmps: "余裕(A)",
     batteryChargeEstimate: "蓄電池の最大充電電力(W)",
@@ -2786,6 +2788,7 @@ function defaultAutomationRule() {
     name: "Charging demand guard",
     type: "backup-demand-guard",
     enabled: false,
+    dashboardWarningEnabled: true,
     conditions: {
       source: "gridImportW",
       breakerAmps: 40,
@@ -2807,12 +2810,51 @@ function updateAutomationControls(rules = state.automationRules) {
     rules.find((item) => item.type === "backup-demand-guard") ??
     defaultAutomationRule();
   $("#automationEnabled").checked = rule.enabled === true;
+  $("#automationDashboardWarningEnabled").checked = rule.dashboardWarningEnabled !== false;
   $("#automationBreakerAmps").value = rule.conditions?.breakerAmps ?? "";
   $("#automationReserveAmps").value = rule.conditions?.reserveAmps ?? "";
   $("#automationRestoreBelow").value = rule.conditions?.restoreBelowAmps ?? "";
   $("#automationRestoreDelay").value =
     rule.conditions?.restoreDelaySeconds ?? "";
   renderAutomationLog(rule);
+}
+
+function gridImportGuardWarningLevel(gridImportWatts) {
+  const rule = state.automationRules.find(
+    (item) => item.type === "backup-demand-guard",
+  );
+  if (
+    state.historyMode ||
+    !rule ||
+    rule.dashboardWarningEnabled === false ||
+    !Number.isFinite(Number(gridImportWatts))
+  ) return null;
+
+  const breakerAmps = Number(rule.conditions?.breakerAmps);
+  const reserveAmps = Number(rule.conditions?.reserveAmps);
+  const voltage = Number(rule.conditions?.breakerVoltage);
+  if (
+    !Number.isFinite(breakerAmps) || breakerAmps <= 0 ||
+    !Number.isFinite(reserveAmps) || reserveAmps < 0 || reserveAmps >= breakerAmps ||
+    !Number.isFinite(voltage) || voltage <= 0
+  ) return null;
+
+  const guardLimitWatts = (breakerAmps - reserveAmps) * voltage;
+  const contractLimitWatts = breakerAmps * voltage;
+  const watts = Number(gridImportWatts);
+  if (watts >= contractLimitWatts) return "over-limit";
+  if (watts >= guardLimitWatts) return "critical";
+  if (watts >= guardLimitWatts * 0.8) return "caution";
+  return null;
+}
+
+function applyGridImportGuardWarning(gridImportWatts) {
+  const widget = $('[data-widget-id="gridImportPower"]');
+  if (!widget) return;
+  const level = gridImportGuardWarningLevel(gridImportWatts);
+  for (const name of ["caution", "critical", "over-limit"]) {
+    widget.classList.toggle(`guard-warning-${name}`, level === name);
+  }
 }
 
 function renderAutomationLog(rule) {
@@ -2852,6 +2894,7 @@ function normalizeAutomationLogMessage(message) {
 async function refreshAutomationRules() {
   state.automationRules = await api("/api/automation-rules");
   updateAutomationControls(state.automationRules);
+  applyGridImportGuardWarning(state.status?.meter?.grid_import_power?.value);
   return state.automationRules;
 }
 
@@ -4664,6 +4707,7 @@ function renderDashboard(data, options = {}) {
         ? t("unavailable")
         : t("notSet"),
   );
+  applyGridImportGuardWarning(gridImportWatts);
   setText(
     "#gridExportPower",
     Number.isFinite(gridExportWatts)
@@ -6582,6 +6626,7 @@ function initForms() {
     const body = {
       ...(existing ?? defaultAutomationRule()),
       enabled: $("#automationEnabled").checked,
+      dashboardWarningEnabled: $("#automationDashboardWarningEnabled").checked,
       conditions: {
         source: "gridImportW",
         breakerAmps: $("#automationBreakerAmps").value,

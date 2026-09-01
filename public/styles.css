@@ -325,6 +325,37 @@ label {
   gap: 12px;
 }
 
+[data-widget-id="gridImportPower"] {
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.widget.guard-warning-caution {
+  border-color: #d78a20;
+  background: #fff9ed;
+  box-shadow: 0 0 0 2px rgba(215, 138, 32, 0.16), var(--shadow);
+}
+
+.widget.guard-warning-critical {
+  border-color: #dc2626;
+  background: #fff4f4;
+  box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.2), var(--shadow);
+}
+
+.widget.guard-warning-over-limit {
+  border-color: #991b1b;
+  background: #fee2e2;
+  box-shadow: 0 0 0 3px rgba(153, 27, 27, 0.25), var(--shadow);
+}
+
+.widget.guard-warning-caution > span:first-child {
+  color: #9a5b08;
+}
+
+.widget.guard-warning-critical > span:first-child,
+.widget.guard-warning-over-limit > span:first-child {
+  color: #991b1b;
+}
+
 .widget.wide {
   grid-column: span 2;
 }

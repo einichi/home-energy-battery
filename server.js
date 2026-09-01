@@ -6251,6 +6251,7 @@ function cleanAutomationRuleConfig(input = {}) {
     name: String(input.name || "Charging demand guard"),
     type: String(input.type || "backup-demand-guard"),
     enabled: input.enabled === true,
+    dashboardWarningEnabled: input.dashboardWarningEnabled !== false,
     conditions: {
       source: ["houseDemandW", "gridImportW"].includes(conditions.source) ? conditions.source : "gridImportW",
       breakerAmps: configNumber(conditions.breakerAmps, DEFAULT_GUARD_CONDITIONS.breakerAmps, 1, 400),
