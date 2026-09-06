@@ -28,6 +28,8 @@ import {
   buildBatteryChargePowerCurve,
   buildFuelCellGenerationModel,
   buildAdaptiveChargingTimelineView,
+  backupPreparationAllowsActionSource,
+  backupPreparationBlocksActions,
   batteryLearningModelSwitchDue,
   consumeBatteryLearningModelSwitch,
   capAdaptiveChargingSlotToRemainingTime,
@@ -107,6 +109,18 @@ import {
   updateAdaptiveChargingExportConfirmation,
   verifyBatteryOperationMode,
 } from "../server.js";
+
+const inactiveBackupPreparation = { backupPreparation: { active: false, allowDemandGuard: true } };
+const guardedBackupPreparation = { backupPreparation: { active: true, allowDemandGuard: true } };
+const isolatedBackupPreparation = { backupPreparation: { active: true, allowDemandGuard: false } };
+assert.equal(backupPreparationBlocksActions(inactiveBackupPreparation), false);
+assert.equal(backupPreparationBlocksActions(guardedBackupPreparation), true);
+assert.equal(backupPreparationAllowsActionSource(guardedBackupPreparation, "backup-preparation"), true);
+assert.equal(backupPreparationAllowsActionSource(guardedBackupPreparation, "charging-demand-guard"), true);
+assert.equal(backupPreparationAllowsActionSource(guardedBackupPreparation, "manual"), false);
+assert.equal(backupPreparationAllowsActionSource(guardedBackupPreparation, "schedule"), false);
+assert.equal(backupPreparationAllowsActionSource(guardedBackupPreparation, "adaptive-charging"), false);
+assert.equal(backupPreparationAllowsActionSource(isolatedBackupPreparation, "charging-demand-guard"), false);
 
 const timestampWrites = [];
 const testConsole = {
@@ -353,9 +367,10 @@ assert.deepEqual(simple.circuitLabels, {});
 assert.deepEqual(simple.circuitDashboardVisibility, {});
 assert.equal(simple.circuitSortMode, "number");
 assert.equal(rateForTimestamp(simple.rateBands, "2026-05-31T23:30:00+09:00").yenPerKwh, 42);
-assert.equal(simple.dashboardWidgets.length, 23);
+assert.equal(simple.dashboardWidgets.length, 24);
 assert.equal(simple.dashboardWidgets[0].id, "solarPower");
 assert.equal(simple.dashboardWidgets.find((widget) => widget.id === "adaptiveCharging")?.priority, 5);
+assert.equal(simple.dashboardWidgets.find((widget) => widget.id === "backupPreparation")?.priority, 6);
 assert.equal(simple.dashboardWidgets.find((widget) => widget.id === "awayStatus")?.priority, 7);
 assert.deepEqual(simple.batteryCapabilities, { usableCapacityKwh: null, maximumChargeWatts: null });
 assert.equal(simple.adaptiveCharging.enabled, false);
@@ -2398,7 +2413,7 @@ const normalizedWidgets = normalizeDashboardWidgets([
   { id: "houseDemandPower", visible: true, priority: "bad" },
   { id: "unknownWidget", visible: true, priority: 1 },
 ]);
-assert.equal(normalizedWidgets.length, 23);
+assert.equal(normalizedWidgets.length, 24);
 assert.deepEqual(normalizedWidgets.find((widget) => widget.id === "solarPower"), {
   id: "solarPower",
   group: "trends",

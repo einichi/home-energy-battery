@@ -56,6 +56,8 @@ const state = {
   automationRules: [],
   adaptiveChargingStatus: null,
   adaptiveChargingRecalculating: false,
+  backupPreparation: null,
+  backupPreparationBusy: false,
   adaptiveChargingTimelineHover: null,
   awayPeriodsView: null,
   awayFromSetByNow: false,
@@ -126,6 +128,7 @@ const DASHBOARD_WIDGET_DEFAULTS = [
   { id: "gridImportPower", group: "trends", labelKey: "gridImport", visible: true, priority: 60 },
   { id: "gridExportPower", group: "trends", labelKey: "gridExport", visible: true, priority: 70 },
   { id: "adaptiveCharging", group: "status", labelKey: "adaptiveCharging", visible: true, priority: 5 },
+  { id: "backupPreparation", group: "status", labelKey: "backupPreparation", visible: true, priority: 6 },
   { id: "awayStatus", group: "status", labelKey: "awayStatus", visible: true, priority: 7 },
   { id: "batteryWorking", group: "status", labelKey: "batteryWorkingStatus", visible: true, priority: 10 },
   { id: "operationMode", group: "status", labelKey: "operationMode", visible: true, priority: 20 },
@@ -370,6 +373,21 @@ const I18N = {
     estimateNotice: "All costs and savings are estimates. Check your provider statement for accurate billing information.",
     carbonBalance: "Carbon balance",
     batterySettings: "Battery Settings",
+    backupPreparation: "Backup Preparation",
+    backupPreparationHelp: "Temporarily hold the backup charging profile until you explicitly restore normal automation.",
+    backupPreparationAllowGuard: "Allow Charging Demand Guard intervention",
+    backupPreparationGuardHelp: "Recommended. The Guard may temporarily use Standby and Auto while preserving the backup profile.",
+    startBackupPreparation: "Start Backup Preparation",
+    endBackupPreparation: "End and Restore Previous Profile",
+    backupPreparationActive: "Active",
+    backupPreparationInactive: "Off",
+    backupPreparationStarting: "Starting",
+    backupPreparationEnding: "Ending",
+    backupPreparationActiveSince: "Backup profile protected since {time}",
+    backupPreparationRestoresProfile: "Previous profile: {profile}",
+    backupPreparationNormalAutomation: "Normal battery automation is available",
+    backupPreparationStarted: "Backup Preparation started",
+    backupPreparationEnded: "Previous profile restored",
     chargingProfileHelp:
       "Choose the battery behavior profile used by the controller.",
     dischargeLimitHelp: "Minimum charge to keep available for later use.",
@@ -617,6 +635,7 @@ const I18N = {
     decisionLog: "Decision log",
     forecastDataAttribution: "Weather forecasts:",
     schedulesDisabledByAdaptiveCharging: "Schedules are preserved but disabled while adaptive charging is enabled.",
+    schedulesDisabledByBackupPreparation: "Schedules are preserved but will not run while Backup Preparation is active.",
     noPlannedWindows: "No discounted charging windows selected.",
     noAdaptiveChargingLog: "No Adaptive Charging decisions yet.",
     adaptiveChargingNeedsRates: "Off-Peak or Multi-Rate pricing is required.",
@@ -1028,6 +1047,21 @@ const I18N = {
     estimateNotice: "料金と節約額はすべて推定値です。正確な請求額は契約先にご確認ください。",
     carbonBalance: "CO2収支",
     batterySettings: "蓄電池設定",
+    backupPreparation: "停電準備",
+    backupPreparationHelp: "明示的に通常運転へ戻すまで、バックアップ充電プロファイルを維持します。",
+    backupPreparationAllowGuard: "充電デマンドガードの介入を許可",
+    backupPreparationGuardHelp: "推奨。バックアッププロファイルを維持したまま、ガードが一時的に待機・自動運転を使用できます。",
+    startBackupPreparation: "停電準備を開始",
+    endBackupPreparation: "終了して前のプロファイルに戻す",
+    backupPreparationActive: "有効",
+    backupPreparationInactive: "オフ",
+    backupPreparationStarting: "開始中",
+    backupPreparationEnding: "終了中",
+    backupPreparationActiveSince: "{time} からバックアッププロファイルを保護中",
+    backupPreparationRestoresProfile: "復元するプロファイル: {profile}",
+    backupPreparationNormalAutomation: "通常の蓄電池自動化を使用できます",
+    backupPreparationStarted: "停電準備を開始しました",
+    backupPreparationEnded: "以前のプロファイルに戻しました",
     chargingProfileHelp:
       "コントローラーが使う蓄電池の動作プロファイルを選びます。",
     dischargeLimitHelp: "あとで使うために残しておく最低残量です。",
@@ -1273,6 +1307,7 @@ const I18N = {
     decisionLog: "判断ログ",
     forecastDataAttribution: "天気予報:",
     schedulesDisabledByAdaptiveCharging: "適応充電が有効な間、スケジュールは保存されたまま実行されません。",
+    schedulesDisabledByBackupPreparation: "停電準備が有効な間、スケジュールは保存されますが実行されません。",
     noPlannedWindows: "割安な充電時間帯は選択されていません。",
     noAdaptiveChargingLog: "適応充電の判断履歴はまだありません。",
     adaptiveChargingNeedsRates: "夜間料金または複数料金の設定が必要です。",
@@ -1595,6 +1630,7 @@ function setLanguage(language) {
   const serviceKey = $("#serviceState")?.dataset.stateKey;
   if (serviceKey) setServiceState(serviceKey);
   if (state.status) renderDashboard(state.status, { recordTrend: false });
+  if (state.backupPreparation) renderBackupPreparation(state.backupPreparation);
   renderReportQuickRanges(reportBucket());
   if (state.reportData) renderReport(state.reportData);
   drawAllTrends();
@@ -3048,8 +3084,16 @@ function adaptiveChargingConfiguredInUi(config = state.config ?? {}) {
 }
 
 function updateScheduleAdaptiveChargingState(config = state.config ?? {}) {
-  const disabled = adaptiveChargingConfiguredInUi(config);
-  $("#scheduleAdaptiveChargingNotice")?.classList.toggle("hidden", !disabled);
+  const disabledByAdaptiveCharging = adaptiveChargingConfiguredInUi(config);
+  const disabledByBackupPreparation = state.backupPreparation?.active === true;
+  const disabled = disabledByAdaptiveCharging || disabledByBackupPreparation;
+  const notice = $("#scheduleAdaptiveChargingNotice");
+  notice?.classList.toggle("hidden", !disabled);
+  if (notice) {
+    notice.textContent = t(disabledByBackupPreparation
+      ? "schedulesDisabledByBackupPreparation"
+      : "schedulesDisabledByAdaptiveCharging");
+  }
   $(".schedule-panel")?.classList.toggle("adaptive-charging-disabled", disabled);
   $$("#scheduleForm input, #scheduleForm select, #scheduleForm button, #scheduleRows button").forEach((control) => {
     control.disabled = disabled;
@@ -3150,6 +3194,67 @@ function renderAdaptiveChargingWidget(status) {
   if (!stateEl || !note) return;
   stateEl.textContent = adaptiveChargingDisplayState(status);
   note.textContent = adaptiveChargingNextAction(status);
+}
+
+function backupPreparationPhaseLabel(backup = state.backupPreparation) {
+  return t({
+    active: "backupPreparationActive",
+    starting: "backupPreparationStarting",
+    ending: "backupPreparationEnding",
+    inactive: "backupPreparationInactive",
+  }[backup?.phase] ?? "backupPreparationInactive");
+}
+
+function backupPreparationDetail(backup = state.backupPreparation) {
+  if (backup?.active && backup.startedAt) {
+    const activeSince = template("backupPreparationActiveSince", {
+      time: formatAdaptiveChargingDateTime(backup.startedAt),
+    });
+    if (!backup.previousProfile) return activeSince;
+    return `${activeSince} · ${template("backupPreparationRestoresProfile", {
+      profile: displayValue(`profile${backup.previousProfile.replace(/^./, (character) => character.toUpperCase())}`),
+    })}`;
+  }
+  if (backup?.previousProfile) {
+    return template("backupPreparationRestoresProfile", {
+      profile: displayValue(`profile${backup.previousProfile.replace(/^./, (character) => character.toUpperCase())}`),
+    });
+  }
+  return t("backupPreparationNormalAutomation");
+}
+
+function renderBackupPreparation(backup) {
+  if (!backup) return;
+  state.backupPreparation = backup;
+  const active = backup.active === true;
+  const busy = state.backupPreparationBusy || ["starting", "ending"].includes(backup.phase);
+  setText("#backupPreparationWidgetState", backupPreparationPhaseLabel(backup));
+  setText("#backupPreparationWidgetNote", backupPreparationDetail(backup));
+  setText("#backupPreparationStatus", backupPreparationPhaseLabel(backup));
+  setText("#backupPreparationDetail", backupPreparationDetail(backup));
+  $("#backupPreparationAllowGuard").checked = backup.allowDemandGuard !== false;
+  if (backup.currentProfile) {
+    const profileControl = $(`input[name="mode"][value="${backup.currentProfile}"]`);
+    if (profileControl) profileControl.checked = true;
+  }
+  $("#backupPreparationAllowGuard").disabled = active || busy;
+  $("#backupPreparationStart").disabled = active || busy;
+  $("#backupPreparationEnd").disabled = !active || busy;
+  $("#backupPreparationControl")?.classList.toggle("is-active", active);
+  $("[data-widget-id='backupPreparation']")?.classList.toggle("is-active", active);
+  for (const selector of ["#modeForm", "#limitForm", "#chargeWindowForm", "#dischargeWindowForm", "#directActionForm"]) {
+    $$(`${selector} input, ${selector} select, ${selector} button`).forEach((control) => {
+      control.disabled = active || busy;
+    });
+  }
+  updateScheduleAdaptiveChargingState();
+  updateAdaptiveChargingAvailability();
+}
+
+async function refreshBackupPreparation() {
+  const backup = await api("/api/backup-preparation");
+  renderBackupPreparation(backup);
+  return backup;
 }
 
 function formatAwayDateTime(value) {
@@ -3955,7 +4060,7 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
     log.append(row);
   }
   if (!log.children.length) log.textContent = t("noAdaptiveChargingLog");
-  $("#adaptiveChargingResume").disabled = !status.paused;
+  $("#adaptiveChargingResume").disabled = state.backupPreparation?.active === true || !status.paused;
   drawAdaptiveChargingTimeline(status);
 }
 
@@ -3992,7 +4097,10 @@ function updateAdaptiveChargingAvailability(config = state.config ?? {}) {
   recalculateButton.classList.toggle("is-recalculating", recalculating);
   recalculateButton.setAttribute("aria-busy", String(recalculating));
   recalculateButton.textContent = t(recalculating ? "recalculatingPlan" : "recalculatePlan");
-  $("#adaptiveChargingResume").disabled = !configuredEnabled || !state.adaptiveChargingStatus?.paused || reasons.length > 0;
+  $("#adaptiveChargingResume").disabled = state.backupPreparation?.active === true
+    || !configuredEnabled
+    || !state.adaptiveChargingStatus?.paused
+    || reasons.length > 0;
   const runtimeReason = configuredEnabled
     ? state.adaptiveChargingStatus?.available
       ? state.adaptiveChargingStatus?.warning
@@ -5620,6 +5728,7 @@ async function refreshAll() {
   }
   if (["dashboard", "adaptiveCharging", "settings"].includes(state.currentPage)) {
     tasks.push(refreshAdaptiveCharging());
+    tasks.push(refreshBackupPreparation());
   }
   if (state.currentPage === "graph" && state.activeGraph === "fuelCellPower") {
     const start = new Date($("#graphHistoryStart").value);
@@ -5654,6 +5763,7 @@ async function initialLoad() {
     updateConfigControls(configResult.value);
     if (state.status) renderCircuitWidgets(state.status);
     refreshAdaptiveCharging().catch(() => {});
+    refreshBackupPreparation().catch(() => {});
     refreshFuelCellSummary().catch(() => {});
   }
   scheduleNextRefresh();
@@ -5671,6 +5781,7 @@ async function hydrateSettingsView() {
     api("/api/status").then(updateControls),
     refreshAutomationRules(),
     refreshAdaptiveCharging(),
+    refreshBackupPreparation(),
     refreshHistoryStats(),
     refreshNotifications(),
     refreshDatabaseBackups(),
@@ -6037,6 +6148,17 @@ function initForms() {
       openAdaptiveCharging();
     }
   });
+  const openBackupPreparation = () => {
+    setPage("settings");
+    $("#backupPreparationControl")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  $("#backupPreparationWidgetState")?.closest("[data-widget-id='backupPreparation']")?.addEventListener("click", openBackupPreparation);
+  $("#backupPreparationWidgetState")?.closest("[data-widget-id='backupPreparation']")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openBackupPreparation();
+    }
+  });
   const openAwaySchedule = () => {
     setPage("adaptiveCharging");
     $(".away-periods-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -6301,6 +6423,48 @@ function initForms() {
       updateAdaptiveChargingAvailability();
     } catch (err) {
       toast(err.message);
+    }
+  });
+
+  $("#backupPreparationStart")?.addEventListener("click", async () => {
+    if (state.backupPreparationBusy || state.backupPreparation?.active) return;
+    state.backupPreparationBusy = true;
+    renderBackupPreparation({
+      ...(state.backupPreparation ?? {}),
+      active: true,
+      phase: "starting",
+      allowDemandGuard: $("#backupPreparationAllowGuard").checked,
+    });
+    try {
+      renderBackupPreparation(await api("/api/backup-preparation/start", {
+        method: "POST",
+        body: { allowDemandGuard: $("#backupPreparationAllowGuard").checked },
+      }));
+      toast(t("backupPreparationStarted"));
+      await Promise.allSettled([refreshStatus(), refreshAdaptiveCharging(), refreshSchedules()]);
+    } catch (error) {
+      toast(error.message);
+      await refreshBackupPreparation().catch(() => {});
+    } finally {
+      state.backupPreparationBusy = false;
+      if (state.backupPreparation) renderBackupPreparation(state.backupPreparation);
+    }
+  });
+
+  $("#backupPreparationEnd")?.addEventListener("click", async () => {
+    if (state.backupPreparationBusy || !state.backupPreparation?.active) return;
+    state.backupPreparationBusy = true;
+    renderBackupPreparation({ ...state.backupPreparation, active: true, phase: "ending" });
+    try {
+      renderBackupPreparation(await api("/api/backup-preparation/end", { method: "POST", body: {} }));
+      toast(t("backupPreparationEnded"));
+      await Promise.allSettled([refreshStatus(), refreshAdaptiveCharging(), refreshSchedules()]);
+    } catch (error) {
+      toast(error.message);
+      await refreshBackupPreparation().catch(() => {});
+    } finally {
+      state.backupPreparationBusy = false;
+      if (state.backupPreparation) renderBackupPreparation(state.backupPreparation);
     }
   });
 

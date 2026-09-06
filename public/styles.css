@@ -1313,6 +1313,79 @@ h2 {
   border-top: 0;
 }
 
+.backup-preparation-control {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 4px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-left: 4px solid #8090a3;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.backup-preparation-control.is-active {
+  border-color: #d78a20;
+  border-left-color: #d78a20;
+  background: #fff9ed;
+}
+
+.backup-preparation-control > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.backup-preparation-control p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.backup-preparation-status {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #eef3f7;
+}
+
+.backup-preparation-control.is-active .backup-preparation-status {
+  background: #ffedc7;
+}
+
+.backup-preparation-status small {
+  color: var(--muted);
+  text-align: right;
+}
+
+.backup-preparation-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.backup-preparation-actions button {
+  width: 100%;
+}
+
+.backup-preparation-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.backup-preparation-widget.is-active {
+  border-color: #d78a20;
+  background: #fff9ed;
+  box-shadow: 0 0 0 2px rgba(215, 138, 32, 0.16), var(--shadow);
+}
+
+.backup-preparation-widget.is-active > span:first-child,
+.backup-preparation-widget.is-active .status-text {
+  color: #9a5b08;
+}
+
 .segmented {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -1898,12 +1971,15 @@ output {
 }
 
 .adaptive-charging-widget,
+.backup-preparation-widget,
 .away-status-widget {
   cursor: pointer;
 }
 
 .adaptive-charging-widget:hover,
 .adaptive-charging-widget:focus-visible,
+.backup-preparation-widget:hover,
+.backup-preparation-widget:focus-visible,
 .away-status-widget:hover,
 .away-status-widget:focus-visible {
   border-color: rgba(18, 124, 120, 0.55);
@@ -2778,6 +2854,19 @@ td code {
   .rate-form .feature-options,
   .rate-mode-options,
   .rate-mode-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .backup-preparation-status {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .backup-preparation-status small {
+    text-align: left;
+  }
+
+  .backup-preparation-actions {
     grid-template-columns: 1fr;
   }
 

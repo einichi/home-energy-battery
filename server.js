@@ -51,6 +51,7 @@ const SCHEDULES_FILE = path.join(DATA_DIR, "schedules.json");
 const AUTOMATION_RULES_FILE = path.join(DATA_DIR, "automation-rules.json");
 const AUTOMATION_RULE_STATE_FILE = path.join(DATA_DIR, "automation-rule-state.json");
 const ADAPTIVE_CHARGING_STATE_FILE = path.join(DATA_DIR, "adaptive-charging-state.json");
+const OPERATIONAL_OVERRIDES_FILE = path.join(DATA_DIR, "operational-overrides.json");
 const ADAPTIVE_CHARGING_DIR = path.join(DATA_DIR, "adaptive-charging");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 const DATABASE_BACKUP_DIR = path.join(DATA_DIR, "backups");
@@ -119,6 +120,7 @@ const DEFAULT_DASHBOARD_WIDGETS = [
   { id: "gridImportPower", group: "trends", visible: true, priority: 60 },
   { id: "gridExportPower", group: "trends", visible: true, priority: 70 },
   { id: "adaptiveCharging", group: "status", visible: true, priority: 5 },
+  { id: "backupPreparation", group: "status", visible: true, priority: 6 },
   { id: "awayStatus", group: "status", visible: true, priority: 7 },
   { id: "batteryWorking", group: "status", visible: true, priority: 10 },
   { id: "operationMode", group: "status", visible: true, priority: 20 },
@@ -210,6 +212,7 @@ let cliQueueRunning = false;
 let cliQueueSequence = 0;
 let configMutationQueue = Promise.resolve();
 let adaptiveChargingStateWriteQueue = Promise.resolve();
+let operationalOverrideMutationQueue = Promise.resolve();
 let scheduleMutationQueue = Promise.resolve();
 let scheduleTimer = null;
 let automationTimer = null;
@@ -903,6 +906,121 @@ async function writeJsonFileAtomic(file, data) {
   const tmp = `${file}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`);
   await rename(tmp, file);
+}
+
+const BATTERY_PROFILES = new Set(["osaifu", "eco", "backup"]);
+const BACKUP_PREPARATION_LOG_LIMIT = 50;
+
+function cleanOperationalOverridesState(input = {}) {
+  const backup = input?.backupPreparation ?? {};
+  const phase = ["inactive", "starting", "active", "ending"].includes(backup.phase)
+    ? backup.phase
+    : backup.active === true
+      ? "active"
+      : "inactive";
+  const active = phase !== "inactive";
+  return {
+    version: 1,
+    backupPreparation: {
+      active,
+      phase,
+      allowDemandGuard: backup.allowDemandGuard !== false,
+      previousProfile: BATTERY_PROFILES.has(backup.previousProfile) ? backup.previousProfile : null,
+      currentProfile: BATTERY_PROFILES.has(backup.currentProfile) ? backup.currentProfile : null,
+      startedAt: typeof backup.startedAt === "string" ? backup.startedAt : null,
+      endedAt: typeof backup.endedAt === "string" ? backup.endedAt : null,
+      updatedAt: typeof backup.updatedAt === "string" ? backup.updatedAt : null,
+      lastResult: backup.lastResult && typeof backup.lastResult === "object" ? backup.lastResult : null,
+    },
+    log: (Array.isArray(input?.log) ? input.log : [])
+      .filter((entry) => entry && typeof entry.at === "string" && typeof entry.message === "string")
+      .map((entry) => ({ at: entry.at, message: entry.message, kind: String(entry.kind ?? "info") }))
+      .slice(-BACKUP_PREPARATION_LOG_LIMIT),
+  };
+}
+
+function appendBackupPreparationLog(state, message, kind = "info", now = new Date()) {
+  state.log = [
+    ...(state.log ?? []),
+    { at: now.toISOString(), message, kind },
+  ].slice(-BACKUP_PREPARATION_LOG_LIMIT);
+}
+
+async function readOperationalOverridesState() {
+  await ensureDataDir();
+  try {
+    const source = await readFile(OPERATIONAL_OVERRIDES_FILE, "utf8");
+    let parsed;
+    let recovered = null;
+    try {
+      parsed = parseJsonWithContext(source, OPERATIONAL_OVERRIDES_FILE);
+    } catch (error) {
+      recovered = recoverConcatenatedJsonValue(source, (value) => value && typeof value === "object" && !Array.isArray(value));
+      if (!recovered) throw error;
+      logDetailedError("operational-overrides-state", error);
+      parsed = recovered.value;
+    }
+    const cleaned = cleanOperationalOverridesState(parsed);
+    if (recovered) await writeJsonFileAtomic(OPERATIONAL_OVERRIDES_FILE, cleaned);
+    return cleaned;
+  } catch (error) {
+    if (error.code === "ENOENT") return cleanOperationalOverridesState();
+    throw error;
+  }
+}
+
+async function writeOperationalOverridesState(state) {
+  const cleaned = cleanOperationalOverridesState(state);
+  await ensureDataDir();
+  await writeJsonFileAtomic(OPERATIONAL_OVERRIDES_FILE, cleaned);
+  return cleaned;
+}
+
+function withOperationalOverrideMutation(mutation) {
+  const task = operationalOverrideMutationQueue.then(mutation);
+  operationalOverrideMutationQueue = task.catch(() => {});
+  return task;
+}
+
+function backupPreparationBlocksActions(state) {
+  return state?.backupPreparation?.active === true;
+}
+
+function backupPreparationAllowsActionSource(state, source) {
+  if (!backupPreparationBlocksActions(state)) return true;
+  if (source === "backup-preparation") return true;
+  return source === "charging-demand-guard" && state.backupPreparation.allowDemandGuard !== false;
+}
+
+function backupPreparationView(state) {
+  const cleaned = cleanOperationalOverridesState(state);
+  return {
+    ...cleaned.backupPreparation,
+    log: [...cleaned.log].reverse(),
+  };
+}
+
+async function recordBlockedBackupPreparationAction(source, action) {
+  return withOperationalOverrideMutation(async () => {
+    const state = await readOperationalOverridesState();
+    if (!backupPreparationBlocksActions(state)) return state;
+    const now = new Date();
+    appendBackupPreparationLog(
+      state,
+      `Blocked ${source} action ${action} while Backup Preparation is active`,
+      "blocked",
+      now,
+    );
+    state.backupPreparation.updatedAt = now.toISOString();
+    return writeOperationalOverridesState(state);
+  });
+}
+
+async function assertActionAllowedByOperationalOverride(source, action) {
+  const state = await readOperationalOverridesState();
+  if (backupPreparationAllowsActionSource(state, source)) return;
+  await recordBlockedBackupPreparationAction(source, action);
+  throw requestError(409, `Backup Preparation is active; ${action} is blocked until it is ended`);
 }
 
 async function pathExists(file) {
@@ -5362,6 +5480,9 @@ async function commitConfig(previous, config) {
   });
   if (adaptiveChargingInputsChanged) {
     const state = await readAdaptiveChargingState();
+    const backupPreparationActive = backupPreparationBlocksActions(
+      await readOperationalOverridesState(),
+    );
     const changedAt = new Date();
     state.plan = null;
     state.interruptedCharge = null;
@@ -5383,7 +5504,23 @@ async function commitConfig(previous, config) {
       state.forecast = null;
       state.historicalWeatherFetchedAt = null;
     }
-    if (state.owner === "adaptiveCharging") {
+    if (backupPreparationActive) {
+      state.owner = null;
+      state.activeSlot = null;
+      state.activePlanCreatedAt = null;
+      state.activeChargedKwh = 0;
+      state.activeLastCheckedAt = null;
+      state.activeChargeSession = null;
+      state.interruptedCharge = null;
+      state.breakerRecovery = null;
+      state.standbyHoldUntil = null;
+      appendAdaptiveChargingLog(
+        state,
+        "Adaptive Charging configuration changed while Backup Preparation retained battery control",
+        "pause",
+        changedAt,
+      );
+    } else if (state.owner === "adaptiveCharging") {
       const reason = adaptiveChargingConfiguredActive(cleaned)
         ? "Adaptive Charging configuration changed"
         : "Adaptive Charging was disabled";
@@ -5983,9 +6120,10 @@ const DEVICE_ACTIONS = new Set([
   "discharge",
 ]);
 
-async function executeAction(action, payload = {}) {
+async function executeAction(action, payload = {}, { source = "manual" } = {}) {
   // Settings and direct actions share this path so scheduled jobs exercise the
   // same validation and CLI writes as button clicks in the UI.
+  await assertActionAllowedByOperationalOverride(source, action);
   const config = await readConfig();
   const host = hostFrom(payload, config);
   switch (action) {
@@ -6175,6 +6313,35 @@ function clearStaleScheduleRuns(schedules, activeIds = runningScheduleIds) {
 async function runDueSchedules() {
   const config = await readConfig();
   if (config.adaptiveCharging?.enabled && config.solarEnabled !== false && config.rateMode !== "simple") return;
+  if (backupPreparationBlocksActions(await readOperationalOverridesState())) {
+    await mutateSchedules(async (schedules) => {
+      const now = new Date();
+      for (const schedule of schedules) {
+        if (!isDue(schedule, now)) continue;
+        const attemptedAt = now.toISOString();
+        const attemptDate = localDayKey(now);
+        schedule.lastAttemptDate = attemptDate;
+        schedule.lastResult = {
+          ok: false,
+          skipped: "Backup Preparation owns battery control",
+          at: attemptedAt,
+        };
+        schedule.executionIntent = {
+          id: randomUUID(),
+          state: "blocked",
+          attemptedAt,
+          completedAt: attemptedAt,
+          action: schedule.action,
+          payload: schedule.payload,
+        };
+        if (schedule.repeat !== "daily") {
+          schedule.enabled = false;
+          schedule.completed = true;
+        }
+      }
+    });
+    return;
+  }
   const rules = await readAutomationRules();
   const guardOwner = rules.find(
     (rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore,
@@ -6210,7 +6377,7 @@ async function runDueSchedules() {
       schedule.runningSince = attemptAt;
       await writeSchedules(schedules);
       try {
-        const result = await executeAction(schedule.action, schedule.payload);
+        const result = await executeAction(schedule.action, schedule.payload, { source: "schedule" });
         schedule.lastResult = { ok: true, at: new Date().toISOString(), result };
         schedule.executionIntent.state = "acknowledged";
         schedule.executionIntent.completedAt = schedule.lastResult.at;
@@ -6513,13 +6680,330 @@ function nextLocalMidnight(now = new Date()) {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
 }
 
+async function readBatteryChargingProfile(host) {
+  const result = await runCliQueued("vendor-profile", { host });
+  const profile = result?.decoded?.mode ?? result?.mode;
+  if (!BATTERY_PROFILES.has(profile)) {
+    throw new Error(`Unable to verify battery charging profile${result?.error ? `: ${result.error}` : ""}`);
+  }
+  return profile;
+}
+
+async function setAndVerifyBatteryChargingProfile(profile, host) {
+  if (!BATTERY_PROFILES.has(profile)) throw new Error(`Unsupported battery charging profile: ${profile}`);
+  const result = await executeAction(
+    "vendor-profile",
+    { mode: profile, host },
+    { source: "backup-preparation" },
+  );
+  let observed = null;
+  for (let attempt = 0; attempt < OPERATION_MODE_VERIFY_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) await sleep(OPERATION_MODE_VERIFY_DELAY_MS);
+    try {
+      observed = await readBatteryChargingProfile(host);
+      if (observed === profile) return { result, profile: observed };
+    } catch (error) {
+      if (attempt === OPERATION_MODE_VERIFY_ATTEMPTS - 1) throw error;
+    }
+  }
+  throw new Error(`Battery charging profile verification failed: expected ${profile}, observed ${observed ?? "unavailable"}`);
+}
+
+async function prepareAdaptiveChargingForBackup(now = new Date()) {
+  const state = await readAdaptiveChargingState();
+  const guardActive = (await readAutomationRules()).some(
+    (rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore,
+  );
+  const execute = (action, payload) => executeAction(action, payload, { source: "backup-preparation" });
+  if (state.owner === "adaptiveCharging") {
+    await releaseAdaptiveCharge(state, "Backup Preparation activated", now, null, execute);
+  } else if (state.standbyHoldUntil && !guardActive) {
+    await execute("set-mode", { mode: "auto" });
+    appendAdaptiveChargingLog(
+      state,
+      "Backup Preparation activated; releasing Adaptive Charging Standby hold",
+      "stop",
+      now,
+    );
+  }
+  state.owner = null;
+  state.activeSlot = null;
+  state.activePlanCreatedAt = null;
+  state.activeChargedKwh = 0;
+  state.activeLastCheckedAt = null;
+  state.activeChargeSession = null;
+  state.interruptedCharge = null;
+  state.breakerRecovery = null;
+  state.standbyHoldUntil = null;
+  state.lastPlanEventKey = null;
+  state.lastResult = { ok: true, at: now.toISOString(), skipped: "Backup Preparation active" };
+  appendAdaptiveChargingLog(
+    state,
+    "Backup Preparation activated; battery control is suspended until the override is ended",
+    "pause",
+    now,
+  );
+  return writeAdaptiveChargingState(state);
+}
+
+async function releaseChargingDemandGuardForBackup(now = new Date()) {
+  const rules = await readAutomationRules();
+  let changed = false;
+  for (const rule of rules) {
+    if (rule.type !== "backup-demand-guard" || !rule.state?.awaitingRestore) continue;
+    rule.state = { ...rule.state, awaitingRestore: false, restoreSince: null };
+    rule.lastResult = {
+      ok: true,
+      at: now.toISOString(),
+      skipped: "Released because Backup Preparation disabled Demand Guard intervention",
+    };
+    rule.stateUpdatedAt = now.toISOString();
+    appendAutomationLog(
+      rule,
+      "Backup Preparation disabled Charging Demand Guard intervention; releasing Standby ownership",
+      now,
+      "release",
+    );
+    changed = true;
+  }
+  if (changed) {
+    await writeAutomationRuleStates(rules);
+    await executeAction("set-mode", { mode: "auto" }, { source: "backup-preparation" });
+  }
+  return changed;
+}
+
+async function queueAdaptiveChargingAfterBackup(now = new Date()) {
+  const state = await readAdaptiveChargingState();
+  state.plan = null;
+  state.interruptedCharge = null;
+  state.breakerRecovery = null;
+  state.standbyHoldUntil = null;
+  state.lastPlanEventKey = null;
+  queueAdaptiveChargingPlanRefresh(state, "Backup Preparation ended", now);
+  appendAdaptiveChargingLog(
+    state,
+    "Backup Preparation ended; Adaptive Charging will recalculate before resuming control",
+    "resume",
+    now,
+  );
+  return writeAdaptiveChargingState(state);
+}
+
+async function startBackupPreparation({ allowDemandGuard = true } = {}, now = new Date()) {
+  return withOperationalOverrideMutation(async () => {
+    let state = await readOperationalOverridesState();
+    if (backupPreparationBlocksActions(state)) return backupPreparationView(state);
+    const config = await readConfig();
+    if (!config.batteryHost || isDocumentationHost(config.batteryHost)) {
+      throw requestError(409, "A battery address must be configured before Backup Preparation can start");
+    }
+    const previousProfile = await readBatteryChargingProfile(config.batteryHost);
+    state.backupPreparation = {
+      active: true,
+      phase: "starting",
+      allowDemandGuard: allowDemandGuard !== false,
+      previousProfile,
+      currentProfile: previousProfile,
+      startedAt: now.toISOString(),
+      endedAt: null,
+      updatedAt: now.toISOString(),
+      lastResult: null,
+    };
+    appendBackupPreparationLog(
+      state,
+      `Starting Backup Preparation from ${previousProfile} profile`,
+      "start",
+      now,
+    );
+    state = await writeOperationalOverridesState(state);
+    try {
+      if (!state.backupPreparation.allowDemandGuard) {
+        await releaseChargingDemandGuardForBackup(now);
+      }
+      await prepareAdaptiveChargingForBackup(now);
+      const profileResult = await setAndVerifyBatteryChargingProfile("backup", config.batteryHost);
+      const guardActive = state.backupPreparation.allowDemandGuard && (await readAutomationRules()).some(
+        (rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore,
+      );
+      if (!guardActive) {
+        await executeAction("set-mode", { mode: "auto" }, { source: "backup-preparation" });
+      }
+      const completedAt = new Date();
+      state.backupPreparation = {
+        ...state.backupPreparation,
+        active: true,
+        phase: "active",
+        currentProfile: profileResult.profile,
+        updatedAt: completedAt.toISOString(),
+        lastResult: { ok: true, at: completedAt.toISOString() },
+      };
+      appendBackupPreparationLog(
+        state,
+        `Backup Preparation active; backup profile verified${state.backupPreparation.allowDemandGuard ? "; Charging Demand Guard remains enabled" : "; Charging Demand Guard intervention is disabled"}`,
+        "active",
+        completedAt,
+      );
+      invalidateStatusSnapshot();
+      return backupPreparationView(await writeOperationalOverridesState(state));
+    } catch (error) {
+      const failedAt = new Date();
+      try {
+        if (previousProfile !== "backup") {
+          await setAndVerifyBatteryChargingProfile(previousProfile, config.batteryHost);
+        }
+      } catch (restoreError) {
+        error.message = `${error.message}; failed to restore ${previousProfile} profile: ${restoreError.message}`;
+      }
+      state.backupPreparation = {
+        ...state.backupPreparation,
+        active: false,
+        phase: "inactive",
+        currentProfile: previousProfile,
+        endedAt: failedAt.toISOString(),
+        updatedAt: failedAt.toISOString(),
+        lastResult: { ok: false, at: failedAt.toISOString(), error: error.message },
+      };
+      appendBackupPreparationLog(state, `Backup Preparation failed: ${error.message}`, "error", failedAt);
+      await writeOperationalOverridesState(state);
+      await queueAdaptiveChargingAfterBackup(failedAt).catch((resumeError) => {
+        logDetailedError("backup-preparation-resume-after-failure", resumeError);
+      });
+      throw error;
+    }
+  });
+}
+
+async function endBackupPreparation(now = new Date()) {
+  return withOperationalOverrideMutation(async () => {
+    let state = await readOperationalOverridesState();
+    if (!backupPreparationBlocksActions(state)) return backupPreparationView(state);
+    const config = await readConfig();
+    const previousProfile = state.backupPreparation.previousProfile;
+    state.backupPreparation.phase = "ending";
+    state.backupPreparation.updatedAt = now.toISOString();
+    appendBackupPreparationLog(state, "Ending Backup Preparation", "stop", now);
+    state = await writeOperationalOverridesState(state);
+    try {
+      let currentProfile = "backup";
+      if (previousProfile) {
+        currentProfile = (await setAndVerifyBatteryChargingProfile(previousProfile, config.batteryHost)).profile;
+      }
+      const guardActive = (await readAutomationRules()).some(
+        (rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore,
+      );
+      if (!guardActive) {
+        await executeAction("set-mode", { mode: "auto" }, { source: "backup-preparation" });
+      }
+      await queueAdaptiveChargingAfterBackup(now);
+      const completedAt = new Date();
+      state.backupPreparation = {
+        ...state.backupPreparation,
+        active: false,
+        phase: "inactive",
+        currentProfile,
+        endedAt: completedAt.toISOString(),
+        updatedAt: completedAt.toISOString(),
+        lastResult: {
+          ok: true,
+          at: completedAt.toISOString(),
+          guardRetainedStandby: guardActive,
+        },
+      };
+      appendBackupPreparationLog(
+        state,
+        guardActive
+          ? `Backup Preparation ended; restored ${currentProfile} profile and left Standby under Charging Demand Guard control`
+          : `Backup Preparation ended; restored ${currentProfile} profile and Auto operation mode`,
+        "complete",
+        completedAt,
+      );
+      invalidateStatusSnapshot();
+      return backupPreparationView(await writeOperationalOverridesState(state));
+    } catch (error) {
+      const failedAt = new Date();
+      let currentProfile = state.backupPreparation.currentProfile;
+      try {
+        currentProfile = (await setAndVerifyBatteryChargingProfile("backup", config.batteryHost)).profile;
+      } catch (preserveError) {
+        error.message = `${error.message}; could not reassert backup profile: ${preserveError.message}`;
+      }
+      state.backupPreparation = {
+        ...state.backupPreparation,
+        active: true,
+        phase: "active",
+        currentProfile,
+        updatedAt: failedAt.toISOString(),
+        lastResult: { ok: false, at: failedAt.toISOString(), error: error.message },
+      };
+      appendBackupPreparationLog(
+        state,
+        `Could not end Backup Preparation safely: ${error.message}; override remains active`,
+        "error",
+        failedAt,
+      );
+      await writeOperationalOverridesState(state);
+      throw error;
+    }
+  });
+}
+
+async function reconcileBackupPreparationOnStartup(now = new Date()) {
+  return withOperationalOverrideMutation(async () => {
+    let state = await readOperationalOverridesState();
+    if (!backupPreparationBlocksActions(state)) return backupPreparationView(state);
+    const config = await readConfig();
+    try {
+      if (!state.backupPreparation.allowDemandGuard) {
+        await releaseChargingDemandGuardForBackup(now);
+      }
+      await prepareAdaptiveChargingForBackup(now);
+      const profile = (await setAndVerifyBatteryChargingProfile("backup", config.batteryHost)).profile;
+      const completedAt = new Date();
+      state.backupPreparation = {
+        ...state.backupPreparation,
+        active: true,
+        phase: "active",
+        currentProfile: profile,
+        updatedAt: completedAt.toISOString(),
+        lastResult: { ok: true, at: completedAt.toISOString(), recoveredAtStartup: true },
+      };
+      appendBackupPreparationLog(
+        state,
+        "Server restarted during Backup Preparation; backup profile was reverified before automation resumed",
+        "active",
+        completedAt,
+      );
+      invalidateStatusSnapshot();
+      return backupPreparationView(await writeOperationalOverridesState(state));
+    } catch (error) {
+      const failedAt = new Date();
+      state.backupPreparation = {
+        ...state.backupPreparation,
+        active: true,
+        phase: "active",
+        updatedAt: failedAt.toISOString(),
+        lastResult: { ok: false, at: failedAt.toISOString(), error: error.message },
+      };
+      appendBackupPreparationLog(
+        state,
+        `Could not reverify Backup Preparation after restart: ${error.message}; battery actions remain blocked`,
+        "error",
+        failedAt,
+      );
+      await writeOperationalOverridesState(state);
+      return backupPreparationView(state);
+    }
+  });
+}
+
 async function pauseAdaptiveChargingForManualAction(action, now = new Date()) {
   const config = await readConfig();
   if (!adaptiveChargingConfiguredActive(config)) return null;
   const state = await readAdaptiveChargingState();
   if (state.owner === "adaptiveCharging") await releaseAdaptiveCharge(state, "Manual battery action received", now);
   else if (state.standbyHoldUntil) {
-    await executeAction("set-mode", { mode: "auto" });
+    await executeAdaptiveChargingAction("set-mode", { mode: "auto" });
     appendAdaptiveChargingLog(
       state,
       "Manual battery action received; releasing Adaptive Charging Standby hold",
@@ -6543,7 +7027,7 @@ async function resumeAdaptiveCharging(now = new Date()) {
   state.breakerRecovery = null;
   state.solarHeadroomHoldUntil = null;
   if (state.standbyHoldUntil) {
-    await executeAction("set-mode", { mode: "auto" });
+    await executeAdaptiveChargingAction("set-mode", { mode: "auto" });
     state.standbyHoldUntil = null;
   }
   state.lastPlanEventKey = null;
@@ -6776,9 +7260,19 @@ function finalizeAdaptiveChargeSession(state, reason, now = new Date()) {
   return session;
 }
 
-async function releaseAdaptiveCharge(state, reason, now = new Date(), batteryHost = null) {
+function executeAdaptiveChargingAction(action, payload = {}) {
+  return executeAction(action, payload, { source: "adaptive-charging" });
+}
+
+async function releaseAdaptiveCharge(
+  state,
+  reason,
+  now = new Date(),
+  batteryHost = null,
+  execute = executeAdaptiveChargingAction,
+) {
   if (state.owner !== "adaptiveCharging") return false;
-  await executeAction("set-mode", { mode: "auto", ...(batteryHost ? { host: batteryHost } : {}) });
+  await execute("set-mode", { mode: "auto", ...(batteryHost ? { host: batteryHost } : {}) });
   finalizeAdaptiveChargeSession(state, reason, now);
   appendAdaptiveChargingLog(state, `${reason}; setting operation mode to Auto`, "stop", now);
   state.owner = null;
@@ -6795,7 +7289,7 @@ async function suspendAdaptiveChargeInStandby(
   reason,
   now = new Date(),
   batteryHost = null,
-  execute = executeAction,
+  execute = executeAdaptiveChargingAction,
   holdUntil = null,
 ) {
   if (state.owner !== "adaptiveCharging") return false;
@@ -6821,7 +7315,7 @@ async function suspendAdaptiveChargeInStandby(
   return true;
 }
 
-async function executeAdaptiveChargeStart(slot, { resumeFromStandby = false, execute = executeAction } = {}) {
+async function executeAdaptiveChargeStart(slot, { resumeFromStandby = false, execute = executeAdaptiveChargingAction } = {}) {
   if (resumeFromStandby) await execute("set-mode", { mode: "auto" });
   try {
     return await execute("charge", { targetWh: slot.targetWh });
@@ -7600,6 +8094,30 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
     state.lastAwayStateKey = awayStateKey;
   }
   recordAdaptiveChargeSample(state, status, now);
+  const operationalOverrides = await readOperationalOverridesState();
+  if (backupPreparationBlocksActions(operationalOverrides)) {
+    if (state.owner === "adaptiveCharging") {
+      finalizeAdaptiveChargeSession(state, "Backup Preparation activated", now);
+      state.owner = null;
+      state.activeSlot = null;
+      state.activePlanCreatedAt = null;
+      state.activeChargedKwh = 0;
+      state.activeLastCheckedAt = null;
+    }
+    state.interruptedCharge = null;
+    state.breakerRecovery = null;
+    state.standbyHoldUntil = null;
+    if (state.lastResult?.skipped !== "Backup Preparation active") {
+      appendAdaptiveChargingLog(
+        state,
+        "Backup Preparation is active; Adaptive Charging will continue observing data without controlling the battery",
+        "pause",
+        now,
+      );
+    }
+    state.lastResult = { ok: true, at: now.toISOString(), skipped: "Backup Preparation active" };
+    return writeAdaptiveChargingState(state);
+  }
   if (state.interruptedCharge
     && new Date(state.interruptedCharge.slotEnd).getTime() <= now.getTime()) {
     state.interruptedCharge = null;
@@ -7611,7 +8129,7 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
   if (state.standbyHoldUntil
     && (!Number.isFinite(standbyHoldUntilMs) || standbyHoldUntilMs <= now.getTime())
     && !guardActive) {
-    await executeAction("set-mode", { mode: "auto" });
+    await executeAdaptiveChargingAction("set-mode", { mode: "auto" });
     appendAdaptiveChargingLog(
       state,
       "Discounted charging hold ended; restoring operation mode to Auto",
@@ -7787,7 +8305,7 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
     );
   }
   if (liveExportNeedsHeadroom && state.standbyHoldUntil) {
-    await executeAction("set-mode", { mode: "auto" });
+    await executeAdaptiveChargingAction("set-mode", { mode: "auto" });
     appendAdaptiveChargingLog(
       state,
       "Live grid export indicates solar needs battery headroom; releasing Standby hold and restoring operation mode to Auto",
@@ -7872,7 +8390,7 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
           stopReason,
           now,
           null,
-          executeAction,
+          executeAdaptiveChargingAction,
           completedSlot.windowEnd,
         );
       } else {
@@ -8061,7 +8579,13 @@ async function runAutomationRules(context = {}) {
   context.phase = "loading automation rules";
   const config = await readConfig();
   const rules = await readAutomationRules();
-  const enabledRules = rules.filter((rule) => rule.enabled);
+  const operationalOverrides = await readOperationalOverridesState();
+  const backupPreparation = operationalOverrides.backupPreparation;
+  const enabledRules = rules.filter((rule) => rule.enabled && !(
+    backupPreparation.active
+    && backupPreparation.allowDemandGuard === false
+    && rule.type === "backup-demand-guard"
+  ));
   const adaptiveChargingRequested = adaptiveChargingConfiguredActive(config);
   const adaptiveChargingStateBeforeStatus = adaptiveChargingRequested ? await readAdaptiveChargingState() : null;
   const adaptiveChargingEnabled = adaptiveChargingRequested
@@ -8109,9 +8633,22 @@ async function runAutomationRules(context = {}) {
     const ruleStartedAt = Date.now();
     let ruleChanged = false;
     try {
+      if (backupPreparation.active
+        && backupPreparation.allowDemandGuard === false
+        && rule.enabled
+        && rule.type === "backup-demand-guard") {
+        const skipped = "Backup Preparation has Demand Guard intervention disabled";
+        if (rule.lastResult?.skipped !== skipped) {
+          rule.lastResult = { ok: true, at: now.toISOString(), skipped };
+          rule.stateUpdatedAt = now.toISOString();
+          changed = true;
+        }
+        continue;
+      }
       const result = await evaluateAutomationRule(rule, status, now, (phase) => {
         context.phase = `${phase} for ${ruleLabel}`;
       }, config, {
+        execute: (action, payload) => executeAction(action, payload, { source: "charging-demand-guard" }),
         holdStandbyForAdaptiveCharging: adaptiveChargingEnabled
           && shouldHoldGuardStandbyForAdaptiveCharging(adaptiveChargingCoordinationState, now),
       });
@@ -8706,8 +9243,14 @@ async function runRetentionMaintenance() {
 
 function startApplicationBackgroundProcesses() {
   backgroundProcessesEnabled = true;
-  readAdaptiveChargingState()
-    .then((state) => syncAdaptiveChargingSlotEndTimer(state))
+  Promise.all([readAdaptiveChargingState(), readOperationalOverridesState()])
+    .then(([state, operationalOverrides]) => {
+      if (backupPreparationBlocksActions(operationalOverrides)) {
+        clearAdaptiveChargingSlotEndTimer();
+        return false;
+      }
+      return syncAdaptiveChargingSlotEndTimer(state);
+    })
     .catch((error) => logDetailedError("adaptive-charging-slot-end-startup", error));
   startScheduler();
   startBackgroundRecorder();
@@ -9311,22 +9854,38 @@ async function api(req, res, url) {
     return json(res, 200, adaptiveChargingView(config, state, rules));
   }
   if (req.method === "POST" && url.pathname === "/api/adaptive-charging/resume") {
+    await assertActionAllowedByOperationalOverride("adaptive-charging", "resume");
     const config = await readConfig();
     const rules = await readAutomationRules();
     return json(res, 200, adaptiveChargingView(config, await resumeAdaptiveCharging(), rules));
   }
+  if (req.method === "GET" && url.pathname === "/api/backup-preparation") {
+    return json(res, 200, backupPreparationView(await readOperationalOverridesState()));
+  }
+  if (req.method === "POST" && url.pathname === "/api/backup-preparation/start") {
+    const body = await readBody(req);
+    return json(res, 200, await startBackupPreparation({
+      allowDemandGuard: body.allowDemandGuard !== false,
+    }));
+  }
+  if (req.method === "POST" && url.pathname === "/api/backup-preparation/end") {
+    await readBody(req);
+    return json(res, 200, await endBackupPreparation());
+  }
   if (req.method === "POST" && url.pathname.startsWith("/api/settings/")) {
     const body = await readBody(req);
     const action = url.pathname.replace("/api/settings/", "");
+    await assertActionAllowedByOperationalOverride("manual", action);
     await pauseAdaptiveChargingForManualAction(action);
-    return json(res, 200, await executeAction(action, body));
+    return json(res, 200, await executeAction(action, body, { source: "manual" }));
   }
   if (req.method === "POST" && url.pathname.startsWith("/api/actions/")) {
     const body = await readBody(req);
     const action = url.pathname.replace("/api/actions/", "");
     if (!DEVICE_ACTIONS.has(action)) throw requestError(404, `unknown action: ${action}`);
+    await assertActionAllowedByOperationalOverride("manual", action);
     await pauseAdaptiveChargingForManualAction(action);
-    const result = await executeAction(action, body);
+    const result = await executeAction(action, body, { source: "manual" });
     return json(res, 200, result);
   }
   if (req.method === "GET" && url.pathname === "/api/schedules") {
@@ -9488,6 +10047,7 @@ async function initializeApplication() {
     });
   }
   await writeAutomationRuleStates(await readAutomationRules());
+  await reconcileBackupPreparationOnStartup();
   const notificationHistory = await notificationService.view();
   for (const delivery of notificationHistory.deliveries) {
     const at = delivery.at ?? delivery.event?.occurredAt;
@@ -9689,6 +10249,8 @@ export {
   adaptiveChargingLiveChargeHeadroom,
   adaptiveChargingLiveImportSafety,
   adaptiveChargingBreakerSettings,
+  backupPreparationAllowsActionSource,
+  backupPreparationBlocksActions,
   adaptiveChargingBreakerRecoveryReady,
   adaptiveChargingSlotEndDelayMs,
   adaptiveChargingSlotEndKey,

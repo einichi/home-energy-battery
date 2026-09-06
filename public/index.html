@@ -205,6 +205,11 @@
             <strong class="status-text" id="adaptiveChargingWidgetState">--</strong>
             <small id="adaptiveChargingWidgetNote" class="widget-note">--</small>
           </article>
+          <article class="widget backup-preparation-widget" data-widget-id="backupPreparation" data-widget-group="status" role="button" tabindex="0">
+            <span data-i18n="backupPreparation">Backup Preparation</span>
+            <strong class="status-text" id="backupPreparationWidgetState">--</strong>
+            <small id="backupPreparationWidgetNote" class="widget-note">--</small>
+          </article>
           <article class="widget away-status-widget" data-widget-id="awayStatus" data-widget-group="status" role="button" tabindex="0">
             <span data-i18n="awayStatus">Away Status</span>
             <strong class="status-text" id="awayStatusWidgetState">--</strong>
@@ -777,6 +782,30 @@
             <div class="panel-title">
               <h1 data-i18n="batterySettings">Battery Settings</h1>
             </div>
+
+            <section id="backupPreparationControl" class="backup-preparation-control" aria-labelledby="backupPreparationTitle">
+              <div>
+                <h2 id="backupPreparationTitle" data-i18n="backupPreparation">Backup Preparation</h2>
+                <p data-i18n="backupPreparationHelp">
+                  Temporarily hold the backup charging profile until you explicitly restore normal automation.
+                </p>
+              </div>
+              <div class="backup-preparation-status" role="status" aria-live="polite">
+                <strong id="backupPreparationStatus">--</strong>
+                <small id="backupPreparationDetail">--</small>
+              </div>
+              <label class="check-row">
+                <input id="backupPreparationAllowGuard" type="checkbox" checked />
+                <span data-i18n="backupPreparationAllowGuard">Allow Charging Demand Guard intervention</span>
+              </label>
+              <p class="field-help" data-i18n="backupPreparationGuardHelp">
+                Recommended. The Guard may temporarily use Standby and Auto while preserving the backup profile.
+              </p>
+              <div class="backup-preparation-actions">
+                <button id="backupPreparationStart" type="button" data-i18n="startBackupPreparation">Start Backup Preparation</button>
+                <button id="backupPreparationEnd" class="ghost" type="button" data-i18n="endBackupPreparation">End and Restore Previous Profile</button>
+              </div>
+            </section>
 
             <form id="modeForm" class="setting-row">
               <div>

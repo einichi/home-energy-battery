@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { copyFile, mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -47,8 +47,8 @@ async function request(baseUrl, pathname, { method = "GET", body } = {}) {
 const port = await availablePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
-try {
-  child = spawn(process.execPath, [path.resolve("server.js")], {
+function startTestServer() {
+  const processHandle = spawn(process.execPath, [path.resolve("server.js")], {
     cwd: path.resolve("."),
     env: {
       ...process.env,
@@ -63,8 +63,13 @@ try {
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stdout.on("data", (chunk) => { output += chunk; });
-  child.stderr.on("data", (chunk) => { output += chunk; });
+  processHandle.stdout.on("data", (chunk) => { output += chunk; });
+  processHandle.stderr.on("data", (chunk) => { output += chunk; });
+  return processHandle;
+}
+
+try {
+  child = startTestServer();
 
   await waitFor(async () => (await fetch(`${baseUrl}/api/config`)).ok);
   const indexResponse = await fetch(`${baseUrl}/`);
@@ -179,6 +184,136 @@ try {
     return schedules.payload.find((item) => item.id === schedule.payload.id)?.lastResult?.ok === true;
   });
   assert.equal((await request(baseUrl, "/api/status")).payload.energy.battery.operation_mode.value, "auto");
+
+  const inactiveBackupPreparation = await request(baseUrl, "/api/backup-preparation");
+  assert.equal(inactiveBackupPreparation.response.status, 200);
+  assert.equal(inactiveBackupPreparation.payload.active, false);
+
+  const startedBackupPreparation = await request(baseUrl, "/api/backup-preparation/start", {
+    method: "POST",
+    body: { allowDemandGuard: true },
+  });
+  assert.equal(startedBackupPreparation.response.status, 200, JSON.stringify(startedBackupPreparation.payload));
+  assert.equal(startedBackupPreparation.payload.active, true);
+  assert.equal(startedBackupPreparation.payload.phase, "active");
+  assert.equal(startedBackupPreparation.payload.previousProfile, "eco");
+  assert.equal(startedBackupPreparation.payload.currentProfile, "backup");
+  assert.equal(startedBackupPreparation.payload.allowDemandGuard, true);
+  const protectedStatus = await request(baseUrl, "/api/status");
+  assert.equal(protectedStatus.payload.energy.battery.vendor_profile.value, "backup");
+  assert.equal(protectedStatus.payload.energy.battery.operation_mode.value, "auto");
+
+  const blockedManualAction = await request(baseUrl, "/api/actions/vendor-profile", {
+    method: "POST",
+    body: { mode: "eco" },
+  });
+  assert.equal(blockedManualAction.response.status, 409);
+  assert.match(blockedManualAction.payload.error, /Backup Preparation is active/);
+  assert.equal((await request(baseUrl, "/api/status")).payload.energy.battery.vendor_profile.value, "backup");
+
+  const blockedSchedule = await request(baseUrl, "/api/schedules", {
+    method: "POST",
+    body: {
+      name: "Must not escape Backup Preparation",
+      action: "vendor-profile",
+      payload: { mode: "osaifu" },
+      repeat: "once",
+      runAt: new Date(Date.now() - 1000).toISOString(),
+    },
+  });
+  assert.equal(blockedSchedule.response.status, 201);
+  const skippedSchedule = await waitFor(async () => {
+    const schedules = await request(baseUrl, "/api/schedules");
+    const item = schedules.payload.find((candidate) => candidate.id === blockedSchedule.payload.id);
+    return item?.lastResult?.skipped ? item : null;
+  });
+  assert.equal(skippedSchedule.lastResult.skipped, "Backup Preparation owns battery control");
+  assert.equal(skippedSchedule.enabled, false);
+  assert.equal(skippedSchedule.completed, true);
+  assert.equal((await request(baseUrl, "/api/status")).payload.energy.battery.vendor_profile.value, "backup");
+
+  const persistedOverride = JSON.parse(await readFile(path.join(dataDir, "operational-overrides.json"), "utf8"));
+  assert.equal(persistedOverride.backupPreparation.active, true);
+  assert.equal(persistedOverride.backupPreparation.previousProfile, "eco");
+
+  child.kill("SIGTERM");
+  await new Promise((resolve) => child.once("exit", resolve));
+  child = startTestServer();
+  await waitFor(async () => (await fetch(`${baseUrl}/api/config`)).ok);
+  const restartedOverride = await request(baseUrl, "/api/backup-preparation");
+  assert.equal(restartedOverride.payload.active, true);
+  assert.equal(restartedOverride.payload.phase, "active");
+  assert.equal(restartedOverride.payload.currentProfile, "backup");
+  assert.equal(restartedOverride.payload.lastResult.recoveredAtStartup, true);
+  assert.equal((await request(baseUrl, "/api/status")).payload.energy.battery.vendor_profile.value, "backup");
+
+  const endedBackupPreparation = await request(baseUrl, "/api/backup-preparation/end", {
+    method: "POST",
+    body: {},
+  });
+  assert.equal(endedBackupPreparation.response.status, 200, JSON.stringify(endedBackupPreparation.payload));
+  assert.equal(endedBackupPreparation.payload.active, false);
+  assert.equal(endedBackupPreparation.payload.currentProfile, "eco");
+  const restoredStatus = await request(baseUrl, "/api/status");
+  assert.equal(restoredStatus.payload.energy.battery.vendor_profile.value, "eco");
+  assert.equal(restoredStatus.payload.energy.battery.operation_mode.value, "auto");
+
+  assert.equal((await request(baseUrl, "/api/actions/charge", {
+    method: "POST",
+    body: { targetWh: 500 },
+  })).response.status, 200);
+  const guard = await request(baseUrl, "/api/automation-rules", {
+    method: "POST",
+    body: {
+      name: "Backup Preparation guard test",
+      type: "backup-demand-guard",
+      enabled: true,
+      conditions: {
+        source: "gridImportW",
+        breakerAmps: 30,
+        breakerVoltage: 100,
+        reserveAmps: 0,
+        restoreBelowAmps: 1,
+        restoreDelaySeconds: 0,
+      },
+      cooldownSeconds: 0,
+    },
+  });
+  assert.equal(guard.response.status, 201);
+  await waitFor(async () => {
+    const rules = await request(baseUrl, "/api/automation-rules");
+    return rules.payload.find((item) => item.id === guard.payload.id)?.state?.awaitingRestore === true;
+  });
+  assert.equal((await request(baseUrl, "/api/status")).payload.energy.battery.operation_mode.value, "standby");
+  const guardedBackupPreparation = await request(baseUrl, "/api/backup-preparation/start", {
+    method: "POST",
+    body: { allowDemandGuard: true },
+  });
+  assert.equal(guardedBackupPreparation.response.status, 200);
+  const guardedStatus = await request(baseUrl, "/api/status");
+  assert.equal(guardedStatus.payload.energy.battery.vendor_profile.value, "backup");
+  assert.equal(guardedStatus.payload.energy.battery.operation_mode.value, "standby");
+  assert.equal((await request(baseUrl, `/api/automation-rules/${guard.payload.id}`, {
+    method: "DELETE",
+    body: {},
+  })).response.status, 200);
+  assert.equal((await request(baseUrl, "/api/backup-preparation/end", {
+    method: "POST",
+    body: {},
+  })).response.status, 200);
+  assert.equal((await request(baseUrl, "/api/status")).payload.energy.battery.operation_mode.value, "auto");
+
+  const isolatedBackupPreparation = await request(baseUrl, "/api/backup-preparation/start", {
+    method: "POST",
+    body: { allowDemandGuard: false },
+  });
+  assert.equal(isolatedBackupPreparation.response.status, 200);
+  assert.equal(isolatedBackupPreparation.payload.allowDemandGuard, false);
+  assert.equal((await request(baseUrl, "/api/backup-preparation")).payload.allowDemandGuard, false);
+  assert.equal((await request(baseUrl, "/api/backup-preparation/end", {
+    method: "POST",
+    body: {},
+  })).response.status, 200);
 
   const manualBackup = await request(baseUrl, "/api/database-backups", {
     method: "POST",
