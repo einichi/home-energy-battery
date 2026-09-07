@@ -2338,6 +2338,7 @@ output {
 
 .adaptive-charging-window-heading {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
@@ -2351,7 +2352,7 @@ output {
 }
 
 .adaptive-charging-window-heading span {
-  flex: none;
+  flex: 0 1 auto;
   color: var(--muted);
   font-weight: 800;
 }

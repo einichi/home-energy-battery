@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createDeviceSimulator } from "./support/device-simulator.js";
 import {
   createNotificationService,
   normalizeNotificationConfig,
@@ -15,6 +16,9 @@ import {
 } from "../lib/counter-utils.js";
 import {
   activeAdaptiveChargingSlotStopReason,
+  adaptiveChargingWindowHasShortfall,
+  mergeAdaptiveChargingSlots,
+  updateActiveAdaptiveChargingObjective,
   adaptiveChargingExportEvidence,
   adaptiveChargingTimingProfile,
   advanceAdaptiveChargingBreakerRecovery,
@@ -1012,6 +1016,93 @@ const conservativeTaperPlan = planChronologicalDiscountedCharging({
   chargeToStoredRatio: 1,
 });
 assert.equal(new Date(conservativeTaperPlan.slots[0].start).getTime(), taperWindowStart);
+
+// Timing reserve must become usable continuous charging time, not pauses at
+// each half-hour quota. Device mutations go only to the central simulator.
+assert.equal(conservativeTaperPlan.slots.length, 1);
+assert.equal(conservativeTaperPlan.slots[0].end, new Date(taperWindowEnd).toISOString());
+const continuousSimulator = createDeviceSimulator();
+const continuousExecute = (action, payload) => continuousSimulator.execute(
+  action, { host: "10.250.0.10", "target-wh": payload.targetWh },
+  payload.mode ? [payload.mode] : [],
+);
+const continuousSlot = conservativeTaperPlan.slots[0];
+await executeAdaptiveChargeStart(continuousSlot, { execute: continuousExecute });
+let continuousState = cleanAdaptiveChargingState({
+  owner: "adaptiveCharging",
+  activeSlot: continuousSlot,
+  activePlanCreatedAt: "original",
+  activeChargedKwh: 0.9,
+  activeChargeSession: {
+    startedAt: continuousSlot.start, requestedWh: continuousSlot.targetWh,
+    slotEnd: continuousSlot.end, startSocPercent: 34, latestSocPercent: 50,
+  },
+});
+const checkpoint = new Date(taperWindowStart + 1_800_000);
+const checkpointPlan = {
+  createdAt: "checkpoint",
+  slots: [{ ...continuousSlot, start: checkpoint.toISOString(), targetWh: 2000 }],
+};
+assert.equal(await updateActiveAdaptiveChargingObjective(
+  continuousState, checkpointPlan, checkpoint, continuousExecute, 50,
+), true);
+assert.equal(continuousState.activeSlot.targetWh, 2900);
+assert.equal(continuousState.activeChargedKwh, 0.9);
+assert.equal(continuousState.activeChargeSession.requestedWh, 2900);
+assert.equal(continuousSimulator.snapshot().battery.targetWh, 2000);
+assert.deepEqual(continuousSimulator.calls.map((call) => call.command), ["charge", "charge"]);
+const callsAtCheckpoint = continuousSimulator.calls.length;
+await updateActiveAdaptiveChargingObjective(continuousState, checkpointPlan, checkpoint, continuousExecute, 50);
+assert.equal(continuousSimulator.calls.length, callsAtCheckpoint);
+continuousState = cleanAdaptiveChargingState(JSON.parse(JSON.stringify(continuousState)));
+assert.equal(continuousState.activeSlot.continuousWindowCharge, true);
+assert.equal(continuousState.activeChargedKwh, 0.9);
+assert.ok(adaptiveChargingSlotEndDelayMs(continuousState, checkpoint) > 1_800_000);
+const beforeFailedUpdate = structuredClone(continuousState);
+continuousSimulator.failNext("charge");
+await assert.rejects(updateActiveAdaptiveChargingObjective(
+  continuousState, { ...checkpointPlan, createdAt: "changed", slots: [{ ...continuousSlot, targetWh: 1800 }] },
+  checkpoint, continuousExecute, 50,
+), /simulated failure/);
+assert.deepEqual(continuousState, beforeFailedUpdate);
+// A reduced SOC objective stops without sending another charging request.
+const beforeSocStop = continuousSimulator.calls.length;
+await updateActiveAdaptiveChargingObjective(
+  continuousState, { ...checkpointPlan, createdAt: "soc-reduced", slots: [{ ...continuousSlot, targetWh: 100, targetSocPercent: 50 }] },
+  checkpoint, continuousExecute, 50,
+);
+assert.equal(continuousSimulator.calls.length, beforeSocStop);
+assert.equal(continuousState.activeSlot.targetSocPercent, 50);
+const boundaryResult = await enforceAdaptiveChargingSlotEndDeadline(adaptiveChargingSlotEndKey(continuousState), {
+  now: new Date(taperWindowEnd), readState: async () => continuousState,
+  release: async (state) => { await continuousExecute("set-mode", { mode: "auto" }); state.owner = null; },
+  suspend: async () => assert.fail("The continuous window must end in Auto"),
+  writeState: async () => {},
+});
+assert.equal(boundaryResult.stopped, true);
+assert.equal(continuousSimulator.snapshot().battery.operationMode, "auto");
+
+const separateSlots = [
+  { ...continuousSlot, end: new Date(taperWindowStart + 1_800_000).toISOString(), targetWh: 500 },
+  { ...continuousSlot, start: new Date(taperWindowStart + 3_600_000).toISOString(), targetWh: 500 },
+];
+assert.equal(mergeAdaptiveChargingSlots(separateSlots).length, 2, "Preserve intentional gaps");
+assert.equal(mergeAdaptiveChargingSlots([
+  separateSlots[0], { ...separateSlots[1], start: separateSlots[0].end, yenPerKwh: 99 },
+]).length, 2, "Never merge different rates");
+
+// Reproducible taper is not necessarily low-dispersion power. This regression
+// characterizes the current learning gate; extra copies do not cure rejection.
+const decliningCurveEvidence = Array.from({ length: 120 }, (_, index) => ({
+  at: new Date(taperWindowStart + index * 30_000).toISOString(),
+  socPercent: 90 + index % 5,
+  batteryChargingW: [2000, 1400, 900, 600, 400][index % 5],
+  sessionId: `repeat-${Math.floor(index / 40)}`,
+  day: `2026-09-0${1 + Math.floor(index / 40)}`,
+}));
+const decliningCurve = buildBatteryChargePowerCurve(decliningCurveEvidence, 2192, { activeWatts: 2192 });
+assert.equal(decliningCurve[3].source, "configured");
+assert.deepEqual(decliningCurve[3].blockers, ["charge-power dispersion must be within 20%"]);
 assert.equal(Math.round(conservativeTaperPlan.slots.reduce((sum, slot) => sum + slot.targetWh, 0)), 2989);
 
 const exportStatus = {
@@ -1440,6 +1531,27 @@ const persistedAdaptiveChargingExecution = cleanAdaptiveChargingState({
 });
 assert.equal(persistedAdaptiveChargingExecution.breakerRecovery.consecutiveSafeChecks, 1);
 assert.equal(persistedAdaptiveChargingExecution.windowSummaries[0].unmetWh, 400);
+
+const achievedState = cleanAdaptiveChargingState({ activeWindowExecution: {
+  ...executionState.windowSummaries[0], plannedWh: 765, deliveredWh: 508,
+  targetSocPercent: 84, latestSocPercent: 84,
+} });
+const achievedSummary = finalizeAdaptiveChargingWindowExecution(achievedState, 84);
+assert.equal(achievedSummary.unmetWh, 257, "Preserve the measured energy difference");
+assert.equal(achievedSummary.socTargetReached, true);
+assert.equal(adaptiveChargingWindowHasShortfall(achievedSummary), false);
+const restoredSummary = cleanAdaptiveChargingState(achievedState).windowSummaries[0];
+assert.equal(restoredSummary.socTargetReached, true);
+assert.equal(restoredSummary.targetSocPercent, 84);
+assert.equal(adaptiveChargingWindowHasShortfall({ ...achievedSummary, socTargetReached: false }), true);
+assert.equal(adaptiveChargingWindowHasShortfall({ unmetWh: 257 }), true, "Legacy summaries retain their meaning");
+const missingSocState = cleanAdaptiveChargingState({ activeWindowExecution: {
+  ...executionState.windowSummaries[0], targetSocPercent: 84,
+  latestSocPercent: null, plannedWh: 765, deliveredWh: 508,
+} });
+const missingSocSummary = finalizeAdaptiveChargingWindowExecution(missingSocState, null);
+assert.equal(missingSocSummary.endSocPercent, null);
+assert.equal(missingSocSummary.socTargetReached, false);
 const solarHeadroomExecution = {
   activeWindowExecution: { solarHeadroomInterruptionCount: 0 },
 };
@@ -2178,7 +2290,7 @@ const floorClippedWindowPlan = planChronologicalDiscountedCharging({
   maximumTargetPercent: 80,
   maximumChargeWatts: 2000,
 });
-assert.equal(floorClippedWindowPlan.slots.length, 3);
+assert.equal(floorClippedWindowPlan.slots.length, 1);
 assert.ok(Math.abs(floorClippedWindowPlan.plannedChargeKwh - 8 / 3) < 0.001);
 assert.ok(floorClippedWindowPlan.unmetChargeKwh < 0.0001);
 assert.ok(Math.abs(floorClippedWindowPlan.expectedEndStoredKwh - 4) < 0.0001);
@@ -2202,6 +2314,19 @@ const forcedChargeDemandPlan = planChronologicalDiscountedCharging({
 assert.ok(Math.abs(forcedChargeDemandPlan.plannedChargeKwh - 4.185) < 0.001);
 assert.ok(forcedChargeDemandPlan.unmetChargeKwh < 0.0001);
 assert.ok(Math.abs(forcedChargeDemandPlan.windows[0].predictedEndSocPercent - 100) < 0.001);
+
+const heldTargetPlan = planChronologicalDiscountedCharging({
+  timeline: forcedChargeDemandTimeline,
+  currentStoredKwh: 4.2,
+  capacityKwh: 5,
+  dischargeFloorKwh: 0.5,
+  maximumTargetPercent: 84,
+  maximumChargeWatts: 2100,
+  standbyWindowEnd: new Date(forcedChargeDemandTimeline.at(-1).endMs).toISOString(),
+});
+assert.equal(heldTargetPlan.slots.length, 0, "Do not replace imaginary Auto discharge while holding Standby");
+assert.equal(heldTargetPlan.plannedChargeKwh, 0);
+assert.equal(heldTargetPlan.expectedEndStoredKwh, 4.2);
 
 const backwardFeasibilityTimeline = [
   ...[0, 0.5, 1, 1.5].map((hour) => chronologicalSlot(

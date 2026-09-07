@@ -620,6 +620,8 @@ const I18N = {
     plannedChargingRange: "Planned charging",
     noChargingPlanned: "No charging planned",
     remainingShortfall: "Remaining shortfall",
+    unusedPlannedCharge: "Unused planned charge",
+    socTargetAchieved: "SOC target achieved",
     recentWindowResults: "Recent window results",
     deliveredCharge: "Delivered charge",
     boundaryDeliveryEstimate: "{value} Wh estimated at boundaries",
@@ -1292,6 +1294,8 @@ const I18N = {
     plannedChargingRange: "予定充電時間",
     noChargingPlanned: "充電予定なし",
     remainingShortfall: "残り不足量",
+    unusedPlannedCharge: "不要となった計画充電量",
+    socTargetAchieved: "SOC目標達成",
     recentWindowResults: "最近の時間帯実績",
     deliveredCharge: "実績充電量",
     boundaryDeliveryEstimate: "境界時刻の推定 {value} Wh",
@@ -4015,7 +4019,7 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
     const stateLabel = document.createElement("span");
     stateLabel.textContent = execution.active
       ? t("inProgress")
-      : formatAdaptiveChargingDate(execution.windowStart);
+      : `${formatAdaptiveChargingDate(execution.windowStart)}${execution.socTargetReached ? ` · ${t("socTargetAchieved")}` : ""}`;
     heading.append(title, stateLabel);
     card.append(heading);
     const metrics = document.createElement("dl");
@@ -4027,7 +4031,7 @@ function renderAdaptiveChargingStatus(status = state.adaptiveChargingStatus) {
     const values = [
       [t("plannedCharge"), `${Number(execution.plannedWh || 0)} Wh`],
       [t("deliveredCharge"), deliveredCharge],
-      [t("remainingShortfall"), `${Number(execution.unmetWh || 0)} Wh`],
+      [t(execution.socTargetReached ? "unusedPlannedCharge" : "remainingShortfall"), `${Number(execution.unmetWh || 0)} Wh`],
       [t("breakerInterruptions"), String(Number(execution.interruptionCount || 0))],
       [t("startingSoc"), formatAdaptiveChargingPercent(execution.startSocPercent)],
       [t("endingSoc"), formatAdaptiveChargingPercent(execution.endSocPercent)],

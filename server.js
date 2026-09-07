@@ -1401,6 +1401,7 @@ function cleanAdaptiveChargingState(value = {}) {
         ),
         startSocPercent: finiteNumberOrNull(value.activeWindowExecution.startSocPercent),
         latestSocPercent: finiteNumberOrNull(value.activeWindowExecution.latestSocPercent),
+        targetSocPercent: finiteNumberOrNull(value.activeWindowExecution.targetSocPercent),
         startedTrackingAt: value.activeWindowExecution.startedTrackingAt ?? null,
         updatedAt: value.activeWindowExecution.updatedAt ?? null,
       }
@@ -1417,6 +1418,8 @@ function cleanAdaptiveChargingState(value = {}) {
         deliveredWh: Math.max(0, Math.round(Number(summary.deliveredWh) || 0)),
         estimatedDeliveryWh: Math.max(0, Math.round(Number(summary.estimatedDeliveryWh) || 0)),
         unmetWh: Math.max(0, Math.round(Number(summary.unmetWh) || 0)),
+        targetSocPercent: finiteNumberOrNull(summary.targetSocPercent),
+        socTargetReached: summary.socTargetReached === true,
         interruptionCount: Math.max(0, Math.round(Number(summary.interruptionCount) || 0)),
         solarHeadroomInterruptionCount: Math.max(
           0,
@@ -2064,6 +2067,7 @@ function buildAdaptiveChargingTimelineView({
   capacityKwh,
   chargeToStoredRatio = 1,
   config,
+  standbyWindowEnd = null,
 } = {}) {
   let storedKwh = Math.max(floorKwh, Math.min(capacityKwh, Number(initialStoredKwh)));
   const normalizedSlots = slots.map((slot) => ({
@@ -2115,6 +2119,10 @@ function buildAdaptiveChargingTimelineView({
         netKwh: Number(interval.netKwh || 0) * intervalFraction,
         chargeCapacityKwh: Number(interval.chargeCapacityKwh || 0) * intervalFraction,
       };
+      const controlled = segmentStartMs < new Date(standbyWindowEnd).getTime()
+        || normalizedSlots.some((slot) => slot.continuousWindowCharge
+          && segmentStartMs >= slot.startMs && segmentStartMs < new Date(slot.windowEnd ?? slot.end).getTime());
+      if (controlled) segment.netKwh = 0;
       const startingStoredKwh = storedKwh;
       storedKwh = applyAdaptiveChargingTimelineSlot(
         storedKwh,
@@ -2165,6 +2173,7 @@ function planChronologicalDiscountedCharging({
   chargePowerCurve = [],
   chargeWhPerSocPoint,
   chargeToStoredRatio = 1,
+  standbyWindowEnd = null,
 } = {}) {
   const chargeConversion = Math.min(1.5, Math.max(0.5, Number(chargeToStoredRatio) || 1));
   const windows = discountedTimelineWindows(timeline);
@@ -2194,17 +2203,28 @@ function planChronologicalDiscountedCharging({
       const window = windows[windowIndex];
       simulate(cursor, window.startIndex);
       const storedAtStartKwh = storedKwh;
+      let windowSchedulingWatts = maximumChargeWatts;
       const simulateWindow = (chargeByIndex = new Map()) => {
         let projectedStoredKwh = storedKwh;
+        let chargingStarted = window.startMs < new Date(standbyWindowEnd).getTime();
         for (let index = window.startIndex; index < window.endIndex; index += 1) {
+          const allocated = chargeByIndex.get(index) ?? 0;
+          // After charging starts, execution charges continuously then holds
+          // Standby. Only the time before its start can discharge in Auto.
+          const slot = timeline[index];
           projectedStoredKwh = applyAdaptiveChargingTimelineSlot(
             projectedStoredKwh,
-            timeline[index],
-            chargeByIndex.get(index),
+            {
+              ...slot,
+              netKwh: chargingStarted ? 0 : slot.netKwh,
+              chargeCapacityKwh: windowSchedulingWatts * (slot.endMs - slot.startMs) / 3_600_000 / 1000,
+            },
+            allocated,
             dischargeFloorKwh,
             capacityKwh,
             chargeConversion,
           );
+          if (allocated > 0) chargingStarted = true;
         }
         return projectedStoredKwh;
       };
@@ -2248,7 +2268,7 @@ function planChronologicalDiscountedCharging({
             timeConstrainedWh: 0,
             source: "configured",
           };
-      const windowSchedulingWatts = timing.schedulingWatts;
+      windowSchedulingWatts = timing.schedulingWatts;
       const chargeByIndex = new Map();
       let projectedEndKwh = noGridStoredKwh;
       for (let index = window.endIndex - 1; index >= window.startIndex && projectedEndKwh < targetStoredKwh - 0.0001; index -= 1) {
@@ -2300,7 +2320,7 @@ function planChronologicalDiscountedCharging({
         });
       }
 
-      simulate(window.startIndex, window.endIndex, chargeByIndex);
+      storedKwh = simulateWindow(chargeByIndex);
       const predictedEndStoredKwh = storedKwh;
       const windowUnmetStoredKwh = Math.max(0, targetStoredKwh - predictedEndStoredKwh);
       const windowUnmetChargeKwh = windowUnmetStoredKwh / chargeConversion;
@@ -2357,7 +2377,7 @@ function planChronologicalDiscountedCharging({
       0,
     );
     return {
-      slots: selectedSlots.sort((a, b) => new Date(a.start) - new Date(b.start)),
+      slots: mergeAdaptiveChargingSlots(selectedSlots),
       windows: windowPlans,
       plannedChargeKwh,
       plannedStoredChargeKwh: plannedChargeKwh * chargeConversion,
@@ -3761,6 +3781,8 @@ function buildAdaptiveChargingPlan({
     time = slotEndMs;
   }
   const demandPredictions = [...demandByDay.values()].map((prediction) => prediction.home);
+  const standbyWindowEnd = state.standbyHoldUntil
+    ?? (state.owner === "adaptiveCharging" ? state.activeSlot?.windowEnd : null);
   const optimized = planChronologicalDiscountedCharging({
     timeline,
     currentStoredKwh: initialStoredKwh,
@@ -3771,6 +3793,7 @@ function buildAdaptiveChargingPlan({
     chargePowerCurve: chargePerformance.curve,
     chargeWhPerSocPoint: batteryModel.charge.whPerSocPoint,
     chargeToStoredRatio: batteryModel.chargeToStoredRatio,
+    standbyWindowEnd,
   });
   const timelineView = buildAdaptiveChargingTimelineView({
     timeline,
@@ -3779,6 +3802,7 @@ function buildAdaptiveChargingPlan({
     floorKwh: dischargeFloorKwh,
     capacityKwh,
     chargeToStoredRatio: batteryModel.chargeToStoredRatio,
+    standbyWindowEnd,
     config,
   });
   const planStatus = discountedPlanStatus(optimized);
@@ -7068,9 +7092,12 @@ function adaptiveChargingWindowRemainingWh(plan, window) {
 function finalizeAdaptiveChargingWindowExecution(state, endSocPercent = null, now = new Date(), reason = "discounted window ended") {
   const active = state.activeWindowExecution;
   if (!active) return null;
-  const endSoc = Number.isFinite(Number(endSocPercent))
-    ? Number(endSocPercent)
+  const endSoc = Number.isFinite(finiteNumberOrNull(endSocPercent))
+    ? finiteNumberOrNull(endSocPercent)
     : finiteNumberOrNull(active.latestSocPercent);
+  const targetSocPercent = finiteNumberOrNull(active.targetSocPercent);
+  const socTargetReached = Number.isFinite(endSoc) && Number.isFinite(targetSocPercent)
+    && endSoc >= targetSocPercent;
   const summary = {
     key: active.key,
     windowStart: active.windowStart,
@@ -7081,6 +7108,8 @@ function finalizeAdaptiveChargingWindowExecution(state, endSocPercent = null, no
     deliveredWh: active.deliveredWh,
     estimatedDeliveryWh: Math.max(0, Math.round(Number(active.estimatedDeliveryWh) || 0)),
     unmetWh: Math.max(0, active.plannedWh - active.deliveredWh),
+    targetSocPercent,
+    socTargetReached,
     interruptionCount: active.interruptionCount,
     solarHeadroomInterruptionCount: Math.max(
       0,
@@ -7099,8 +7128,8 @@ function finalizeAdaptiveChargingWindowExecution(state, endSocPercent = null, no
   state.activeWindowExecution = null;
   appendAdaptiveChargingLog(
     state,
-    `${active.label || "Discounted window"} summary: ${summary.plannedWh} Wh planned, ${summary.deliveredWh} Wh delivered${summary.estimatedDeliveryWh > 0 ? ` (${summary.estimatedDeliveryWh} Wh estimated at exact boundaries)` : ""}, ${summary.unmetWh} Wh unmet, ${summary.interruptionCount} breaker interruptions, ${summary.solarHeadroomInterruptionCount} solar-headroom pauses, SOC ${summary.startSocPercent ?? "--"}% to ${summary.endSocPercent ?? "--"}%`,
-    summary.unmetWh > 0 ? "warning" : "summary",
+    `${active.label || "Discounted window"} summary: ${summary.plannedWh} Wh planned, ${summary.deliveredWh} Wh delivered${summary.estimatedDeliveryWh > 0 ? ` (${summary.estimatedDeliveryWh} Wh estimated at exact boundaries)` : ""}, ${summary.unmetWh} Wh ${socTargetReached ? "unused (SOC target achieved)" : "unmet"}, ${summary.interruptionCount} breaker interruptions, ${summary.solarHeadroomInterruptionCount} solar-headroom pauses, SOC ${summary.startSocPercent ?? "--"}% to ${summary.endSocPercent ?? "--"}%`,
+    summary.unmetWh > 0 && !socTargetReached ? "warning" : "summary",
     now,
   );
   return summary;
@@ -7114,6 +7143,9 @@ function syncAdaptiveChargingWindowExecution(state, occurrence, plan, soc, now =
     finalizeAdaptiveChargingWindowExecution(state, soc, now, "next discounted window started");
   }
   const remainingWh = adaptiveChargingWindowRemainingWh(plan, occurrence);
+  const targetSocPercent = finiteNumberOrNull((plan?.windows ?? []).find(
+    (window) => window.start === occurrence.start && window.end === occurrence.end,
+  )?.targetSocPercent);
   const activeDeliveredWh = planRecalculated && state.owner === "adaptiveCharging"
     ? Math.max(0, Math.round(Number(state.activeChargedKwh) * 1000))
     : 0;
@@ -7131,11 +7163,13 @@ function syncAdaptiveChargingWindowExecution(state, occurrence, plan, soc, now =
       solarHeadroomInterruptionCount: 0,
       startSocPercent: finiteNumberOrNull(soc),
       latestSocPercent: finiteNumberOrNull(soc),
+      targetSocPercent,
       startedTrackingAt: now.toISOString(),
       updatedAt: now.toISOString(),
     };
   } else {
     state.activeWindowExecution.latestSocPercent = finiteNumberOrNull(soc);
+    if (targetSocPercent !== null) state.activeWindowExecution.targetSocPercent = targetSocPercent;
     if (planRecalculated) {
       state.activeWindowExecution.plannedWh = state.activeWindowExecution.deliveredWh + activeDeliveredWh + remainingWh;
     }
@@ -7447,6 +7481,48 @@ function syncAdaptiveChargingSlotEndTimer(state, now = new Date()) {
 function adaptiveChargingSlotAt(plan, now = new Date()) {
   const time = now.getTime();
   return (plan?.slots ?? []).find((slot) => new Date(slot.start).getTime() <= time && time < new Date(slot.end).getTime()) ?? null;
+}
+
+function mergeAdaptiveChargingSlots(slots = []) {
+  const merged = [];
+  for (const slot of [...slots].sort((a, b) => new Date(a.start) - new Date(b.start))) {
+    const previous = merged.at(-1);
+    if (previous && previous.yenPerKwh === slot.yenPerKwh && previous.label === slot.label
+      && previous.windowStart && previous.windowStart === slot.windowStart && previous.windowEnd === slot.windowEnd
+      && Math.abs(new Date(previous.end) - new Date(slot.start)) <= 1
+      && previous.targetSocPercent === slot.targetSocPercent) {
+      previous.end = slot.end;
+      previous.targetWh += slot.targetWh;
+      previous.slotId = slot.slotId;
+      previous.continuousWindowCharge = true;
+    } else merged.push({ ...slot, continuousWindowCharge: true });
+  }
+  return merged;
+}
+
+async function updateActiveAdaptiveChargingObjective(state, plan, now = new Date(), execute = executeAdaptiveChargingAction, soc = null) {
+  if (state.owner !== "adaptiveCharging" || state.activePlanCreatedAt === plan?.createdAt) return false;
+  const active = state.activeSlot;
+  if (now.getTime() >= new Date(active?.end).getTime()) return false;
+  const replacement = (plan?.slots ?? []).find((slot) => slot.windowStart === active?.windowStart
+    && slot.windowEnd === active?.windowEnd && slot.yenPerKwh === active?.yenPerKwh
+    && slot.label === active?.label && new Date(slot.end) > now);
+  if (!replacement || !active?.continuousWindowCharge) return false;
+  const deliveredWh = Math.max(0, Number(state.activeChargedKwh) * 1000);
+  const remainingWh = Math.max(0, Math.round(Number(replacement.targetWh) || 0));
+  if (!remainingWh) return false;
+  const targetWh = Math.round(deliveredWh + remainingWh);
+  // Re-issue only the remaining device target, without an intervening Auto or
+  // Standby command. Preserve measurement and ownership across the checkpoint.
+  const socReached = Number.isFinite(soc) && soc >= Number(replacement.targetSocPercent);
+  if (!socReached && targetWh !== active.targetWh) await execute("charge", { targetWh: remainingWh });
+  state.activeSlot = { ...replacement, start: active.start, targetWh, continuousWindowCharge: true };
+  state.activePlanCreatedAt = plan.createdAt;
+  if (state.activeChargeSession) {
+    state.activeChargeSession.requestedWh = targetWh;
+    state.activeChargeSession.slotEnd = replacement.end;
+  }
+  return true;
 }
 
 function capAdaptiveChargingSlotToRemainingTime(slot, maximumChargeWatts, now = new Date()) {
@@ -7791,7 +7867,12 @@ function adaptiveChargingLiveImportSafety(status, rules = []) {
 function activeAdaptiveChargingSlotStopReason(state, config, plan, now = new Date()) {
   if (state.owner !== "adaptiveCharging") return null;
   if (!explicitDiscountedBand(config, now)) return "Current rate is no longer discounted";
-  const replacement = adaptiveChargingSlotAt(plan, now);
+  const replacement = state.activeSlot?.continuousWindowCharge
+    ? (plan?.slots ?? []).find((slot) => slot.windowStart === state.activeSlot.windowStart
+      && slot.windowEnd === state.activeSlot.windowEnd
+      && slot.yenPerKwh === state.activeSlot.yenPerKwh && slot.label === state.activeSlot.label
+      && new Date(slot.end) > now)
+    : adaptiveChargingSlotAt(plan, now);
   if (!replacement) return "Recalculated plan no longer includes the active charging period";
   const planChanged = state.activePlanCreatedAt !== plan?.createdAt;
   if (planChanged) {
@@ -8314,11 +8395,14 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
     );
     state.standbyHoldUntil = null;
   }
+  const liveImportSafety = adaptiveChargingLiveImportSafety(status, rules);
+  if (explicitDiscountedBand(config, now) && liveImportSafety.available && !liveExportNeedsHeadroom) {
+    await updateActiveAdaptiveChargingObjective(state, state.plan, now, executeAdaptiveChargingAction, soc);
+  }
   const activeTargetKwh = Number(state.activeSlot?.targetWh ?? 0) / 1000;
   const activeTargetSocPercent = Number(state.activeSlot?.targetSocPercent ?? config.adaptiveCharging.targetSocPercent);
   const activeExpired = state.activeSlot && now.getTime() >= new Date(state.activeSlot.end).getTime();
   const activePlanStopReason = activeAdaptiveChargingSlotStopReason(state, config, state.plan, now);
-  const liveImportSafety = adaptiveChargingLiveImportSafety(status, rules);
   const activeEnergyTargetReached = state.owner === "adaptiveCharging" && state.activeChargedKwh >= activeTargetKwh;
   const activeSocTargetReached = state.owner === "adaptiveCharging" && soc >= activeTargetSocPercent;
   const breakerReserveInterrupted = state.owner === "adaptiveCharging"
@@ -8527,6 +8611,10 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
   return writeAdaptiveChargingState(state);
 }
 
+function adaptiveChargingWindowHasShortfall(summary) {
+  return Number(summary?.unmetWh) >= 50 && summary?.socTargetReached !== true;
+}
+
 function observeAdaptiveChargingNotifications(config, adaptiveChargingState) {
   if (!adaptiveChargingConfiguredActive(config)) return;
   const paused = adaptiveChargingState.pausedUntil && new Date(adaptiveChargingState.pausedUntil).getTime() > Date.now();
@@ -8557,7 +8645,7 @@ function observeAdaptiveChargingNotifications(config, adaptiveChargingState) {
   }
 
   const summary = adaptiveChargingState.windowSummaries?.at(-1);
-  if (summary?.unmetWh >= 50) {
+  if (adaptiveChargingWindowHasShortfall(summary)) {
     const estimatedDeliveryText = summary.estimatedDeliveryWh > 0
       ? ` ${summary.estimatedDeliveryWh} Wh of delivery was estimated between the final sample and exact charge boundaries.`
       : "";
@@ -10186,6 +10274,9 @@ export const server = http.createServer(async (req, res) => {
 });
 
 export {
+  adaptiveChargingWindowHasShortfall,
+  mergeAdaptiveChargingSlots,
+  updateActiveAdaptiveChargingObjective,
   activeAdaptiveChargingSlotStopReason,
   advanceAdaptiveChargingBreakerRecovery,
   aggregateDemandDays,
