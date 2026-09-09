@@ -20,6 +20,9 @@ const DEFAULT_DEVICE_STATE = Object.freeze({
     chargeWindow: { startHour: 1, endHour: 5 },
     dischargeWindow: { startHour: 7, endHour: 23 },
     targetWh: null,
+    // Opt in when emulating devices whose target register is a session total.
+    chargeTargetAccounting: "remaining",
+    sessionChargedWh: 0,
   },
   solar: {
     host: "10.250.0.10",
@@ -219,10 +222,12 @@ export function createDeviceSimulator(options = {}) {
         Math.min(100, state.battery.stateOfChargePercent + batteryWh / (state.battery.usableCapacityKwh * 10)),
       );
       if (Number.isFinite(state.battery.targetWh)) {
-        state.battery.targetWh = Math.max(0, state.battery.targetWh - Math.max(0, batteryWh));
-        if (state.battery.targetWh === 0) {
-          state.battery.operationMode = "auto";
-          state.battery.workingStatus = "auto";
+        const cumulative = state.battery.chargeTargetAccounting === "session-total";
+        state.battery.sessionChargedWh += Math.max(0, batteryWh);
+        if (!cumulative) state.battery.targetWh = Math.max(0, state.battery.targetWh - Math.max(0, batteryWh));
+        if (cumulative ? state.battery.sessionChargedWh >= state.battery.targetWh : state.battery.targetWh === 0) {
+          if (!cumulative) state.battery.operationMode = "auto";
+          state.battery.workingStatus = cumulative ? "standby" : "auto";
           state.battery.instantPowerW = 0;
         }
       }
@@ -391,6 +396,7 @@ export function createDeviceSimulator(options = {}) {
       case "charge":
       case "discharge": {
         const charging = command === "charge";
+        if (state.battery.operationMode !== "charging") state.battery.sessionChargedWh = 0;
         state.battery.operationMode = charging ? "charging" : "discharging";
         state.battery.workingStatus = state.battery.operationMode;
         state.battery.instantPowerW = (charging ? 1 : -1) * state.battery.chargePowerWatts;

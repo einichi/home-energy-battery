@@ -19,6 +19,7 @@ import {
   adaptiveChargingWindowHasShortfall,
   mergeAdaptiveChargingSlots,
   updateActiveAdaptiveChargingObjective,
+  recoverIdleAdaptiveCharge,
   adaptiveChargingExportEvidence,
   adaptiveChargingTimingProfile,
   advanceAdaptiveChargingBreakerRecovery,
@@ -1021,7 +1022,7 @@ assert.equal(new Date(conservativeTaperPlan.slots[0].start).getTime(), taperWind
 // each half-hour quota. Device mutations go only to the central simulator.
 assert.equal(conservativeTaperPlan.slots.length, 1);
 assert.equal(conservativeTaperPlan.slots[0].end, new Date(taperWindowEnd).toISOString());
-const continuousSimulator = createDeviceSimulator();
+const continuousSimulator = createDeviceSimulator({ state: { battery: { chargeTargetAccounting: "session-total" } } });
 const continuousExecute = (action, payload) => continuousSimulator.execute(
   action, { host: "10.250.0.10", "target-wh": payload.targetWh },
   payload.mode ? [payload.mode] : [],
@@ -1049,7 +1050,7 @@ assert.equal(await updateActiveAdaptiveChargingObjective(
 assert.equal(continuousState.activeSlot.targetWh, 2900);
 assert.equal(continuousState.activeChargedKwh, 0.9);
 assert.equal(continuousState.activeChargeSession.requestedWh, 2900);
-assert.equal(continuousSimulator.snapshot().battery.targetWh, 2000);
+assert.equal(continuousSimulator.snapshot().battery.targetWh, 2900);
 assert.deepEqual(continuousSimulator.calls.map((call) => call.command), ["charge", "charge"]);
 const callsAtCheckpoint = continuousSimulator.calls.length;
 await updateActiveAdaptiveChargingObjective(continuousState, checkpointPlan, checkpoint, continuousExecute, 50);
@@ -1081,6 +1082,92 @@ const boundaryResult = await enforceAdaptiveChargingSlotEndDeadline(adaptiveChar
 });
 assert.equal(boundaryResult.stopped, true);
 assert.equal(continuousSimulator.snapshot().battery.operationMode, "auto");
+
+// September 9: the remaining target at 11:30 (3272 Wh) must never replace
+// the device's session-total target (4369 Wh). Exercise actual energy advance.
+const cutoffSimulator = createDeviceSimulator({ state: { battery: {
+  stateOfChargePercent: 15, dischargeLimitPercent: 0,
+  chargeTargetAccounting: "session-total",
+} } });
+const cutoffExecute = (action, payload) => cutoffSimulator.execute(action,
+  { host: "10.250.0.10", "target-wh": payload.targetWh }, payload.mode ? [payload.mode] : []);
+const cutoffStart = "2026-09-09T02:00:24.843Z";
+const cutoffSlot = { ...continuousSlot, start: cutoffStart, end: "2026-09-09T04:00:00.000Z",
+  windowStart: "2026-09-09T02:00:00.000Z", windowEnd: "2026-09-09T04:00:00.000Z", targetWh: 4368, targetSocPercent: 100 };
+await executeAdaptiveChargeStart(cutoffSlot, { execute: cutoffExecute });
+let cutoffState = cleanAdaptiveChargingState({ owner: "adaptiveCharging", activeSlot: { ...cutoffSlot, deviceTargetWh: 4368 },
+  activePlanCreatedAt: "initial", activeChargedKwh: 0,
+  activeChargeSession: { startedAt: cutoffStart, requestedWh: 4368, slotEnd: cutoffSlot.end },
+});
+let cutoffPrevious = Date.parse(cutoffStart);
+for (const [at, remaining] of [
+  ["2026-09-09T02:30:26.975Z", 3272], ["2026-09-09T02:35:58.409Z", 3070],
+  ["2026-09-09T03:00:28.592Z", 2175], ["2026-09-09T03:30:02.433Z", 1095],
+]) {
+  cutoffSimulator.advance(Date.parse(at) - cutoffPrevious);
+  cutoffPrevious = Date.parse(at);
+  cutoffState.activeChargedKwh = cutoffSimulator.snapshot().battery.sessionChargedWh / 1000;
+  await updateActiveAdaptiveChargingObjective(cutoffState,
+    { createdAt: at, slots: [{ ...cutoffSlot, start: at, targetWh: remaining }] },
+    new Date(at), cutoffExecute, cutoffSimulator.snapshot().battery.stateOfChargePercent);
+  cutoffState = cleanAdaptiveChargingState(JSON.parse(JSON.stringify(cutoffState)));
+  assert.equal(cutoffSimulator.snapshot().battery.targetWh, 4369);
+}
+cutoffSimulator.advance(Date.parse(cutoffSlot.end) - cutoffPrevious);
+assert.ok(cutoffSimulator.snapshot().battery.sessionChargedWh > 4350, "Use the final half-hour instead of stopping at 3274 Wh");
+assert.deepEqual(cutoffSimulator.calls.map((call) => call.command), ["charge", "charge"]);
+// A legacy state may claim the correct total while the device has the old,
+// incorrectly reduced register. Repair it even without a new plan revision.
+delete cutoffState.activeSlot.deviceTargetWh;
+cutoffState.activeChargedKwh = 3.274;
+await updateActiveAdaptiveChargingObjective(cutoffState,
+  { createdAt: cutoffState.activePlanCreatedAt, slots: [{ ...cutoffSlot, targetWh: 1095 }] },
+  new Date("2026-09-09T03:31:00Z"), cutoffExecute, 76);
+assert.equal(cutoffState.activeSlot.deviceTargetWh, 4369);
+assert.equal(cutoffSimulator.snapshot().battery.targetWh, 4369);
+
+const idleStart = new Date("2026-09-09T03:31:00Z");
+const idleState = cleanAdaptiveChargingState({ ...cutoffState,
+  plan: { slots: [{ ...cutoffSlot, targetWh: 4369 }] },
+  activeWindowExecution: { key: "idle", windowStart: cutoffSlot.windowStart, windowEnd: cutoffSlot.windowEnd,
+    plannedWh: 4369, deliveredWh: 0, latestSocPercent: 76 },
+});
+const idleStatus = { energy: { battery: { instant_power: { value: 0 }, remaining_percent: { value: 76 }, operation_mode: { value: "charging" } } } };
+const idleCalls = [];
+const idleExecute = async (action, payload) => { idleCalls.push({ action, payload }); };
+assert.equal(await recoverIdleAdaptiveCharge(idleState, idleStatus, idleStart, idleExecute), false);
+const unavailablePower = structuredClone(idleStatus);
+unavailablePower.energy.battery.instant_power.value = null;
+assert.equal(await recoverIdleAdaptiveCharge(idleState, unavailablePower, new Date(+idleStart + 30_000), idleExecute), false);
+assert.equal(idleState.activeChargeSession.idleSince, null, "Missing telemetry is not an idle sample");
+for (const seconds of [60, 90, 120]) {
+  assert.equal(await recoverIdleAdaptiveCharge(idleState, idleStatus, new Date(+idleStart + seconds * 1000), idleExecute), false);
+}
+assert.equal(await recoverIdleAdaptiveCharge(idleState, idleStatus, new Date(+idleStart + 150_000), idleExecute), true);
+assert.deepEqual(idleCalls, [{ action: "set-mode", payload: { mode: "auto" } }]);
+assert.equal(idleState.owner, null);
+assert.equal(idleState.activeWindowExecution.deliveredWh, 3274);
+assert.equal(idleState.interruptedCharge.remainingWh, 1095);
+assert.equal(idleState.plan.slots[0].targetWh, 1095);
+assert.equal(cleanAdaptiveChargingState(idleState).activeWindowExecution.idleRecoveryCount, 1);
+await cutoffExecute("set-mode", { mode: "auto" });
+await executeAdaptiveChargeStart(idleState.plan.slots[0], { execute: cutoffExecute });
+assert.equal(cutoffSimulator.snapshot().battery.sessionChargedWh, 0, "An explicit Auto transition starts a fresh device session");
+assert.equal(cutoffSimulator.snapshot().battery.targetWh, 1095);
+cutoffSimulator.advance(1095 / 2192 * 3_600_000);
+assert.ok(Math.abs(cutoffSimulator.snapshot().battery.sessionChargedWh + idleState.activeWindowExecution.deliveredWh - 4369) < 0.001);
+// Slow taper must not trigger recovery, and recovery is bounded per window.
+for (const [power, mode, count] of [[1, "charging", 0], [0, "standby", 0], [0, "charging", 2]]) {
+  const protectedState = cleanAdaptiveChargingState({ ...cutoffState,
+    activeWindowExecution: { ...idleState.activeWindowExecution, idleRecoveryCount: count },
+    activeChargeSession: { ...cutoffState.activeChargeSession, idleSince: idleStart.toISOString(), idleCheckedAt: new Date(+idleStart + 120_000).toISOString() },
+  });
+  const protectedStatus = structuredClone(idleStatus);
+  protectedStatus.energy.battery.instant_power.value = power;
+  protectedStatus.energy.battery.operation_mode.value = mode;
+  assert.equal(await recoverIdleAdaptiveCharge(protectedState, protectedStatus, new Date(+idleStart + 150_000),
+    async () => assert.fail("Unexpected idle recovery")), false);
+}
 
 const separateSlots = [
   { ...continuousSlot, end: new Date(taperWindowStart + 1_800_000).toISOString(), targetWh: 500 },

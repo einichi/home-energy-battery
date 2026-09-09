@@ -1345,6 +1345,8 @@ function cleanAdaptiveChargingState(value = {}) {
       latestSocPercent: finiteNumberOrNull(value.activeChargeSession.latestSocPercent),
       latestChargingW: finiteNumberOrNull(value.activeChargeSession.latestChargingW),
       lastSampleAt: value.activeChargeSession.lastSampleAt ?? null,
+      idleSince: value.activeChargeSession.idleSince ?? null,
+      idleCheckedAt: value.activeChargeSession.idleCheckedAt ?? null,
       slotStart: value.activeChargeSession.slotStart ?? null,
       slotEnd: value.activeChargeSession.slotEnd ?? null,
       label: value.activeChargeSession.label ?? null,
@@ -1402,6 +1404,7 @@ function cleanAdaptiveChargingState(value = {}) {
         startSocPercent: finiteNumberOrNull(value.activeWindowExecution.startSocPercent),
         latestSocPercent: finiteNumberOrNull(value.activeWindowExecution.latestSocPercent),
         targetSocPercent: finiteNumberOrNull(value.activeWindowExecution.targetSocPercent),
+        idleRecoveryCount: Math.max(0, Math.round(Number(value.activeWindowExecution.idleRecoveryCount) || 0)),
         startedTrackingAt: value.activeWindowExecution.startedTrackingAt ?? null,
         updatedAt: value.activeWindowExecution.updatedAt ?? null,
       }
@@ -7501,9 +7504,11 @@ function mergeAdaptiveChargingSlots(slots = []) {
 }
 
 async function updateActiveAdaptiveChargingObjective(state, plan, now = new Date(), execute = executeAdaptiveChargingAction, soc = null) {
-  if (state.owner !== "adaptiveCharging" || state.activePlanCreatedAt === plan?.createdAt) return false;
+  if (state.owner !== "adaptiveCharging") return false;
   const active = state.activeSlot;
   if (now.getTime() >= new Date(active?.end).getTime()) return false;
+  const planChanged = state.activePlanCreatedAt !== plan?.createdAt;
+  if (!planChanged && Number.isFinite(active?.deviceTargetWh)) return false;
   const replacement = (plan?.slots ?? []).find((slot) => slot.windowStart === active?.windowStart
     && slot.windowEnd === active?.windowEnd && slot.yenPerKwh === active?.yenPerKwh
     && slot.label === active?.label && new Date(slot.end) > now);
@@ -7511,17 +7516,54 @@ async function updateActiveAdaptiveChargingObjective(state, plan, now = new Date
   const deliveredWh = Math.max(0, Number(state.activeChargedKwh) * 1000);
   const remainingWh = Math.max(0, Math.round(Number(replacement.targetWh) || 0));
   if (!remainingWh) return false;
-  const targetWh = Math.round(deliveredWh + remainingWh);
-  // Re-issue only the remaining device target, without an intervening Auto or
-  // Standby command. Preserve measurement and ownership across the checkpoint.
+  const targetWh = planChanged ? Math.round(deliveredWh + remainingWh) : active.targetWh;
+  if (!Number.isFinite(targetWh) || targetWh <= 0) return false;
+  // The device target is cumulative for the ongoing charge, not an additional
+  // allowance. Keep its total distinct from the planner's remaining energy.
+  // Missing deviceTargetWh also repairs sessions persisted by the old code.
   const socReached = Number.isFinite(soc) && soc >= Number(replacement.targetSocPercent);
-  if (!socReached && targetWh !== active.targetWh) await execute("charge", { targetWh: remainingWh });
-  state.activeSlot = { ...replacement, start: active.start, targetWh, continuousWindowCharge: true };
+  let deviceTargetWh = active.deviceTargetWh;
+  if (!socReached && targetWh !== deviceTargetWh) {
+    await execute("charge", { targetWh });
+    deviceTargetWh = targetWh;
+  }
+  state.activeSlot = { ...replacement, start: active.start, targetWh, deviceTargetWh, continuousWindowCharge: true };
   state.activePlanCreatedAt = plan.createdAt;
   if (state.activeChargeSession) {
     state.activeChargeSession.requestedWh = targetWh;
     state.activeChargeSession.slotEnd = replacement.end;
   }
+  return true;
+}
+
+async function recoverIdleAdaptiveCharge(state, status, now = new Date(), execute = executeAdaptiveChargingAction) {
+  const session = state.activeChargeSession;
+  const window = state.activeWindowExecution;
+  if (state.owner !== "adaptiveCharging" || !session || !window) return false;
+  const soc = numericMetric(status.energy?.battery?.remaining_percent);
+  const remainingWh = Number(state.activeSlot?.targetWh) - Number(state.activeChargedKwh) * 1000;
+  const eligible = batteryChargingWatts(status) === 0
+    && batteryOperationMode(status) === "charging"
+    && Number.isFinite(soc) && soc < Number(state.activeSlot?.targetSocPercent)
+    && remainingWh >= 50 && new Date(state.activeSlot?.end).getTime() - now.getTime() > 120_000;
+  if (!eligible) {
+    session.idleSince = null;
+    session.idleCheckedAt = null;
+    return false;
+  }
+  const previousCheckMs = new Date(session.idleCheckedAt).getTime();
+  if (!session.idleSince || !session.idleCheckedAt || now.getTime() - previousCheckMs > 60_000) {
+    session.idleSince = now.toISOString();
+  }
+  session.idleCheckedAt = now.toISOString();
+  if (now.getTime() - new Date(session.idleSince).getTime() < 90_000
+    || Number(window.idleRecoveryCount || 0) >= 2) return false;
+  // A confirmed zero-power charge is different from slow taper. End the old
+  // device session explicitly, preserve its measured delivery, and let the
+  // normal start path recheck breaker headroom before starting the remainder.
+  preserveInterruptedAdaptiveCharge(state, now);
+  await releaseAdaptiveCharge(state, "Battery remained idle below its charging objective for 90 seconds; restarting the remaining charge", now, null, execute);
+  window.idleRecoveryCount = Number(window.idleRecoveryCount || 0) + 1;
   return true;
 }
 
@@ -8511,6 +8553,11 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
     state.activePlanCreatedAt = state.plan.createdAt;
   }
 
+  // All override, telemetry, SOC, tariff, and live safety stop checks above
+  // must run before idle recovery can release or restart device control.
+  if (liveImportSafety.available && !liveExportNeedsHeadroom) {
+    await recoverIdleAdaptiveCharge(state, status, now);
+  }
   const plannedSlot = explicitDiscountedBand(config, now) ? adaptiveChargingSlotAt(state.plan, now) : null;
   const slot = plannedSlot ? capAdaptiveChargingSlotToRemainingTime(
     plannedSlot,
@@ -8579,7 +8626,7 @@ async function evaluateAdaptiveCharging(config, status, rules, now = new Date())
       throw error;
     }
     state.owner = "adaptiveCharging";
-    state.activeSlot = slot;
+    state.activeSlot = { ...slot, deviceTargetWh: slot.targetWh };
     state.activePlanCreatedAt = state.plan.createdAt;
     state.activeChargedKwh = 0;
     state.activeLastCheckedAt = now.toISOString();
@@ -10274,6 +10321,7 @@ export const server = http.createServer(async (req, res) => {
 });
 
 export {
+  recoverIdleAdaptiveCharge,
   adaptiveChargingWindowHasShortfall,
   mergeAdaptiveChargingSlots,
   updateActiveAdaptiveChargingObjective,
