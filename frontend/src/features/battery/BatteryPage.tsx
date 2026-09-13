@@ -43,7 +43,7 @@ const sourceLabels: Record<string, string> = {
   schedule: "Battery schedule",
   "adaptive-charging": "Adaptive Charging",
   "charging-demand-guard": "Demand Guard",
-  "backup-preparation": "Disaster Prep / 停電対策",
+  "backup-preparation": "Disaster Prep",
 };
 
 type EverydaySettings = {
@@ -478,11 +478,11 @@ export function BatteryPage({ view = "status" }: { view?: "status" | "schedules"
   return (
     <main className="page battery-page">
       <header className="page-heading">
-        <div><p className="eyebrow">Operate</p><h1>{view === "status" ? "Battery" : view === "schedules" ? "Battery schedules" : "Disaster Prep / 停電対策"}</h1><p>{view === "status" ? "Status, deliberate controls, and verified outcomes." : view === "schedules" ? "Plan recurring or one-time changes and review execution results." : "Temporarily prioritize stored energy so the battery is ready for an outage."}</p></div>
+        <div><p className="eyebrow">Operate</p><h1>{view === "status" ? "Battery" : view === "schedules" ? "Battery schedules" : "Disaster Prep"}</h1><p>{view === "status" ? "Status, deliberate controls, and verified outcomes." : view === "schedules" ? "Plan recurring or one-time changes and review execution results." : "Temporarily prioritize stored energy so the battery is ready for an outage."}</p></div>
         <span className="live-state"><i />{status ? `Device ${host}` : sentence(loadingState)}</span>
       </header>
-      <nav className="battery-navigation" aria-label="Battery sections"><NavLink to="/battery" end>Status & control</NavLink><NavLink to="/battery/schedules">Schedules</NavLink><NavLink to="/battery/backup">Disaster Prep / 停電対策</NavLink></nav>
-      {backup?.active ? <div className="backup-banner" role="status">Disaster Prep / 停電対策 is active · Profile {sentence(backup.currentProfile)}</div> : null}
+      <nav className="battery-navigation" aria-label="Battery sections"><NavLink to="/battery" end>Status & control</NavLink><NavLink to="/battery/schedules">Schedules</NavLink><NavLink to="/battery/backup">Disaster Prep</NavLink></nav>
+      {backup?.active ? <div className="backup-banner" role="status">Disaster Prep is active · Profile {sentence(backup.currentProfile)}</div> : null}
       {loadError ? <div className="status-banner" role="alert">{loadError}</div> : null}
 
       {view === "status" ? <>
@@ -536,7 +536,7 @@ export function BatteryPage({ view = "status" }: { view?: "status" | "schedules"
 
       {view === "backup" ?
       <section className="panel backup-panel">
-        <div><p className="eyebrow">Operational mode</p><h2>Disaster Prep / 停電対策</h2><p>Temporarily switches the battery to its backup profile so more stored energy is ready for an outage. Adaptive Charging pauses while this mode is active. When stopped, the previous profile is restored and normal automation recalculates before resuming.</p></div>
+        <div><p className="eyebrow">Operational mode</p><h2>Disaster Prep</h2><p>Temporarily switches the battery to its backup profile so more stored energy is ready for an outage. Adaptive Charging pauses while this mode is active. When stopped, the previous profile is restored and normal automation recalculates before resuming.</p></div>
         <div className="backup-state"><strong>{backup?.active ? "Active" : "Inactive"}</strong><span>{backup?.active ? `Since ${backup.startedAt ? new Date(backup.startedAt).toLocaleString() : "recently"}` : "Normal automation can operate"}</span></div>
         {!backup?.active ? <label className="guard-choice"><input type="checkbox" checked={backupAllowDemandGuard} onChange={(event) => setBackupAllowDemandGuard(event.target.checked)} /><span>Allow Demand Guard to retain breaker protection</span></label> : null}
         <button className={`button${backup?.active ? " secondary" : " primary"}`} type="button" onClick={() => openReview({ action: backup?.active ? "backup-end" : "backup-start", label: backup?.active ? "Stop Disaster Prep" : "Start Disaster Prep", payload: { allowDemandGuard: backupAllowDemandGuard, reserve }, impact: backup?.active ? "Stopping restores the battery profile that was active before Disaster Prep began. Adaptive Charging will then recalculate before normal operation resumes." : `Disaster Prep switches the battery to its backup profile and pauses Adaptive Charging so stored energy is prioritized for an outage. Your ${reserve}% reserve remains unchanged, and Demand Guard will ${backupAllowDemandGuard ? "remain available for breaker protection" : "pause"}. All of these temporary changes are reversed when Disaster Prep is stopped.` })}>{backup?.active ? "Stop" : "Start"}</button>

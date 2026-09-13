@@ -5295,7 +5295,7 @@ async function batteryStrategyView(now = new Date()) {
 
   let strategy;
   if (backup.active) {
-    strategy = { kind: "backup-preparation", title: "Disaster Prep / 停電対策", description: `Holding the ${backup.currentProfile ?? "backup"} profile while normal automation is suspended.` };
+    strategy = { kind: "backup-preparation", title: "Disaster Prep", description: `Holding the ${backup.currentProfile ?? "backup"} profile while normal automation is suspended.` };
   } else if (guard) {
     strategy = { kind: "demand-guard", title: "Charging Demand Guard", description: "Standby is being held to preserve configured breaker headroom." };
   } else if (adaptive.owner === "adaptiveCharging") {

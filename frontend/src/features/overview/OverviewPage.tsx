@@ -3,10 +3,12 @@ import { Link } from "react-router-dom";
 import { CombinedEnergyChart } from "../../components/CombinedEnergyChart";
 import { EnergyFlow } from "../../components/EnergyFlow";
 import { OutcomeStrip } from "../../components/OutcomeStrip";
+import { EneFarmActivity, EnergySourcesBar, OffPeakSavings } from "../../components/TelemetryParity";
 import { formatFreshness, formatPower, formatSoc, metricValue } from "../../core/format";
 import { withLatestStatus } from "../../core/energy";
 import { useEnergyStatus } from "../../hooks/useEnergyStatus";
 import { useHistoryRange } from "../../hooks/useHistoryRange";
+import { useEneFarm } from "../../hooks/useEneFarm";
 
 function preferredFuelCell(status: ReturnType<typeof useEnergyStatus>["status"]) {
   const fuelCells = status?.energy?.fuel_cells ?? [];
@@ -22,6 +24,7 @@ export function OverviewPage() {
     return value.toISOString();
   }, []);
   const { history: todayHistory, refresh: refreshToday } = useHistoryRange(24 * 60 * 60_000, undefined, todayStart);
+  const { summary: eneFarmToday, loading: eneFarmLoading, refresh: refreshEneFarm } = useEneFarm(24 * 60 * 60_000, todayStart);
   const battery = status?.energy?.battery;
   const fuelCell = preferredFuelCell(status);
   const soc = metricValue(battery?.remaining_percent);
@@ -41,7 +44,7 @@ export function OverviewPage() {
           <h1>Home energy overview</h1>
           <p>{formatFreshness(status?.read_at)}</p>
         </div>
-        <button className="quiet-button" type="button" onClick={() => { refreshStatus(); refreshHistory(); refreshToday(); }} disabled={loadingState === "loading" || manualRefreshing}>
+        <button className="quiet-button" type="button" onClick={() => { refreshStatus(); refreshHistory(); refreshToday(); refreshEneFarm(); }} disabled={loadingState === "loading" || manualRefreshing}>
           {manualRefreshing ? "Refreshing…" : "Refresh"}
         </button>
       </header>
@@ -88,6 +91,12 @@ export function OverviewPage() {
           <CombinedEnergyChart samples={chartSamples} selected={["houseDemandW", "solarPowerW", "fuelCellPowerW", "gridImportW", "batteryPowerW"]} label="Last 24 hours of home energy" />
         )}
       </section>
+
+      <div className="telemetry-parity-grid">
+        <EnergySourcesBar sources={todayHistory.summary.energySources} />
+        <EneFarmActivity summary={eneFarmToday} compact loading={eneFarmLoading} />
+        <OffPeakSavings status={status} />
+      </div>
 
       <section className="outcome-section" aria-labelledby="today-heading">
         <div className="section-heading"><div><p className="eyebrow">Today</p><h2 id="today-heading">Energy outcomes</h2></div><Link className="text-link" to="/energy">Full history →</Link></div>

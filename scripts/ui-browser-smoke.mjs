@@ -118,6 +118,13 @@ try {
   assert(await page.locator(".chart-tooltip").isVisible(), "Chart hover details did not render");
   assert(await page.getByRole("heading", { name: "Energy outcomes" }).isVisible(), "Overview daily outcomes did not render");
   assert(await page.getByRole("heading", { name: "Current measurements" }).count() === 0, "Overview still duplicates Live Power in a Snapshot section");
+  assert(await page.getByRole("heading", { name: "Energy Sources" }).isVisible(), "Energy Sources composition is missing");
+  assert(await page.getByRole("heading", { name: "Ene-Farm Activity" }).isVisible(), "Ene-Farm activity bar is missing");
+  assert(await page.getByRole("heading", { name: "Off-Peak Savings" }).isVisible(), "Off-Peak Savings is missing");
+  await page.getByRole("button", { name: "Grid use", exact: true }).click();
+  assert(await page.getByRole("button", { name: "Grid use", exact: true }).getAttribute("aria-pressed") === "true", "Off-Peak Savings did not switch to grid use");
+  await page.getByRole("button", { name: "Battery charging", exact: true }).click();
+  assert(await page.getByRole("button", { name: "Battery charging", exact: true }).getAttribute("aria-pressed") === "true", "Off-Peak Savings did not switch to battery charging");
   const refreshLabels = [];
   for (let sample = 0; sample < 24; sample += 1) {
     refreshLabels.push(await page.getByRole("button", { name: /Refresh/ }).first().textContent());
@@ -127,6 +134,16 @@ try {
 
   await page.locator(".sidebar .theme-control select").selectOption("dark");
   assert(await page.locator("html").getAttribute("data-theme") === "dark", "Dark theme was not applied");
+
+  await page.goto(`${apiOrigin}/ui/energy`, { waitUntil: "domcontentloaded" });
+  assert(await page.getByRole("heading", { name: "Circuit history" }).isVisible(), "Smart Cosmo circuit history is missing");
+  assert(await page.locator(".circuit-picker select").isVisible(), "Circuit selector is missing");
+  assert(await page.locator(".circuit-history-chart svg").isVisible(), "Circuit history graph did not render");
+  await page.locator(".circuit-picker select").selectOption("2");
+  assert(await page.getByRole("img", { name: "Circuit 2 circuit power history" }).isVisible(), "Circuit selection did not update the history graph");
+  assert(await page.getByText("Electricity generated", { exact: true }).isVisible(), "Ene-Farm generated electricity statistic is missing");
+  assert(await page.getByText("Gas used", { exact: true }).isVisible(), "Ene-Farm gas statistic is missing");
+  assert(await page.getByText("Last stop", { exact: true }).isVisible(), "Ene-Farm last-stop statistic is missing");
 
   await page.goto(`${apiOrigin}/ui/battery`, { waitUntil: "domcontentloaded" });
   assert(await page.getByRole("heading", { name: "Battery", exact: true }).isVisible(), "Battery workspace did not render");
@@ -148,8 +165,8 @@ try {
   await page.getByRole("link", { name: "Schedules", exact: true }).click();
   assert(await page.getByRole("heading", { name: "Battery schedules" }).isVisible(), "Battery schedules subpage is missing");
   assert(await page.getByRole("heading", { name: "Seven-day plan" }).isVisible(), "Battery schedule calendar is missing");
-  await page.getByRole("link", { name: "Disaster Prep / 停電対策", exact: true }).click();
-  assert(await page.getByRole("heading", { name: "Disaster Prep / 停電対策", exact: true }).first().isVisible(), "Disaster Prep subpage is missing");
+  await page.getByRole("link", { name: "Disaster Prep", exact: true }).click();
+  assert(await page.getByRole("heading", { name: "Disaster Prep", exact: true }).first().isVisible(), "Disaster Prep subpage is missing");
   await page.getByRole("button", { name: "Start", exact: true }).click();
   assert(await page.getByText(/20% reserve remains unchanged/).isVisible(), "Disaster Prep did not preview reserve behavior");
   assert(await page.getByText(/Demand Guard will remain available/).isVisible(), "Disaster Prep did not preview Demand Guard ownership");
@@ -158,7 +175,7 @@ try {
   await page.getByText("Command completed and device state was verified.").waitFor();
   await page.getByRole("button", { name: "Close receipt" }).click();
   await page.goto(`${apiOrigin}/ui/energy`, { waitUntil: "domcontentloaded" });
-  await assertOperationalBanner(page, "Disaster Prep / 停電対策", "Disaster Prep was not persistent across the app");
+  await assertOperationalBanner(page, "Disaster Prep", "Disaster Prep was not persistent across the app");
 
   await page.setViewportSize({ width: 390, height: 844 });
   assert(await page.locator(".mobile-navigation").isVisible(), "Mobile navigation is not visible at phone width");
@@ -170,8 +187,9 @@ try {
   await page.goto(`${apiOrigin}/ui/energy`, { waitUntil: "domcontentloaded" });
   assert(await page.getByRole("heading", { name: "Energy", exact: true }).isVisible(), "Production deep link did not render");
   assert(await page.getByText("Simulated environment", { exact: false }).isVisible(), "Production build lost the simulator banner");
+  await page.getByRole("img", { name: "24h energy history" }).waitFor();
   assert(await page.getByRole("img", { name: "24h energy history" }).isVisible(), "Combined Energy chart did not render");
-  assert(await page.getByRole("heading", { name: "Circuits" }).isVisible(), "Circuit history did not render");
+  assert(await page.getByRole("heading", { name: "Circuit history" }).isVisible(), "Circuit history did not render");
   assert(await page.getByRole("checkbox", { name: "Battery SOC" }).isVisible(), "Battery SOC history selector is missing");
 
   await page.goto(`${apiOrigin}/ui/graphs/solarPower`, { waitUntil: "domcontentloaded" });

@@ -9,7 +9,7 @@ for the same telemetry, health, and command states.
 | Product area | React route | Current source or API | Phase 0 status |
 | --- | --- | --- | --- |
 | Overview | `/ui/` | `GET /api/status`, `GET /api/config`, `GET /api/history` | Phase 1 read-only live flow, 24-hour chart, daily outcomes |
-| Energy and history | `/ui/energy` | `/api/history`, status telemetry, legacy graph views | Phase 1 combined chart, periods, all live metrics, storage balance, quality, and circuits |
+| Energy and history | `/ui/energy`, `/ui/energy#circuits`, `/ui/energy#ene-farm` | `/api/history`, `/api/ene-farm`, status telemetry, legacy graph views | Phase 1 combined chart and Phase 2.5 specialized parity views implemented |
 | Battery | `/ui/battery` | status battery fields, `/api/actions/*`, `/api/settings/*`, schedules, backup preparation, command receipts | Phase 2 operational workspace |
 | Automation | `/ui/automation` | adaptive charging, automation rules, Away periods, schedules, operational overrides | Placeholder |
 | Insights | `/ui/insights` | energy and Ene-Farm reports, savings and emissions data | Placeholder |
@@ -115,11 +115,30 @@ database migration.
 
 Battery owns three routed views: status and control at `/ui/battery`, the
 seven-day schedule calendar and guided editor at `/ui/battery/schedules`, and
-Disaster Prep / 停電対策 at `/ui/battery/backup`. Manual or disaster-prep ownership is
+Disaster Prep at `/ui/battery/backup`. Manual or disaster-prep ownership is
 reported by `/api/status` and rendered by the application shell, so its banner
 survives route changes. The server remains the authority for strategy ownership,
 command acknowledgement, fresh readback comparison, schedule execution, and
 Disaster Prep restoration.
+
+Phase 2.5 is a required read-only parity checkpoint before Phase 3. It adds
+Smart Cosmo per-circuit history graphs, the Overview Energy Sources composition
+bar, the Ene-Farm activity bar and operational statistics, and Off-Peak Savings
+views for total, grid use, and battery charging. These features must reuse the
+existing status, history, savings-period, and Ene-Farm summary data. They add no
+device commands and require no database migration. Phase 4 may expand these
+summaries into deeper Insights, but it must not be their first React home.
+
+Phase 2.5 is implemented in React. Overview owns the daily Energy Sources,
+Ene-Farm Activity, and three-view Off-Peak Savings summaries. Energy owns the
+shared-period Smart Cosmo circuit selector/history chart and the Ene-Farm
+activity and operational-statistics detail. Null and insufficient-history states
+remain distinct from measured zero; charts retain numeric legends, hover/readout
+information, and accessible data-table alternatives.
+
+The current React UI remains English-only until Phase 5 localization. Visible
+labels must not combine English and Japanese. Phase 5 will translate Disaster
+Prep as `停電対策` through the shared message catalog.
 
 ## Development boundary
 

@@ -15,6 +15,13 @@ const config = {
 
 const status = {
   read_at: new Date().toISOString(),
+  savings: { sampleCount: 2, totalOffPeakSavingYen: 12, gridOffPeakSavingYen: 5, batteryOffPeakSavingYen: 7 },
+  savingsPeriods: {
+    today: { totalOffPeakSavingYen: 12, gridOffPeakSavingYen: 5, batteryOffPeakSavingYen: 7 },
+    lastMonth: { totalOffPeakSavingYen: 310, gridOffPeakSavingYen: 110, batteryOffPeakSavingYen: 200 },
+    month: { totalOffPeakSavingYen: 140, gridOffPeakSavingYen: 50, batteryOffPeakSavingYen: 90 },
+    year: { totalOffPeakSavingYen: 2100, gridOffPeakSavingYen: 800, batteryOffPeakSavingYen: 1300 },
+  },
   batteryStrategy: { kind: "device-auto", title: "Device-managed operation", description: "No application automation currently owns the battery.", manualOverride: { active: false } },
   energy: {
     battery: {
@@ -52,10 +59,31 @@ const history = {
     batteryNetKwh: -0.6,
     averageStateOfChargePercent: 69,
     solarSavingYen: 84,
-    energySources: { solarUsedKwh: 2.4, fuelCellContributionKwh: 0.5 },
+    energySources: { peakGridKwh: 0.2, peakGridPercent: 5.6, offPeakGridKwh: 0.1, offPeakGridPercent: 2.8, solarUsedKwh: 2.4, solarUsedPercent: 66.7, fuelCellContributionKwh: 0.9, fuelCellContributionPercent: 25, totalKwh: 3.6 },
     circuits: [{ channel: 1, label: "Kitchen", totalKwh: 0.4, latestWatts: 420 }],
     dataQuality: { houseDemandKwh: { quality: "counter", coveragePercent: 100 } },
   },
+};
+
+const eneFarm = {
+  configured: true,
+  sampleCount: 2,
+  start: "2026-09-12T00:00:00.000Z",
+  end: "2026-09-12T12:00:00.000Z",
+  generatedKwh: 0.5,
+  gasM3: 0.22,
+  electricalYieldKwhPerM3: 2.27,
+  operatingSeconds: 7200,
+  startCount: 1,
+  averageGeneratingW: 500,
+  currentState: "generating",
+  timeInStateSeconds: 3600,
+  lastStopAt: "2026-09-12T06:00:00.000Z",
+  dataQuality: "counter",
+  stateIntervals: [
+    { start: "2026-09-12T00:00:00.000Z", end: "2026-09-12T06:00:00.000Z", state: "stopped", durationSeconds: 21600, generatedKwh: 0 },
+    { start: "2026-09-12T06:00:00.000Z", end: "2026-09-12T12:00:00.000Z", state: "generating", durationSeconds: 21600, generatedKwh: 0.5 },
+  ],
 };
 
 const schedules = [
@@ -70,6 +98,8 @@ function mockApi(commandState: "succeeded" | "mismatched" = "succeeded", adaptiv
       ? { ...config, adaptiveCharging: { enabled: adaptiveEnabled } }
       : url.includes("/api/history?")
         ? history
+        : url.includes("/api/ene-farm?")
+          ? eneFarm
         : url.includes("/api/command-receipts")
           ? { receipts: [] }
           : url.includes("/api/device-commands/command-1")
@@ -120,10 +150,34 @@ describe("React application shell", () => {
 
     expect(await screen.findByRole("heading", { name: "Energy" })).toBeVisible();
     expect(await screen.findByRole("img", { name: /24h energy history/ })).toBeVisible();
-    expect(screen.getByText("Kitchen")).toBeVisible();
+    expect(screen.getAllByText("Kitchen").length).toBeGreaterThan(0);
     expect(screen.getByText(/minimum coverage 100%/)).toBeVisible();
     expect(screen.getByText("3.2 kWh")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Circuit history" })).toBeVisible();
+    expect(screen.getByRole("img", { name: "Kitchen circuit power history" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Ene-Farm Activity" })).toBeVisible();
+    expect(screen.getByText("Electricity generated")).toBeVisible();
     expect(screen.queryByRole("button", { name: /charge|discharge|backup/i })).not.toBeInTheDocument();
+  });
+
+  it("restores source composition, Ene-Farm activity, and three off-peak savings views on Overview", async () => {
+    mockApi();
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <AppProviders><App /></AppProviders>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Energy Sources" })).toBeVisible();
+    expect(screen.getByRole("img", { name: /Peak grid 5.6%/ })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Ene-Farm Activity" })).toBeVisible();
+    expect(screen.getByRole("img", { name: "Ene-Farm operating states today" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Off-Peak Savings" })).toBeVisible();
+    expect(screen.getByText("¥12")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Grid use" }));
+    expect(screen.getByText("¥5")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Battery charging" }));
+    expect(screen.getByText("¥7")).toBeVisible();
   });
 
   it("redirects a legacy graph route to a focused Energy metric", async () => {
@@ -177,8 +231,8 @@ describe("React application shell", () => {
       "/api/schedules",
       expect.objectContaining({ method: "POST" }),
     ));
-    fireEvent.click(screen.getByRole("link", { name: "Disaster Prep / 停電対策" }));
-    expect(await screen.findByRole("heading", { name: "Disaster Prep / 停電対策", level: 1 })).toBeVisible();
+    fireEvent.click(screen.getByRole("link", { name: "Disaster Prep" }));
+    expect(await screen.findByRole("heading", { name: "Disaster Prep", level: 1 })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Start" }));
     expect(screen.getByRole("dialog", { name: "Start Disaster Prep" })).toBeVisible();
     expect(screen.getByText(/temporary changes are reversed/i)).toBeVisible();

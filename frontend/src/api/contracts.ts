@@ -22,6 +22,62 @@ export type FuelCellStatus = {
   error?: string | null;
 };
 
+export type SavingsSummary = {
+  start?: string | null;
+  end?: string | null;
+  solarSavingYen?: number | null;
+  co2SavingKg?: number | null;
+  gridImportKwh?: number | null;
+  gridExportKwh?: number | null;
+  totalOffPeakSavingYen?: number | null;
+  gridOffPeakSavingYen?: number | null;
+  batteryOffPeakSavingYen?: number | null;
+  sampleCount?: number | null;
+  energySources?: EnergySources;
+};
+
+export type EnergySources = {
+  peakGridKwh?: number | null;
+  peakGridPercent?: number | null;
+  offPeakGridKwh?: number | null;
+  offPeakGridPercent?: number | null;
+  solarUsedKwh?: number | null;
+  solarUsedPercent?: number | null;
+  fuelCellContributionKwh?: number | null;
+  fuelCellContributionPercent?: number | null;
+  totalKwh?: number | null;
+};
+
+export type EneFarmInterval = {
+  start: string;
+  end: string;
+  state?: string | null;
+  durationSeconds?: number | null;
+  generatedKwh?: number | null;
+  gasM3?: number | null;
+  quality?: string | null;
+};
+
+export type EneFarmSummary = {
+  configured?: boolean;
+  sampleCount?: number;
+  start?: string | null;
+  end?: string | null;
+  generatedKwh?: number | null;
+  gasM3?: number | null;
+  electricalYieldKwhPerM3?: number | null;
+  operatingSeconds?: number | null;
+  startCount?: number | null;
+  averageGeneratingW?: number | null;
+  currentState?: string | null;
+  stateSince?: string | null;
+  timeInStateSeconds?: number | null;
+  lastStopAt?: string | null;
+  dataQuality?: string | null;
+  stateIntervals?: EneFarmInterval[];
+  estimateNotice?: string | null;
+};
+
 export type EnergySample = {
   timestamp: string;
   batteryPowerW?: number | null;
@@ -70,11 +126,7 @@ export type HistorySummary = {
   co2SavingKg?: number | null;
   circuits?: CircuitSummary[];
   dataQuality?: Record<string, DataQuality>;
-  energySources?: {
-    solarUsedKwh?: number | null;
-    fuelCellContributionKwh?: number | null;
-    totalKwh?: number | null;
-  };
+  energySources?: EnergySources;
 };
 
 export type HistoryResponse = {
@@ -108,6 +160,13 @@ export type StatusSnapshot = {
     osaifu_discharge_window?: { decoded?: BatteryWindow; available?: boolean; error?: string | null };
   };
   batteryStrategy?: BatteryStrategy;
+  savings?: SavingsSummary;
+  savingsPeriods?: {
+    today?: SavingsSummary;
+    lastMonth?: SavingsSummary;
+    month?: SavingsSummary;
+    year?: SavingsSummary;
+  };
 };
 
 export type BatteryStrategy = {

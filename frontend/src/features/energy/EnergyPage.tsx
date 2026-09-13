@@ -5,6 +5,7 @@ import { CombinedEnergyChart } from "../../components/CombinedEnergyChart";
 import { Metric } from "../../components/Metric";
 import { OutcomeStrip } from "../../components/OutcomeStrip";
 import { TimeRangeControl } from "../../components/TimeRangeControl";
+import { CircuitHistoryChart, EneFarmActivity, EneFarmDetails } from "../../components/TelemetryParity";
 import { formatEnergy, formatPercent, formatPower, formatSoc, metricValue } from "../../core/format";
 import { withLatestStatus } from "../../core/energy";
 import { energySeries } from "../../core/energySeries";
@@ -13,6 +14,7 @@ import { timeRangeMilliseconds } from "../../core/timeRange";
 import type { TimeRangeId } from "../../core/timeRange";
 import { useEnergyStatus } from "../../hooks/useEnergyStatus";
 import { useHistoryRange } from "../../hooks/useHistoryRange";
+import { useEneFarm } from "../../hooks/useEneFarm";
 
 const selectableSeries = Object.keys(energySeries) as EnergySeriesKey[];
 const defaultSeries: EnergySeriesKey[] = ["houseDemandW", "solarPowerW", "fuelCellPowerW", "gridImportW", "batteryPowerW"];
@@ -45,11 +47,13 @@ export function EnergyPage() {
   const requestedMetric = metricAliases[searchParams.get("metric") ?? ""];
   const [range, setRange] = useState<TimeRangeId>("24h");
   const [selected, setSelected] = useState<EnergySeriesKey[]>(requestedMetric ? [requestedMetric] : defaultSeries);
+  const [selectedCircuit, setSelectedCircuit] = useState("");
   const { status, loadingState, manualRefreshing, refresh: refreshStatus } = useEnergyStatus();
   const { history, loading, error, refresh: refreshHistory } = useHistoryRange(
     timeRangeMilliseconds(range),
     range === "live" ? status?.read_at : undefined,
   );
+  const { summary: eneFarmSummary, error: eneFarmError, loading: eneFarmLoading, refresh: refreshEneFarm } = useEneFarm(timeRangeMilliseconds(range));
   const battery = status?.energy?.battery;
   const fuelCell = latestFuelCell(status);
   const latestSample = history.samples.at(-1);
@@ -73,6 +77,7 @@ export function EnergyPage() {
       };
     });
   }, [history.summary.circuits, latestSample, status?.meter?.channel_power?.decoded?.channels]);
+  const activeCircuit = circuits.some((circuit) => circuit.id === selectedCircuit) ? selectedCircuit : circuits[0]?.id ?? "";
 
   const toggleSeries = (key: EnergySeriesKey) => {
     setSelected((current) => current.includes(key)
@@ -82,6 +87,7 @@ export function EnergyPage() {
   const refresh = () => {
     refreshStatus();
     refreshHistory();
+    refreshEneFarm();
   };
 
   return (
@@ -136,8 +142,16 @@ export function EnergyPage() {
         </dl>
       </section>
 
+      <section id="ene-farm" className="panel ene-farm-panel" aria-labelledby="ene-farm-heading">
+        <div className="section-heading"><div><p className="eyebrow">Selected period</p><h2 id="ene-farm-heading">Ene-Farm</h2></div><span className="sample-count">{eneFarmSummary?.sampleCount ?? 0} records</span></div>
+        {eneFarmError ? <p className="status-banner">Ene-Farm summary: {eneFarmError}</p> : null}
+        <EneFarmActivity summary={eneFarmSummary} period="Selected period" loading={eneFarmLoading} />
+        {!eneFarmLoading ? <EneFarmDetails summary={eneFarmSummary} hotWaterLevel={fuelCell?.hot_water_level?.value} /> : null}
+      </section>
+
       <section id="circuits" className="panel circuits-panel" aria-labelledby="circuits-heading">
-        <div className="section-heading"><div><p className="eyebrow">Smart Cosmo</p><h2 id="circuits-heading">Circuits</h2></div><span className="sample-count">{circuits.length} reporting</span></div>
+        <div className="section-heading"><div><p className="eyebrow">Smart Cosmo</p><h2 id="circuits-heading">Circuit history</h2></div>{circuits.length ? <label className="circuit-picker"><span>Circuit</span><select value={activeCircuit} onChange={(event) => setSelectedCircuit(event.target.value)}>{circuits.map((circuit) => <option key={circuit.id} value={circuit.id}>{circuit.label}</option>)}</select></label> : <span className="sample-count">0 reporting</span>}</div>
+        {activeCircuit ? <CircuitHistoryChart samples={history.samples} circuitId={activeCircuit} label={circuits.find((circuit) => circuit.id === activeCircuit)?.label ?? `Circuit ${activeCircuit}`} /> : null}
         {circuits.length ? (
           <div className="table-scroll"><table><thead><tr><th>Circuit</th><th>Power now</th><th>Period energy</th></tr></thead><tbody>
             {circuits.map((circuit) => <tr key={circuit.id}><th>{circuit.label}</th><td>{formatPower(circuit.watts)}</td><td>{formatEnergy(circuit.energy)}</td></tr>)}

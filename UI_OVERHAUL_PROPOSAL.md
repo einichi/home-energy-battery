@@ -73,7 +73,7 @@ Energy
 Battery
   Status & control
   Schedules
-  Disaster Prep / 停電対策
+  Disaster Prep
 
 Automation
   Adaptive charging
@@ -160,7 +160,7 @@ The primary screen contains:
 
 Schedules become a subpage with a timeline/calendar presentation, human-readable recurrence, next run, last result, and conflict warnings. Creation uses a guided form: **when → action → value → review**, rather than displaying every payload field at once. When Adaptive Charging is enabled, schedules remain visible for reference but are clearly marked as paused and cannot be created or enabled.
 
-Disaster Prep / 停電対策 becomes a named operational mode with a persistent banner across the app while active. Its Start action requires a plain-language confirmation covering the temporary backup profile, reserve behavior, demand-guard permission, affected automation, and automatic restoration when stopped.
+Disaster Prep becomes a named operational mode with a persistent banner across the app while active. Its Start action requires a plain-language confirmation covering the temporary backup profile, reserve behavior, demand-guard permission, affected automation, and automatic restoration when stopped. The English UI must not append Japanese text to the label; when localization is implemented, the Japanese label will be **停電対策**.
 
 ### Automation: one control center
 
@@ -453,29 +453,29 @@ freshness, data quality, sign conventions, route ownership, and command states.
 - Build the global shell, health center, energy flow, combined chart, period controls, daily outcome strip, and mobile navigation.
 - Consolidate graph destinations into Energy while keeping old entry points as temporary redirects.
 
-**Exit:** normal household status is understandable in under ten seconds on desktop and phone; all current live/history metrics remain accessible.
+**Exit:** normal household status is understandable in under ten seconds on desktop and phone; all current live/history metrics remain accessible. The telemetry-parity checkpoint below closes the remaining specialized dashboard views before Phase 3 begins.
 
 **Implemented:** the React Overview now combines live flow, battery state,
 24-hour comparison, and today's outcomes. Energy provides Live through 30-day
 periods, selectable power/SOC/hot-water series, an accessible chart table,
-quality/coverage context, battery balance, and circuit totals. Legacy graph URLs
+quality/coverage context, battery balance, and circuit totals. Specialized circuit graphs, source composition, Ene-Farm activity/details, and the complete off-peak savings split remain assigned to Phase 2.5. Legacy graph URLs
 redirect to the matching focused Energy series. The route remains read-only and
 is covered by simulator-backed desktop and phone browser checks.
 
 ### Phase 2 — Battery and command safety
 
-- Move battery controls, schedules, backup preparation, and direct actions out of Settings.
+- Move battery controls, schedules, Disaster Prep, and direct actions out of Settings.
 - Implement confirmations, progress, verified readback, and activity receipts.
 
 **Exit:** every physical command has an explicit, tested lifecycle and no battery function depends on the legacy Settings layout.
 
 **Implemented:** Battery is now a first-class routed React workspace. Its primary
 view combines live SOC, power, verified mode, profile, reserve, latest contact,
-server-owned strategy, preselected controls, a disclosed manual-control area,
+server-owned strategy, preselected controls, an always-visible manual-control area,
 and a 24-hour power/SOC chart with reserve and operating windows. Schedules have
 their own seven-day calendar, human recurrence, next run and last result,
-conflict warnings, and a when → action → value → review editor. Backup
-Preparation has a dedicated view, an impact preview covering profile, reserve,
+conflict warnings, and a when → action → value → review editor. Disaster Prep
+has a dedicated view, an impact preview covering profile, reserve,
 Demand Guard and restoration, and a persistent application-level banner.
 
 Physical actions use an impact review and an observable server lifecycle with
@@ -488,6 +488,30 @@ mismatch, manual-override visibility, Disaster Prep persistence, desktop
 and phone navigation, and both themes without production-device access. The
 existing schema-v7 event store is reused; no database migration is introduced.
 
+### Phase 2.5 — telemetry and dashboard parity
+
+Complete the read-only capabilities that were present on the legacy dashboard before expanding operational automation:
+
+- Add Smart Cosmo circuit history graphs using the existing per-channel history samples, with circuit selection, configured labels, shared time ranges, current power, period energy, and data-quality context.
+- Restore an **Energy Sources** proportional bar on Overview for peak grid, off-peak grid, on-site solar, and Ene-Farm contribution. Its period and denominator must be explicit, and it must retain numeric values alongside color.
+- Restore the **Ene-Farm Activity** state bar for generating, starting, stopping, idle, and stopped intervals.
+- Add a focused Ene-Farm view containing the legacy operational statistics: electricity generated, gas used, operating time, starts, time in the current state, last stop, current generation state, and hot-water level/trend.
+- Restore Off-Peak Savings with explicit **Total**, **Grid use**, and **Battery charging** views for today, last month, month to date, and year to date. All values remain labeled as estimates with tariff basis and coverage available.
+- Keep these surfaces read-only and source them from the existing status/history/report APIs; do not introduce new device commands or production-device testing.
+
+**Exit:** every specialized live/history item listed above is available in React, legacy values can be reconciled against the same simulator fixture, missing or disabled equipment has an intentional empty state, and desktop/phone plus light/dark browser fixtures pass.
+
+**Implemented:** Overview now shows the daily Energy Sources composition with
+peak grid, off-peak grid, on-site solar, and Ene-Farm values; an Ene-Farm state
+timeline; and Off-Peak Savings toggles for Total, Grid use, and Battery charging
+across today, last month, month to date, and year to date. Energy adds a
+time-range-aware Smart Cosmo circuit selector with per-circuit history, hover
+readout, accessible table, current power, and period energy. It also includes an
+Ene-Farm activity timeline plus electricity, gas, operating time, starts, time
+in state, last stop, average generating power, electrical yield, hot-water level,
+and data-quality statistics. All data comes from existing status, history, and
+Ene-Farm endpoints; no schema change or new device command was added.
+
 ### Phase 3 — Automation
 
 - Merge Adaptive Charging, Demand Guard, Away Schedule, prerequisite setup, and activity.
@@ -497,7 +521,7 @@ existing schema-v7 event store is reused; no database migration is introduced.
 
 ### Phase 4 — Insights and System
 
-- Rework reports into outcome-oriented Insights.
+- Rework reports into outcome-oriented Insights, expanding the Phase 2.5 savings summary into period comparison, definitions, and detailed tables without removing its three-way off-peak breakdown.
 - Split equipment, rates, notifications, data/backups, and preferences into routed administration pages.
 - Replace numeric dashboard priorities with direct show/hide and drag/reorder only if advanced customization remains necessary.
 
@@ -506,6 +530,7 @@ existing schema-v7 event store is reused; no database migration is introduced.
 ### Phase 5 — hardening and removal
 
 - Run accessibility, localization, phone/tablet, slow-device, stale-data, and offline-state testing.
+- Introduce centralized English and Japanese message catalogs and locale-aware formatting. Never concatenate both languages into one control label; translate **Disaster Prep** to **停電対策** in Japanese.
 - Add visual regression fixtures using the existing device simulator.
 - Remove legacy page markup, duplicate chart implementations, obsolete CSS, redirects, and unused translation keys.
 
