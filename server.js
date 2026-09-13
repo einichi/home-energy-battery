@@ -41,12 +41,19 @@ import {
   finiteCounterMap,
 } from "./lib/counter-utils.js";
 import { timestampConsole } from "./lib/console-timestamps.js";
+import {
+  assertSafeUiDevelopmentEnvironment,
+  externalIoDisabled,
+  uiDevelopmentMode,
+} from "./lib/development-safety.js";
 
 timestampConsole();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 8787);
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, "data");
+const UI_DEVELOPMENT_MODE = uiDevelopmentMode(process.env);
+const EXTERNAL_IO_DISABLED = externalIoDisabled(process.env);
 const SCHEDULES_FILE = path.join(DATA_DIR, "schedules.json");
 const AUTOMATION_RULES_FILE = path.join(DATA_DIR, "automation-rules.json");
 const AUTOMATION_RULE_STATE_FILE = path.join(DATA_DIR, "automation-rule-state.json");
@@ -274,6 +281,7 @@ let statusRefreshPromise = null;
 let adaptiveChargingHistoryCache = null;
 let adaptiveChargingDemandProfileIndexPromise = null;
 const runningScheduleIds = new Set();
+const activeDeviceCommands = new Set();
 const discoveryJobs = new Map();
 const DISCOVERY_JOB_TTL_MS = 10 * 60 * 1000;
 
@@ -1598,6 +1606,7 @@ function appendAdaptiveChargingLog(state, message, kind = "info", at = new Date(
 }
 
 async function fetchJson(url, fetchImpl = fetch) {
+  if (EXTERNAL_IO_DISABLED) throw new Error("External HTTP access is disabled in simulated UI development");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
@@ -4920,6 +4929,7 @@ function estimatedGasCost(config, gasM3, start, end, billingPeriodGasM3 = gasM3)
 }
 
 async function updateCurrentGasTariff(config, now = new Date()) {
+  if (EXTERNAL_IO_DISABLED) return null;
   if (config.fuelCellEnabled === false || config.fuelCell?.tariff?.automaticUpdates !== true) return null;
   const provider = config.fuelCell.tariff.provider;
   if (provider !== "tokyo-gas") return null;
@@ -5185,6 +5195,144 @@ async function readHistoryStats() {
   return historyStore.stats();
 }
 
+function readCommandReceipts(limit = 25, beforeMs = Date.now()) {
+  const normalizedLimit = Math.max(1, Math.min(50, Math.floor(Number(limit) || 25)));
+  const events = historyStore.recentEvents("command", Math.min(250, normalizedLimit * 8), beforeMs);
+  const receipts = new Map();
+  for (const event of events) {
+    const commandId = event.payload?.commandId;
+    if (!commandId) continue;
+    if (!receipts.has(commandId)) {
+      receipts.set(commandId, {
+        commandId,
+        action: event.payload?.action ?? "unknown",
+        source: event.payload?.source ?? "unknown",
+        target: event.payload?.target ?? null,
+        request: event.payload?.request ?? {},
+        state: event.type,
+        requestedAt: null,
+        completedAt: ["succeeded", "failed", "timed-out", "mismatched"].includes(event.type) ? event.at : null,
+        message: event.message,
+        error: event.payload?.error ?? null,
+        verification: event.payload?.verification ?? null,
+        durationMs: event.payload?.durationMs ?? null,
+        events: [],
+      });
+    }
+    const receipt = receipts.get(commandId);
+    receipt.events.push(event);
+    if (event.type === "requested") receipt.requestedAt = event.at;
+  }
+  return [...receipts.values()].slice(0, normalizedLimit);
+}
+
+function readCommandReceipt(commandId) {
+  const events = historyStore.eventsByKeyPrefix(`command:${commandId}:`);
+  if (!events.length) return null;
+  const ordered = [...events].reverse();
+  const latest = ordered[0];
+  const requested = events.find((event) => event.type === "requested");
+  const terminal = ordered.find((event) => ["succeeded", "failed", "timed-out", "mismatched"].includes(event.type));
+  return {
+    commandId,
+    action: latest.payload?.action ?? requested?.payload?.action ?? "unknown",
+    source: latest.payload?.source ?? requested?.payload?.source ?? "unknown",
+    target: latest.payload?.target ?? requested?.payload?.target ?? null,
+    request: latest.payload?.request ?? requested?.payload?.request ?? {},
+    state: latest.type,
+    requestedAt: requested?.at ?? null,
+    completedAt: terminal?.at ?? null,
+    message: latest.message,
+    error: terminal?.payload?.error ?? null,
+    verification: terminal?.payload?.verification ?? null,
+    durationMs: terminal?.payload?.durationMs ?? null,
+    events: ordered,
+  };
+}
+
+function nextScheduleAt(schedule, now = new Date()) {
+  if (!schedule.enabled) return null;
+  if (schedule.repeat !== "daily") {
+    const timestamp = new Date(schedule.runAt ?? "").getTime();
+    return Number.isFinite(timestamp) && timestamp > now.getTime() ? new Date(timestamp).toISOString() : null;
+  }
+  if (!/^\d{2}:\d{2}$/.test(schedule.time ?? "")) return null;
+  const [hour, minute] = schedule.time.split(":").map(Number);
+  const days = Array.isArray(schedule.days) && schedule.days.length ? schedule.days : ALL_DAYS;
+  for (let offset = 0; offset <= 7; offset += 1) {
+    const candidate = new Date(now);
+    candidate.setDate(now.getDate() + offset);
+    candidate.setHours(hour, minute, 0, 0);
+    if (days.includes(candidate.getDay()) && candidate.getTime() > now.getTime()) return candidate.toISOString();
+  }
+  return null;
+}
+
+async function batteryStrategyView(now = new Date()) {
+  const [config, adaptive, overrides, rules, schedules] = await Promise.all([
+    readConfig(),
+    readAdaptiveChargingState(),
+    readOperationalOverridesState(),
+    readAutomationRules(),
+    readSchedules(),
+  ]);
+  const backup = backupPreparationView(overrides);
+  const away = historyStore.isReady() ? awayPeriodsView(now) : { active: null, next: null, state: "home" };
+  const guard = rules.find((rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore);
+  const recentTerminal = readCommandReceipts(20, now.getTime())
+    .find((receipt) => ["succeeded", "failed", "timed-out", "mismatched"].includes(receipt.state));
+  const nextSchedule = schedules
+    .map((schedule) => ({ schedule, at: nextScheduleAt(schedule, now) }))
+    .filter((item) => item.at)
+    .sort((left, right) => new Date(left.at).getTime() - new Date(right.at).getTime())[0] ?? null;
+  const paused = adaptive.pausedUntil && new Date(adaptive.pausedUntil).getTime() > now.getTime();
+  const manualDirect = recentTerminal?.state === "succeeded"
+    && recentTerminal.source === "manual"
+    && ["charge", "discharge", "set-mode"].includes(recentTerminal.action)
+    && !(recentTerminal.action === "set-mode" && recentTerminal.request?.mode === "auto");
+  const manualProfile = recentTerminal?.state === "succeeded" && recentTerminal.source === "manual" && recentTerminal.action === "vendor-profile";
+  const scheduledCommand = recentTerminal?.state === "succeeded" && recentTerminal.source === "schedule";
+
+  let strategy;
+  if (backup.active) {
+    strategy = { kind: "backup-preparation", title: "Backup Preparation", description: `Holding the ${backup.currentProfile ?? "backup"} profile while normal automation is suspended.` };
+  } else if (guard) {
+    strategy = { kind: "demand-guard", title: "Charging Demand Guard", description: "Standby is being held to preserve configured breaker headroom." };
+  } else if (adaptive.owner === "adaptiveCharging") {
+    strategy = { kind: "adaptive-charging", title: "Adaptive Charging", description: adaptive.plan?.reason ?? "The active charging plan currently owns battery operation." };
+  } else if (away.active) {
+    strategy = { kind: "away", title: "Away mode", description: `Away assumptions remain active until ${away.active.until}.` };
+  } else if (manualDirect || manualProfile || paused) {
+    strategy = {
+      kind: "manual",
+      title: "Manual control",
+      description: paused
+        ? `A manual battery action paused Adaptive Charging until ${adaptive.pausedUntil}.`
+        : manualProfile
+          ? `The ${recentTerminal.request?.mode ?? "selected"} charging profile was selected manually.`
+          : "The latest direct battery command remains in effect until changed by another command or automation.",
+    };
+  } else if (scheduledCommand) {
+    strategy = { kind: "schedule", title: "Scheduled control", description: `The latest schedule applied ${recentTerminal.action}; that result remains in effect until another command or automation changes it.` };
+  } else if (nextSchedule) {
+    strategy = { kind: "schedule", title: "Scheduled control", description: `${nextSchedule.schedule.name} is next at ${nextSchedule.at}.` };
+  } else if (config.adaptiveCharging?.enabled) {
+    strategy = { kind: "adaptive-charging", title: paused ? "Adaptive Charging paused" : "Adaptive Charging", description: paused ? `Paused until ${adaptive.pausedUntil}.` : adaptive.plan?.reason ?? "Waiting for the next planned charging window." };
+  } else {
+    strategy = { kind: "device-auto", title: "Device-managed operation", description: "No application automation currently owns the battery." };
+  }
+  return {
+    ...strategy,
+    manualOverride: manualDirect || manualProfile || paused ? {
+      active: true,
+      label: manualDirect ? `${recentTerminal.action} override` : manualProfile ? `${recentTerminal.request?.mode ?? "Profile"} override` : "Manual override",
+      until: paused ? adaptive.pausedUntil : null,
+      untilChanged: !paused,
+    } : { active: false },
+    nextSchedule: nextSchedule ? { id: nextSchedule.schedule.id, name: nextSchedule.schedule.name, action: nextSchedule.schedule.action, at: nextSchedule.at } : null,
+  };
+}
+
 async function trimHistory(retention) {
   adaptiveChargingHistoryCache = null;
   return historyStore.applyRetention(retention);
@@ -5443,7 +5591,10 @@ function cleanConfig(input = {}) {
     rateBands,
     batteryCapabilities: normalizeBatteryCapabilities(input.batteryCapabilities ?? {}),
     adaptiveCharging: normalizeAdaptiveCharging(input.adaptiveCharging ?? {}),
-    notifications: normalizeNotificationConfig(input.notifications ?? {}),
+    notifications: {
+      ...normalizeNotificationConfig(input.notifications ?? {}),
+      ...(EXTERNAL_IO_DISABLED ? { enabled: false } : {}),
+    },
     dashboardWidgets: normalizeDashboardWidgets(input.dashboardWidgets),
     settingCache: normalizeSettingCache(input.settingCache ?? {}),
     language: ["en", "ja"].includes(input.language) ? input.language : DEFAULT_CONFIG.language,
@@ -6147,10 +6298,11 @@ const DEVICE_ACTIONS = new Set([
   "discharge",
 ]);
 
-async function executeAction(action, payload = {}, { source = "manual" } = {}) {
+async function executeActionCore(action, payload = {}, { source = "manual" } = {}) {
   // Settings and direct actions share this path so scheduled jobs exercise the
   // same validation and CLI writes as button clicks in the UI.
   await assertActionAllowedByOperationalOverride(source, action);
+  if (source === "manual") await pauseAdaptiveChargingForManualAction(action);
   const config = await readConfig();
   const host = hostFrom(payload, config);
   switch (action) {
@@ -6185,13 +6337,9 @@ async function executeAction(action, payload = {}, { source = "manual" } = {}) {
     }
     case "set-mode":
       if (!payload.mode) throw new Error("mode is required");
-      return verifyBatteryOperationMode(
-        assertDeviceCommandResult(
-          await runCliQueued("set-mode", { host }, [payload.mode]),
-          `operation mode ${payload.mode}`,
-        ),
-        host,
-        payload.mode,
+      return assertDeviceCommandResult(
+        await runCliQueued("set-mode", { host }, [payload.mode]),
+        `operation mode ${payload.mode}`,
       );
     case "charge":
     case "discharge": {
@@ -6207,6 +6355,186 @@ async function executeAction(action, payload = {}, { source = "manual" } = {}) {
     default:
       throw requestError(404, `unknown action: ${action}`);
   }
+}
+
+function commandRequestPayload(payload = {}) {
+  const allowed = ["mode", "percent", "startHour", "endHour", "targetWh"];
+  return Object.fromEntries(allowed
+    .filter((key) => payload[key] !== undefined && payload[key] !== "")
+    .map((key) => [key, payload[key]]));
+}
+
+function commandResultSummary(result = {}) {
+  return {
+    acknowledged: result?.acknowledged === true,
+    ok: result?.ok !== false,
+    esv: result?.esv ?? null,
+    results: Array.isArray(result?.results)
+      ? result.results.map((item) => ({ epc: item?.epc ?? null, ok: item?.ok !== false, esv: item?.esv ?? null }))
+      : undefined,
+  };
+}
+
+function recordCommandLifecycle(commandId, type, details) {
+  if (!historyStore.isReady()) return false;
+  const at = new Date().toISOString();
+  return historyStore.recordEvent({
+    eventKey: `command:${commandId}:${type}`,
+    at,
+    category: "command",
+    type,
+    message: details.message,
+    payload: { commandId, ...details, at },
+  });
+}
+
+function commandFailureType(error) {
+  const message = String(error?.message ?? error);
+  if (/timed? out|timeout|exceeded .*ms/i.test(message)) return "timed-out";
+  if (/still read back as|verification mismatch|expected .* observed/i.test(message)) return "mismatched";
+  return "failed";
+}
+
+async function verifyBatterySetting(result, host, command, expected, readObserved, {
+  attempts = OPERATION_MODE_VERIFY_ATTEMPTS,
+  delayMs = OPERATION_MODE_VERIFY_DELAY_MS,
+} = {}) {
+  let observed = null;
+  let lastReadError = null;
+  const maximumAttempts = Math.max(1, Math.floor(Number(attempts) || 1));
+  for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+    if (attempt > 1 && delayMs > 0) await sleep(delayMs);
+    try {
+      const readback = await runCliQueued(command, { host }, [], { priority: 0 });
+      observed = readObserved(readback);
+      lastReadError = null;
+      if (JSON.stringify(observed) === JSON.stringify(expected)) {
+        return { ...result, verified: true, readBack: { value: observed, attempts: attempt } };
+      }
+    } catch (error) {
+      lastReadError = error;
+    }
+  }
+  if (lastReadError) {
+    throw new Error(`${command} was acknowledged but verification failed: ${lastReadError.message}`, { cause: lastReadError });
+  }
+  throw new Error(`${command} verification mismatch: expected ${JSON.stringify(expected)}, observed ${JSON.stringify(observed)}`);
+}
+
+async function verifyDeviceAction(action, payload, result, host) {
+  switch (action) {
+    case "set-mode":
+      return verifyBatteryOperationMode(result, host, payload.mode);
+    case "charge":
+      return verifyBatteryOperationMode(result, host, "charging");
+    case "discharge":
+      return verifyBatteryOperationMode(result, host, "discharging");
+    case "vendor-profile":
+      return verifyBatterySetting(result, host, "vendor-profile", String(payload.mode), (readback) => readback?.decoded?.mode ?? readback?.mode ?? null);
+    case "discharge-limit":
+      return verifyBatterySetting(result, host, "discharge-limit", Number(result?.percent ?? payload.percent), (readback) => Number(readback?.decoded?.percent));
+    case "osaifu-charge-window":
+      return verifyBatterySetting(result, host, "osaifu-charge-window", [Number(result?.decoded?.start_hour ?? payload.startHour), Number(result?.decoded?.end_hour ?? payload.endHour)], (readback) => [Number(readback?.decoded?.start_hour), Number(readback?.decoded?.end_hour)]);
+    case "osaifu-discharge-window":
+      return verifyBatterySetting(result, host, "osaifu-discharge-window", [Number(result?.decoded?.start_hour ?? payload.startHour), Number(result?.decoded?.end_hour ?? payload.endHour)], (readback) => [Number(readback?.decoded?.start_hour), Number(readback?.decoded?.end_hour)]);
+    default:
+      throw new Error(`No readback verifier is defined for ${action}`);
+  }
+}
+
+async function executeAction(action, payload = {}, {
+  source = "manual",
+  commandId = randomUUID(),
+  requestedRecorded = false,
+} = {}) {
+  const startedAtMs = Date.now();
+  const config = await readConfig();
+  const host = hostFrom(payload, config);
+  const request = commandRequestPayload(payload);
+  if (!requestedRecorded) {
+    recordCommandLifecycle(commandId, "requested", {
+      action,
+      source,
+      target: { kind: "battery", host },
+      request,
+      message: `${source} requested ${action}`,
+    });
+  }
+  recordCommandLifecycle(commandId, "sending", {
+    action,
+    source,
+    target: { kind: "battery", host },
+    request,
+    message: `Sending ${action} to the device`,
+  });
+  try {
+    const acknowledged = await executeActionCore(action, payload, { source });
+    recordCommandLifecycle(commandId, "acknowledged", {
+      action,
+      source,
+      target: { kind: "battery", host },
+      request,
+      acknowledgement: commandResultSummary(acknowledged),
+      message: `${action} was acknowledged by the device`,
+    });
+    recordCommandLifecycle(commandId, "verifying", {
+      action,
+      source,
+      target: { kind: "battery", host },
+      request,
+      message: `Reading back ${action}`,
+    });
+    const verified = await verifyDeviceAction(action, payload, acknowledged, host);
+    const completedAt = new Date().toISOString();
+    recordCommandLifecycle(commandId, "succeeded", {
+      action,
+      source,
+      target: { kind: "battery", host },
+      request,
+      verification: verified.readBack ?? null,
+      durationMs: Date.now() - startedAtMs,
+      message: `${action} was verified`,
+    });
+    return {
+      ...verified,
+      commandId,
+      commandState: "succeeded",
+      completedAt,
+    };
+  } catch (error) {
+    const type = commandFailureType(error);
+    recordCommandLifecycle(commandId, type, {
+      action,
+      source,
+      target: { kind: "battery", host },
+      request,
+      error: error.message,
+      durationMs: Date.now() - startedAtMs,
+      message: `${action} ${type.replace("-", " ")}: ${error.message}`,
+    });
+    error.commandId = commandId;
+    error.commandState = type;
+    throw error;
+  }
+}
+
+async function startDeviceCommand(action, payload = {}, { source = "manual" } = {}) {
+  if (!DEVICE_ACTIONS.has(action)) throw requestError(404, `unknown action: ${action}`);
+  const commandId = randomUUID();
+  const config = await readConfig();
+  const host = hostFrom(payload, config);
+  recordCommandLifecycle(commandId, "requested", {
+    action,
+    source,
+    target: { kind: "battery", host },
+    request: commandRequestPayload(payload),
+    message: `${source} requested ${action}`,
+  });
+  const operation = executeAction(action, payload, { source, commandId, requestedRecorded: true })
+    .catch(() => null)
+    .finally(() => activeDeviceCommands.delete(operation));
+  activeDeviceCommands.add(operation);
+  return { commandId, commandState: "requested" };
 }
 
 function assertDeviceCommandResult(result, description = "device command") {
@@ -6406,7 +6734,7 @@ async function runDueSchedules() {
       try {
         const result = await executeAction(schedule.action, schedule.payload, { source: "schedule" });
         schedule.lastResult = { ok: true, at: new Date().toISOString(), result };
-        schedule.executionIntent.state = "acknowledged";
+        schedule.executionIntent.state = "succeeded";
         schedule.executionIntent.completedAt = schedule.lastResult.at;
         if (schedule.repeat === "daily") schedule.lastRunDate = attemptDate;
         else {
@@ -9397,6 +9725,7 @@ function startApplicationBackgroundProcesses() {
 async function waitForDatabaseWriters(timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
   while (automationRunInProgress
+    || activeDeviceCommands.size > 0
     || cliQueueRunning
     || runningScheduleIds.size > 0
     || retentionRunPromise
@@ -9732,10 +10061,19 @@ async function api(req, res, url) {
     return json(res, 200, await notificationService.view(config));
   }
   if (req.method === "POST" && url.pathname === "/api/notifications/test") {
+    if (EXTERNAL_IO_DISABLED) throw requestError(403, "External notification delivery is disabled in simulated UI development");
     return json(res, 200, await notificationService.sendTest());
   }
   if (req.method === "GET" && url.pathname === "/api/config") {
-    return json(res, 200, { ...(await readConfig()), port: PORT });
+    return json(res, 200, {
+      ...(await readConfig()),
+      port: PORT,
+      runtime: {
+        uiDevelopment: UI_DEVELOPMENT_MODE,
+        simulatedDevices: UI_DEVELOPMENT_MODE,
+        externalIoDisabled: EXTERNAL_IO_DISABLED,
+      },
+    });
   }
   if (req.method === "PUT" && url.pathname === "/api/config") {
     return json(res, 200, { ...(await writeConfig(await readBody(req))), port: PORT });
@@ -9775,6 +10113,7 @@ async function api(req, res, url) {
         payload,
       };
     } else {
+      if (EXTERNAL_IO_DISABLED) throw requestError(403, "External tariff import is disabled in simulated UI development");
       imported = await importGasTariff(provider, {
         billingMonth,
         readingDay: config.fuelCell?.tariff?.meterReadingDay ?? 1,
@@ -9813,7 +10152,26 @@ async function api(req, res, url) {
     }
     const config = await readConfig();
     const maxAgeMs = Math.max(5, Number(config.updateIntervalSeconds) || DEFAULT_CONFIG.updateIntervalSeconds) * 1000;
-    return json(res, 200, await getStatusSnapshot({ maxAgeMs }));
+    const snapshot = await getStatusSnapshot({ maxAgeMs });
+    return json(res, 200, { ...snapshot, batteryStrategy: await batteryStrategyView() });
+  }
+  if (req.method === "GET" && url.pathname === "/api/command-receipts") {
+    const before = url.searchParams.get("before");
+    const beforeMs = before ? new Date(before).getTime() : Date.now();
+    if (!Number.isFinite(beforeMs)) return json(res, 400, { error: "before must be an ISO date/time" });
+    return json(res, 200, {
+      receipts: readCommandReceipts(url.searchParams.get("limit"), beforeMs),
+    });
+  }
+  if (req.method === "POST" && url.pathname === "/api/device-commands") {
+    const body = await readBody(req);
+    return json(res, 202, await startDeviceCommand(String(body.action ?? ""), body.payload ?? {}, { source: "manual" }));
+  }
+  if (req.method === "GET" && url.pathname.startsWith("/api/device-commands/")) {
+    const commandId = decodeURIComponent(url.pathname.slice("/api/device-commands/".length));
+    if (!/^[a-z0-9-]{8,}$/i.test(commandId)) return json(res, 400, { error: "invalid command id" });
+    const receipt = readCommandReceipt(commandId);
+    return receipt ? json(res, 200, receipt) : json(res, 404, { error: "command receipt not found" });
   }
   if (req.method === "GET" && url.pathname === "/api/history") {
     const config = await readConfig();
@@ -10010,16 +10368,12 @@ async function api(req, res, url) {
   if (req.method === "POST" && url.pathname.startsWith("/api/settings/")) {
     const body = await readBody(req);
     const action = url.pathname.replace("/api/settings/", "");
-    await assertActionAllowedByOperationalOverride("manual", action);
-    await pauseAdaptiveChargingForManualAction(action);
     return json(res, 200, await executeAction(action, body, { source: "manual" }));
   }
   if (req.method === "POST" && url.pathname.startsWith("/api/actions/")) {
     const body = await readBody(req);
     const action = url.pathname.replace("/api/actions/", "");
     if (!DEVICE_ACTIONS.has(action)) throw requestError(404, `unknown action: ${action}`);
-    await assertActionAllowedByOperationalOverride("manual", action);
-    await pauseAdaptiveChargingForManualAction(action);
     const result = await executeAction(action, body, { source: "manual" });
     return json(res, 200, result);
   }
@@ -10114,19 +10468,34 @@ async function api(req, res, url) {
 }
 
 async function serveStatic(res, pathname) {
-  const filePath = path.join(__dirname, "public", pathname === "/" ? "index.html" : pathname);
+  const publicPath = pathname === "/"
+    ? "index.html"
+    : pathname === "/ui" || pathname === "/ui/"
+      ? "/ui/index.html"
+      : pathname;
+  const filePath = path.join(__dirname, "public", publicPath);
   const resolved = path.resolve(filePath);
   const publicDir = path.resolve(__dirname, "public");
   if (resolved !== publicDir && !resolved.startsWith(`${publicDir}${path.sep}`)) {
     return text(res, 403, "Forbidden");
   }
   try {
-    const data = await readFile(resolved);
-    const ext = path.extname(resolved);
+    let data;
+    let servedPath = resolved;
+    try {
+      data = await readFile(servedPath);
+    } catch (error) {
+      if (error.code !== "ENOENT" || !pathname.startsWith("/ui/")) throw error;
+      servedPath = path.join(publicDir, "ui", "index.html");
+      data = await readFile(servedPath);
+    }
+    const ext = path.extname(servedPath);
     const type =
       ext === ".html" ? "text/html; charset=utf-8" :
       ext === ".css" ? "text/css; charset=utf-8" :
       ext === ".js" ? "text/javascript; charset=utf-8" :
+      ext === ".json" || ext === ".map" ? "application/json; charset=utf-8" :
+      ext === ".svg" ? "image/svg+xml" :
       "application/octet-stream";
     text(res, 200, data, type);
   } catch {
@@ -10316,7 +10685,11 @@ export const server = http.createServer(async (req, res) => {
   } catch (err) {
     const status = Number.isInteger(err.statusCode) ? err.statusCode : 500;
     if (status >= 500) logDetailedError("api", err);
-    json(res, status, { error: err.message });
+    json(res, status, {
+      error: err.message,
+      ...(err.commandId ? { commandId: err.commandId } : {}),
+      ...(err.commandState ? { commandState: err.commandState } : {}),
+    });
   }
 });
 
@@ -10427,6 +10800,7 @@ export {
 };
 
 async function main() {
+  assertSafeUiDevelopmentEnvironment(process.env, { projectDir: __dirname });
   await configureDeviceCommandAdapter();
   await ensureDataDir();
   const inspection = await inspectHistoryDatabase(DATA_DIR);

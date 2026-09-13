@@ -1,6 +1,9 @@
 # Node dependencies
 node_modules/
 
+# Generated React UI build
+public/ui/
+
 # Environment variables
 .env
 

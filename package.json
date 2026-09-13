@@ -7,14 +7,42 @@
   "scripts": {
     "node:help": "node home-energy-battery-node.js --help",
     "start": "node server.js",
-    "check": "node --check home-energy-battery-node.js && node --check server.js && node --check public/app.js",
-    "test": "node tests/helpers.test.js && node tests/history-store.test.js && node tests/database-upgrade.test.js && node tests/database-upgrade-server.test.js && node tests/device-simulator.test.js && node tests/device-adapter-integration.test.js && node tests/adaptive-charging-isolation.test.js && node tests/ene-farm.test.js && node tests/gas-tariffs.test.js && node tests/chart-utils.test.js"
+    "dev:ui": "node scripts/dev-ui-safe.mjs",
+    "build:ui": "vite build --config frontend/vite.config.ts",
+    "typecheck:ui": "tsc -p frontend/tsconfig.json --noEmit",
+    "lint:ui": "eslint frontend/src frontend/*.ts",
+    "test:ui": "vitest run --config frontend/vitest.config.ts",
+    "test:ui:browser": "npm run build:ui && node scripts/ui-browser-smoke.mjs",
+    "test:server": "node tests/helpers.test.js && node tests/history-store.test.js && node tests/database-upgrade.test.js && node tests/database-upgrade-server.test.js && node tests/device-simulator.test.js && node tests/device-adapter-integration.test.js && node tests/command-lifecycle-scenarios.test.js && node tests/development-safety.test.js && node tests/adaptive-charging-isolation.test.js && node tests/ene-farm.test.js && node tests/gas-tariffs.test.js && node tests/chart-utils.test.js",
+    "check": "node --check home-energy-battery-node.js && node --check server.js && node --check public/app.js && npm run typecheck:ui && npm run lint:ui && npm run build:ui",
+    "test": "npm run test:server && npm run test:ui"
   },
   "engines": {
     "node": ">=24.15.0"
   },
   "dependencies": {
     "node-echonet-lite": "^0.6.0",
-    "nodemailer": "^9.0.3"
+    "nodemailer": "^9.1.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-router-dom": "^7.18.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^22.20.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "eslint": "^10.10.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.12.0",
+    "jsdom": "^27.4.0",
+    "playwright-core": "^1.58.2",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.0",
+    "vite": "^8.3.0",
+    "vitest": "^4.1.11"
   }
 }

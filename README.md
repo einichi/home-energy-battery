@@ -97,6 +97,45 @@ The Web UI has live graphs, status widgets, battery profile settings,
 osaifu-mode charge/discharge windows, discharge limit, direct charge/discharge
 actions, schedules, device discovery, and simple historical recording.
 
+### React UI development (simulator only)
+
+The next-generation UI is being introduced route by route at `/ui/`. Its
+read-only Overview, consolidated Energy workspace, and operational Battery area
+are available now. Battery includes verified controls, schedules, Backup
+Preparation, and command receipts; automation, insights, and system controls
+remain in the existing interface while they are migrated. Start its development
+environment with:
+
+```bash
+npm run dev:ui
+```
+
+This is the only supported command for UI development. It creates a temporary
+data directory, forces the device simulator, disables external I/O, and starts:
+
+- React/Vite UI: `http://127.0.0.1:5173/ui/`
+- simulated API: `http://127.0.0.1:8797/`
+
+The UI displays a persistent simulated-environment banner. The launcher refuses
+the production API port, a real device adapter, a non-temporary data directory,
+or enabled external I/O. Do not point Vite at the household instance or copy
+production addresses, databases, credentials, or notification recipients into
+development fixtures.
+
+Run the frontend quality gates with:
+
+```bash
+npm run typecheck:ui
+npm run lint:ui
+npm run test:ui
+npm run test:ui:browser
+npm run build:ui
+```
+
+The production build is written to `public/ui/` and is generated during the
+Docker image build. The existing interface remains available at `/` throughout
+the incremental migration.
+
 Adaptive Charging includes an Away Schedule for exact From/Until periods. Future
 periods can be edited or deleted, while an active period can be ended with Back
 Home or extended. Completed periods are hidden from the management table but

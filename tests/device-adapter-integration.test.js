@@ -77,6 +77,9 @@ try {
   assert.match(indexResponse.headers.get("content-security-policy") ?? "", /default-src 'self'/);
   assert.equal(indexResponse.headers.get("x-content-type-options"), "nosniff");
   assert.equal(indexResponse.headers.get("x-frame-options"), "DENY");
+  const reactIndexResponse = await fetch(`${baseUrl}/ui/`);
+  assert.equal(reactIndexResponse.status, 200);
+  assert.match(await reactIndexResponse.text(), /<div id="root"><\/div>/);
 
   const invalidContentType = await fetch(`${baseUrl}/api/config`, {
     method: "PUT",
@@ -167,6 +170,58 @@ try {
   });
   assert.equal(limit.response.status, 200);
   assert.equal((await request(baseUrl, "/api/status")).payload.settings.discharge_limit.decoded.percent, 30);
+  const commandReceipts = await request(baseUrl, "/api/command-receipts?limit=10");
+  assert.equal(commandReceipts.response.status, 200);
+  assert.ok(commandReceipts.payload.receipts.some((receipt) => receipt.commandId === limit.payload.commandId
+    && receipt.action === "discharge-limit"
+    && receipt.state === "succeeded"
+    && receipt.events.some((event) => event.type === "acknowledged")
+    && receipt.events.some((event) => event.type === "verifying")));
+
+  const startedCommand = await request(baseUrl, "/api/device-commands", {
+    method: "POST",
+    body: { action: "vendor-profile", payload: { mode: "eco" } },
+  });
+  assert.equal(startedCommand.response.status, 202);
+  const asynchronousReceipt = await waitFor(async () => {
+    const response = await request(baseUrl, `/api/device-commands/${startedCommand.payload.commandId}`);
+    return response.payload.state === "succeeded" ? response.payload : null;
+  });
+  assert.deepEqual(
+    asynchronousReceipt.events.map((event) => event.type),
+    ["succeeded", "verifying", "acknowledged", "sending", "requested"],
+  );
+  const manualProfileStrategy = (await request(baseUrl, "/api/status")).payload.batteryStrategy;
+  assert.equal(manualProfileStrategy.kind, "manual");
+  assert.equal(manualProfileStrategy.manualOverride.active, true);
+  assert.equal(manualProfileStrategy.manualOverride.untilChanged, true);
+
+  for (const command of [
+    { action: "discharge", payload: { targetWh: 400 } },
+    { action: "osaifu-charge-window", payload: { startHour: 1, endHour: 5 } },
+    { action: "osaifu-discharge-window", payload: { startHour: 7, endHour: 23 } },
+  ]) {
+    const started = await request(baseUrl, "/api/device-commands", {
+      method: "POST",
+      body: command,
+    });
+    assert.equal(started.response.status, 202, `${command.action} was not accepted`);
+    const receipt = await waitFor(async () => {
+      const response = await request(baseUrl, `/api/device-commands/${started.payload.commandId}`);
+      return response.payload.state === "succeeded" ? response.payload : null;
+    });
+    assert.equal(receipt.action, command.action);
+    assert.deepEqual(
+      receipt.events.map((event) => event.type),
+      ["succeeded", "verifying", "acknowledged", "sending", "requested"],
+      `${command.action} did not record the complete verified lifecycle`,
+    );
+  }
+  const windowStatus = await request(baseUrl, "/api/status");
+  assert.equal(windowStatus.payload.settings.osaifu_charge_window.decoded.start_hour, 1);
+  assert.equal(windowStatus.payload.settings.osaifu_charge_window.decoded.end_hour, 5);
+  assert.equal(windowStatus.payload.settings.osaifu_discharge_window.decoded.start_hour, 7);
+  assert.equal(windowStatus.payload.settings.osaifu_discharge_window.decoded.end_hour, 23);
 
   const schedule = await request(baseUrl, "/api/schedules", {
     method: "POST",
@@ -184,6 +239,12 @@ try {
     return schedules.payload.find((item) => item.id === schedule.payload.id)?.lastResult?.ok === true;
   });
   assert.equal((await request(baseUrl, "/api/status")).payload.energy.battery.operation_mode.value, "auto");
+  assert.equal((await request(baseUrl, "/api/status")).payload.batteryStrategy.kind, "schedule");
+  const scheduleReceipt = (await request(baseUrl, "/api/command-receipts?limit=10")).payload.receipts
+    .find((receipt) => receipt.source === "schedule" && receipt.action === "set-mode");
+  assert.equal(scheduleReceipt.state, "succeeded");
+  assert.ok(scheduleReceipt.events.some((event) => event.type === "acknowledged"));
+  assert.ok(scheduleReceipt.events.some((event) => event.type === "verifying"));
 
   const inactiveBackupPreparation = await request(baseUrl, "/api/backup-preparation");
   assert.equal(inactiveBackupPreparation.response.status, 200);
@@ -202,6 +263,12 @@ try {
   const protectedStatus = await request(baseUrl, "/api/status");
   assert.equal(protectedStatus.payload.energy.battery.vendor_profile.value, "backup");
   assert.equal(protectedStatus.payload.energy.battery.operation_mode.value, "auto");
+  assert.equal(protectedStatus.payload.batteryStrategy.kind, "backup-preparation");
+  const backupReceipt = (await request(baseUrl, "/api/command-receipts?limit=10")).payload.receipts
+    .find((receipt) => receipt.source === "backup-preparation" && receipt.action === "vendor-profile");
+  assert.equal(backupReceipt.state, "succeeded");
+  assert.ok(backupReceipt.events.some((event) => event.type === "acknowledged"));
+  assert.ok(backupReceipt.events.some((event) => event.type === "verifying"));
 
   const blockedManualAction = await request(baseUrl, "/api/actions/vendor-profile", {
     method: "POST",
@@ -209,6 +276,11 @@ try {
   });
   assert.equal(blockedManualAction.response.status, 409);
   assert.match(blockedManualAction.payload.error, /Backup Preparation is active/);
+  assert.equal(blockedManualAction.payload.commandState, "failed");
+  assert.ok(blockedManualAction.payload.commandId);
+  const blockedReceipt = (await request(baseUrl, "/api/command-receipts?limit=10")).payload.receipts
+    .find((receipt) => receipt.commandId === blockedManualAction.payload.commandId);
+  assert.equal(blockedReceipt.state, "failed");
   assert.equal((await request(baseUrl, "/api/status")).payload.energy.battery.vendor_profile.value, "backup");
 
   const blockedSchedule = await request(baseUrl, "/api/schedules", {
