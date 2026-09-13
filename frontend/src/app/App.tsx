@@ -5,7 +5,8 @@ import { OverviewPage } from "../features/overview/OverviewPage";
 import { EnergyPage } from "../features/energy/EnergyPage";
 import { BatteryPage } from "../features/battery/BatteryPage";
 import { AutomationPage } from "../features/automation/AutomationPage";
-import { PlaceholderPage } from "../features/shared/PlaceholderPage";
+import { InsightsPage } from "../features/insights/InsightsPage";
+import { SystemPage } from "../features/system/SystemPage";
 
 const legacyGraphMetrics: Record<string, string> = {
   solarPower: "solar",
@@ -45,8 +46,9 @@ export function App() {
           <Route path="battery/schedules" element={<BatteryPage view="schedules" />} />
           <Route path="battery/backup" element={<BatteryPage view="backup" />} />
           <Route path="automation" element={<AutomationPage />} />
-          <Route path="insights" element={<PlaceholderPage eyebrow="Understand" title="Insights" description="Energy, cost, carbon, and forecast performance." />} />
-          <Route path="system" element={<PlaceholderPage eyebrow="Administer" title="System" description="Equipment, rates, notifications, data, and preferences." />} />
+          <Route path="insights" element={<InsightsPage />} />
+          <Route path="system" element={<Navigate to="/system/equipment" replace />} />
+          <Route path="system/:section" element={<SystemPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

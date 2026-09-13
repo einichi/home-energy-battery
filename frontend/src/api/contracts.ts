@@ -123,15 +123,62 @@ export type HistorySummary = {
   averageStateOfChargePercent?: number | null;
   solarSavingYen?: number | null;
   offPeakSavingYen?: number | null;
+  totalOffPeakSavingYen?: number | null;
+  gridOffPeakSavingYen?: number | null;
+  batteryOffPeakSavingYen?: number | null;
   co2SavingKg?: number | null;
   circuits?: CircuitSummary[];
   dataQuality?: Record<string, DataQuality>;
   energySources?: EnergySources;
+  solarCoveragePercent?: number | null;
 };
 
 export type HistoryResponse = {
   samples: EnergySample[];
   summary: HistorySummary;
+};
+
+export type EnergyReportBucket = HistorySummary & {
+  key: string;
+  label: string;
+  start: string;
+  end: string;
+  previousHouseDemandKwh?: number | null;
+  houseDemandDeltaKwh?: number | null;
+  houseDemandDeltaPercent?: number | null;
+  peakDemandW?: number | null;
+  sampleCount?: number;
+};
+
+export type EnergyReport = {
+  start: string;
+  end: string;
+  bucket: "day" | "week" | "month";
+  buckets: EnergyReportBucket[];
+  totals: EnergyReportBucket;
+  features?: { solarEnabled?: boolean; smartCosmoEnabled?: boolean; fuelCellEnabled?: boolean };
+  meta?: { recordsRead?: number; recordsIncluded?: number; invalidRecords?: number; resolution?: string };
+};
+
+export type EneFarmReportBucket = EneFarmSummary & {
+  key: string;
+  label: string;
+  onSiteKwh?: number | null;
+  generationCoveragePercent?: number | null;
+  estimatedGasCost?: {
+    marginalCostYen?: number | null;
+    standingChargeInclusive?: { available?: boolean; totalYen?: number | null; allocatedYenPerM3?: number | null; reason?: string | null };
+  } | null;
+  carbon?: { estimated?: boolean; directGasCo2Kg?: number | null; avoidedGridCo2Kg?: number | null; electricityOnlyBalanceKg?: number | null; methodology?: string };
+};
+
+export type EneFarmReport = {
+  start: string;
+  end: string;
+  bucket: "day" | "week" | "month";
+  buckets: EneFarmReportBucket[];
+  totals: EneFarmReportBucket;
+  estimateNotice?: string;
 };
 
 export type StatusSnapshot = {
@@ -198,6 +245,28 @@ export type AppConfig = {
   rateMode?: "simple" | "off-peak" | "multi" | string;
   runtime?: RuntimeInformation;
   batteryHost?: string;
+  meterHost?: string;
+  meterEoj?: string;
+  solarHost?: string;
+  fuelCellPrimaryHost?: string;
+  fuelCellProxyHosts?: string[];
+  discoverySubnets?: string[];
+  circuitLabels?: Record<string, string>;
+  circuitDashboardVisibility?: Record<string, boolean>;
+  circuitSortMode?: "number" | "current" | "accumulated" | string;
+  standardRateYenPerKwh?: number;
+  offPeakRateYenPerKwh?: number;
+  offPeakSavingsEnabled?: boolean;
+  co2TonnesPerKwh?: number;
+  rateBands?: Array<{ start: string; end: string; yenPerKwh: number; label?: string }>;
+  fuelCell?: {
+    includeInAdaptiveCharging?: boolean;
+    gasCo2KgPerM3?: number;
+    tariff?: { provider?: string; region?: string; plan?: string; equipmentDiscount?: string; meterReadingDay?: number; automaticUpdates?: boolean; marginalRateOverrideYenPerM3?: number | null };
+  };
+  retention?: { rawTelemetryDays?: number; intervalAggregatesDays?: number | null; dailyAggregatesDays?: number | null; adaptiveChargingHistoryDays?: number | null; automationEventDays?: number | null; commandReceiptDays?: number | null; notificationDeliveryDays?: number; automaticMaintenance?: boolean };
+  dashboardWidgets?: Array<{ id: string; group?: string; visible: boolean; priority?: number }>;
+  notifications?: NotificationConfig;
   batteryCapabilities?: { usableCapacityKwh?: number | null; maximumChargeWatts?: number | null };
   adaptiveCharging?: {
     enabled?: boolean;
@@ -211,6 +280,19 @@ export type AppConfig = {
     forecastMarginPercent?: number | null;
   };
 };
+
+export type NotificationTrigger = { enabled: boolean; cooldownMinutes: number; thresholdPercent?: number };
+export type NotificationConfig = {
+  enabled: boolean;
+  channels: Array<{ id: string; type: "smtp" | string; enabled: boolean; settings: { host?: string; port?: number; security?: string; username?: string; from?: string; recipients?: string[] } }>;
+  triggers: Record<string, NotificationTrigger>;
+};
+export type NotificationDelivery = { at?: string; ok?: boolean; event?: { title?: string; type?: string; severity?: string; occurredAt?: string }; attempts?: Array<{ channelId?: string; ok?: boolean; error?: string; result?: { messageId?: string | null; response?: string | null } }> };
+export type NotificationView = { config: NotificationConfig; passwordConfigured?: boolean; deliveries?: NotificationDelivery[] };
+export type HistoryStats = { sizeBytes?: number; fileSizes?: { mainBytes?: number; walBytes?: number; shmBytes?: number; totalBytes?: number }; sampleCount?: number; averageSampleBytes?: number; estimatedDailyGrowthBytes?: number; earliest?: string | null; latest?: string | null; daysRecorded?: number; rollups?: { interval?: number; daily?: number }; events?: Record<string, number>; schemaVersion?: number; lastCompaction?: { completedAt?: string } | null };
+export type DatabaseBackup = { filename: string; createdAt?: string; modifiedAt?: string; sizeBytes?: number; schemaVersion?: number; compatible?: boolean; kind?: string };
+export type DatabaseBackupsView = { schemaVersion?: number; operation?: { busy?: boolean; phase?: string; percent?: number; error?: string | null }; backups: DatabaseBackup[] };
+export type DiscoveryView = { discovered?: Array<{ host: string; roles?: string[]; instances?: unknown[] }>; suggestedConfig?: Partial<AppConfig> };
 
 export type CommandOutcome = {
   commandId: string;

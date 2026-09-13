@@ -27,10 +27,9 @@ function ThemeControl({ mobile = false }: { mobile?: boolean }) {
 }
 
 function Navigation({ mobile = false }: { mobile?: boolean }) {
-  const visibleItems = mobile ? navigation.filter(({ to }) => to !== "/insights") : navigation;
   return (
     <nav className={mobile ? "mobile-navigation" : "primary-navigation"} aria-label="Primary">
-      {visibleItems.map(({ to, label, short, glyph }) => (
+      {navigation.map(({ to, label, short, glyph }) => (
         <NavLink key={to} to={to} end={to === "/"}>
           <span className="nav-glyph" aria-hidden="true">{glyph}</span>
           <span>{mobile ? short : label}</span>

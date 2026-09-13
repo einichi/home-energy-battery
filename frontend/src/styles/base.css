@@ -83,7 +83,7 @@ h2 { margin-bottom: 0; font-size: 1.08rem; letter-spacing: -0.015em; }
   .mobile-header { display: flex; min-height: 66px; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--surface); }
   .mobile-header .brand-mark { width: 30px; height: 30px; }
   .mobile-header .mobile-theme-control { display: grid; }
-  .mobile-navigation { position: fixed; inset: auto 0 0; z-index: 30; display: grid; grid-template-columns: repeat(5, 1fr); padding: 7px max(8px, env(safe-area-inset-right)) calc(7px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); border-top: 1px solid var(--border); background: color-mix(in srgb, var(--surface) 94%, transparent); backdrop-filter: blur(18px); }
+  .mobile-navigation { position: fixed; inset: auto 0 0; z-index: 30; display: grid; grid-template-columns: repeat(6, 1fr); padding: 7px max(8px, env(safe-area-inset-right)) calc(7px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); border-top: 1px solid var(--border); background: color-mix(in srgb, var(--surface) 94%, transparent); backdrop-filter: blur(18px); }
   .page { padding: 28px 18px 48px; }
   .app-shell:has(.simulation-banner) .application { padding-top: 28px; }
   .operational-banner { top: 0; align-items: flex-start; flex-wrap: wrap; }

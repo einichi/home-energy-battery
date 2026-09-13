@@ -77,9 +77,9 @@ function initialAwayDraft(): AwayDraft {
 function prerequisites(config: AppConfig | null): Prerequisite[] {
   const adaptive = config?.adaptiveCharging;
   return [
-    { label: "Multi-rate electricity pricing", ready: Boolean(config && config.rateMode !== "simple"), detail: "A discounted rate window is required to choose economical charging times.", action: "Open rate settings", href: "/?page=settings&focus=rateConfigForm" },
-    { label: "Solar generation", ready: config?.solarEnabled !== false, detail: "Solar production must be available for the next-day forecast.", action: "Open equipment settings", href: "/?page=settings&focus=deviceConfigForm" },
-    { label: "House demand", ready: config?.smartCosmoEnabled !== false, detail: "Whole-home demand history is required to predict consumption.", action: "Open equipment settings", href: "/?page=settings&focus=deviceConfigForm" },
+    { label: "Multi-rate electricity pricing", ready: Boolean(config && config.rateMode !== "simple"), detail: "A discounted rate window is required to choose economical charging times.", action: "Open rate settings", href: "/ui/system/rates" },
+    { label: "Solar generation", ready: config?.solarEnabled !== false, detail: "Solar production must be available for the next-day forecast.", action: "Open equipment settings", href: "/ui/system/equipment" },
+    { label: "House demand", ready: config?.smartCosmoEnabled !== false, detail: "Whole-home demand history is required to predict consumption.", action: "Open equipment settings", href: "/ui/system/equipment" },
     { label: "Home location", ready: Number.isFinite(Number(adaptive?.latitude)) && Number.isFinite(Number(adaptive?.longitude)), detail: "Latitude and longitude drive sunrise and weather forecasts.", action: "Review planning settings", href: "#adaptive-settings" },
     { label: "Solar array", ready: Number(adaptive?.arrayPeakKw) > 0, detail: "Array peak capacity is required to scale the solar forecast.", action: "Review planning settings", href: "#adaptive-settings" },
     { label: "Battery capacity and charge power", ready: Number(config?.batteryCapabilities?.usableCapacityKwh) > 0 && Number(config?.batteryCapabilities?.maximumChargeWatts) > 0, detail: "Usable capacity and maximum charging power bound the plan.", action: "Review planning settings", href: "#adaptive-settings" },

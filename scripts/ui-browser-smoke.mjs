@@ -207,13 +207,47 @@ try {
   await page.getByRole("button", { name: "Configuration" }).click();
   assert(await page.getByRole("heading", { name: "Setup checklist" }).isVisible(), "Automation Configuration checklist did not render");
   assert(await page.getByText(/ready$/).first().isVisible(), "Automation prerequisite progress is missing");
-  assert(await page.getByRole("link", { name: /Open rate settings/ }).getAttribute("href") === "/?page=settings&focus=rateConfigForm", "Rate prerequisite does not link to its existing settings");
+  assert(await page.getByRole("link", { name: /Open rate settings/ }).getAttribute("href") === "/ui/system/rates", "Rate prerequisite does not link to System settings");
   assert(await page.getByRole("link", { name: /Review planning settings/ }).first().getAttribute("href") === "#adaptive-settings", "Planning prerequisite does not link to its Phase 3 form");
   assert(await page.getByRole("heading", { name: "Adaptive Charging configuration" }).isVisible(), "Adaptive Charging settings did not migrate into Automation");
   assert(await page.getByRole("heading", { name: "Demand Guard configuration" }).isVisible(), "Demand Guard settings did not migrate into Automation");
 
-  await page.goto(`${apiOrigin}/?page=settings&focus=rateConfigForm`, { waitUntil: "domcontentloaded" });
-  assert(await page.getByRole("heading", { name: "Electricity Rates" }).isVisible(), "Legacy rate-settings deep link did not open Settings");
+  await page.goto(`${apiOrigin}/ui/insights`, { waitUntil: "domcontentloaded" });
+  assert(await page.getByRole("heading", { name: "Insights" }).isVisible(), "Insights did not render");
+  await page.getByRole("heading", { name: "Period comparison" }).waitFor();
+  assert(await page.getByRole("heading", { name: "Period comparison" }).isVisible(), "Insights period comparison is missing");
+  assert(await page.getByRole("heading", { name: "Estimated savings breakdown" }).isVisible(), "Insights savings detail is missing");
+  await page.locator(".insight-controls label").filter({ hasText: "Period" }).locator("select").selectOption("custom");
+  assert(await page.getByLabel("Start date").isVisible(), "Insights custom report start date is missing");
+  assert(await page.getByLabel("End date").isVisible(), "Insights custom report end date is missing");
+  await page.getByRole("button", { name: "Ene-Farm" }).click();
+  await page.getByRole("heading", { name: "Ene-Farm detail" }).waitFor();
+  assert(await page.getByRole("heading", { name: "Ene-Farm detail" }).isVisible(), "Ene-Farm Insights are missing");
+
+  await page.goto(`${apiOrigin}/ui/system/equipment`, { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Installed equipment" }).waitFor();
+  assert(await page.getByRole("heading", { name: "Installed equipment" }).isVisible(), "System equipment route did not render");
+  assert(await page.getByRole("heading", { name: "Smart Cosmo circuits" }).isVisible(), "Smart Cosmo circuit administration is missing");
+  await page.getByLabel(/Circuit \d+ label/).first().waitFor();
+  assert(await page.getByLabel(/Circuit \d+ label/).first().isVisible(), "Detected Smart Cosmo circuits cannot be named");
+  await page.getByRole("link", { name: /Rates & emissions/ }).click();
+  await page.getByRole("heading", { name: "Electricity rates" }).waitFor();
+  assert(await page.getByRole("heading", { name: "Electricity rates" }).isVisible(), "System rates route did not render");
+  await page.getByRole("link", { name: /Notifications/ }).click();
+  await page.getByRole("heading", { name: "Email notifications" }).waitFor();
+  assert(await page.getByRole("heading", { name: "Email notifications" }).isVisible(), "System notifications route did not render");
+  assert(await page.getByLabel(/cooldown/).first().isVisible(), "Notification trigger cooldown settings are missing");
+  assert(!await page.getByRole("button", { name: "Send test email" }).isEnabled(), "Simulator allowed an external notification test");
+  assert(await page.getByRole("heading", { name: "Recent deliveries" }).isVisible(), "Notification delivery history is missing");
+  await page.getByRole("link", { name: /Data & backups/ }).click();
+  await page.getByRole("heading", { name: "Storage health" }).waitFor();
+  assert(await page.getByRole("heading", { name: "Storage health" }).isVisible(), "System data route did not render");
+  await page.getByRole("button", { name: "Create backup" }).click();
+  await page.getByText("Backup created and inventory refreshed.").waitFor();
+  assert(await page.locator(".backup-list article").count() > 0, "Created database backup did not appear in the refreshed inventory");
+  await page.getByRole("link", { name: /Preferences/ }).click();
+  await page.getByRole("heading", { name: "Application preferences" }).waitFor();
+  assert(await page.getByRole("heading", { name: "Application preferences" }).isVisible(), "System preferences route did not render");
 
   await page.goto(`${apiOrigin}/ui/battery`, { waitUntil: "domcontentloaded" });
   assert(await page.getByRole("heading", { name: "Battery", exact: true }).isVisible(), "Battery workspace did not render");
@@ -253,6 +287,7 @@ try {
   assert(await page.locator(".mobile-navigation").isVisible(), "Mobile navigation is not visible at phone width");
   assert(!await page.locator(".sidebar").isVisible(), "Desktop sidebar is visible at phone width");
   assert(await page.locator(".mobile-header .theme-control select").isVisible(), "Theme control is not reachable on phone");
+  assert(await page.locator(".mobile-navigation").getByRole("link", { name: "Insights" }).isVisible(), "Insights is not reachable from phone navigation");
   await page.locator(".mobile-header .theme-control select").selectOption("light");
   assert(await page.locator("html").getAttribute("data-theme") === "light", "Phone theme control did not apply light mode");
 
@@ -261,6 +296,10 @@ try {
   await page.getByRole("button", { name: "Configuration" }).click();
   assert(await page.getByRole("heading", { name: "Adaptive Charging configuration" }).isVisible(), "Automation configuration is not reachable on phone");
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "Automation configuration overflows the phone viewport");
+
+  await page.locator(".mobile-navigation").getByRole("link", { name: "Insights" }).click();
+  assert(await page.getByRole("heading", { name: "Insights" }).isVisible(), "Insights did not render from phone navigation");
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "Insights overflows the phone viewport");
 
   await page.goto(`${apiOrigin}/ui/energy`, { waitUntil: "domcontentloaded" });
   assert(await page.getByRole("heading", { name: "Energy", exact: true }).isVisible(), "Production deep link did not render");

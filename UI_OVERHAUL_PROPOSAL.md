@@ -544,6 +544,23 @@ plan through the existing server behavior. No database schema change was require
 
 **Exit:** no catch-all settings page remains; every current setting and report has a stable task-oriented home.
 
+**Implemented:** `/ui/insights` consumes the existing energy and Ene-Farm report
+APIs with 30-day, 90-day, 12-month, and custom date ranges; daily, weekly, and
+monthly grouping; recorded outcome cards; a comparable energy trend; explicit
+coverage; estimated savings, gas-cost, and carbon labels; and exact detail tables.
+Periods without samples remain disclosed, break chart continuity, and are omitted
+from tabular evidence rather than being presented as measured zero.
+
+`/ui/system` now routes equipment, rates and emissions, notifications, data and
+backups, and preferences to separate task-oriented pages. Existing configuration,
+notification, discovery, retention, backup, and report endpoints are reused.
+Simulator development disables external notification delivery and published tariff
+imports. No database schema change or production-device access has been introduced.
+The completed parity audit includes Smart Cosmo circuit names, default visibility
+and sorting; notification trigger parameters, password state and delivery history;
+and retention, backup compatibility, confirmation, operation progress, and refreshed
+inventory. React routes no longer depend on the legacy catch-all Settings page.
+
 ### Phase 5 — hardening and removal
 
 - Run accessibility, localization, phone/tablet, slow-device, stale-data, and offline-state testing.

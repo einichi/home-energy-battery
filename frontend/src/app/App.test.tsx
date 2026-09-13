@@ -90,6 +90,17 @@ const eneFarm = {
   ],
 };
 
+const energyReport = {
+  start: "2026-08-13T00:00:00.000Z", end: "2026-09-13T00:00:00.000Z", bucket: "day",
+  totals: { key: "total", label: "Selected period", houseDemandKwh: 84, solarGenerationKwh: 42, gridImportKwh: 39, gridExportKwh: 8, fuelCellKwh: 12, totalOffPeakSavingYen: 640, gridOffPeakSavingYen: 240, batteryOffPeakSavingYen: 400, solarSavingYen: 1470, co2SavingKg: 17.8, solarCoveragePercent: 50, peakDemandW: 5200 },
+  buckets: [
+    { key: "2026-09-11", label: "2026-09-11", start: "2026-09-11T00:00:00.000Z", end: "2026-09-12T00:00:00.000Z", houseDemandKwh: 3, solarGenerationKwh: 1.2, gridImportKwh: 1.5, gridExportKwh: .1, fuelCellKwh: .5, peakDemandW: 4100, sampleCount: 48, dataQuality: { houseDemandKwh: { coveragePercent: 100 } } },
+    { key: "2026-09-12", label: "2026-09-12", start: "2026-09-12T00:00:00.000Z", end: "2026-09-13T00:00:00.000Z", houseDemandKwh: 3.3, houseDemandDeltaKwh: .3, houseDemandDeltaPercent: 10, solarGenerationKwh: 1.6, gridImportKwh: 1.4, gridExportKwh: .2, fuelCellKwh: .6, peakDemandW: 4300, sampleCount: 48, dataQuality: { houseDemandKwh: { coveragePercent: 98 } } },
+  ], features: { solarEnabled: true, smartCosmoEnabled: true, fuelCellEnabled: true }, meta: { recordsRead: 96, resolution: "30-minute" },
+};
+const eneFarmReport = { start: energyReport.start, end: energyReport.end, bucket: "day", estimateNotice: "All costs and savings are estimates.", totals: { key: "total", label: "Selected period", generatedKwh: 12, gasM3: 5, electricalYieldKwhPerM3: 2.4, operatingSeconds: 72000, startCount: 5, estimatedGasCost: { marginalCostYen: 810 }, carbon: { electricityOnlyBalanceKg: 1.2 } }, buckets: [{ key: "2026-09-12", label: "2026-09-12", generatedKwh: .6, gasM3: .25, electricalYieldKwhPerM3: 2.4, operatingSeconds: 3600, startCount: 1, estimatedGasCost: { marginalCostYen: 42 }, carbon: { electricityOnlyBalanceKg: .08 } }] };
+const notifications = { config: { enabled: false, channels: [{ id: "primary-email", type: "smtp", enabled: true, settings: { host: "", port: 587, security: "starttls", username: "", from: "", recipients: [] } }], triggers: { deviceOffline: { enabled: true, cooldownMinutes: 60 }, lowBattery: { enabled: false, cooldownMinutes: 120, thresholdPercent: 20 } } }, passwordConfigured: true, deliveries: [{ at: "2026-09-12T12:00:00.000Z", ok: false, event: { title: "Battery unavailable", type: "deviceOffline" }, attempts: [{ channelId: "primary-email", ok: false, error: "Connection refused" }] }] };
+
 const schedules = [
   { id: "schedule-1", name: "Overnight Eco", action: "vendor-profile", payload: { mode: "eco" }, repeat: "daily", days: [0, 1, 2, 3, 4, 5, 6], time: "02:00", enabled: true, lastResult: { ok: true, at: "2026-09-12T02:00:00.000Z" } },
   { id: "schedule-2", name: "Reserve before morning", action: "discharge-limit", payload: { percent: 40 }, repeat: "daily", days: [0, 1, 2, 3, 4, 5, 6], time: "02:00", enabled: true },
@@ -146,7 +157,17 @@ function mockApi(
 ) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    const body = url.endsWith("/api/config")
+    const body = url.includes("/api/reports/energy?")
+      ? energyReport
+      : url.includes("/api/reports/ene-farm?")
+        ? eneFarmReport
+      : url.endsWith("/api/notifications")
+        ? notifications
+      : url.endsWith("/api/history/stats")
+        ? { sizeBytes: 2048, sampleCount: 96, daysRecorded: 2, rollups: { interval: 48, daily: 2 }, schemaVersion: 7 }
+      : url.endsWith("/api/database-backups")
+        ? { schemaVersion: 7, operation: { busy: false }, backups: [] }
+      : url.endsWith("/api/config")
       ? { ...config, adaptiveCharging: { ...config.adaptiveCharging, enabled: adaptiveEnabled } }
       : url.includes("/api/history?")
         ? history
@@ -180,6 +201,56 @@ function mockApi(
 afterEach(() => vi.unstubAllGlobals());
 
 describe("React application shell", () => {
+  it("turns reports into outcome-oriented Insights with period and domain controls", async () => {
+    mockApi();
+    render(<MemoryRouter initialEntries={["/insights"]}><AppProviders><App /></AppProviders></MemoryRouter>);
+    expect(await screen.findByRole("heading", { name: "Insights" })).toBeVisible();
+    expect(await screen.findByRole("img", { name: /Energy use, solar generation/ })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Period comparison" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Estimated savings breakdown" })).toBeVisible();
+    expect(screen.getByText("¥640")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Ene-Farm" }));
+    expect(await screen.findByRole("heading", { name: "Ene-Farm detail" })).toBeVisible();
+    expect(screen.getByText("12 kWh")).toBeVisible();
+  });
+
+  it("routes System administration by task and saves equipment without device commands", async () => {
+    const fetchMock = mockApi();
+    render(<MemoryRouter initialEntries={["/system/equipment"]}><AppProviders><App /></AppProviders></MemoryRouter>);
+    expect(await screen.findByRole("heading", { name: "System" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Installed equipment" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Smart Cosmo circuits" })).toBeVisible();
+    expect(screen.getByLabelText("Circuit 1 label")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Save equipment" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/config", expect.objectContaining({ method: "PUT" })));
+    expect(await screen.findByText("Equipment settings saved.")).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Circuit 1 label"), { target: { value: "Kitchen" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save circuits" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/config", expect.objectContaining({ method: "PUT", body: expect.stringContaining('"Kitchen"') })));
+  });
+
+  it("shows notification parameters, secret state, and durable delivery outcomes", async () => {
+    mockApi();
+    render(<MemoryRouter initialEntries={["/system/notifications"]}><AppProviders><App /></AppProviders></MemoryRouter>);
+    expect(await screen.findByRole("heading", { name: "Email notifications" })).toBeVisible();
+    expect(screen.getByText("Password stored")).toBeVisible();
+    expect(screen.getByLabelText("deviceOffline cooldown")).toHaveValue(60);
+    expect(screen.getByLabelText("Low battery threshold")).toHaveValue(20);
+    expect(screen.getByRole("heading", { name: "Recent deliveries" })).toBeVisible();
+    expect(screen.getByText(/Failed · Battery unavailable/)).toBeVisible();
+    expect(screen.getByText("Connection refused")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Send test email" })).toBeDisabled();
+  });
+
+  it("reviews retention maintenance before removing historical records", async () => {
+    mockApi();
+    render(<MemoryRouter initialEntries={["/system/data"]}><AppProviders><App /></AppProviders></MemoryRouter>);
+    expect(await screen.findByRole("heading", { name: "Storage health" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Run maintenance now" }));
+    expect(screen.getByRole("dialog", { name: "Run retention maintenance now?" })).toBeVisible();
+    expect(screen.getByText(/Records older than the values shown/)).toBeVisible();
+  });
+
   it("renders a simulator banner and read-only overview from the API", async () => {
     mockApi();
 
@@ -295,7 +366,7 @@ describe("React application shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Configuration" }));
     expect(screen.getByRole("heading", { name: "Setup checklist" })).toBeVisible();
     expect(screen.getByText("6/6 ready")).toBeVisible();
-    expect(screen.getByRole("link", { name: /Open rate settings/ })).toHaveAttribute("href", "/?page=settings&focus=rateConfigForm");
+    expect(screen.getByRole("link", { name: /Open rate settings/ })).toHaveAttribute("href", "/ui/system/rates");
     expect(screen.getAllByRole("link", { name: /Review planning settings/ })[0]).toHaveAttribute("href", "#adaptive-settings");
     expect(screen.getByRole("heading", { name: "Adaptive Charging configuration" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Demand Guard configuration" })).toBeVisible();

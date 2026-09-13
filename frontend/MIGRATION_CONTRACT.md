@@ -12,8 +12,8 @@ for the same telemetry, health, and command states.
 | Energy and history | `/ui/energy`, `/ui/energy#circuits`, `/ui/energy#ene-farm` | `/api/history`, `/api/ene-farm`, status telemetry, legacy graph views | Phase 1 combined chart and Phase 2.5 specialized parity views implemented |
 | Battery | `/ui/battery` | status battery fields, `/api/actions/*`, `/api/settings/*`, schedules, backup preparation, command receipts | Phase 2 operational workspace |
 | Automation | `/ui/automation` | adaptive charging, away periods, automation rules, command receipts, status/config | Phase 3 control center implemented with Plan, Performance, Configuration, and simulator-verified mutations |
-| Insights | `/ui/insights` | energy and Ene-Farm reports, savings and emissions data | Placeholder |
-| System | `/ui/system` | config, discovery, notifications, retention, tariffs, database backup/restore | Placeholder |
+| Insights | `/ui/insights` | energy and Ene-Farm reports, savings and emissions data | Phase 4 outcome-oriented reporting implemented |
+| System | `/ui/system/*` | config, discovery, notifications, retention, tariffs, database backup/restore | Phase 4 routed administration implemented |
 
 React exclusively owns DOM below its root. The legacy application remains the
 owner of `/` until each feature is migrated. A migrated route must not use legacy
@@ -157,6 +157,19 @@ adaptive state, and schema-v7 command events. It adds no database migration. Any
 battery-mode side effect continues through the server's existing command recorder;
 the Automation activity table includes those durable receipts alongside Adaptive
 Charging and Demand Guard logs.
+
+Phase 4 moves reporting into `/ui/insights` and administration into task-oriented
+`/ui/system/*` routes. Insights keeps recorded energy separate from tariff-, gas-,
+and emissions-derived estimates, preserves null and coverage semantics, and keeps
+empty report periods as visible chart gaps rather than measured zero. Presets and
+custom dates retain the existing reporting range capability.
+
+System now gives equipment, Smart Cosmo circuit administration, rates and emissions,
+Ene-Farm assumptions, notification configuration and delivery history, data retention,
+database backup/recovery, and preferences stable routed homes. It uses the existing
+local config and operational APIs and introduces no schema migration. Simulator-only
+development keeps device discovery local and blocks outbound notification and
+tariff-import traffic.
 
 The current React UI remains English-only until Phase 5 localization. Visible
 labels must not combine English and Japanese. Phase 5 will translate Disaster
