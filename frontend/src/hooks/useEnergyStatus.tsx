@@ -10,6 +10,7 @@ type EnergyStatusContextValue = {
   manualRefreshing: boolean;
   error: string | null;
   refresh: () => void;
+  replaceConfig: (config: AppConfig) => void;
 };
 
 const EnergyStatusContext = createContext<EnergyStatusContextValue | null>(null);
@@ -94,6 +95,7 @@ export function EnergyStatusProvider({ children }: { children: ReactNode }) {
     manualRefreshing,
     error,
     refresh,
+    replaceConfig: setConfig,
   }), [config, status, loadingState, manualRefreshing, error, refresh]);
 
   return <EnergyStatusContext.Provider value={value}>{children}</EnergyStatusContext.Provider>;

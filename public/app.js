@@ -7105,4 +7105,13 @@ function localizeRole(role) {
 }
 
 initForms();
+const requestedView = new URLSearchParams(window.location.search);
+if (requestedView.get("page") === "settings") {
+  setPage("settings");
+  const requestedFocus = requestedView.get("focus");
+  const allowedFocusTargets = new Set(["rateConfigForm", "deviceConfigForm", "batteryCapabilitiesForm", "adaptiveChargingForm"]);
+  if (requestedFocus && allowedFocusTargets.has(requestedFocus)) {
+    requestAnimationFrame(() => document.getElementById(requestedFocus)?.scrollIntoView({ block: "center" }));
+  }
+}
 initialLoad();

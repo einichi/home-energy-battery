@@ -11,7 +11,7 @@ for the same telemetry, health, and command states.
 | Overview | `/ui/` | `GET /api/status`, `GET /api/config`, `GET /api/history` | Read-only live flow, battery state, daily composition and outcomes; detailed history belongs to Energy |
 | Energy and history | `/ui/energy`, `/ui/energy#circuits`, `/ui/energy#ene-farm` | `/api/history`, `/api/ene-farm`, status telemetry, legacy graph views | Phase 1 combined chart and Phase 2.5 specialized parity views implemented |
 | Battery | `/ui/battery` | status battery fields, `/api/actions/*`, `/api/settings/*`, schedules, backup preparation, command receipts | Phase 2 operational workspace |
-| Automation | `/ui/automation` | adaptive charging, automation rules, Away periods, schedules, operational overrides | Placeholder |
+| Automation | `/ui/automation` | adaptive charging, away periods, automation rules, command receipts, status/config | Phase 3 control center implemented with Plan, Performance, Configuration, and simulator-verified mutations |
 | Insights | `/ui/insights` | energy and Ene-Farm reports, savings and emissions data | Placeholder |
 | System | `/ui/system` | config, discovery, notifications, retention, tariffs, database backup/restore | Placeholder |
 
@@ -135,6 +135,28 @@ shared-period Smart Cosmo circuit selector/history chart and the Ene-Farm
 activity and operational-statistics detail. Null and insufficient-history states
 remain distinct from measured zero; charts retain numeric legends, hover/readout
 information, and accessible data-table alternatives.
+
+Phase 3 consolidates automation under `/ui/automation`. The Plan view is the
+authoritative explanation surface for master state, next action and reason,
+breaker headroom, Disaster Prep priority, operational ownership, selected
+discounted windows, Away context, forecast assumptions, and recent automation
+activity. The Performance view keeps planning estimates distinct from recorded
+solar, battery-window, and Ene-Farm outcomes, and identifies demand-model evidence
+separately because the API does not expose a settled demand-error series.
+
+Adaptive Charging and Demand Guard configuration now live in the Automation
+Configuration view. Enabling or changing automation that can subsequently own the
+battery requires an impact review. Manual resume also requires review; plan
+recalculation reports success or failure inline. Away periods support scheduled
+creation, Away now with return-time review, editing, extending, deletion, and Back
+home. Away changes remain occupancy inputs rather than direct device commands and
+queue recalculation through the existing server endpoints.
+
+Phase 3 reuses configuration JSON, automation-rule state, Away-period storage, the
+adaptive state, and schema-v7 command events. It adds no database migration. Any
+battery-mode side effect continues through the server's existing command recorder;
+the Automation activity table includes those durable receipts alongside Adaptive
+Charging and Demand Guard logs.
 
 The current React UI remains English-only until Phase 5 localization. Visible
 labels must not combine English and Japanese. Phase 5 will translate Disaster

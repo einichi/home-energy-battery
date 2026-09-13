@@ -519,6 +519,23 @@ Ene-Farm endpoints; no schema change or new device command was added.
 
 **Exit:** a user can explain the next automated action and its reason from one screen.
 
+**Implemented:** the React Automation route now combines Adaptive Charging,
+Demand Guard, Away Schedule, prerequisite setup, and activity. Plan derives a
+master state, next action and plain-language reason, breaker headroom, Disaster
+Prep priority, operational ownership, a shared Adaptive Charging/Away timeline,
+selected discounted windows, forecast assumptions and confidence, and structured
+automation and device-command activity from the existing APIs.
+
+Performance separates current solar, demand, battery, and Ene-Farm estimates from
+their available recorded outcomes and learning evidence. It explicitly identifies
+that the current API has demand-model evidence but no settled demand-error series.
+Configuration owns Adaptive Charging, battery planning limits, and Demand Guard.
+Automation-affecting saves use an impact review and clear success or failure state;
+resume requires an explicit review, while recalculation reports its terminal result.
+Away periods can be created, started immediately after reviewing the return time,
+edited, extended, removed, or ended with Back home. Every change queues a fresh
+plan through the existing server behavior. No database schema change was required.
+
 ### Phase 4 — Insights and System
 
 - Rework reports into outcome-oriented Insights, expanding the Phase 2.5 savings summary into period comparison, definitions, and detailed tables without removing its three-way off-peak breakdown.

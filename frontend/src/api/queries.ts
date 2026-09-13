@@ -1,8 +1,12 @@
-import { getJson } from "./client";
+import { getJson, sendJson } from "./client";
 import type { AppConfig, EneFarmSummary, HistoryResponse, StatusSnapshot } from "./contracts";
 
 export function getConfig(signal?: AbortSignal) {
   return getJson<AppConfig>("/api/config", signal);
+}
+
+export function updateConfig(config: AppConfig) {
+  return sendJson<AppConfig>("/api/config", "PUT", config);
 }
 
 export function getStatus(signal?: AbortSignal) {

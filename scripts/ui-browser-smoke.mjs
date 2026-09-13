@@ -184,6 +184,37 @@ try {
   assert(await page.getByText("Gas used", { exact: true }).isVisible(), "Ene-Farm gas statistic is missing");
   assert(await page.getByText("Last stop", { exact: true }).isVisible(), "Ene-Farm last-stop statistic is missing");
 
+  await page.goto(`${apiOrigin}/ui/automation`, { waitUntil: "domcontentloaded" });
+  assert(await page.getByRole("heading", { name: "Automation", exact: true }).isVisible(), "Automation control center did not render");
+  const automationState = page.getByRole("heading", { name: "Needs setup" });
+  await automationState.waitFor();
+  assert(await automationState.isVisible(), "Automation master state did not explain the simulator's missing prerequisites");
+  assert(await page.getByRole("heading", { name: "Active protections" }).isVisible(), "Automation protections summary is missing");
+  assert(await page.getByRole("heading", { name: "Shared automation timeline" }).isVisible(), "Shared automation timeline is missing");
+  assert(await page.getByRole("heading", { name: "Away schedule" }).isVisible(), "Away context is missing from Automation");
+  assert(!await page.getByRole("button", { name: "Recalculate plan" }).isEnabled(), "Plan recalculation should be unavailable until setup is complete");
+  await page.getByRole("button", { name: "Away now" }).click();
+  assert(await page.getByText(/Confirm when you expect to return/).isVisible(), "Away now did not expose its return-time review");
+  await page.getByRole("button", { name: "Start Away period" }).click();
+  await page.getByText(/Away period saved and plan recalculation queued/).waitFor();
+  await page.getByRole("button", { name: "Back home" }).waitFor();
+  await page.getByRole("button", { name: "Back home" }).click();
+  await page.getByText(/Home state restored/).waitFor();
+  await page.getByRole("button", { name: "Performance" }).click();
+  assert(await page.getByRole("heading", { name: "Forecast and control performance" }).isVisible(), "Automation Performance view did not render");
+  assert(await page.getByRole("heading", { name: "Historical model" }).isVisible(), "Demand forecast evidence is missing");
+  assert(await page.getByRole("heading", { name: "Charging-window outcomes" }).isVisible(), "Battery outcome evidence is missing");
+  await page.getByRole("button", { name: "Configuration" }).click();
+  assert(await page.getByRole("heading", { name: "Setup checklist" }).isVisible(), "Automation Configuration checklist did not render");
+  assert(await page.getByText(/ready$/).first().isVisible(), "Automation prerequisite progress is missing");
+  assert(await page.getByRole("link", { name: /Open rate settings/ }).getAttribute("href") === "/?page=settings&focus=rateConfigForm", "Rate prerequisite does not link to its existing settings");
+  assert(await page.getByRole("link", { name: /Review planning settings/ }).first().getAttribute("href") === "#adaptive-settings", "Planning prerequisite does not link to its Phase 3 form");
+  assert(await page.getByRole("heading", { name: "Adaptive Charging configuration" }).isVisible(), "Adaptive Charging settings did not migrate into Automation");
+  assert(await page.getByRole("heading", { name: "Demand Guard configuration" }).isVisible(), "Demand Guard settings did not migrate into Automation");
+
+  await page.goto(`${apiOrigin}/?page=settings&focus=rateConfigForm`, { waitUntil: "domcontentloaded" });
+  assert(await page.getByRole("heading", { name: "Electricity Rates" }).isVisible(), "Legacy rate-settings deep link did not open Settings");
+
   await page.goto(`${apiOrigin}/ui/battery`, { waitUntil: "domcontentloaded" });
   assert(await page.getByRole("heading", { name: "Battery", exact: true }).isVisible(), "Battery workspace did not render");
   const batteryTimeline = page.getByRole("img", { name: /battery power and state of charge/ });
@@ -225,6 +256,12 @@ try {
   await page.locator(".mobile-header .theme-control select").selectOption("light");
   assert(await page.locator("html").getAttribute("data-theme") === "light", "Phone theme control did not apply light mode");
 
+  await page.goto(`${apiOrigin}/ui/automation`, { waitUntil: "domcontentloaded" });
+  assert(await page.getByRole("heading", { name: "Automation", exact: true }).isVisible(), "Automation did not render at phone width");
+  await page.getByRole("button", { name: "Configuration" }).click();
+  assert(await page.getByRole("heading", { name: "Adaptive Charging configuration" }).isVisible(), "Automation configuration is not reachable on phone");
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "Automation configuration overflows the phone viewport");
+
   await page.goto(`${apiOrigin}/ui/energy`, { waitUntil: "domcontentloaded" });
   assert(await page.getByRole("heading", { name: "Energy", exact: true }).isVisible(), "Production deep link did not render");
   const simulatorBanner = page.getByText("Simulated environment", { exact: false });
@@ -242,7 +279,7 @@ try {
   assert(failedResponses.length === 0, `Failed browser requests: ${failedResponses.join(", ")}`);
   assert(browserErrors.length === 0, `Browser errors: ${browserErrors.join("; ")}`);
 
-  console.log("UI browser smoke test passed: simulator boundary, Overview, Energy, Battery command lifecycle, themes, phone layout, and legacy redirects");
+  console.log("UI browser smoke test passed: simulator boundary, Overview, Energy, Automation controls, Battery command lifecycle, themes, phone layout, and legacy redirects");
 } finally {
   await browser?.close();
   if (launcher.exitCode === null) {

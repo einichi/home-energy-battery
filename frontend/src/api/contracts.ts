@@ -195,9 +195,21 @@ export type AppConfig = {
   solarEnabled: boolean;
   smartCosmoEnabled: boolean;
   fuelCellEnabled: boolean;
+  rateMode?: "simple" | "off-peak" | "multi" | string;
   runtime?: RuntimeInformation;
   batteryHost?: string;
-  adaptiveCharging?: { enabled?: boolean };
+  batteryCapabilities?: { usableCapacityKwh?: number | null; maximumChargeWatts?: number | null };
+  adaptiveCharging?: {
+    enabled?: boolean;
+    latitude?: number | null;
+    longitude?: number | null;
+    arrayPeakKw?: number | null;
+    panelTiltDegrees?: number | null;
+    panelAzimuthDegrees?: number | null;
+    systemLossPercent?: number | null;
+    targetSocPercent?: number | null;
+    forecastMarginPercent?: number | null;
+  };
 };
 
 export type CommandOutcome = {
@@ -254,6 +266,159 @@ export type BackupPreparation = {
   endedAt?: string | null;
   lastResult?: { ok?: boolean; at?: string; error?: string } | null;
   log?: Array<{ at: string; message: string; kind: string }>;
+};
+
+export type AwayPeriod = {
+  id: string;
+  from: string;
+  until: string;
+  source?: "manual" | "scheduled" | string;
+  status?: "scheduled" | "active" | "completed" | string;
+};
+
+export type AwayPeriodsView = {
+  periods: AwayPeriod[];
+  active: AwayPeriod | null;
+  next: AwayPeriod | null;
+  state: "home" | "away";
+  returnBufferMinutes?: number;
+};
+
+export type AutomationLogEntry = {
+  at?: string | null;
+  kind?: string | null;
+  message?: string | null;
+};
+
+export type AutomationRule = {
+  id?: string;
+  name?: string;
+  type?: string;
+  enabled?: boolean;
+  dashboardWarningEnabled?: boolean;
+  conditions?: {
+    source?: string;
+    breakerAmps?: number | null;
+    breakerVoltage?: number | null;
+    reserveAmps?: number | null;
+    restoreBelowAmps?: number | null;
+    restoreDelaySeconds?: number | null;
+  };
+  state?: { awaitingRestore?: boolean; triggeredAt?: string | null };
+  log?: AutomationLogEntry[];
+};
+
+export type AdaptiveTimelineItem = {
+  start: string;
+  end: string;
+  demandW?: number | null;
+  solarW?: number | null;
+  fuelCellMedianW?: number | null;
+  predictedStartSocPercent?: number | null;
+  predictedEndSocPercent?: number | null;
+  plannedChargeWh?: number | null;
+  discounted?: boolean;
+  rateLabel?: string | null;
+  yenPerKwh?: number | null;
+  away?: boolean;
+  awayDemandConfidence?: string | null;
+};
+
+export type AdaptiveChargingPlan = {
+  available?: boolean;
+  reason?: string | null;
+  warning?: string | null;
+  createdAt?: string | null;
+  targetSunset?: string | null;
+  currentSocPercent?: number | null;
+  targetSocPercent?: number | null;
+  expectedSunsetSocPercent?: number | null;
+  predictedSolarKwh?: number | null;
+  predictedDemandKwh?: number | null;
+  predictedFuelCellKwh?: number | null;
+  predictedSurplusKwh?: number | null;
+  plannedChargeKwh?: number | null;
+  plannedStoredChargeKwh?: number | null;
+  timeline?: AdaptiveTimelineItem[];
+  slots?: Array<{ start: string; end: string; windowEnd?: string; targetWh?: number; targetSocPercent?: number; label?: string }>;
+  demandHistory?: {
+    recordedDayCount?: number;
+    validDayCount?: number;
+    recentComparableDayCount?: number;
+    seasonalComparableDayCount?: number;
+    seasonalYears?: number[];
+    seasonalBlendPercent?: number;
+    awaySlotCount?: number;
+    awayComparableDayCount?: number;
+    awayConfidence?: string | null;
+  };
+  solarCalibration?: { learned?: boolean; sampleCount?: number; factor?: number | null };
+};
+
+export type AdaptiveChargingStatus = {
+  enabled: boolean;
+  available: boolean;
+  reason?: string | null;
+  warning?: string | null;
+  paused?: boolean;
+  pausedUntil?: string | null;
+  owner?: string | null;
+  activeSlot?: { start?: string; end?: string; windowEnd?: string; targetWh?: number; targetSocPercent?: number; label?: string } | null;
+  forecast?: { fetchedAt?: string | null; ageMs?: number | null; timezone?: string | null; stale?: boolean } | null;
+  plan?: AdaptiveChargingPlan | null;
+  away?: AwayPeriodsView;
+  batteryModel?: {
+    version?: number;
+    status?: "learning" | "validating" | "active" | "degraded" | string;
+    charge?: { acceptedObservationCount?: number; distinctDays?: number; blockers?: string[] };
+    discharge?: { acceptedObservationCount?: number; distinctDays?: number; blockers?: string[] };
+    power?: { sampleCount?: number; sessionCount?: number; blockers?: string[] };
+  } | null;
+  solarForecastAccuracy?: {
+    learned?: boolean;
+    sampleCount?: number;
+    factor?: number | null;
+    meanAbsolutePercentageError?: number | null;
+    outcomes?: Array<{
+      targetDate?: string;
+      predictedKwh?: number | null;
+      planningKwh?: number | null;
+      actualKwh?: number | null;
+      errorKwh?: number | null;
+      errorPercent?: number | null;
+    }>;
+  };
+  fuelCellForecastOutcomes?: Array<{
+    start?: string;
+    targetStart?: string;
+    end?: string;
+    p20W?: number | null;
+    medianW?: number | null;
+    p80W?: number | null;
+    actualKwh?: number | null;
+    influence?: string | null;
+  }>;
+  windowSummaries?: Array<{
+    key?: string;
+    windowStart?: string;
+    windowEnd?: string;
+    label?: string | null;
+    plannedWh?: number | null;
+    deliveredWh?: number | null;
+    estimatedDeliveryWh?: number | null;
+    unmetWh?: number | null;
+    targetSocPercent?: number | null;
+    socTargetReached?: boolean;
+    interruptionCount?: number;
+    solarHeadroomInterruptionCount?: number;
+    startSocPercent?: number | null;
+    endSocPercent?: number | null;
+    completedAt?: string | null;
+    reason?: string | null;
+  }>;
+  lastResult?: { skipped?: string; gridImportW?: number | null; thresholdW?: number | null; at?: string | null; error?: string | null } | null;
+  lastForecastError?: { at?: string | null; error?: string | null } | null;
+  log?: AutomationLogEntry[];
 };
 
 export type LoadingState = "loading" | "ready" | "refreshing" | "error";
