@@ -8,7 +8,7 @@ for the same telemetry, health, and command states.
 
 | Product area | React route | Current source or API | Phase 0 status |
 | --- | --- | --- | --- |
-| Overview | `/ui/` | `GET /api/status`, `GET /api/config`, `GET /api/history` | Phase 1 read-only live flow, 24-hour chart, daily outcomes |
+| Overview | `/ui/` | `GET /api/status`, `GET /api/config`, `GET /api/history` | Read-only live flow, battery state, daily composition and outcomes; detailed history belongs to Energy |
 | Energy and history | `/ui/energy`, `/ui/energy#circuits`, `/ui/energy#ene-farm` | `/api/history`, `/api/ene-farm`, status telemetry, legacy graph views | Phase 1 combined chart and Phase 2.5 specialized parity views implemented |
 | Battery | `/ui/battery` | status battery fields, `/api/actions/*`, `/api/settings/*`, schedules, backup preparation, command receipts | Phase 2 operational workspace |
 | Automation | `/ui/automation` | adaptive charging, automation rules, Away periods, schedules, operational overrides | Placeholder |

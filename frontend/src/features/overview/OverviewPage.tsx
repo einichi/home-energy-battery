@@ -1,11 +1,9 @@
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import { CombinedEnergyChart } from "../../components/CombinedEnergyChart";
 import { EnergyFlow } from "../../components/EnergyFlow";
 import { OutcomeStrip } from "../../components/OutcomeStrip";
 import { EneFarmActivity, EnergySourcesBar, OffPeakSavings } from "../../components/TelemetryParity";
 import { formatFreshness, formatPower, formatSoc, metricValue } from "../../core/format";
-import { withLatestStatus } from "../../core/energy";
 import { useEnergyStatus } from "../../hooks/useEnergyStatus";
 import { useHistoryRange } from "../../hooks/useHistoryRange";
 import { useEneFarm } from "../../hooks/useEneFarm";
@@ -17,7 +15,6 @@ function preferredFuelCell(status: ReturnType<typeof useEnergyStatus>["status"])
 
 export function OverviewPage() {
   const { status, loadingState, manualRefreshing, error, refresh: refreshStatus } = useEnergyStatus();
-  const { history, loading: historyLoading, refresh: refreshHistory } = useHistoryRange(24 * 60 * 60_000);
   const todayStart = useMemo(() => {
     const value = new Date();
     value.setHours(0, 0, 0, 0);
@@ -34,7 +31,6 @@ export function OverviewPage() {
   const demandPower = metricValue(status?.meter?.house_demand_power);
   const gridImport = metricValue(status?.meter?.grid_import_power);
   const gridExport = metricValue(status?.meter?.grid_export_power);
-  const chartSamples = useMemo(() => withLatestStatus(history.samples, status), [history.samples, status]);
 
   return (
     <main className="page overview-page">
@@ -44,7 +40,7 @@ export function OverviewPage() {
           <h1>Home energy overview</h1>
           <p>{formatFreshness(status?.read_at)}</p>
         </div>
-        <button className="quiet-button" type="button" onClick={() => { refreshStatus(); refreshHistory(); refreshToday(); refreshEneFarm(); }} disabled={loadingState === "loading" || manualRefreshing}>
+        <button className="quiet-button" type="button" onClick={() => { refreshStatus(); refreshToday(); refreshEneFarm(); }} disabled={loadingState === "loading" || manualRefreshing}>
           {manualRefreshing ? "Refreshing…" : "Refresh"}
         </button>
       </header>
@@ -85,23 +81,19 @@ export function OverviewPage() {
         </article>
       </section>
 
-      <section className="panel overview-history" aria-labelledby="overview-history-heading">
-        <div className="history-toolbar"><div><p className="eyebrow">Last 24 hours</p><h2 id="overview-history-heading">Demand, generation, grid, and battery</h2></div><Link className="text-link" to="/energy">Explore Energy →</Link></div>
-        {historyLoading && !chartSamples.length ? <div className="chart-empty">Loading history…</div> : (
-          <CombinedEnergyChart samples={chartSamples} selected={["houseDemandW", "solarPowerW", "fuelCellPowerW", "gridImportW", "batteryPowerW"]} label="Last 24 hours of home energy" />
-        )}
+      <section className="overview-daily-section" aria-labelledby="today-heading">
+        <div className="section-heading"><div><p className="eyebrow">Daily summary</p><h2 id="today-heading">Today at a glance</h2></div><Link className="text-link" to="/energy">Full history →</Link></div>
+        <div className="telemetry-parity-grid">
+          <EnergySourcesBar sources={todayHistory.summary.energySources} showPeriod={false} />
+          <EneFarmActivity summary={eneFarmToday} compact loading={eneFarmLoading} showPeriod={false} />
+        </div>
+        <div className="outcome-section overview-outcomes" aria-labelledby="energy-outcomes-heading">
+          <div className="section-heading"><h2 id="energy-outcomes-heading">Energy outcomes</h2></div>
+          <OutcomeStrip summary={todayHistory.summary} compact />
+        </div>
       </section>
 
-      <div className="telemetry-parity-grid">
-        <EnergySourcesBar sources={todayHistory.summary.energySources} />
-        <EneFarmActivity summary={eneFarmToday} compact loading={eneFarmLoading} />
-        <OffPeakSavings status={status} />
-      </div>
-
-      <section className="outcome-section" aria-labelledby="today-heading">
-        <div className="section-heading"><div><p className="eyebrow">Today</p><h2 id="today-heading">Energy outcomes</h2></div><Link className="text-link" to="/energy">Full history →</Link></div>
-        <OutcomeStrip summary={todayHistory.summary} compact />
-      </section>
+      <div className="overview-savings"><OffPeakSavings status={status} /></div>
 
     </main>
   );

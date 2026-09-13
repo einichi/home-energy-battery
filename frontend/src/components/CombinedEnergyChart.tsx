@@ -41,12 +41,13 @@ function pathFor(
   }).join(" ");
 }
 
-export function CombinedEnergyChart({ samples, selected, label = "Energy history", overlays = [], reservePercent = null }: {
+export function CombinedEnergyChart({ samples, selected, label = "Energy history", overlays = [], reservePercent = null, showSeriesLegend = true }: {
   samples: EnergySample[];
   selected: EnergySeriesKey[];
   label?: string;
   overlays?: TimelineOverlay[];
   reservePercent?: number | null;
+  showSeriesLegend?: boolean;
 }) {
   const titleId = useId();
   const [hoveredTimestamp, setHoveredTimestamp] = useState<string | null>(null);
@@ -180,9 +181,11 @@ export function CombinedEnergyChart({ samples, selected, label = "Energy history
         <text className="chart-axis-label" x={chart.left} y={chart.height - 12}>{formatChartTime(validSamples[0].timestamp, end - start > 86_400_000)}</text>
         <text className="chart-axis-label" x={chart.width - chart.right} y={chart.height - 12} textAnchor="end">{formatChartTime(validSamples.at(-1)?.timestamp ?? "", end - start > 86_400_000)}</text>
       </svg>
-      <div className="chart-series-legend" aria-label="Chart series">
-        {definitions.map((definition) => <span key={definition.key}><i style={{ background: definition.color }} aria-hidden="true" />{definition.label}</span>)}
-      </div>
+      {showSeriesLegend ? (
+        <div className="chart-series-legend" aria-label="Chart series">
+          {definitions.map((definition) => <span key={definition.key}><i style={{ background: definition.color }} aria-hidden="true" />{definition.label}</span>)}
+        </div>
+      ) : null}
       {overlays.length ? <div className="chart-overlay-legend" aria-label="Timeline overlays"><span data-tone="charge">Charge window</span><span data-tone="discharge">Discharge window</span><span data-tone="schedule">Scheduled command</span></div> : null}
       {hoveredSample ? <div className="chart-hover-summary" role="status" aria-label="Chart reading details">{formatChartTime(hoveredSample.timestamp, true)} · {definitions.map((definition) => { const value = definition.value(hoveredSample); return `${definition.label}: ${value === null ? "unavailable" : definition.display(value)}`; }).join(" · ")}</div> : null}
       <details className="chart-table-disclosure">

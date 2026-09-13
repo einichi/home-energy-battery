@@ -85,6 +85,33 @@ try {
   ]);
   browser = await chromium.launch({ executablePath, headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const eneFarmEnd = new Date();
+  const eneFarmMiddle = new Date(eneFarmEnd.getTime() - 30 * 60_000);
+  const eneFarmStart = new Date(eneFarmEnd.getTime() - 60 * 60_000);
+  await page.route("**/api/ene-farm?**", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      configured: true,
+      sampleCount: 3,
+      start: eneFarmStart.toISOString(),
+      end: eneFarmEnd.toISOString(),
+      generatedKwh: 0.5,
+      gasM3: 0.22,
+      electricalYieldKwhPerM3: 2.27,
+      operatingSeconds: 1800,
+      startCount: 1,
+      averageGeneratingW: 500,
+      currentState: "generating",
+      timeInStateSeconds: 1800,
+      lastStopAt: eneFarmMiddle.toISOString(),
+      dataQuality: "counter",
+      stateIntervals: [
+        { start: eneFarmStart.toISOString(), end: eneFarmMiddle.toISOString(), state: "stopped", durationSeconds: 1800, generatedKwh: 0 },
+        { start: eneFarmMiddle.toISOString(), end: eneFarmEnd.toISOString(), state: "generating", durationSeconds: 1800, generatedKwh: 0.5 },
+      ],
+    }),
+  }));
   const unexpectedRequests = [];
   const browserErrors = [];
   const failedResponses = [];
@@ -111,16 +138,19 @@ try {
   await page.getByText("62%", { exact: true }).first().waitFor();
   assert(await page.getByText("62%", { exact: true }).first().isVisible(), "Expected simulator battery SOC");
   assert(await page.getByText("850 W", { exact: true }).first().isVisible(), "Expected simulator solar power");
-  const overviewChart = page.getByRole("img", { name: "Last 24 hours of home energy" });
-  assert(await overviewChart.isVisible(), "Overview history chart did not render");
-  assert(await page.getByLabel("Chart series").getByText("Demand", { exact: true }).isVisible(), "Chart series legend did not render");
-  await overviewChart.hover({ position: { x: 420, y: 150 } });
-  assert(await page.locator(".chart-tooltip").isVisible(), "Chart hover details did not render");
+  assert(await page.getByRole("img", { name: "Last 24 hours of home energy" }).count() === 0, "Overview still duplicates the detailed Energy history chart");
+  assert(await page.getByRole("link", { name: "Full history →" }).isVisible(), "Overview does not link to detailed Energy history");
   assert(await page.getByRole("heading", { name: "Energy outcomes" }).isVisible(), "Overview daily outcomes did not render");
+  assert(await page.getByRole("heading", { name: "Today at a glance" }).isVisible(), "Overview daily evidence is not grouped under one time scope");
   assert(await page.getByRole("heading", { name: "Current measurements" }).count() === 0, "Overview still duplicates Live Power in a Snapshot section");
   assert(await page.getByRole("heading", { name: "Energy Sources" }).isVisible(), "Energy Sources composition is missing");
   assert(await page.getByRole("heading", { name: "Ene-Farm Activity" }).isVisible(), "Ene-Farm activity bar is missing");
-  assert(await page.getByRole("heading", { name: "Off-Peak Savings" }).isVisible(), "Off-Peak Savings is missing");
+  const activitySegment = page.locator(".ene-farm-state-strip i").first();
+  await activitySegment.hover();
+  assert(await page.getByRole("tooltip").isVisible(), "Ene-Farm activity interval tooltip did not render");
+  assert(await page.getByRole("tooltip").getByText(/→/).isVisible(), "Ene-Farm activity tooltip is missing start and finish times");
+  assert(await page.getByRole("tooltip").getByText(/\d+[hms]/).isVisible(), "Ene-Farm activity tooltip is missing its duration");
+  assert(await page.getByRole("heading", { name: "Estimated Off-Peak Savings" }).isVisible(), "Off-Peak Savings is missing");
   await page.getByRole("button", { name: "Grid use", exact: true }).click();
   assert(await page.getByRole("button", { name: "Grid use", exact: true }).getAttribute("aria-pressed") === "true", "Off-Peak Savings did not switch to grid use");
   await page.getByRole("button", { name: "Battery charging", exact: true }).click();
@@ -136,6 +166,15 @@ try {
   assert(await page.locator("html").getAttribute("data-theme") === "dark", "Dark theme was not applied");
 
   await page.goto(`${apiOrigin}/ui/energy`, { waitUntil: "domcontentloaded" });
+  const metricToggle = page.locator(".series-picker label").filter({ hasText: "Solar" });
+  assert(await metricToggle.isVisible(), "Visible metric controls did not render");
+  assert(await page.getByLabel("Chart series").count() === 0, "Combined history repeats the Visible Metrics legend below the chart");
+  await metricToggle.hover();
+  assert(await metricToggle.evaluate((element) => getComputedStyle(element).transform !== "none"), "Visible metric control has no hover affordance");
+  await page.getByRole("checkbox", { name: "Solar" }).click();
+  assert(!await page.getByRole("checkbox", { name: "Solar" }).isChecked(), "Visible metric control did not hide its series");
+  await page.getByRole("checkbox", { name: "Solar" }).click();
+  assert(await page.getByRole("checkbox", { name: "Solar" }).isChecked(), "Visible metric control did not restore its series");
   assert(await page.getByRole("heading", { name: "Circuit history" }).isVisible(), "Smart Cosmo circuit history is missing");
   assert(await page.locator(".circuit-picker select").isVisible(), "Circuit selector is missing");
   assert(await page.locator(".circuit-history-chart svg").isVisible(), "Circuit history graph did not render");
@@ -147,7 +186,9 @@ try {
 
   await page.goto(`${apiOrigin}/ui/battery`, { waitUntil: "domcontentloaded" });
   assert(await page.getByRole("heading", { name: "Battery", exact: true }).isVisible(), "Battery workspace did not render");
-  assert(await page.getByRole("img", { name: /battery power and state of charge/ }).isVisible(), "Battery timeline did not render");
+  const batteryTimeline = page.getByRole("img", { name: /battery power and state of charge/ });
+  await batteryTimeline.waitFor();
+  assert(await batteryTimeline.isVisible(), "Battery timeline did not render");
   assert(await page.getByText("Direct operation", { exact: true }).isVisible(), "Manual controls are not persistently visible");
   await page.getByRole("button", { name: "Charge", exact: true }).click();
   assert(await page.getByRole("dialog", { name: "Start manual charging" }).isVisible(), "Physical command review did not open");
@@ -186,7 +227,9 @@ try {
 
   await page.goto(`${apiOrigin}/ui/energy`, { waitUntil: "domcontentloaded" });
   assert(await page.getByRole("heading", { name: "Energy", exact: true }).isVisible(), "Production deep link did not render");
-  assert(await page.getByText("Simulated environment", { exact: false }).isVisible(), "Production build lost the simulator banner");
+  const simulatorBanner = page.getByText("Simulated environment", { exact: false });
+  await simulatorBanner.waitFor();
+  assert(await simulatorBanner.isVisible(), "Production build lost the simulator banner");
   await page.getByRole("img", { name: "24h energy history" }).waitFor();
   assert(await page.getByRole("img", { name: "24h energy history" }).isVisible(), "Combined Energy chart did not render");
   assert(await page.getByRole("heading", { name: "Circuit history" }).isVisible(), "Circuit history did not render");

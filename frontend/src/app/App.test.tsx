@@ -135,8 +135,9 @@ describe("React application shell", () => {
     expect(await screen.findAllByText("68%")).not.toHaveLength(0);
     expect(screen.getByRole("heading", { name: "Home energy overview" })).toBeVisible();
     expect(screen.queryByRole("button", { name: /charge|discharge|backup/i })).not.toBeInTheDocument();
-    expect(await screen.findByRole("img", { name: /Last 24 hours/ })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Energy outcomes" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Full history →" })).toHaveAttribute("href", "/energy");
+    expect(screen.queryByRole("img", { name: /Last 24 hours of home energy/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Current measurements" })).not.toBeInTheDocument();
   });
 
@@ -150,6 +151,11 @@ describe("React application shell", () => {
 
     expect(await screen.findByRole("heading", { name: "Energy" })).toBeVisible();
     expect(await screen.findByRole("img", { name: /24h energy history/ })).toBeVisible();
+    expect(screen.getByRole("group", { name: /Visible metrics/ })).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: "Solar" })).toBeChecked();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Solar" }));
+    expect(screen.getByRole("checkbox", { name: "Solar" })).not.toBeChecked();
+    expect(screen.queryByLabelText("Chart series")).not.toBeInTheDocument();
     expect(screen.getAllByText("Kitchen").length).toBeGreaterThan(0);
     expect(screen.getByText(/minimum coverage 100%/)).toBeVisible();
     expect(screen.getByText("3.2 kWh")).toBeVisible();
@@ -170,9 +176,17 @@ describe("React application shell", () => {
 
     expect(await screen.findByRole("heading", { name: "Energy Sources" })).toBeVisible();
     expect(screen.getByRole("img", { name: /Peak grid 5.6%/ })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Today at a glance" })).toBeVisible();
+    expect(screen.getAllByText("Today", { exact: true })).toHaveLength(1);
     expect(screen.getByRole("heading", { name: "Ene-Farm Activity" })).toBeVisible();
-    expect(screen.getByRole("img", { name: "Ene-Farm operating states today" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Off-Peak Savings" })).toBeVisible();
+    expect(screen.getByRole("group", { name: "Ene-Farm operating states for today" })).toBeVisible();
+    const stoppedInterval = screen.getByRole("img", { name: /Stopped\. Start .* Finish .* Duration 6h 0m 0s/ });
+    fireEvent.pointerEnter(stoppedInterval);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(/Stopped/);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(/6h 0m 0s/);
+    fireEvent.pointerLeave(stoppedInterval);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Estimated Off-Peak Savings" })).toBeVisible();
     expect(screen.getByText("¥12")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Grid use" }));
     expect(screen.getByText("¥5")).toBeVisible();

@@ -111,9 +111,9 @@ The Overview is intentionally opinionated rather than customizable by default.
 │ Ene-Farm ─┼─ Home ─ Grid             │ Reserve 30%             │
 │ Battery ─┘                           │ [Battery details]       │
 ├──────────────────────────────────────┼────────────────────────┤
-│ Last 24 hours: combined power chart  │ Next automation action │
-│ Demand / solar / grid / battery      │ Charge 02:00–05:30      │
-│ [1h] [8h] [24h] [3d] [Custom]        │ Target 84% · high conf. │
+│ Energy sources and Ene-Farm activity │ Next automation action │
+│ At-a-glance daily composition        │ Charge 02:00–05:30      │
+│ [Open detailed Energy history]        │ Target 84% · high conf. │
 ├──────────────────────────────────────┴────────────────────────┤
 │ Today: used · self-powered · imported · exported · cost      │
 ├───────────────────────────────────────────────────────────────┤
@@ -124,7 +124,7 @@ The Overview is intentionally opinionated rather than customizable by default.
 Key changes:
 
 - Replace separate live-value cards with one energy-flow composition. It should visualize direction and magnitude without animated decoration that makes the screen restless.
-- Use one aligned, multi-series chart for comparison. Series can be toggled, but demand, local generation, grid exchange, and battery power share a timeline.
+- Keep the aligned, multi-series comparison chart in Energy, where its period and series controls support deliberate exploration. Overview links to that workspace instead of duplicating it.
 - Give State of Charge, reserve, operating mode, and charge/discharge state one coherent Battery card.
 - Summarize the next automation action with a plain-language reason and link to the full plan.
 - Keep daily outcomes in a single strip instead of separate large cards.
@@ -456,7 +456,7 @@ freshness, data quality, sign conventions, route ownership, and command states.
 **Exit:** normal household status is understandable in under ten seconds on desktop and phone; all current live/history metrics remain accessible. The telemetry-parity checkpoint below closes the remaining specialized dashboard views before Phase 3 begins.
 
 **Implemented:** the React Overview now combines live flow, battery state,
-24-hour comparison, and today's outcomes. Energy provides Live through 30-day
+daily source/activity summaries, and today's outcomes. Energy provides Live through 30-day
 periods, selectable power/SOC/hot-water series, an accessible chart table,
 quality/coverage context, battery balance, and circuit totals. Specialized circuit graphs, source composition, Ene-Farm activity/details, and the complete off-peak savings split remain assigned to Phase 2.5. Legacy graph URLs
 redirect to the matching focused Energy series. The route remains read-only and

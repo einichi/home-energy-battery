@@ -36,6 +36,16 @@ describe("combined energy chart", () => {
     expect(screen.getAllByText("0 W").length).toBeGreaterThan(0);
   });
 
+  it("can omit its passive legend when metric controls already identify the series", () => {
+    render(<CombinedEnergyChart
+      label="Controlled history"
+      selected={["houseDemandW"]}
+      showSeriesLegend={false}
+      samples={[{ timestamp: "2026-09-12T11:00:00.000Z", houseDemandW: 1200 }]}
+    />);
+    expect(screen.queryByLabelText("Chart series")).not.toBeInTheDocument();
+  });
+
   it("shows reserve and operational windows on a battery timeline", () => {
     const { container } = render(<CombinedEnergyChart
       label="Battery timeline"

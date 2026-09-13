@@ -114,7 +114,7 @@ export function EnergyPage() {
           <TimeRangeControl value={range} onChange={setRange} />
         </div>
         <fieldset className="series-picker">
-          <legend>Visible metrics</legend>
+          <legend>Visible metrics <span>· Select to show or hide</span></legend>
           {selectableSeries.map((key) => (
             <label key={key} style={{ "--series-color": energySeries[key].color } as CSSProperties}>
               <input type="checkbox" checked={selected.includes(key)} onChange={() => toggleSeries(key)} />
@@ -122,7 +122,7 @@ export function EnergyPage() {
             </label>
           ))}
         </fieldset>
-        <CombinedEnergyChart samples={chartSamples} selected={selected} label={`${range} energy history`} />
+        <CombinedEnergyChart samples={chartSamples} selected={selected} label={`${range} energy history`} showSeriesLegend={false} />
         <div className="quality-note"><strong>Data quality</strong><span>{dataQualityDescription(history.summary.dataQuality)}</span></div>
       </section>
 
