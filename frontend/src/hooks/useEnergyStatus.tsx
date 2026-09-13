@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { AppConfig, LoadingState, StatusSnapshot } from "../api/contracts";
 import { getConfig, getStatus } from "../api/queries";
@@ -7,6 +7,7 @@ type EnergyStatusContextValue = {
   config: AppConfig | null;
   status: StatusSnapshot | null;
   loadingState: LoadingState;
+  manualRefreshing: boolean;
   error: string | null;
   refresh: () => void;
 };
@@ -19,7 +20,15 @@ export function EnergyStatusProvider({ children }: { children: ReactNode }) {
   const [loadingState, setLoadingState] = useState<LoadingState>("loading");
   const [error, setError] = useState<string | null>(null);
   const [refreshSequence, setRefreshSequence] = useState(0);
+  const [manualRefreshing, setManualRefreshing] = useState(false);
   const latestRequest = useRef(0);
+  const manualRefreshQueued = useRef(false);
+
+  const refresh = useCallback(() => {
+    manualRefreshQueued.current = true;
+    setManualRefreshing(true);
+    setRefreshSequence((sequence) => sequence + 1);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -37,6 +46,8 @@ export function EnergyStatusProvider({ children }: { children: ReactNode }) {
     let stopped = false;
 
     const poll = async () => {
+      const isManualRefresh = manualRefreshQueued.current;
+      manualRefreshQueued.current = false;
       const request = ++latestRequest.current;
       controller?.abort();
       controller = new AbortController();
@@ -52,6 +63,7 @@ export function EnergyStatusProvider({ children }: { children: ReactNode }) {
         setError(reason instanceof Error ? reason.message : "Status request failed");
         setLoadingState("error");
       } finally {
+        if (isManualRefresh) setManualRefreshing(false);
         if (!stopped) {
           const interval = Math.max(5, config?.updateIntervalSeconds ?? 15) * 1000;
           timer = window.setTimeout(poll, document.hidden ? Math.max(interval, 300_000) : interval);
@@ -79,9 +91,10 @@ export function EnergyStatusProvider({ children }: { children: ReactNode }) {
     config,
     status,
     loadingState,
+    manualRefreshing,
     error,
-    refresh: () => setRefreshSequence((sequence) => sequence + 1),
-  }), [config, status, loadingState, error]);
+    refresh,
+  }), [config, status, loadingState, manualRefreshing, error, refresh]);
 
   return <EnergyStatusContext.Provider value={value}>{children}</EnergyStatusContext.Provider>;
 }

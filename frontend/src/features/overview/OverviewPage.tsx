@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { CombinedEnergyChart } from "../../components/CombinedEnergyChart";
 import { EnergyFlow } from "../../components/EnergyFlow";
-import { Metric } from "../../components/Metric";
 import { OutcomeStrip } from "../../components/OutcomeStrip";
 import { formatFreshness, formatPower, formatSoc, metricValue } from "../../core/format";
 import { withLatestStatus } from "../../core/energy";
@@ -15,7 +14,7 @@ function preferredFuelCell(status: ReturnType<typeof useEnergyStatus>["status"])
 }
 
 export function OverviewPage() {
-  const { status, loadingState, error, refresh: refreshStatus } = useEnergyStatus();
+  const { status, loadingState, manualRefreshing, error, refresh: refreshStatus } = useEnergyStatus();
   const { history, loading: historyLoading, refresh: refreshHistory } = useHistoryRange(24 * 60 * 60_000);
   const todayStart = useMemo(() => {
     const value = new Date();
@@ -42,8 +41,8 @@ export function OverviewPage() {
           <h1>Home energy overview</h1>
           <p>{formatFreshness(status?.read_at)}</p>
         </div>
-        <button className="quiet-button" type="button" onClick={() => { refreshStatus(); refreshHistory(); refreshToday(); }} disabled={loadingState === "loading" || loadingState === "refreshing"}>
-          {loadingState === "refreshing" ? "Refreshing…" : "Refresh"}
+        <button className="quiet-button" type="button" onClick={() => { refreshStatus(); refreshHistory(); refreshToday(); }} disabled={loadingState === "loading" || manualRefreshing}>
+          {manualRefreshing ? "Refreshing…" : "Refresh"}
         </button>
       </header>
 
@@ -95,17 +94,6 @@ export function OverviewPage() {
         <OutcomeStrip summary={todayHistory.summary} compact />
       </section>
 
-      <section className="metric-grid" aria-labelledby="snapshot-heading">
-        <div className="section-heading section-heading-wide">
-          <div><p className="eyebrow">Snapshot</p><h2 id="snapshot-heading">Current measurements</h2></div>
-        </div>
-        <Metric label="House demand" value={formatPower(demandPower)} detail="Current household load" />
-        <Metric label="Solar generation" value={formatPower(solarPower)} detail="Local renewable generation" tone="solar" />
-        <Metric label="Battery power" value={formatPower(batteryPower)} detail="Charge or discharge power" tone="battery" />
-        <Metric label="Grid import" value={formatPower(gridImport)} detail="Power bought from the grid" tone="grid" />
-        <Metric label="Grid export" value={formatPower(gridExport)} detail="Power sent to the grid" tone="grid" />
-        <Metric label="Ene-Farm" value={formatPower(fuelCellPower)} detail={fuelCell?.generation_status?.value ?? "Generation state unavailable"} tone="fuel-cell" />
-      </section>
     </main>
   );
 }

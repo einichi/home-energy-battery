@@ -93,12 +93,22 @@
 .chart-time-overlay[data-tone="schedule"] { fill: var(--solar); opacity: .7; }
 .chart-reserve-line { stroke: var(--warning); stroke-dasharray: 7 5; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .chart-reserve-label { fill: var(--warning); font-weight: 750; }
+.chart-series-legend { display: flex; flex-wrap: wrap; gap: 7px 15px; margin-top: -2px; color: var(--text-muted); font-size: .68rem; }
+.chart-series-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.chart-series-legend i { display: inline-block; width: 16px; height: 3px; border-radius: 99px; }
 .chart-overlay-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: -2px; color: var(--text-muted); font-size: .68rem; }
 .chart-overlay-legend span::before { content: ""; display: inline-block; width: 12px; height: 7px; margin-right: 5px; border-radius: 2px; background: var(--battery); opacity: .35; }
 .chart-overlay-legend span[data-tone="discharge"]::before { background: var(--grid); }
 .chart-overlay-legend span[data-tone="schedule"]::before { width: 3px; background: var(--solar); opacity: .9; }
 .chart-axis-label { fill: var(--text-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
 .chart-series-line { fill: none; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2.4; vector-effect: non-scaling-stroke; }
+.chart-pointer-target { fill: transparent; cursor: crosshair; touch-action: none; }
+.chart-tooltip { pointer-events: none; }
+.chart-hover-line { stroke: var(--text-muted); stroke-dasharray: 3 3; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.chart-tooltip-surface { fill: var(--surface); stroke: var(--border-strong); stroke-width: 1; filter: drop-shadow(0 5px 10px rgb(0 0 0 / 14%)); }
+.chart-tooltip-time { fill: var(--text); font-size: 11px; font-weight: 780; }
+.chart-tooltip-value { fill: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.chart-hover-summary { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .chart-empty { display: grid; min-height: 260px; place-items: center; color: var(--text-muted); font-size: 0.84rem; text-align: center; }
 .chart-table-disclosure { margin-top: 4px; border-top: 1px solid var(--border); padding-top: 12px; }
 .chart-table-disclosure summary { color: var(--text-muted); cursor: pointer; font-size: 0.74rem; font-weight: 720; }
@@ -157,15 +167,9 @@ tbody td { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .battery-timeline-panel { margin-top: 18px; padding: 24px; }
 .control-panel { display: grid; align-content: start; gap: 15px; padding: 24px; }
 .section-copy { margin: 8px 0 0; color: var(--text-muted); font-size: .78rem; line-height: 1.55; }
-.manual-panel { position: relative; display: block; }
-.manual-summary { cursor: pointer; list-style: none; }
-.manual-summary::-webkit-details-marker { display: none; }
-.manual-summary > span { display: grid; gap: 5px; }
-.manual-summary strong { font-size: 1.08rem; }
-.manual-summary small { color: var(--text-muted); font-size: .72rem; font-weight: 600; }
-.manual-summary::after { content: "+"; position: absolute; inset: 24px 24px auto auto; color: var(--accent); font-size: 1.3rem; }
-.manual-panel[open] .manual-summary::after { content: "−"; }
-.manual-content { display: grid; gap: 15px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+.manual-panel { position: relative; }
+.manual-panel .section-heading small { display: block; margin-top: 5px; color: var(--text-muted); font-size: .72rem; font-weight: 600; }
+.manual-content { display: grid; gap: 15px; padding-top: 1px; }
 .field { display: grid; gap: 7px; color: var(--text-muted); font-size: .72rem; font-weight: 750; }
 .field input, .field select, .window-row select { width: 100%; min-height: 42px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); color: var(--text); }
 .input-suffix { display: grid; grid-template-columns: 1fr auto; align-items: center; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); }
@@ -176,7 +180,10 @@ tbody td { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .command-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .advanced-controls { margin-top: 4px; padding-top: 14px; border-top: 1px solid var(--border); }
 .advanced-controls summary { color: var(--text-muted); cursor: pointer; font-size: .75rem; font-weight: 760; }
-.window-row { display: grid; grid-template-columns: 75px 1fr auto 1fr auto; gap: 8px; align-items: center; margin-top: 12px; color: var(--text-muted); font-size: .72rem; }
+.window-row { display: grid; grid-template-columns: 75px 1fr auto 1fr; gap: 8px; align-items: center; margin-top: 12px; color: var(--text-muted); font-size: .72rem; }
+.inline-save-result { margin: -3px 0 0; font-size: .74rem; font-weight: 720; line-height: 1.45; }
+.inline-save-result.success { color: var(--success); }
+.inline-save-result.failure { color: var(--critical); }
 .backup-panel { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(150px, .4fr) minmax(190px, .5fr) auto; gap: 24px; align-items: center; margin-top: 18px; padding: 24px; }
 .backup-panel p:last-child { max-width: 650px; margin: 8px 0 0; color: var(--text-muted); font-size: .78rem; line-height: 1.5; }
 .backup-state { display: grid; gap: 4px; }
@@ -202,6 +209,11 @@ tbody td { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .schedule-calendar-day .schedule-calendar-empty { border-left: 0; background: transparent; color: var(--text-faint); font-size: .65rem; }
 .calendar-note { margin: 10px 0 0; color: var(--text-faint); font-size: .66rem; }
 .schedule-form { display: grid; grid-template-columns: 1.1fr 1.4fr 1fr .8fr auto; gap: 10px; align-items: end; margin-top: 18px; padding: 16px; border-radius: 12px; background: var(--surface-subtle); }
+.schedule-form-fields { display: grid; grid-template-columns: 1.1fr 1.4fr 1fr .8fr auto; grid-column: 1 / -1; gap: 10px; align-items: end; min-width: 0; margin: 0; padding: 0; border: 0; }
+.schedule-form-fields:disabled { opacity: .52; }
+.automation-disabled-note { display: grid; gap: 5px; margin-top: 18px; padding: 13px 15px; border: 1px solid color-mix(in srgb, var(--warning) 42%, var(--border)); border-radius: 11px; background: var(--solar-soft); }
+.automation-disabled-note strong { font-size: .8rem; }
+.automation-disabled-note span { color: var(--text-muted); font-size: .72rem; line-height: 1.5; }
 .paired-fields { display: grid; grid-template-columns: .65fr 1fr; gap: 6px; }
 .compact-window { display: grid; min-height: 42px; align-items: center; padding: 0 11px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); }
 .schedule-days { display: flex; grid-column: 1 / -1; flex-wrap: wrap; gap: 7px; margin: 3px 0 0; padding: 0; border: 0; }
@@ -296,7 +308,7 @@ tbody td { color: var(--text-muted); font-variant-numeric: tabular-nums; }
   .window-row { grid-template-columns: 1fr 1fr; }
   .window-row > span:nth-child(3) { display: none; }
   .schedule-list article { align-items: flex-start; flex-direction: column; }
-  .schedule-form { grid-template-columns: 1fr; }
+  .schedule-form, .schedule-form-fields { grid-template-columns: 1fr; }
   .schedule-review-note { align-items: flex-start; flex-direction: column; }
   .command-review { grid-template-columns: 1fr; }
 }

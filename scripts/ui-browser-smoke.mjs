@@ -70,6 +70,12 @@ launcher.stderr.on("data", (chunk) => { launcherOutput += chunk; });
 let browser;
 try {
   await waitFor(`${apiOrigin}/api/config`, launcher);
+  const fiveSecondRefresh = await fetch(`${apiOrigin}/api/config`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ updateIntervalSeconds: 5 }),
+  });
+  assert(fiveSecondRefresh.ok, "Could not configure the simulator for five-second refresh QA");
   const executablePath = await firstExecutable([
     process.env.UI_BROWSER_EXECUTABLE,
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -105,8 +111,19 @@ try {
   await page.getByText("62%", { exact: true }).first().waitFor();
   assert(await page.getByText("62%", { exact: true }).first().isVisible(), "Expected simulator battery SOC");
   assert(await page.getByText("850 W", { exact: true }).first().isVisible(), "Expected simulator solar power");
-  assert(await page.getByRole("img", { name: "Last 24 hours of home energy" }).isVisible(), "Overview history chart did not render");
+  const overviewChart = page.getByRole("img", { name: "Last 24 hours of home energy" });
+  assert(await overviewChart.isVisible(), "Overview history chart did not render");
+  assert(await page.getByLabel("Chart series").getByText("Demand", { exact: true }).isVisible(), "Chart series legend did not render");
+  await overviewChart.hover({ position: { x: 420, y: 150 } });
+  assert(await page.locator(".chart-tooltip").isVisible(), "Chart hover details did not render");
   assert(await page.getByRole("heading", { name: "Energy outcomes" }).isVisible(), "Overview daily outcomes did not render");
+  assert(await page.getByRole("heading", { name: "Current measurements" }).count() === 0, "Overview still duplicates Live Power in a Snapshot section");
+  const refreshLabels = [];
+  for (let sample = 0; sample < 24; sample += 1) {
+    refreshLabels.push(await page.getByRole("button", { name: /Refresh/ }).first().textContent());
+    await page.waitForTimeout(250);
+  }
+  assert(!refreshLabels.includes("Refreshing…"), "Automatic five-second polling visibly toggled the manual Refresh button");
 
   await page.locator(".sidebar .theme-control select").selectOption("dark");
   assert(await page.locator("html").getAttribute("data-theme") === "dark", "Dark theme was not applied");
@@ -114,11 +131,12 @@ try {
   await page.goto(`${apiOrigin}/ui/battery`, { waitUntil: "domcontentloaded" });
   assert(await page.getByRole("heading", { name: "Battery", exact: true }).isVisible(), "Battery workspace did not render");
   assert(await page.getByRole("img", { name: /battery power and state of charge/ }).isVisible(), "Battery timeline did not render");
-  await page.getByText("Direct operation", { exact: true }).click();
+  assert(await page.getByText("Direct operation", { exact: true }).isVisible(), "Manual controls are not persistently visible");
   await page.getByRole("button", { name: "Charge", exact: true }).click();
   assert(await page.getByRole("dialog", { name: "Start manual charging" }).isVisible(), "Physical command review did not open");
   await page.getByRole("button", { name: "Send command" }).click();
   await page.getByText("Command completed and device state was verified.").waitFor();
+  await page.getByText("Manual charge", { exact: true }).waitFor();
   assert(await page.getByText("Manual charge", { exact: true }).isVisible(), "Durable command receipt did not render");
   await page.getByRole("button", { name: "Close receipt" }).click();
   await assertOperationalBanner(page, "Manual control", "Manual override was not made globally visible");
@@ -130,17 +148,17 @@ try {
   await page.getByRole("link", { name: "Schedules", exact: true }).click();
   assert(await page.getByRole("heading", { name: "Battery schedules" }).isVisible(), "Battery schedules subpage is missing");
   assert(await page.getByRole("heading", { name: "Seven-day plan" }).isVisible(), "Battery schedule calendar is missing");
-  await page.getByRole("link", { name: "Backup preparation", exact: true }).click();
-  assert(await page.getByRole("heading", { name: "Backup Preparation", exact: true }).first().isVisible(), "Backup Preparation subpage is missing");
-  await page.getByRole("button", { name: "Review start" }).click();
-  assert(await page.getByText(/Reserve remains 20%/).isVisible(), "Backup Preparation did not preview reserve behavior");
-  assert(await page.getByText(/Demand Guard will remain available/).isVisible(), "Backup Preparation did not preview Demand Guard ownership");
-  assert(await page.getByText(/Ending restores the prior profile/).isVisible(), "Backup Preparation did not preview restoration");
+  await page.getByRole("link", { name: "Disaster Prep / 停電対策", exact: true }).click();
+  assert(await page.getByRole("heading", { name: "Disaster Prep / 停電対策", exact: true }).first().isVisible(), "Disaster Prep subpage is missing");
+  await page.getByRole("button", { name: "Start", exact: true }).click();
+  assert(await page.getByText(/20% reserve remains unchanged/).isVisible(), "Disaster Prep did not preview reserve behavior");
+  assert(await page.getByText(/Demand Guard will remain available/).isVisible(), "Disaster Prep did not preview Demand Guard ownership");
+  assert(await page.getByText(/temporary changes are reversed/).isVisible(), "Disaster Prep did not preview restoration");
   await page.getByRole("button", { name: "Send command" }).click();
   await page.getByText("Command completed and device state was verified.").waitFor();
   await page.getByRole("button", { name: "Close receipt" }).click();
   await page.goto(`${apiOrigin}/ui/energy`, { waitUntil: "domcontentloaded" });
-  await assertOperationalBanner(page, "Backup Preparation", "Backup Preparation was not persistent across the app");
+  await assertOperationalBanner(page, "Disaster Prep / 停電対策", "Disaster Prep was not persistent across the app");
 
   await page.setViewportSize({ width: 390, height: 844 });
   assert(await page.locator(".mobile-navigation").isVisible(), "Mobile navigation is not visible at phone width");

@@ -45,7 +45,7 @@ export function EnergyPage() {
   const requestedMetric = metricAliases[searchParams.get("metric") ?? ""];
   const [range, setRange] = useState<TimeRangeId>("24h");
   const [selected, setSelected] = useState<EnergySeriesKey[]>(requestedMetric ? [requestedMetric] : defaultSeries);
-  const { status, loadingState, refresh: refreshStatus } = useEnergyStatus();
+  const { status, loadingState, manualRefreshing, refresh: refreshStatus } = useEnergyStatus();
   const { history, loading, error, refresh: refreshHistory } = useHistoryRange(
     timeRangeMilliseconds(range),
     range === "live" ? status?.read_at : undefined,
@@ -88,7 +88,7 @@ export function EnergyPage() {
     <main className="page energy-page">
       <header className="page-heading">
         <div><p className="eyebrow">Explore</p><h1>Energy</h1><p>Compare demand, generation, storage, and grid exchange on one timeline.</p></div>
-        <button className="quiet-button" type="button" onClick={refresh} disabled={loading || loadingState === "refreshing"}>{loading ? "Loading…" : "Refresh"}</button>
+        <button className="quiet-button" type="button" onClick={refresh} disabled={(loading && !history.samples.length) || loadingState === "loading" || manualRefreshing}>{loading && !history.samples.length ? "Loading…" : manualRefreshing ? "Refreshing…" : "Refresh"}</button>
       </header>
 
       {error ? <div className="status-banner" data-severity="critical">History: {error}</div> : null}

@@ -115,11 +115,11 @@ database migration.
 
 Battery owns three routed views: status and control at `/ui/battery`, the
 seven-day schedule calendar and guided editor at `/ui/battery/schedules`, and
-Backup Preparation at `/ui/battery/backup`. Manual or backup ownership is
+Disaster Prep / 停電対策 at `/ui/battery/backup`. Manual or disaster-prep ownership is
 reported by `/api/status` and rendered by the application shell, so its banner
 survives route changes. The server remains the authority for strategy ownership,
 command acknowledgement, fresh readback comparison, schedule execution, and
-Backup Preparation restoration.
+Disaster Prep restoration.
 
 ## Development boundary
 

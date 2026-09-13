@@ -63,11 +63,11 @@ const schedules = [
   { id: "schedule-2", name: "Reserve before morning", action: "discharge-limit", payload: { percent: 40 }, repeat: "daily", days: [0, 1, 2, 3, 4, 5, 6], time: "02:00", enabled: true },
 ];
 
-function mockApi(commandState: "succeeded" | "mismatched" = "succeeded") {
+function mockApi(commandState: "succeeded" | "mismatched" = "succeeded", adaptiveEnabled = false) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const body = url.endsWith("/api/config")
-      ? config
+      ? { ...config, adaptiveCharging: { enabled: adaptiveEnabled } }
       : url.includes("/api/history?")
         ? history
         : url.includes("/api/command-receipts")
@@ -107,6 +107,7 @@ describe("React application shell", () => {
     expect(screen.queryByRole("button", { name: /charge|discharge|backup/i })).not.toBeInTheDocument();
     expect(await screen.findByRole("img", { name: /Last 24 hours/ })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Energy outcomes" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Current measurements" })).not.toBeInTheDocument();
   });
 
   it("consolidates current, historical, quality, and circuit data on Energy", async () => {
@@ -149,7 +150,6 @@ describe("React application shell", () => {
     expect(await screen.findByRole("heading", { name: "Battery" })).toBeVisible();
     expect(await screen.findByRole("img", { name: /battery power and state of charge/ })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Device-managed operation" })).toBeVisible();
-    fireEvent.click(screen.getByText("Direct operation"));
     fireEvent.click(screen.getByRole("button", { name: "Charge" }));
     expect(screen.getByRole("dialog", { name: "Start manual charging" })).toBeVisible();
     expect(screen.getByText(/pause Adaptive Charging/)).toBeVisible();
@@ -177,11 +177,11 @@ describe("React application shell", () => {
       "/api/schedules",
       expect.objectContaining({ method: "POST" }),
     ));
-    fireEvent.click(screen.getByRole("link", { name: "Backup preparation" }));
-    expect(await screen.findByRole("heading", { name: "Backup Preparation", level: 1 })).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Review start" }));
-    expect(screen.getByRole("dialog", { name: "Start Backup Preparation" })).toBeVisible();
-    expect(screen.getByText(/Reserve remains 20%/)).toBeVisible();
+    fireEvent.click(screen.getByRole("link", { name: "Disaster Prep / 停電対策" }));
+    expect(await screen.findByRole("heading", { name: "Disaster Prep / 停電対策", level: 1 })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    expect(screen.getByRole("dialog", { name: "Start Disaster Prep" })).toBeVisible();
+    expect(screen.getByText(/temporary changes are reversed/i)).toBeVisible();
   });
 
   it("never presents a readback mismatch as command success", async () => {
@@ -193,7 +193,6 @@ describe("React application shell", () => {
     );
 
     await screen.findByRole("heading", { name: "Battery" });
-    fireEvent.click(screen.getByText("Direct operation"));
     fireEvent.click(screen.getByRole("button", { name: "Charge" }));
     fireEvent.click(screen.getByRole("button", { name: "Send command" }));
 
@@ -202,5 +201,39 @@ describe("React application shell", () => {
     expect(screen.getByText("Device acknowledged").closest("li")).toHaveAttribute("data-state", "complete");
     expect(screen.getByText("Fresh readback verified").closest("li")).toHaveAttribute("data-state", "muted");
     expect(screen.getByRole("button", { name: "Close receipt" })).toBeEnabled();
+  });
+
+  it("saves everyday controls directly and clearly confirms success", async () => {
+    const fetchMock = mockApi();
+    render(
+      <MemoryRouter initialEntries={["/battery"]}>
+        <AppProviders><App /></AppProviders>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("heading", { name: "Battery" });
+    fireEvent.change(screen.getByLabelText("Minimum reserve"), { target: { value: "30" } });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText(/saved and verified on the battery/i)).toBeVisible();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/device-commands",
+      expect.objectContaining({ method: "POST", body: expect.stringContaining("discharge-limit") }),
+    ));
+  });
+
+  it("makes schedule suspension explicit while Adaptive Charging is enabled", async () => {
+    mockApi("succeeded", true);
+    render(
+      <MemoryRouter initialEntries={["/battery/schedules"]}>
+        <AppProviders><App /></AppProviders>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/Schedules are disabled while Adaptive Charging is on/)).toBeVisible();
+    expect(screen.getAllByText("Paused by Adaptive Charging")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: /Review schedule/ })).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: "Disable" })[0]).toBeDisabled();
+    expect(screen.getByText("0 planned changes")).toBeVisible();
   });
 });

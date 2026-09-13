@@ -1,4 +1,5 @@
-import { useId } from "react";
+import { useId, useState } from "react";
+import type { PointerEvent } from "react";
 import type { EnergySample } from "../api/contracts";
 import { formatChartTime, formatPower } from "../core/format";
 import { energySeries } from "../core/energySeries";
@@ -48,6 +49,7 @@ export function CombinedEnergyChart({ samples, selected, label = "Energy history
   reservePercent?: number | null;
 }) {
   const titleId = useId();
+  const [hoveredTimestamp, setHoveredTimestamp] = useState<string | null>(null);
   const validSamples = downsample(samples.filter((sample) => Number.isFinite(new Date(sample.timestamp).getTime())));
   const timestamps = validSamples.map((sample) => new Date(sample.timestamp).getTime());
   const start = Math.min(...timestamps);
@@ -73,6 +75,31 @@ export function CombinedEnergyChart({ samples, selected, label = "Energy history
   const tableSamples = validSamples.length > 24
     ? downsample(validSamples, 24)
     : validSamples;
+  const hoveredSample = hoveredTimestamp === null
+    ? null
+    : validSamples.find((sample) => sample.timestamp === hoveredTimestamp) ?? null;
+  const hoveredX = hoveredSample ? x(hoveredSample.timestamp) : null;
+  const tooltipWidth = 224;
+  const tooltipHeight = 31 + definitions.length * 18;
+  const tooltipX = hoveredX === null
+    ? chart.left
+    : hoveredX > chart.width / 2 ? hoveredX - tooltipWidth - 12 : hoveredX + 12;
+
+  const showNearestSample = (event: PointerEvent<SVGSVGElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const ratio = bounds.width > 0
+      ? Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width))
+      : 0.5;
+    const viewX = ratio * chart.width;
+    const plotRatio = Math.max(0, Math.min(1, (viewX - chart.left) / plotWidth));
+    const targetTime = start + plotRatio * (end - start);
+    const nearest = validSamples.reduce((best, sample) => (
+      Math.abs(new Date(sample.timestamp).getTime() - targetTime) < Math.abs(new Date(best.timestamp).getTime() - targetTime)
+        ? sample
+        : best
+    ));
+    setHoveredTimestamp(nearest.timestamp);
+  };
 
   if (!validSamples.length || !hasSelectedValues) {
     return <div className="chart-empty" role="status">No readings are available for this period yet.</div>;
@@ -80,7 +107,7 @@ export function CombinedEnergyChart({ samples, selected, label = "Energy history
 
   return (
     <div className="combined-chart">
-      <svg viewBox={`0 0 ${chart.width} ${chart.height}`} role="img" aria-labelledby={titleId}>
+      <svg viewBox={`0 0 ${chart.width} ${chart.height}`} role="img" aria-labelledby={titleId} onPointerMove={showNearestSample} onPointerLeave={() => setHoveredTimestamp(null)}>
         <title id={titleId}>{label}</title>
         {overlays.map((overlay, index) => {
           const overlayStart = Math.max(start, new Date(overlay.start).getTime());
@@ -129,10 +156,35 @@ export function CombinedEnergyChart({ samples, selected, label = "Energy history
             <circle key={definition.key} cx={chart.left + plotWidth / 2} cy={(definition.axis === "power" ? powerY : percentY)(value)} r="4" fill={definition.color} />
           );
         }) : null}
+        {hoveredSample && hoveredX !== null ? (
+          <g className="chart-tooltip" aria-hidden="true">
+            <line className="chart-hover-line" x1={hoveredX} x2={hoveredX} y1={chart.top} y2={chart.top + plotHeight} />
+            {definitions.map((definition) => {
+              const value = definition.value(hoveredSample);
+              return value === null ? null : <circle key={definition.key} cx={hoveredX} cy={(definition.axis === "power" ? powerY : percentY)(value)} r="4" fill={definition.color} />;
+            })}
+            <rect className="chart-tooltip-surface" x={tooltipX} y={chart.top + 6} width={tooltipWidth} height={tooltipHeight} rx="8" />
+            <text className="chart-tooltip-time" x={tooltipX + 12} y={chart.top + 25}>{formatChartTime(hoveredSample.timestamp, true)}</text>
+            {definitions.map((definition, index) => {
+              const value = definition.value(hoveredSample);
+              return (
+                <g key={definition.key}>
+                  <circle cx={tooltipX + 14} cy={chart.top + 44 + index * 18} r="3" fill={definition.color} />
+                  <text className="chart-tooltip-value" x={tooltipX + 23} y={chart.top + 48 + index * 18}>{definition.label}: {value === null ? "—" : definition.display(value)}</text>
+                </g>
+              );
+            })}
+          </g>
+        ) : null}
+        <rect className="chart-pointer-target" x={chart.left} y={chart.top} width={plotWidth} height={plotHeight} />
         <text className="chart-axis-label" x={chart.left} y={chart.height - 12}>{formatChartTime(validSamples[0].timestamp, end - start > 86_400_000)}</text>
         <text className="chart-axis-label" x={chart.width - chart.right} y={chart.height - 12} textAnchor="end">{formatChartTime(validSamples.at(-1)?.timestamp ?? "", end - start > 86_400_000)}</text>
       </svg>
+      <div className="chart-series-legend" aria-label="Chart series">
+        {definitions.map((definition) => <span key={definition.key}><i style={{ background: definition.color }} aria-hidden="true" />{definition.label}</span>)}
+      </div>
       {overlays.length ? <div className="chart-overlay-legend" aria-label="Timeline overlays"><span data-tone="charge">Charge window</span><span data-tone="discharge">Discharge window</span><span data-tone="schedule">Scheduled command</span></div> : null}
+      {hoveredSample ? <div className="chart-hover-summary" role="status" aria-label="Chart reading details">{formatChartTime(hoveredSample.timestamp, true)} · {definitions.map((definition) => { const value = definition.value(hoveredSample); return `${definition.label}: ${value === null ? "unavailable" : definition.display(value)}`; }).join(" · ")}</div> : null}
       <details className="chart-table-disclosure">
         <summary>View chart as data table</summary>
         <div className="table-scroll">

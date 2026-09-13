@@ -73,7 +73,7 @@ Energy
 Battery
   Status & control
   Schedules
-  Backup preparation
+  Disaster Prep / 停電対策
 
 Automation
   Adaptive charging
@@ -153,14 +153,14 @@ The primary screen contains:
 
 - SOC, power, verified operation mode, charging profile, reserve, and latest device contact.
 - A 24-hour battery power/SOC chart with reserve and scheduled windows overlaid.
-- A “Current strategy” explanation: manual profile, scheduled command, adaptive plan, demand-guard intervention, away mode, or backup preparation.
+- A “Current strategy” explanation: manual profile, scheduled command, adaptive plan, demand-guard intervention, away mode, or Disaster Prep.
 - Direct controls for profile and reserve with current values preselected.
-- A clearly separated **Manual control** disclosure for raw charge, discharge, standby, and operation-mode commands.
+- An always-visible, clearly separated **Manual control** area for raw charge, discharge, standby, and operation-mode commands.
 - A command receipt after every action: requested, sent, device acknowledged, readback verified, or failed.
 
-Schedules become a subpage with a timeline/calendar presentation, human-readable recurrence, next run, last result, and conflict warnings. Creation uses a guided form: **when → action → value → review**, rather than displaying every payload field at once.
+Schedules become a subpage with a timeline/calendar presentation, human-readable recurrence, next run, last result, and conflict warnings. Creation uses a guided form: **when → action → value → review**, rather than displaying every payload field at once. When Adaptive Charging is enabled, schedules remain visible for reference but are clearly marked as paused and cannot be created or enabled.
 
-Backup Preparation becomes a named operational mode with a persistent banner across the app while active. Starting it must preview the held profile, reserve behavior, demand-guard permission, and how normal automation will be restored.
+Disaster Prep / 停電対策 becomes a named operational mode with a persistent banner across the app while active. Its Start action requires a plain-language confirmation covering the temporary backup profile, reserve behavior, demand-guard permission, affected automation, and automatic restoration when stopped.
 
 ### Automation: one control center
 
@@ -484,7 +484,7 @@ The UI stays pending until the durable receipt is terminal, reports mismatch and
 failure without false success, and displays recent activity. Success requires
 fresh device readback. Simulator-backed integration tests cover every exposed
 battery command plus acknowledgement delay, rejection, timeout, readback
-mismatch, manual-override visibility, Backup Preparation persistence, desktop
+mismatch, manual-override visibility, Disaster Prep persistence, desktop
 and phone navigation, and both themes without production-device access. The
 existing schema-v7 event store is reused; no database migration is introduced.
 

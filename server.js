@@ -5295,7 +5295,7 @@ async function batteryStrategyView(now = new Date()) {
 
   let strategy;
   if (backup.active) {
-    strategy = { kind: "backup-preparation", title: "Backup Preparation", description: `Holding the ${backup.currentProfile ?? "backup"} profile while normal automation is suspended.` };
+    strategy = { kind: "backup-preparation", title: "Disaster Prep / 停電対策", description: `Holding the ${backup.currentProfile ?? "backup"} profile while normal automation is suspended.` };
   } else if (guard) {
     strategy = { kind: "demand-guard", title: "Charging Demand Guard", description: "Standby is being held to preserve configured breaker headroom." };
   } else if (adaptive.owner === "adaptiveCharging") {
@@ -5312,12 +5312,12 @@ async function batteryStrategyView(now = new Date()) {
           ? `The ${recentTerminal.request?.mode ?? "selected"} charging profile was selected manually.`
           : "The latest direct battery command remains in effect until changed by another command or automation.",
     };
+  } else if (config.adaptiveCharging?.enabled) {
+    strategy = { kind: "adaptive-charging", title: "Adaptive Charging", description: adaptive.plan?.reason ?? "Waiting for the next planned charging window." };
   } else if (scheduledCommand) {
     strategy = { kind: "schedule", title: "Scheduled control", description: `The latest schedule applied ${recentTerminal.action}; that result remains in effect until another command or automation changes it.` };
   } else if (nextSchedule) {
     strategy = { kind: "schedule", title: "Scheduled control", description: `${nextSchedule.schedule.name} is next at ${nextSchedule.at}.` };
-  } else if (config.adaptiveCharging?.enabled) {
-    strategy = { kind: "adaptive-charging", title: paused ? "Adaptive Charging paused" : "Adaptive Charging", description: paused ? `Paused until ${adaptive.pausedUntil}.` : adaptive.plan?.reason ?? "Waiting for the next planned charging window." };
   } else {
     strategy = { kind: "device-auto", title: "Device-managed operation", description: "No application automation currently owns the battery." };
   }

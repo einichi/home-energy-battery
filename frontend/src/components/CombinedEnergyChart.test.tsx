@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { CombinedEnergyChart } from "./CombinedEnergyChart";
 
@@ -19,6 +19,14 @@ describe("combined energy chart", () => {
     expect(screen.getByRole("columnheader", { name: "Battery" })).toBeInTheDocument();
     expect(screen.getByText("-500 W")).toBeInTheDocument();
     expect(screen.getByText("72%")).toBeInTheDocument();
+    const legend = screen.getByLabelText("Chart series");
+    expect(within(legend).getByText("Demand")).toBeVisible();
+    expect(within(legend).getByText("Battery")).toBeVisible();
+    expect(within(legend).getByText("Battery SOC")).toBeVisible();
+
+    fireEvent.pointerMove(screen.getByRole("img", { name: "Test energy history" }), { clientX: 460 });
+    expect(screen.getByRole("status", { name: "Chart reading details" })).toHaveTextContent(/Demand: 1.2 kW/);
+    expect(screen.getByRole("status", { name: "Chart reading details" })).toHaveTextContent(/Battery SOC: 72%/);
   });
 
   it("distinguishes an empty period from a zero reading", () => {
