@@ -164,6 +164,7 @@ try {
 
   await page.locator(".sidebar .theme-control select").selectOption("dark");
   assert(await page.locator("html").getAttribute("data-theme") === "dark", "Dark theme was not applied");
+  assert(await page.locator('meta[name="theme-color"]').getAttribute("content") === "#101716", "Mobile browser chrome did not adopt the dark theme color");
 
   await page.goto(`${apiOrigin}/ui/energy`, { waitUntil: "domcontentloaded" });
   const metricToggle = page.locator(".series-picker label").filter({ hasText: "Solar" });
@@ -290,6 +291,7 @@ try {
   assert(await page.locator(".mobile-navigation").getByRole("link", { name: "Insights" }).isVisible(), "Insights is not reachable from phone navigation");
   await page.locator(".mobile-header .theme-control select").selectOption("light");
   assert(await page.locator("html").getAttribute("data-theme") === "light", "Phone theme control did not apply light mode");
+  assert(await page.locator('meta[name="theme-color"]').getAttribute("content") === "#f4f6f5", "Mobile browser chrome did not adopt the light theme color");
 
   await page.goto(`${apiOrigin}/ui/automation`, { waitUntil: "domcontentloaded" });
   assert(await page.getByRole("heading", { name: "Automation", exact: true }).isVisible(), "Automation did not render at phone width");
