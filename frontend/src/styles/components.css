@@ -19,8 +19,6 @@
 .mobile-theme-control { display: none; width: 68px; }
 .mobile-theme-control > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .mobile-theme-control select { min-height: 34px; padding: 0 6px; border-color: var(--border); background: var(--surface-subtle); color: var(--text); font-size: 0.7rem; }
-.legacy-link { padding-top: 2px; color: #8fa19c; font-size: 0.72rem; text-decoration: none; }
-.legacy-link:hover { color: white; }
 
 .quiet-button, .button { display: inline-flex; min-height: 42px; align-items: center; justify-content: center; padding: 0 16px; border: 1px solid var(--border-strong); border-radius: 11px; background: var(--surface); color: var(--text); font-weight: 750; text-decoration: none; cursor: pointer; }
 .quiet-button:hover, .button:hover { border-color: var(--accent); color: var(--accent); }

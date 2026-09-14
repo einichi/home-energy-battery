@@ -1,4 +1,5 @@
 import { formatPower } from "../core/format";
+import { T, useI18n } from "../i18n";
 
 function batteryState(power: number | null) {
   if (power === null) return "Battery";
@@ -15,18 +16,19 @@ export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridE
   gridImport: number | null;
   gridExport: number | null;
 }) {
+  const { text } = useI18n();
   const exporting = gridExport !== null && gridExport > 0;
   return (
-    <div className="energy-flow" aria-label="Current energy sources, storage, home demand, and grid exchange">
-      <div className="flow-source flow-solar"><span>Solar</span><strong>{formatPower(solar)}</strong></div>
-      <div className="flow-source flow-fuel"><span>Ene-Farm</span><strong>{formatPower(fuelCell)}</strong></div>
+    <div className="energy-flow" aria-label={text("Current energy sources, storage, home demand, and grid exchange")}>
+      <div className="flow-source flow-solar"><span><T text={"Solar"} /></span><strong>{formatPower(solar)}</strong></div>
+      <div className="flow-source flow-fuel"><span><T text={"Ene-Farm"} /></span><strong>{formatPower(fuelCell)}</strong></div>
       <div className="flow-source flow-battery" data-direction={battery === null || battery === 0 ? "idle" : battery > 0 ? "in" : "out"}>
-        <span>{batteryState(battery)}</span><strong>{formatPower(battery === null ? null : Math.abs(battery))}</strong>
+        <span>{text(batteryState(battery))}</span><strong>{formatPower(battery === null ? null : Math.abs(battery))}</strong>
       </div>
       <div className="flow-connector flow-connector-in" aria-hidden="true">→</div>
-      <div className="flow-home"><span>Home</span><strong>{formatPower(demand)}</strong></div>
+      <div className="flow-home"><span><T text={"Home"} /></span><strong>{formatPower(demand)}</strong></div>
       <div className="flow-connector flow-connector-out" aria-hidden="true">{exporting ? "→" : "←"}</div>
-      <div className="flow-source flow-grid"><span>{exporting ? "Grid export" : "Grid import"}</span><strong>{formatPower(exporting ? gridExport : gridImport)}</strong></div>
+      <div className="flow-source flow-grid"><span>{text(exporting ? "Grid export" : "Grid import")}</span><strong>{formatPower(exporting ? gridExport : gridImport)}</strong></div>
     </div>
   );
 }

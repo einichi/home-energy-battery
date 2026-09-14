@@ -1,5 +1,6 @@
 import { Component } from "react";
 import type { ErrorInfo, ReactNode } from "react";
+import { T } from "../i18n";
 
 type Props = { children: ReactNode };
 type State = { error: Error | null };
@@ -19,10 +20,10 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.error) {
       return (
         <main className="fatal-state">
-          <p className="eyebrow">Interface error</p>
-          <h1>This view could not be displayed</h1>
+          <p className="eyebrow"><T text={"Interface error"} /></p>
+          <h1><T text={"This view could not be displayed"} /></h1>
           <p>{this.state.error.message}</p>
-          <a className="button" href="/">Open the current interface</a>
+          <a className="button" href="/ui/"><T text={"Return to Overview"} /></a>
         </main>
       );
     }

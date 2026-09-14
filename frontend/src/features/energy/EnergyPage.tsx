@@ -15,6 +15,7 @@ import type { TimeRangeId } from "../../core/timeRange";
 import { useEnergyStatus } from "../../hooks/useEnergyStatus";
 import { useHistoryRange } from "../../hooks/useHistoryRange";
 import { useEneFarm } from "../../hooks/useEneFarm";
+import { T, useI18n } from "../../i18n";
 
 const selectableSeries = Object.keys(energySeries) as EnergySeriesKey[];
 const defaultSeries: EnergySeriesKey[] = ["houseDemandW", "solarPowerW", "fuelCellPowerW", "gridImportW", "batteryPowerW"];
@@ -43,6 +44,7 @@ function dataQualityDescription(dataQuality: ReturnType<typeof useHistoryRange>[
 }
 
 export function EnergyPage() {
+  const { text } = useI18n();
   const [searchParams] = useSearchParams();
   const requestedMetric = metricAliases[searchParams.get("metric") ?? ""];
   const [range, setRange] = useState<TimeRangeId>("24h");
@@ -71,12 +73,12 @@ export function EnergyPage() {
       const summary = summaryByChannel.get(id);
       return {
         id,
-        label: summary?.label ?? `Circuit ${id}`,
+        label: summary?.label ?? text("Circuit {value}", { value: id }),
         watts: liveValue ?? latestSample?.circuitPowerW?.[id] ?? summary?.latestWatts ?? null,
         energy: summary?.totalKwh ?? latestSample?.circuitEnergyKwh?.[id] ?? null,
       };
     });
-  }, [history.summary.circuits, latestSample, status?.meter?.channel_power?.decoded?.channels]);
+  }, [history.summary.circuits, latestSample, status?.meter?.channel_power?.decoded?.channels, text]);
   const activeCircuit = circuits.some((circuit) => circuit.id === selectedCircuit) ? selectedCircuit : circuits[0]?.id ?? "";
 
   const toggleSeries = (key: EnergySeriesKey) => {
@@ -93,70 +95,70 @@ export function EnergyPage() {
   return (
     <main className="page energy-page">
       <header className="page-heading">
-        <div><p className="eyebrow">Explore</p><h1>Energy</h1><p>Compare demand, generation, storage, and grid exchange on one timeline.</p></div>
-        <button className="quiet-button" type="button" onClick={refresh} disabled={(loading && !history.samples.length) || loadingState === "loading" || manualRefreshing}>{loading && !history.samples.length ? "Loading…" : manualRefreshing ? "Refreshing…" : "Refresh"}</button>
+        <div><p className="eyebrow"><T text={"Explore"} /></p><h1><T text={"Energy"} /></h1><p><T text={"Compare demand, generation, storage, and grid exchange on one timeline."} /></p></div>
+        <button className="quiet-button" type="button" onClick={refresh} disabled={(loading && !history.samples.length) || loadingState === "loading" || manualRefreshing}>{text(loading && !history.samples.length ? "Loading…" : manualRefreshing ? "Refreshing…" : "Refresh")}</button>
       </header>
 
-      {error ? <div className="status-banner" data-severity="critical">History: {error}</div> : null}
+      {error ? <div className="status-banner" data-severity="critical"><T text={"History: "} />{error}</div> : null}
 
-      <section className="live-summary" aria-label="Current energy measurements">
-        <Metric label="House demand" value={formatPower(metricValue(status?.meter?.house_demand_power))} detail="Current household load" />
-        <Metric label="Solar" value={formatPower(metricValue(status?.energy?.solar?.instant_power))} detail="Generation now" tone="solar" />
-        <Metric label="Ene-Farm" value={formatPower(metricValue(fuelCell?.instant_power))} detail={fuelCell?.generation_status?.value ?? "Generation state unavailable"} tone="fuel-cell" />
-        <Metric label="Battery" value={formatPower(metricValue(battery?.instant_power))} detail={`${formatSoc(metricValue(battery?.remaining_percent))} state of charge`} tone="battery" />
-        <Metric label="Grid import" value={formatPower(metricValue(status?.meter?.grid_import_power))} detail="Power bought now" tone="grid" />
-        <Metric label="Grid export" value={formatPower(metricValue(status?.meter?.grid_export_power))} detail="Power sent now" tone="grid" />
+      <section className="live-summary" aria-label={text("Current energy measurements")}>
+        <Metric label={text("House demand")} value={formatPower(metricValue(status?.meter?.house_demand_power))} detail={text("Current household load")} />
+        <Metric label={text("Solar")} value={formatPower(metricValue(status?.energy?.solar?.instant_power))} detail={text("Generation now")} tone="solar" />
+        <Metric label={text("Ene-Farm")} value={formatPower(metricValue(fuelCell?.instant_power))} detail={text(fuelCell?.generation_status?.value ?? "Generation state unavailable")} tone="fuel-cell" />
+        <Metric label={text("Battery")} value={formatPower(metricValue(battery?.instant_power))} detail={text("{value} state of charge", { value: formatSoc(metricValue(battery?.remaining_percent)) })} tone="battery" />
+        <Metric label={text("Grid import")} value={formatPower(metricValue(status?.meter?.grid_import_power))} detail={text("Power bought now")} tone="grid" />
+        <Metric label={text("Grid export")} value={formatPower(metricValue(status?.meter?.grid_export_power))} detail={text("Power sent now")} tone="grid" />
       </section>
 
       <section className="panel history-workspace" aria-labelledby="energy-history-heading">
         <div className="history-toolbar">
-          <div><p className="eyebrow">Combined history</p><h2 id="energy-history-heading">Power flows and storage</h2></div>
+          <div><p className="eyebrow"><T text={"Combined history"} /></p><h2 id="energy-history-heading"><T text={"Power flows and storage"} /></h2></div>
           <TimeRangeControl value={range} onChange={setRange} />
         </div>
         <fieldset className="series-picker">
-          <legend>Visible metrics <span>· Select to show or hide</span></legend>
+          <legend><T text={"Visible metrics "} /><span><T text={"· Select to show or hide"} /></span></legend>
           {selectableSeries.map((key) => (
             <label key={key} style={{ "--series-color": energySeries[key].color } as CSSProperties}>
               <input type="checkbox" checked={selected.includes(key)} onChange={() => toggleSeries(key)} />
-              <i aria-hidden="true" />{energySeries[key].label}
+              <i aria-hidden="true" />{text(energySeries[key].label)}
             </label>
           ))}
         </fieldset>
-        <CombinedEnergyChart samples={chartSamples} selected={selected} label={`${range} energy history`} showSeriesLegend={false} />
-        <div className="quality-note"><strong>Data quality</strong><span>{dataQualityDescription(history.summary.dataQuality)}</span></div>
+        <CombinedEnergyChart samples={chartSamples} selected={selected} label={text("{value} energy history", { value: range })} showSeriesLegend={false} />
+        <div className="quality-note"><strong><T text={"Data quality"} /></strong><span>{dataQualityDescription(history.summary.dataQuality)}</span></div>
       </section>
 
       <section className="outcome-section" aria-labelledby="period-outcomes-heading">
-        <div className="section-heading"><div><p className="eyebrow">Selected period</p><h2 id="period-outcomes-heading">Energy outcomes</h2></div><span className="sample-count">{history.summary.sampleCount ?? history.samples.length} records</span></div>
+        <div className="section-heading"><div><p className="eyebrow"><T text={"Selected period"} /></p><h2 id="period-outcomes-heading"><T text={"Energy outcomes"} /></h2></div><span className="sample-count">{history.summary.sampleCount ?? history.samples.length} <T text={" records"} /></span></div>
         <OutcomeStrip summary={history.summary} />
       </section>
 
       <section className="panel battery-balance" aria-labelledby="battery-balance-heading">
-        <div><p className="eyebrow">Storage balance</p><h2 id="battery-balance-heading">Battery over this period</h2></div>
+        <div><p className="eyebrow"><T text={"Storage balance"} /></p><h2 id="battery-balance-heading"><T text={"Battery over this period"} /></h2></div>
         <dl>
-          <div><dt>Charged</dt><dd>{formatEnergy(history.summary.batteryChargedKwh)}</dd></div>
-          <div><dt>Discharged</dt><dd>{formatEnergy(history.summary.batteryDischargedKwh)}</dd></div>
-          <div><dt>Net</dt><dd>{formatEnergy(history.summary.batteryNetKwh)}</dd></div>
-          <div><dt>Average SOC</dt><dd>{formatPercent(history.summary.averageStateOfChargePercent)}</dd></div>
-          <div><dt>Hot-water tank</dt><dd>{fuelCell?.hot_water_level?.value == null ? "—" : `${fuelCell.hot_water_level.value}/5`}</dd></div>
+          <div><dt><T text={"Charged"} /></dt><dd>{formatEnergy(history.summary.batteryChargedKwh)}</dd></div>
+          <div><dt><T text={"Discharged"} /></dt><dd>{formatEnergy(history.summary.batteryDischargedKwh)}</dd></div>
+          <div><dt><T text={"Net"} /></dt><dd>{formatEnergy(history.summary.batteryNetKwh)}</dd></div>
+          <div><dt><T text={"Average SOC"} /></dt><dd>{formatPercent(history.summary.averageStateOfChargePercent)}</dd></div>
+          <div><dt><T text={"Hot-water tank"} /></dt><dd>{fuelCell?.hot_water_level?.value == null ? "—" : `${fuelCell.hot_water_level.value}/5`}</dd></div>
         </dl>
       </section>
 
       <section id="ene-farm" className="panel ene-farm-panel" aria-labelledby="ene-farm-heading">
-        <div className="section-heading"><div><p className="eyebrow">Selected period</p><h2 id="ene-farm-heading">Ene-Farm</h2></div><span className="sample-count">{eneFarmSummary?.sampleCount ?? 0} records</span></div>
-        {eneFarmError ? <p className="status-banner">Ene-Farm summary: {eneFarmError}</p> : null}
-        <EneFarmActivity summary={eneFarmSummary} period="Selected period" loading={eneFarmLoading} />
+        <div className="section-heading"><div><p className="eyebrow"><T text={"Selected period"} /></p><h2 id="ene-farm-heading"><T text={"Ene-Farm"} /></h2></div><span className="sample-count">{eneFarmSummary?.sampleCount ?? 0} <T text={" records"} /></span></div>
+        {eneFarmError ? <p className="status-banner"><T text={"Ene-Farm summary: "} />{eneFarmError}</p> : null}
+        <EneFarmActivity summary={eneFarmSummary} period={text("Selected period")} loading={eneFarmLoading} />
         {!eneFarmLoading ? <EneFarmDetails summary={eneFarmSummary} hotWaterLevel={fuelCell?.hot_water_level?.value} /> : null}
       </section>
 
       <section id="circuits" className="panel circuits-panel" aria-labelledby="circuits-heading">
-        <div className="section-heading"><div><p className="eyebrow">Smart Cosmo</p><h2 id="circuits-heading">Circuit history</h2></div>{circuits.length ? <label className="circuit-picker"><span>Circuit</span><select value={activeCircuit} onChange={(event) => setSelectedCircuit(event.target.value)}>{circuits.map((circuit) => <option key={circuit.id} value={circuit.id}>{circuit.label}</option>)}</select></label> : <span className="sample-count">0 reporting</span>}</div>
-        {activeCircuit ? <CircuitHistoryChart samples={history.samples} circuitId={activeCircuit} label={circuits.find((circuit) => circuit.id === activeCircuit)?.label ?? `Circuit ${activeCircuit}`} /> : null}
+        <div className="section-heading"><div><p className="eyebrow"><T text={"Smart Cosmo"} /></p><h2 id="circuits-heading"><T text={"Circuit history"} /></h2></div>{circuits.length ? <label className="circuit-picker"><span><T text={"Circuit"} /></span><select value={activeCircuit} onChange={(event) => setSelectedCircuit(event.target.value)}>{circuits.map((circuit) => <option key={circuit.id} value={circuit.id}>{circuit.label}</option>)}</select></label> : <span className="sample-count"><T text={"0 reporting"} /></span>}</div>
+        {activeCircuit ? <CircuitHistoryChart samples={history.samples} circuitId={activeCircuit} label={circuits.find((circuit) => circuit.id === activeCircuit)?.label ?? text("Circuit {value}", { value: activeCircuit })} /> : null}
         {circuits.length ? (
-          <div className="table-scroll"><table><thead><tr><th>Circuit</th><th>Power now</th><th>Period energy</th></tr></thead><tbody>
+          <div className="table-scroll"><table><thead><tr><th><T text={"Circuit"} /></th><th><T text={"Power now"} /></th><th><T text={"Period energy"} /></th></tr></thead><tbody>
             {circuits.map((circuit) => <tr key={circuit.id}><th>{circuit.label}</th><td>{formatPower(circuit.watts)}</td><td>{formatEnergy(circuit.energy)}</td></tr>)}
           </tbody></table></div>
-        ) : <p className="empty-copy">No circuit readings are available for this period.</p>}
+        ) : <p className="empty-copy"><T text={"No circuit readings are available for this period."} /></p>}
       </section>
     </main>
   );

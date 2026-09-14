@@ -154,6 +154,7 @@ function mockApi(
   adaptiveEnabled = false,
   adaptiveOverride: Record<string, unknown> = {},
   awayView: AwayPeriodsView = awayPeriods,
+  language: "en" | "ja" = "en",
 ) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -168,7 +169,7 @@ function mockApi(
       : url.endsWith("/api/database-backups")
         ? { schemaVersion: 7, operation: { busy: false }, backups: [] }
       : url.endsWith("/api/config")
-      ? { ...config, adaptiveCharging: { ...config.adaptiveCharging, enabled: adaptiveEnabled } }
+      ? { ...config, language, adaptiveCharging: { ...config.adaptiveCharging, enabled: adaptiveEnabled } }
       : url.includes("/api/history?")
         ? history
         : url.includes("/api/ene-farm?")
@@ -201,6 +202,17 @@ function mockApi(
 afterEach(() => vi.unstubAllGlobals());
 
 describe("React application shell", () => {
+  it("localizes navigation and controls without bilingual labels", async () => {
+    mockApi("succeeded", false, {}, awayPeriods, "ja");
+    render(<MemoryRouter initialEntries={["/battery/backup"]}><AppProviders><App /></AppProviders></MemoryRouter>);
+
+    expect(await screen.findByRole("heading", { name: "停電対策", level: 1 })).toBeVisible();
+    expect(screen.getByRole("link", { name: "停電対策" })).toBeVisible();
+    expect(screen.queryByText("Disaster Prep / 停電対策")).not.toBeInTheDocument();
+    expect(document.documentElement).toHaveAttribute("lang", "ja");
+    expect(screen.getByRole("link", { name: "メインコンテンツへ移動" })).toHaveAttribute("href", "#main-content");
+  });
+
   it("turns reports into outcome-oriented Insights with period and domain controls", async () => {
     mockApi();
     render(<MemoryRouter initialEntries={["/insights"]}><AppProviders><App /></AppProviders></MemoryRouter>);
@@ -323,17 +335,15 @@ describe("React application shell", () => {
     expect(screen.getByText("¥7")).toBeVisible();
   });
 
-  it("redirects a legacy graph route to a focused Energy metric", async () => {
+  it("returns unknown routes to the React overview", async () => {
     mockApi();
     render(
-      <MemoryRouter initialEntries={["/graphs/solarPower"]}>
+      <MemoryRouter initialEntries={["/removed-route"]}>
         <AppProviders><App /></AppProviders>
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole("heading", { name: "Energy" })).toBeVisible();
-    expect(screen.getByRole("checkbox", { name: "Solar" })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "Demand" })).not.toBeChecked();
+    expect(await screen.findByRole("heading", { name: "Home energy overview" })).toBeVisible();
   });
 
   it("turns Automation into one explainable control center", async () => {

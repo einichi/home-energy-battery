@@ -345,7 +345,6 @@ frontend/
   tsconfig.json
   vite.config.ts
 
-public/                       legacy UI during route-by-route migration
 public/ui/                    generated production frontend; not hand-edited
 server.js                     existing API and static-serving host
 tests/support/
@@ -562,6 +561,14 @@ and retention, backup compatibility, confirmation, operation progress, and refre
 inventory. React routes no longer depend on the legacy catch-all Settings page.
 
 ### Phase 5 — hardening and removal
+
+**Implemented.** React is now the only UI served by the application. The root
+redirects to `/ui/`; the legacy markup, scripts, styles, chart utility, and route
+shims have been removed. English and Japanese use a shared catalog and
+locale-aware formatting, including the localized `停電対策` label. Keyboard skip
+navigation, expanded focus treatment, responsive phone/tablet fixtures, dark and
+light theme fixtures, and simulator-only browser coverage now protect the main
+workflows and adverse UI states.
 
 - Run accessibility, localization, phone/tablet, slow-device, stale-data, and offline-state testing.
 - Introduce centralized English and Japanese message catalogs and locale-aware formatting. Never concatenate both languages into one control label; translate **Disaster Prep** to **停電対策** in Japanese.

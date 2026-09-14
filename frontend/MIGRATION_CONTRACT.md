@@ -1,29 +1,26 @@
 # UI migration contract
 
-This document is the stable contract for moving the existing interface into the
-React application. It prevents later routes from inventing different meanings
+This document is the stable contract for the React interface. It prevents later
+changes from inventing different meanings
 for the same telemetry, health, and command states.
 
 ## Ownership and route inventory
 
-| Product area | React route | Current source or API | Phase 0 status |
+| Product area | React route | Current source or API | Current status |
 | --- | --- | --- | --- |
 | Overview | `/ui/` | `GET /api/status`, `GET /api/config`, `GET /api/history` | Read-only live flow, battery state, daily composition and outcomes; detailed history belongs to Energy |
-| Energy and history | `/ui/energy`, `/ui/energy#circuits`, `/ui/energy#ene-farm` | `/api/history`, `/api/ene-farm`, status telemetry, legacy graph views | Phase 1 combined chart and Phase 2.5 specialized parity views implemented |
+| Energy and history | `/ui/energy`, `/ui/energy#circuits`, `/ui/energy#ene-farm` | `/api/history`, `/api/ene-farm`, status telemetry | Combined history and specialized parity views implemented |
 | Battery | `/ui/battery` | status battery fields, `/api/actions/*`, `/api/settings/*`, schedules, backup preparation, command receipts | Phase 2 operational workspace |
 | Automation | `/ui/automation` | adaptive charging, away periods, automation rules, command receipts, status/config | Phase 3 control center implemented with Plan, Performance, Configuration, and simulator-verified mutations |
 | Insights | `/ui/insights` | energy and Ene-Farm reports, savings and emissions data | Phase 4 outcome-oriented reporting implemented |
 | System | `/ui/system/*` | config, discovery, notifications, retention, tariffs, database backup/restore | Phase 4 routed administration implemented |
 
-React exclusively owns DOM below its root. The legacy application remains the
-owner of `/` until each feature is migrated. A migrated route must not use legacy
-selectors or event handlers.
-
-English and Japanese labels currently embedded in the `I18N` table in
-`public/app.js` are the migration source inventory. They must be mapped to
-dedicated React locale modules before a route is declared complete. Missing
-translations must fall back visibly during development, not silently render an
-empty label.
+React exclusively owns the Web UI. `/` redirects to `/ui/`, and no legacy
+selectors, event handlers, markup, or chart implementation remain. English and
+Japanese labels use the shared React catalog; missing translations fall back to
+the English source rather than rendering an empty label. Number, currency, date,
+time, freshness, and mobile browser theme formatting follow the selected locale
+and appearance.
 
 ## Measurement semantics
 
@@ -171,9 +168,12 @@ local config and operational APIs and introduces no schema migration. Simulator-
 development keeps device discovery local and blocks outbound notification and
 tariff-import traffic.
 
-The current React UI remains English-only until Phase 5 localization. Visible
-labels must not combine English and Japanese. Phase 5 will translate Disaster
-Prep as `停電対策` through the shared message catalog.
+Phase 5 completes the React cutover and localization foundation. Visible labels
+never combine English and Japanese; Disaster Prep is `停電対策` in Japanese.
+Simulator fixtures cover English/Japanese, light/dark themes, desktop/tablet/phone
+widths, root and deep-link routing, and horizontal overflow. Component and browser
+tests cover unavailable, stale, missing-data, rejected, timed-out, and readback-
+mismatch states without contacting production equipment.
 
 ## Development boundary
 

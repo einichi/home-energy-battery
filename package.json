@@ -13,8 +13,9 @@
     "lint:ui": "eslint frontend/src frontend/*.ts",
     "test:ui": "vitest run --config frontend/vitest.config.ts",
     "test:ui:browser": "npm run build:ui && node scripts/ui-browser-smoke.mjs",
-    "test:server": "node tests/helpers.test.js && node tests/history-store.test.js && node tests/database-upgrade.test.js && node tests/database-upgrade-server.test.js && node tests/device-simulator.test.js && node tests/device-adapter-integration.test.js && node tests/command-lifecycle-scenarios.test.js && node tests/development-safety.test.js && node tests/adaptive-charging-isolation.test.js && node tests/ene-farm.test.js && node tests/gas-tariffs.test.js && node tests/chart-utils.test.js",
-    "check": "node --check home-energy-battery-node.js && node --check server.js && node --check public/app.js && npm run typecheck:ui && npm run lint:ui && npm run build:ui",
+    "test:ui:visual": "npm run build:ui && node scripts/ui-visual-regression.mjs",
+    "test:server": "node tests/helpers.test.js && node tests/history-store.test.js && node tests/database-upgrade.test.js && node tests/database-upgrade-server.test.js && node tests/device-simulator.test.js && node tests/device-adapter-integration.test.js && node tests/command-lifecycle-scenarios.test.js && node tests/development-safety.test.js && node tests/adaptive-charging-isolation.test.js && node tests/ene-farm.test.js && node tests/gas-tariffs.test.js",
+    "check": "node --check home-energy-battery-node.js && node --check server.js && npm run typecheck:ui && npm run lint:ui && npm run build:ui",
     "test": "npm run test:server && npm run test:ui"
   },
   "engines": {

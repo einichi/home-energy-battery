@@ -18,7 +18,9 @@ a { color: inherit; }
 
 button:focus-visible,
 a:focus-visible,
-select:focus-visible {
+input:focus-visible,
+select:focus-visible,
+summary:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--focus) 45%, transparent);
   outline-offset: 2px;
 }
@@ -28,6 +30,22 @@ h1 { margin-bottom: 8px; font-size: clamp(1.8rem, 3vw, 2.45rem); line-height: 1.
 h2 { margin-bottom: 0; font-size: 1.08rem; letter-spacing: -0.015em; }
 
 .app-shell { min-height: 100vh; }
+
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 100;
+  padding: 10px 14px;
+  border-radius: 9px;
+  background: var(--text);
+  color: var(--canvas);
+  font-weight: 800;
+  text-decoration: none;
+  transform: translateY(-160%);
+}
+.skip-link:focus { transform: translateY(0); }
+#main-content:focus { outline: none; }
 
 .sidebar {
   position: fixed;

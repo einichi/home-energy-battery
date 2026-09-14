@@ -29,7 +29,7 @@ export function deriveSystemHealth(
     return { severity: "attention", label: "Connecting", detail: "Waiting for equipment readings" };
   }
   if (status.energy?.battery?.configured === false) {
-    return { severity: "attention", label: "Battery not configured", detail: "Configure equipment in the current interface" };
+    return { severity: "attention", label: "Battery not configured", detail: "Configure equipment in System" };
   }
   const ageMs = now - new Date(status.read_at).getTime();
   const staleAfterMs = Math.max(30, (config?.updateIntervalSeconds ?? 15) * 3) * 1000;

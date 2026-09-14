@@ -3,6 +3,7 @@ node_modules/
 
 # Generated React UI build
 public/ui/
+test-results/
 
 # Environment variables
 .env

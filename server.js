@@ -5867,6 +5867,11 @@ function text(res, status, body, type = "text/plain; charset=utf-8") {
   res.end(body);
 }
 
+function redirect(res, location, status = 308) {
+  res.writeHead(status, { location, "cache-control": "no-store", ...securityHeaders() });
+  res.end();
+}
+
 function securityHeaders() {
   return {
     "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
@@ -10468,11 +10473,8 @@ async function api(req, res, url) {
 }
 
 async function serveStatic(res, pathname) {
-  const publicPath = pathname === "/"
-    ? "index.html"
-    : pathname === "/ui" || pathname === "/ui/"
-      ? "/ui/index.html"
-      : pathname;
+  if (pathname === "/") return redirect(res, "/ui/");
+  const publicPath = pathname === "/ui" || pathname === "/ui/" ? "/ui/index.html" : pathname;
   const filePath = path.join(__dirname, "public", publicPath);
   const resolved = path.resolve(filePath);
   const publicDir = path.resolve(__dirname, "public");

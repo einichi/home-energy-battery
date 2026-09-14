@@ -11,6 +11,7 @@ import type { Dispatch, ReactNode } from "react";
 import { commandReducer } from "../api/commands";
 import type { CommandAction, CommandState } from "../api/commands";
 import { EnergyStatusProvider } from "../hooks/useEnergyStatus";
+import { I18nProvider } from "../i18n";
 
 export type ThemePreference = "light" | "dark" | "system";
 type ThemeContextValue = {
@@ -73,7 +74,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
   return (
     <ThemeProvider>
       <CommandProvider>
-        <EnergyStatusProvider>{children}</EnergyStatusProvider>
+        <EnergyStatusProvider><I18nProvider>{children}</I18nProvider></EnergyStatusProvider>
       </CommandProvider>
     </ThemeProvider>
   );

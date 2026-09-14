@@ -4,6 +4,7 @@ import type { EnergySample } from "../api/contracts";
 import { formatChartTime, formatPower } from "../core/format";
 import { energySeries } from "../core/energySeries";
 import type { EnergySeriesKey, SeriesDefinition } from "../core/energySeries";
+import { T, useI18n } from "../i18n";
 
 const chart = { width: 920, height: 320, left: 62, right: 50, top: 22, bottom: 42 };
 
@@ -49,6 +50,7 @@ export function CombinedEnergyChart({ samples, selected, label = "Energy history
   reservePercent?: number | null;
   showSeriesLegend?: boolean;
 }) {
+  const { text } = useI18n();
   const titleId = useId();
   const [hoveredTimestamp, setHoveredTimestamp] = useState<string | null>(null);
   const validSamples = downsample(samples.filter((sample) => Number.isFinite(new Date(sample.timestamp).getTime())));
@@ -103,7 +105,7 @@ export function CombinedEnergyChart({ samples, selected, label = "Energy history
   };
 
   if (!validSamples.length || !hasSelectedValues) {
-    return <div className="chart-empty" role="status">No readings are available for this period yet.</div>;
+    return <div className="chart-empty" role="status"><T text={"No readings are available for this period yet."} /></div>;
   }
 
   return (
@@ -134,7 +136,7 @@ export function CombinedEnergyChart({ samples, selected, label = "Energy history
         {hasPercentSeries && reservePercent !== null ? (
           <g>
             <line className="chart-reserve-line" x1={chart.left} x2={chart.width - chart.right} y1={percentY(reservePercent)} y2={percentY(reservePercent)} />
-            <text className="chart-axis-label chart-reserve-label" x={chart.width - chart.right - 5} y={percentY(reservePercent) - 5} textAnchor="end">Reserve {reservePercent}%</text>
+            <text className="chart-axis-label chart-reserve-label" x={chart.width - chart.right - 5} y={percentY(reservePercent) - 5} textAnchor="end"><T text={"Reserve "} />{reservePercent}%</text>
           </g>
         ) : null}
         {hasPowerSeries && hasPercentSeries ? (
@@ -182,17 +184,17 @@ export function CombinedEnergyChart({ samples, selected, label = "Energy history
         <text className="chart-axis-label" x={chart.width - chart.right} y={chart.height - 12} textAnchor="end">{formatChartTime(validSamples.at(-1)?.timestamp ?? "", end - start > 86_400_000)}</text>
       </svg>
       {showSeriesLegend ? (
-        <div className="chart-series-legend" aria-label="Chart series">
+        <div className="chart-series-legend" aria-label={text("Chart series")}>
           {definitions.map((definition) => <span key={definition.key}><i style={{ background: definition.color }} aria-hidden="true" />{definition.label}</span>)}
         </div>
       ) : null}
-      {overlays.length ? <div className="chart-overlay-legend" aria-label="Timeline overlays"><span data-tone="charge">Charge window</span><span data-tone="discharge">Discharge window</span><span data-tone="schedule">Scheduled command</span></div> : null}
-      {hoveredSample ? <div className="chart-hover-summary" role="status" aria-label="Chart reading details">{formatChartTime(hoveredSample.timestamp, true)} · {definitions.map((definition) => { const value = definition.value(hoveredSample); return `${definition.label}: ${value === null ? "unavailable" : definition.display(value)}`; }).join(" · ")}</div> : null}
+      {overlays.length ? <div className="chart-overlay-legend" aria-label={text("Timeline overlays")}><span data-tone="charge"><T text={"Charge window"} /></span><span data-tone="discharge"><T text={"Discharge window"} /></span><span data-tone="schedule"><T text={"Scheduled command"} /></span></div> : null}
+      {hoveredSample ? <div className="chart-hover-summary" role="status" aria-label={text("Chart reading details")}>{formatChartTime(hoveredSample.timestamp, true)} · {definitions.map((definition) => { const value = definition.value(hoveredSample); return `${text(definition.label)}: ${value === null ? text("unavailable") : definition.display(value)}`; }).join(" · ")}</div> : null}
       <details className="chart-table-disclosure">
-        <summary>View chart as data table</summary>
+        <summary><T text={"View chart as data table"} /></summary>
         <div className="table-scroll">
           <table>
-            <thead><tr><th>Time</th>{definitions.map((definition) => <th key={definition.key}>{definition.label}</th>)}</tr></thead>
+            <thead><tr><th><T text={"Time"} /></th>{definitions.map((definition) => <th key={definition.key}>{definition.label}</th>)}</tr></thead>
             <tbody>
               {tableSamples.map((sample) => (
                 <tr key={sample.timestamp}>

@@ -168,6 +168,7 @@ try {
 
   await page.goto(`${apiOrigin}/ui/energy`, { waitUntil: "domcontentloaded" });
   const metricToggle = page.locator(".series-picker label").filter({ hasText: "Solar" });
+  await metricToggle.waitFor();
   assert(await metricToggle.isVisible(), "Visible metric controls did not render");
   assert(await page.getByLabel("Chart series").count() === 0, "Combined history repeats the Visible Metrics legend below the chart");
   await metricToggle.hover();
@@ -186,6 +187,7 @@ try {
   assert(await page.getByText("Last stop", { exact: true }).isVisible(), "Ene-Farm last-stop statistic is missing");
 
   await page.goto(`${apiOrigin}/ui/automation`, { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Automation", exact: true }).waitFor();
   assert(await page.getByRole("heading", { name: "Automation", exact: true }).isVisible(), "Automation control center did not render");
   const automationState = page.getByRole("heading", { name: "Needs setup" });
   await automationState.waitFor();
@@ -214,6 +216,7 @@ try {
   assert(await page.getByRole("heading", { name: "Demand Guard configuration" }).isVisible(), "Demand Guard settings did not migrate into Automation");
 
   await page.goto(`${apiOrigin}/ui/insights`, { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Insights" }).waitFor();
   assert(await page.getByRole("heading", { name: "Insights" }).isVisible(), "Insights did not render");
   await page.getByRole("heading", { name: "Period comparison" }).waitFor();
   assert(await page.getByRole("heading", { name: "Period comparison" }).isVisible(), "Insights period comparison is missing");
@@ -251,6 +254,7 @@ try {
   assert(await page.getByRole("heading", { name: "Application preferences" }).isVisible(), "System preferences route did not render");
 
   await page.goto(`${apiOrigin}/ui/battery`, { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Battery", exact: true }).waitFor();
   assert(await page.getByRole("heading", { name: "Battery", exact: true }).isVisible(), "Battery workspace did not render");
   const batteryTimeline = page.getByRole("img", { name: /battery power and state of charge/ });
   await batteryTimeline.waitFor();
@@ -267,6 +271,7 @@ try {
   await page.goto(`${apiOrigin}/ui/`, { waitUntil: "domcontentloaded" });
   await assertOperationalBanner(page, "Manual control", "Overview did not preserve the manual override banner");
   await page.goto(`${apiOrigin}/ui/automation`, { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Automation", exact: true }).waitFor();
   await assertOperationalBanner(page, "Manual control", "Automation did not preserve the manual override banner");
   await page.goto(`${apiOrigin}/ui/battery`, { waitUntil: "domcontentloaded" });
   await page.getByRole("link", { name: "Schedules", exact: true }).click();
@@ -282,6 +287,7 @@ try {
   await page.getByText("Command completed and device state was verified.").waitFor();
   await page.getByRole("button", { name: "Close receipt" }).click();
   await page.goto(`${apiOrigin}/ui/energy`, { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Energy", exact: true }).waitFor();
   await assertOperationalBanner(page, "Disaster Prep", "Disaster Prep was not persistent across the app");
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -294,16 +300,19 @@ try {
   assert(await page.locator('meta[name="theme-color"]').getAttribute("content") === "#f4f6f5", "Mobile browser chrome did not adopt the light theme color");
 
   await page.goto(`${apiOrigin}/ui/automation`, { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Automation", exact: true }).waitFor();
   assert(await page.getByRole("heading", { name: "Automation", exact: true }).isVisible(), "Automation did not render at phone width");
   await page.getByRole("button", { name: "Configuration" }).click();
   assert(await page.getByRole("heading", { name: "Adaptive Charging configuration" }).isVisible(), "Automation configuration is not reachable on phone");
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "Automation configuration overflows the phone viewport");
 
   await page.locator(".mobile-navigation").getByRole("link", { name: "Insights" }).click();
+  await page.getByRole("heading", { name: "Insights" }).waitFor();
   assert(await page.getByRole("heading", { name: "Insights" }).isVisible(), "Insights did not render from phone navigation");
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "Insights overflows the phone viewport");
 
   await page.goto(`${apiOrigin}/ui/energy`, { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Energy", exact: true }).waitFor();
   assert(await page.getByRole("heading", { name: "Energy", exact: true }).isVisible(), "Production deep link did not render");
   const simulatorBanner = page.getByText("Simulated environment", { exact: false });
   await simulatorBanner.waitFor();
@@ -313,14 +322,15 @@ try {
   assert(await page.getByRole("heading", { name: "Circuit history" }).isVisible(), "Circuit history did not render");
   assert(await page.getByRole("checkbox", { name: "Battery SOC" }).isVisible(), "Battery SOC history selector is missing");
 
-  await page.goto(`${apiOrigin}/ui/graphs/solarPower`, { waitUntil: "domcontentloaded" });
-  assert(await page.getByRole("checkbox", { name: "Solar" }).isChecked(), "Legacy solar graph did not redirect to its Energy metric");
-  assert(!await page.getByRole("checkbox", { name: "Demand" }).isChecked(), "Legacy graph redirect did not focus the requested metric");
+  await page.goto(`${apiOrigin}/`, { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Home energy overview" }).waitFor();
+  assert(page.url() === `${apiOrigin}/ui/`, "Root URL did not cut over to the React application");
+  assert(await page.getByRole("heading", { name: "Home energy overview" }).isVisible(), "React Overview did not render after root cutover");
   assert(unexpectedRequests.length === 0, `Unexpected network requests: ${unexpectedRequests.join(", ")}`);
   assert(failedResponses.length === 0, `Failed browser requests: ${failedResponses.join(", ")}`);
   assert(browserErrors.length === 0, `Browser errors: ${browserErrors.join("; ")}`);
 
-  console.log("UI browser smoke test passed: simulator boundary, Overview, Energy, Automation controls, Battery command lifecycle, themes, phone layout, and legacy redirects");
+  console.log("UI browser smoke test passed: simulator boundary, React root cutover, Overview, Energy, Automation controls, Battery command lifecycle, themes, and phone layout");
 } finally {
   await browser?.close();
   if (launcher.exitCode === null) {

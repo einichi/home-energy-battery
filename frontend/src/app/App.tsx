@@ -1,47 +1,23 @@
-import { Navigate, Route, Routes, useParams } from "react-router-dom";
+import { lazy, Suspense } from "react";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "../components/AppShell";
 import { ErrorBoundary } from "../components/ErrorBoundary";
-import { OverviewPage } from "../features/overview/OverviewPage";
-import { EnergyPage } from "../features/energy/EnergyPage";
-import { BatteryPage } from "../features/battery/BatteryPage";
-import { AutomationPage } from "../features/automation/AutomationPage";
-import { InsightsPage } from "../features/insights/InsightsPage";
-import { SystemPage } from "../features/system/SystemPage";
+import { T } from "../i18n";
 
-const legacyGraphMetrics: Record<string, string> = {
-  solarPower: "solar",
-  houseDemandPower: "demand",
-  gridImportPower: "import",
-  gridExportPower: "export",
-  batteryPower: "battery",
-  batterySoc: "soc",
-  fuelCellPower: "ene-farm",
-  fuelCellHotWater: "hot-water",
-};
-
-function LegacyGraphRedirect() {
-  const { legacyMetric = "" } = useParams();
-  const metric = legacyGraphMetrics[legacyMetric];
-  return <Navigate to={metric ? `/energy?metric=${metric}` : "/energy"} replace />;
-}
+const OverviewPage = lazy(() => import("../features/overview/OverviewPage").then((module) => ({ default: module.OverviewPage })));
+const EnergyPage = lazy(() => import("../features/energy/EnergyPage").then((module) => ({ default: module.EnergyPage })));
+const BatteryPage = lazy(() => import("../features/battery/BatteryPage").then((module) => ({ default: module.BatteryPage })));
+const AutomationPage = lazy(() => import("../features/automation/AutomationPage").then((module) => ({ default: module.AutomationPage })));
+const InsightsPage = lazy(() => import("../features/insights/InsightsPage").then((module) => ({ default: module.InsightsPage })));
+const SystemPage = lazy(() => import("../features/system/SystemPage").then((module) => ({ default: module.SystemPage })));
 
 export function App() {
   return (
     <ErrorBoundary>
-      <Routes>
+      <Suspense fallback={<div className="page"><div className="panel fatal-state" role="status"><T text={"Loading section…"} /></div></div>}><Routes>
         <Route element={<AppShell />}>
           <Route index element={<OverviewPage />} />
           <Route path="energy" element={<EnergyPage />} />
-          <Route path="graphs/:legacyMetric" element={<LegacyGraphRedirect />} />
-          <Route path="solar" element={<Navigate to="/energy?metric=solar" replace />} />
-          <Route path="demand" element={<Navigate to="/energy?metric=demand" replace />} />
-          <Route path="grid" element={<Navigate to="/energy?metric=import" replace />} />
-          <Route path="grid-import" element={<Navigate to="/energy?metric=import" replace />} />
-          <Route path="grid-export" element={<Navigate to="/energy?metric=export" replace />} />
-          <Route path="battery-power" element={<Navigate to="/energy?metric=battery" replace />} />
-          <Route path="battery-soc" element={<Navigate to="/energy?metric=soc" replace />} />
-          <Route path="ene-farm" element={<Navigate to="/energy?metric=ene-farm" replace />} />
-          <Route path="circuits" element={<Navigate to="/energy#circuits" replace />} />
           <Route path="battery" element={<BatteryPage />} />
           <Route path="battery/schedules" element={<BatteryPage view="schedules" />} />
           <Route path="battery/backup" element={<BatteryPage view="backup" />} />
@@ -51,7 +27,7 @@ export function App() {
           <Route path="system/:section" element={<SystemPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
-      </Routes>
+      </Routes></Suspense>
     </ErrorBoundary>
   );
 }

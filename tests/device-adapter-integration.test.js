@@ -72,8 +72,12 @@ try {
   child = startTestServer();
 
   await waitFor(async () => (await fetch(`${baseUrl}/api/config`)).ok);
+  const redirectResponse = await fetch(`${baseUrl}/`, { redirect: "manual" });
+  assert.equal(redirectResponse.status, 308);
+  assert.equal(redirectResponse.headers.get("location"), "/ui/");
   const indexResponse = await fetch(`${baseUrl}/`);
   assert.equal(indexResponse.status, 200);
+  assert.equal(indexResponse.url, `${baseUrl}/ui/`);
   assert.match(indexResponse.headers.get("content-security-policy") ?? "", /default-src 'self'/);
   assert.equal(indexResponse.headers.get("x-content-type-options"), "nosniff");
   assert.equal(indexResponse.headers.get("x-frame-options"), "DENY");
