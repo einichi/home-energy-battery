@@ -175,6 +175,14 @@ widths, root and deep-link routing, and horizontal overflow. Component and brows
 tests cover unavailable, stale, missing-data, rejected, timed-out, and readback-
 mismatch states without contacting production equipment.
 
+The Phase 5 interaction hardening uses the existing asynchronous discovery-job
+API for visible progress, keeps cached status readable while discovery owns the
+device adapter, and shows save results beside each originating form. Smart Cosmo
+circuit rows replace the graph dropdown and provide sortable circuit, live-power,
+and period-energy columns; Overview lists the highest current circuit loads. A
+single off-peak rate window is sufficient for Automation. No schema or data
+migration is introduced.
+
 ## Development boundary
 
 All UI implementation, automated tests, screenshots, and visual review use

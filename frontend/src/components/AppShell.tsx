@@ -10,7 +10,7 @@ const navigation = [
   { to: "/battery", label: "Battery", short: "Battery", glyph: "▰" },
   { to: "/automation", label: "Automation", short: "Auto", glyph: "◇" },
   { to: "/insights", label: "Insights", short: "Insights", glyph: "↗" },
-  { to: "/system", label: "System", short: "More", glyph: "⚙" },
+  { to: "/system", label: "System", short: "Settings", glyph: "⚙" },
 ];
 
 function ThemeControl({ mobile = false }: { mobile?: boolean }) {

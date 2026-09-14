@@ -570,6 +570,16 @@ navigation, expanded focus treatment, responsive phone/tablet fixtures, dark and
 light theme fixtures, and simulator-only browser coverage now protect the main
 workflows and adverse UI states.
 
+The final hardening pass also makes installed-device values suggestion-only until
+edited, reports asynchronous discovery progress, keeps save results beside the
+form that produced them, and normalizes preference-control sizing and label case.
+Energy circuit rows now select the circuit graph and all columns are sortable;
+Overview surfaces the five highest live circuit loads. A single configured
+off-peak window satisfies the Automation pricing prerequisite, while multi-rate
+pricing remains optional. Mobile navigation uses the explicit **Settings** label.
+These refinements reuse the existing configuration, discovery-job, status, and
+history contracts and require no database migration.
+
 - Run accessibility, localization, phone/tablet, slow-device, stale-data, and offline-state testing.
 - Introduce centralized English and Japanese message catalogs and locale-aware formatting. Never concatenate both languages into one control label; translate **Disaster Prep** to **停電対策** in Japanese.
 - Add visual regression fixtures using the existing device simulator.

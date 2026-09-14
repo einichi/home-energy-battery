@@ -64,8 +64,12 @@ const launcher = spawn(process.execPath, [path.join(projectDir, "scripts/dev-ui-
   stdio: ["ignore", "pipe", "pipe"],
 });
 let launcherOutput = "";
-launcher.stdout.on("data", (chunk) => { launcherOutput += chunk; });
-launcher.stderr.on("data", (chunk) => { launcherOutput += chunk; });
+launcher.stdout.on("data", (chunk) => {
+  launcherOutput += chunk;
+});
+launcher.stderr.on("data", (chunk) => {
+  launcherOutput += chunk;
+});
 
 let browser;
 try {
@@ -84,34 +88,50 @@ try {
     "/usr/bin/chromium-browser",
   ]);
   browser = await chromium.launch({ executablePath, headless: true });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 1000 },
+  });
   const eneFarmEnd = new Date();
   const eneFarmMiddle = new Date(eneFarmEnd.getTime() - 30 * 60_000);
   const eneFarmStart = new Date(eneFarmEnd.getTime() - 60 * 60_000);
-  await page.route("**/api/ene-farm?**", (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({
-      configured: true,
-      sampleCount: 3,
-      start: eneFarmStart.toISOString(),
-      end: eneFarmEnd.toISOString(),
-      generatedKwh: 0.5,
-      gasM3: 0.22,
-      electricalYieldKwhPerM3: 2.27,
-      operatingSeconds: 1800,
-      startCount: 1,
-      averageGeneratingW: 500,
-      currentState: "generating",
-      timeInStateSeconds: 1800,
-      lastStopAt: eneFarmMiddle.toISOString(),
-      dataQuality: "counter",
-      stateIntervals: [
-        { start: eneFarmStart.toISOString(), end: eneFarmMiddle.toISOString(), state: "stopped", durationSeconds: 1800, generatedKwh: 0 },
-        { start: eneFarmMiddle.toISOString(), end: eneFarmEnd.toISOString(), state: "generating", durationSeconds: 1800, generatedKwh: 0.5 },
-      ],
+  await page.route("**/api/ene-farm?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        configured: true,
+        sampleCount: 3,
+        start: eneFarmStart.toISOString(),
+        end: eneFarmEnd.toISOString(),
+        generatedKwh: 0.5,
+        gasM3: 0.22,
+        electricalYieldKwhPerM3: 2.27,
+        operatingSeconds: 1800,
+        startCount: 1,
+        averageGeneratingW: 500,
+        currentState: "generating",
+        timeInStateSeconds: 1800,
+        lastStopAt: eneFarmMiddle.toISOString(),
+        dataQuality: "counter",
+        stateIntervals: [
+          {
+            start: eneFarmStart.toISOString(),
+            end: eneFarmMiddle.toISOString(),
+            state: "stopped",
+            durationSeconds: 1800,
+            generatedKwh: 0,
+          },
+          {
+            start: eneFarmMiddle.toISOString(),
+            end: eneFarmEnd.toISOString(),
+            state: "generating",
+            durationSeconds: 1800,
+            generatedKwh: 0.5,
+          },
+        ],
+      }),
     }),
-  }));
+  );
   const unexpectedRequests = [];
   const browserErrors = [];
   const failedResponses = [];
@@ -138,55 +158,75 @@ try {
   await page.getByText("62%", { exact: true }).first().waitFor();
   assert(await page.getByText("62%", { exact: true }).first().isVisible(), "Expected simulator battery SOC");
   assert(await page.getByText("850 W", { exact: true }).first().isVisible(), "Expected simulator solar power");
-  assert(await page.getByRole("img", { name: "Last 24 hours of home energy" }).count() === 0, "Overview still duplicates the detailed Energy history chart");
+  assert((await page.getByRole("img", { name: "Last 24 hours of home energy" }).count()) === 0, "Overview still duplicates the detailed Energy history chart");
   assert(await page.getByRole("link", { name: "Full history →" }).isVisible(), "Overview does not link to detailed Energy history");
   assert(await page.getByRole("heading", { name: "Energy outcomes" }).isVisible(), "Overview daily outcomes did not render");
+  assert(await page.getByRole("heading", { name: "Circuits consuming most power" }).isVisible(), "Overview top circuit demand is missing");
+  assert((await page.locator(".top-circuits-panel li").count()) > 1, "Overview did not list several reporting circuits");
   assert(await page.getByRole("heading", { name: "Today at a glance" }).isVisible(), "Overview daily evidence is not grouped under one time scope");
-  assert(await page.getByRole("heading", { name: "Current measurements" }).count() === 0, "Overview still duplicates Live Power in a Snapshot section");
+  assert((await page.getByRole("heading", { name: "Current measurements" }).count()) === 0, "Overview still duplicates Live Power in a Snapshot section");
   assert(await page.getByRole("heading", { name: "Energy Sources" }).isVisible(), "Energy Sources composition is missing");
   assert(await page.getByRole("heading", { name: "Ene-Farm Activity" }).isVisible(), "Ene-Farm activity bar is missing");
   const activitySegment = page.locator(".ene-farm-state-strip i").first();
   await activitySegment.hover();
   assert(await page.getByRole("tooltip").isVisible(), "Ene-Farm activity interval tooltip did not render");
   assert(await page.getByRole("tooltip").getByText(/→/).isVisible(), "Ene-Farm activity tooltip is missing start and finish times");
-  assert(await page.getByRole("tooltip").getByText(/\d+[hms]/).isVisible(), "Ene-Farm activity tooltip is missing its duration");
+  assert(
+    await page
+      .getByRole("tooltip")
+      .getByText(/\d+[hms]/)
+      .isVisible(),
+    "Ene-Farm activity tooltip is missing its duration",
+  );
   assert(await page.getByRole("heading", { name: "Estimated Off-Peak Savings" }).isVisible(), "Off-Peak Savings is missing");
   await page.getByRole("button", { name: "Grid use", exact: true }).click();
-  assert(await page.getByRole("button", { name: "Grid use", exact: true }).getAttribute("aria-pressed") === "true", "Off-Peak Savings did not switch to grid use");
+  assert((await page.getByRole("button", { name: "Grid use", exact: true }).getAttribute("aria-pressed")) === "true", "Off-Peak Savings did not switch to grid use");
   await page.getByRole("button", { name: "Battery charging", exact: true }).click();
-  assert(await page.getByRole("button", { name: "Battery charging", exact: true }).getAttribute("aria-pressed") === "true", "Off-Peak Savings did not switch to battery charging");
+  assert(
+    (await page.getByRole("button", { name: "Battery charging", exact: true }).getAttribute("aria-pressed")) === "true",
+    "Off-Peak Savings did not switch to battery charging",
+  );
   const refreshLabels = [];
   for (let sample = 0; sample < 24; sample += 1) {
-    refreshLabels.push(await page.getByRole("button", { name: /Refresh/ }).first().textContent());
+    refreshLabels.push(
+      await page
+        .getByRole("button", { name: /Refresh/ })
+        .first()
+        .textContent(),
+    );
     await page.waitForTimeout(250);
   }
   assert(!refreshLabels.includes("Refreshing…"), "Automatic five-second polling visibly toggled the manual Refresh button");
 
   await page.locator(".sidebar .theme-control select").selectOption("dark");
-  assert(await page.locator("html").getAttribute("data-theme") === "dark", "Dark theme was not applied");
-  assert(await page.locator('meta[name="theme-color"]').getAttribute("content") === "#101716", "Mobile browser chrome did not adopt the dark theme color");
+  assert((await page.locator("html").getAttribute("data-theme")) === "dark", "Dark theme was not applied");
+  assert((await page.locator('meta[name="theme-color"]').getAttribute("content")) === "#101716", "Mobile browser chrome did not adopt the dark theme color");
 
   await page.goto(`${apiOrigin}/ui/energy`, { waitUntil: "domcontentloaded" });
   const metricToggle = page.locator(".series-picker label").filter({ hasText: "Solar" });
   await metricToggle.waitFor();
   assert(await metricToggle.isVisible(), "Visible metric controls did not render");
-  assert(await page.getByLabel("Chart series").count() === 0, "Combined history repeats the Visible Metrics legend below the chart");
+  assert((await page.getByLabel("Chart series").count()) === 0, "Combined history repeats the Visible Metrics legend below the chart");
   await metricToggle.hover();
   assert(await metricToggle.evaluate((element) => getComputedStyle(element).transform !== "none"), "Visible metric control has no hover affordance");
   await page.getByRole("checkbox", { name: "Solar" }).click();
-  assert(!await page.getByRole("checkbox", { name: "Solar" }).isChecked(), "Visible metric control did not hide its series");
+  assert(!(await page.getByRole("checkbox", { name: "Solar" }).isChecked()), "Visible metric control did not hide its series");
   await page.getByRole("checkbox", { name: "Solar" }).click();
   assert(await page.getByRole("checkbox", { name: "Solar" }).isChecked(), "Visible metric control did not restore its series");
   assert(await page.getByRole("heading", { name: "Circuit history" }).isVisible(), "Smart Cosmo circuit history is missing");
-  assert(await page.locator(".circuit-picker select").isVisible(), "Circuit selector is missing");
+  assert((await page.locator(".circuit-picker select").count()) === 0, "Legacy circuit dropdown is still present");
   assert(await page.locator(".circuit-history-chart svg").isVisible(), "Circuit history graph did not render");
-  await page.locator(".circuit-picker select").selectOption("2");
+  await page.locator(".selectable-circuit-table tbody button").filter({ hasText: "Circuit 2" }).click();
   assert(await page.getByRole("img", { name: "Circuit 2 circuit power history" }).isVisible(), "Circuit selection did not update the history graph");
+  await page.locator(".selectable-circuit-table thead button").filter({ hasText: "Power now" }).click();
+  assert((await page.locator('.selectable-circuit-table thead th[aria-sort="ascending"]').count()) === 1, "Circuit power column did not sort numerically");
   assert(await page.getByText("Electricity generated", { exact: true }).isVisible(), "Ene-Farm generated electricity statistic is missing");
   assert(await page.getByText("Gas used", { exact: true }).isVisible(), "Ene-Farm gas statistic is missing");
   assert(await page.getByText("Last stop", { exact: true }).isVisible(), "Ene-Farm last-stop statistic is missing");
 
-  await page.goto(`${apiOrigin}/ui/automation`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${apiOrigin}/ui/automation`, {
+    waitUntil: "domcontentloaded",
+  });
   await page.getByRole("heading", { name: "Automation", exact: true }).waitFor();
   assert(await page.getByRole("heading", { name: "Automation", exact: true }).isVisible(), "Automation control center did not render");
   const automationState = page.getByRole("heading", { name: "Needs setup" });
@@ -195,7 +235,7 @@ try {
   assert(await page.getByRole("heading", { name: "Active protections" }).isVisible(), "Automation protections summary is missing");
   assert(await page.getByRole("heading", { name: "Shared automation timeline" }).isVisible(), "Shared automation timeline is missing");
   assert(await page.getByRole("heading", { name: "Away schedule" }).isVisible(), "Away context is missing from Automation");
-  assert(!await page.getByRole("button", { name: "Recalculate plan" }).isEnabled(), "Plan recalculation should be unavailable until setup is complete");
+  assert(!(await page.getByRole("button", { name: "Recalculate plan" }).isEnabled()), "Plan recalculation should be unavailable until setup is complete");
   await page.getByRole("button", { name: "Away now" }).click();
   assert(await page.getByText(/Confirm when you expect to return/).isVisible(), "Away now did not expose its return-time review");
   await page.getByRole("button", { name: "Start Away period" }).click();
@@ -209,13 +249,27 @@ try {
   assert(await page.getByRole("heading", { name: "Charging-window outcomes" }).isVisible(), "Battery outcome evidence is missing");
   await page.getByRole("button", { name: "Configuration" }).click();
   assert(await page.getByRole("heading", { name: "Setup checklist" }).isVisible(), "Automation Configuration checklist did not render");
-  assert(await page.getByText(/ready$/).first().isVisible(), "Automation prerequisite progress is missing");
-  assert(await page.getByRole("link", { name: /Open rate settings/ }).getAttribute("href") === "/ui/system/rates", "Rate prerequisite does not link to System settings");
-  assert(await page.getByRole("link", { name: /Review planning settings/ }).first().getAttribute("href") === "#adaptive-settings", "Planning prerequisite does not link to its Phase 3 form");
+  assert(
+    await page
+      .getByText(/ready$/)
+      .first()
+      .isVisible(),
+    "Automation prerequisite progress is missing",
+  );
+  assert((await page.getByRole("link", { name: /Open rate settings/ }).getAttribute("href")) === "/ui/system/rates", "Rate prerequisite does not link to System settings");
+  assert(
+    (await page
+      .getByRole("link", { name: /Review planning settings/ })
+      .first()
+      .getAttribute("href")) === "#adaptive-settings",
+    "Planning prerequisite does not link to its Phase 3 form",
+  );
   assert(await page.getByRole("heading", { name: "Adaptive Charging configuration" }).isVisible(), "Adaptive Charging settings did not migrate into Automation");
   assert(await page.getByRole("heading", { name: "Demand Guard configuration" }).isVisible(), "Demand Guard settings did not migrate into Automation");
 
-  await page.goto(`${apiOrigin}/ui/insights`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${apiOrigin}/ui/insights`, {
+    waitUntil: "domcontentloaded",
+  });
   await page.getByRole("heading", { name: "Insights" }).waitFor();
   assert(await page.getByRole("heading", { name: "Insights" }).isVisible(), "Insights did not render");
   await page.getByRole("heading", { name: "Period comparison" }).waitFor();
@@ -228,35 +282,71 @@ try {
   await page.getByRole("heading", { name: "Ene-Farm detail" }).waitFor();
   assert(await page.getByRole("heading", { name: "Ene-Farm detail" }).isVisible(), "Ene-Farm Insights are missing");
 
-  await page.goto(`${apiOrigin}/ui/system/equipment`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${apiOrigin}/ui/system/equipment`, {
+    waitUntil: "domcontentloaded",
+  });
   await page.getByRole("heading", { name: "Installed equipment" }).waitFor();
   assert(await page.getByRole("heading", { name: "Installed equipment" }).isVisible(), "System equipment route did not render");
+  assert((await page.getByLabel("Battery address").inputValue()) === "", "Installed battery address was pre-filled");
+  assert(Boolean(await page.getByLabel("Battery address").getAttribute("placeholder")), "Installed battery address has no suggestion");
   assert(await page.getByRole("heading", { name: "Smart Cosmo circuits" }).isVisible(), "Smart Cosmo circuit administration is missing");
-  await page.getByLabel(/Circuit \d+ label/).first().waitFor();
-  assert(await page.getByLabel(/Circuit \d+ label/).first().isVisible(), "Detected Smart Cosmo circuits cannot be named");
+  await page
+    .getByLabel(/Circuit \d+ label/)
+    .first()
+    .waitFor();
+  assert(
+    await page
+      .getByLabel(/Circuit \d+ label/)
+      .first()
+      .isVisible(),
+    "Detected Smart Cosmo circuits cannot be named",
+  );
+  await page.getByRole("button", { name: "Save equipment" }).click();
+  const equipmentSaveResult = page.getByText("Equipment settings saved.");
+  await equipmentSaveResult.waitFor();
+  assert(await equipmentSaveResult.locator("xpath=parent::*").getByRole("button", { name: "Save equipment" }).isVisible(), "Equipment save feedback is not beside its button");
+  await page.getByRole("button", { name: "Active subnet scan" }).click();
+  await page.locator(".discovery-progress").waitFor();
+  assert(await page.locator(".discovery-progress").isVisible(), "Discovery work has no visible progress state");
+  await page.getByText("Discovery complete").waitFor();
   await page.getByRole("link", { name: /Rates & emissions/ }).click();
   await page.getByRole("heading", { name: "Electricity rates" }).waitFor();
   assert(await page.getByRole("heading", { name: "Electricity rates" }).isVisible(), "System rates route did not render");
   await page.getByRole("link", { name: /Notifications/ }).click();
   await page.getByRole("heading", { name: "Email notifications" }).waitFor();
   assert(await page.getByRole("heading", { name: "Email notifications" }).isVisible(), "System notifications route did not render");
-  assert(await page.getByLabel(/cooldown/).first().isVisible(), "Notification trigger cooldown settings are missing");
-  assert(!await page.getByRole("button", { name: "Send test email" }).isEnabled(), "Simulator allowed an external notification test");
+  assert(
+    await page
+      .getByLabel(/cooldown/)
+      .first()
+      .isVisible(),
+    "Notification trigger cooldown settings are missing",
+  );
+  assert(!(await page.getByRole("button", { name: "Send test email" }).isEnabled()), "Simulator allowed an external notification test");
   assert(await page.getByRole("heading", { name: "Recent deliveries" }).isVisible(), "Notification delivery history is missing");
   await page.getByRole("link", { name: /Data & backups/ }).click();
   await page.getByRole("heading", { name: "Storage health" }).waitFor();
   assert(await page.getByRole("heading", { name: "Storage health" }).isVisible(), "System data route did not render");
   await page.getByRole("button", { name: "Create backup" }).click();
   await page.getByText("Backup created and inventory refreshed.").waitFor();
-  assert(await page.locator(".backup-list article").count() > 0, "Created database backup did not appear in the refreshed inventory");
+  assert((await page.locator(".backup-list article").count()) > 0, "Created database backup did not appear in the refreshed inventory");
   await page.getByRole("link", { name: /Preferences/ }).click();
   await page.getByRole("heading", { name: "Application preferences" }).waitFor();
   assert(await page.getByRole("heading", { name: "Application preferences" }).isVisible(), "System preferences route did not render");
+  const preferenceHeights = await page.evaluate(() => {
+    const language = document.querySelector('select[name="language"]');
+    const interval = document.querySelector('input[name="interval"]')?.parentElement;
+    return [language?.getBoundingClientRect().height, interval?.getBoundingClientRect().height];
+  });
+  assert(preferenceHeights[0] === preferenceHeights[1], `Language and refresh controls have different heights: ${preferenceHeights.join(" vs ")}`);
+  assert(await page.locator(".widget-visibility-grid").getByText("Energy sources", { exact: true }).isVisible(), "Overview visibility capitalization is inconsistent");
 
   await page.goto(`${apiOrigin}/ui/battery`, { waitUntil: "domcontentloaded" });
   await page.getByRole("heading", { name: "Battery", exact: true }).waitFor();
   assert(await page.getByRole("heading", { name: "Battery", exact: true }).isVisible(), "Battery workspace did not render");
-  const batteryTimeline = page.getByRole("img", { name: /battery power and state of charge/ });
+  const batteryTimeline = page.getByRole("img", {
+    name: /battery power and state of charge/,
+  });
   await batteryTimeline.waitFor();
   assert(await batteryTimeline.isVisible(), "Battery timeline did not render");
   assert(await page.getByText("Direct operation", { exact: true }).isVisible(), "Manual controls are not persistently visible");
@@ -270,7 +360,9 @@ try {
   await assertOperationalBanner(page, "Manual control", "Manual override was not made globally visible");
   await page.goto(`${apiOrigin}/ui/`, { waitUntil: "domcontentloaded" });
   await assertOperationalBanner(page, "Manual control", "Overview did not preserve the manual override banner");
-  await page.goto(`${apiOrigin}/ui/automation`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${apiOrigin}/ui/automation`, {
+    waitUntil: "domcontentloaded",
+  });
   await page.getByRole("heading", { name: "Automation", exact: true }).waitFor();
   await assertOperationalBanner(page, "Manual control", "Automation did not preserve the manual override banner");
   await page.goto(`${apiOrigin}/ui/battery`, { waitUntil: "domcontentloaded" });
@@ -292,14 +384,17 @@ try {
 
   await page.setViewportSize({ width: 390, height: 844 });
   assert(await page.locator(".mobile-navigation").isVisible(), "Mobile navigation is not visible at phone width");
-  assert(!await page.locator(".sidebar").isVisible(), "Desktop sidebar is visible at phone width");
+  assert(!(await page.locator(".sidebar").isVisible()), "Desktop sidebar is visible at phone width");
   assert(await page.locator(".mobile-header .theme-control select").isVisible(), "Theme control is not reachable on phone");
   assert(await page.locator(".mobile-navigation").getByRole("link", { name: "Insights" }).isVisible(), "Insights is not reachable from phone navigation");
+  assert(await page.locator(".mobile-navigation").getByRole("link", { name: "Settings" }).isVisible(), "Settings is mislabeled in phone navigation");
   await page.locator(".mobile-header .theme-control select").selectOption("light");
-  assert(await page.locator("html").getAttribute("data-theme") === "light", "Phone theme control did not apply light mode");
-  assert(await page.locator('meta[name="theme-color"]').getAttribute("content") === "#f4f6f5", "Mobile browser chrome did not adopt the light theme color");
+  assert((await page.locator("html").getAttribute("data-theme")) === "light", "Phone theme control did not apply light mode");
+  assert((await page.locator('meta[name="theme-color"]').getAttribute("content")) === "#f4f6f5", "Mobile browser chrome did not adopt the light theme color");
 
-  await page.goto(`${apiOrigin}/ui/automation`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${apiOrigin}/ui/automation`, {
+    waitUntil: "domcontentloaded",
+  });
   await page.getByRole("heading", { name: "Automation", exact: true }).waitFor();
   assert(await page.getByRole("heading", { name: "Automation", exact: true }).isVisible(), "Automation did not render at phone width");
   await page.getByRole("button", { name: "Configuration" }).click();
@@ -314,7 +409,9 @@ try {
   await page.goto(`${apiOrigin}/ui/energy`, { waitUntil: "domcontentloaded" });
   await page.getByRole("heading", { name: "Energy", exact: true }).waitFor();
   assert(await page.getByRole("heading", { name: "Energy", exact: true }).isVisible(), "Production deep link did not render");
-  const simulatorBanner = page.getByText("Simulated environment", { exact: false });
+  const simulatorBanner = page.getByText("Simulated environment", {
+    exact: false,
+  });
   await simulatorBanner.waitFor();
   assert(await simulatorBanner.isVisible(), "Production build lost the simulator banner");
   await page.getByRole("img", { name: "24h energy history" }).waitFor();

@@ -293,6 +293,19 @@ export type HistoryStats = { sizeBytes?: number; fileSizes?: { mainBytes?: numbe
 export type DatabaseBackup = { filename: string; createdAt?: string; modifiedAt?: string; sizeBytes?: number; schemaVersion?: number; compatible?: boolean; kind?: string };
 export type DatabaseBackupsView = { schemaVersion?: number; operation?: { busy?: boolean; phase?: string; percent?: number; error?: string | null }; backups: DatabaseBackup[] };
 export type DiscoveryView = { discovered?: Array<{ host: string; roles?: string[]; instances?: unknown[] }>; suggestedConfig?: Partial<AppConfig> };
+export type DiscoveryJob = {
+  id: string;
+  status: "queued" | "running" | "complete" | "failed";
+  phase?: string;
+  total?: number;
+  scanned?: number;
+  found?: number;
+  network?: string;
+  result?: DiscoveryView;
+  error?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
 
 export type CommandOutcome = {
   commandId: string;

@@ -78,7 +78,7 @@ function initialAwayDraft(): AwayDraft {
 function prerequisites(config: AppConfig | null): Prerequisite[] {
   const adaptive = config?.adaptiveCharging;
   return [
-    { label: "Multi-rate electricity pricing", ready: Boolean(config && config.rateMode !== "simple"), detail: "A discounted rate window is required to choose economical charging times.", action: "Open rate settings", href: "/ui/system/rates" },
+    { label: "Off-peak electricity pricing", ready: Boolean(config && config.rateMode !== "simple"), detail: "One discounted off-peak window is enough; a multi-rate plan is optional.", action: "Open rate settings", href: "/ui/system/rates" },
     { label: "Solar generation", ready: config?.solarEnabled !== false, detail: "Solar production must be available for the next-day forecast.", action: "Open equipment settings", href: "/ui/system/equipment" },
     { label: "House demand", ready: config?.smartCosmoEnabled !== false, detail: "Whole-home demand history is required to predict consumption.", action: "Open equipment settings", href: "/ui/system/equipment" },
     { label: "Home location", ready: Number.isFinite(Number(adaptive?.latitude)) && Number.isFinite(Number(adaptive?.longitude)), detail: "Latitude and longitude drive sunrise and weather forecasts.", action: "Review planning settings", href: "#adaptive-settings" },

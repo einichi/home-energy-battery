@@ -10151,6 +10151,14 @@ async function api(req, res, url) {
   }
   if (req.method === "GET" && url.pathname === "/api/status") {
     if (discoveryInProgress()) {
+      if (latestStatusSnapshot) {
+        return json(res, 200, {
+          ...latestStatusSnapshot,
+          batteryStrategy: await batteryStrategyView(),
+          statusRefreshPaused: true,
+          statusRefreshPausedReason: `discovery is running (${discoveryRunContext.label})`,
+        });
+      }
       return json(res, 409, {
         error: `discovery is running (${discoveryRunContext.label}); status polling is paused`,
       });
