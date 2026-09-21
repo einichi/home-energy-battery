@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { execFile } from "node:child_process";
 import dgram from "node:dgram";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -46,6 +45,7 @@ import {
   externalIoDisabled,
   uiDevelopmentMode,
 } from "./lib/development-safety.js";
+import { createEchonetCommandAdapter } from "./lib/echonet-service.js";
 
 timestampConsole();
 
@@ -62,10 +62,9 @@ const OPERATIONAL_OVERRIDES_FILE = path.join(DATA_DIR, "operational-overrides.js
 const ADAPTIVE_CHARGING_DIR = path.join(DATA_DIR, "adaptive-charging");
 const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 const DATABASE_BACKUP_DIR = path.join(DATA_DIR, "backups");
-const CLI_TIMEOUT_MS = Number(process.env.CLI_TIMEOUT_MS ?? 15000);
-const CLI_QUEUE_TIMEOUT_MS = Math.max(30_000, CLI_TIMEOUT_MS * 4);
-const CLI_QUEUE_STARVATION_MS = Math.max(15_000, CLI_TIMEOUT_MS * 2);
-const CLI_FILE = "home-energy-battery-node.js";
+const ECHONET_TIMEOUT_MS = Number(process.env.ECHONET_TIMEOUT_MS ?? 15000);
+const DEVICE_QUEUE_TIMEOUT_MS = Math.max(30_000, ECHONET_TIMEOUT_MS * 4);
+const DEVICE_QUEUE_STARVATION_MS = Math.max(15_000, ECHONET_TIMEOUT_MS * 2);
 const SCHEDULE_CHECK_INTERVAL_MS = Number(process.env.SCHEDULE_CHECK_INTERVAL_MS ?? 15_000);
 const AUTOMATION_CHECK_INTERVAL_MS = Math.max(50, Number(process.env.AUTOMATION_CHECK_INTERVAL_MS ?? 30_000));
 const SOLAR_FORECAST_REFRESH_MS = 3 * 60 * 60_000;
@@ -214,9 +213,9 @@ const DEFAULT_CONFIG = {
   language: "en",
 };
 
-const cliQueue = [];
-let cliQueueRunning = false;
-let cliQueueSequence = 0;
+const deviceCommandQueue = [];
+let deviceCommandQueueRunning = false;
+let deviceCommandQueueSequence = 0;
 let configMutationQueue = Promise.resolve();
 let adaptiveChargingStateWriteQueue = Promise.resolve();
 let operationalOverrideMutationQueue = Promise.resolve();
@@ -265,7 +264,7 @@ let databaseUpgrade = {
 let automationRunInProgress = false;
 let automationRunContext = null;
 let discoveryRunContext = null;
-let activeCliContext = null;
+let activeEchonetContext = null;
 
 const historyStore = createHistoryStore({ dataDir: DATA_DIR });
 const notificationService = createNotificationService({
@@ -273,8 +272,8 @@ const notificationService = createNotificationService({
   getConfig: () => readConfig(),
   recordEvent: (event) => historyStore.isReady() && historyStore.recordEvent(event),
 });
-let cliTimingSequence = 0;
-const recentCliTimings = [];
+let echonetTimingSequence = 0;
+const recentEchonetTimings = [];
 let lastRecordedSample = null;
 let latestStatusSnapshot = null;
 let statusRefreshPromise = null;
@@ -285,51 +284,10 @@ const activeDeviceCommands = new Set();
 const discoveryJobs = new Map();
 const DISCOVERY_JOB_TTL_MS = 10 * 60 * 1000;
 
-function cliArgs(command, args = {}) {
-  const out = [path.join(__dirname, CLI_FILE), command];
-  for (const [key, value] of Object.entries(args)) {
-    if (value === undefined || value === null || value === false) continue;
-    if (Array.isArray(value)) {
-      for (const item of value) out.push(`--${key}`, String(item));
-    } else if (value === true) {
-      out.push(`--${key}`);
-    } else {
-      out.push(`--${key}`, String(value));
-    }
-  }
-  return out;
-}
-
-function runCli(command, args = {}, positional = []) {
-  const execArgs = [...cliArgs(command, args), ...positional.map(String)];
-  return new Promise((resolve, reject) => {
-    execFile(process.execPath, execArgs, { timeout: CLI_TIMEOUT_MS }, (error, stdout, stderr) => {
-      if (error) {
-        const details = [];
-        if (stderr?.trim()) details.push(stderr.trim());
-        if (error.killed || error.signal) {
-          details.push(`CLI ${command} exceeded ${CLI_TIMEOUT_MS}ms or was terminated (${error.signal ?? "unknown signal"})`);
-        } else if (error.message) {
-          details.push(error.message.trim());
-        }
-        if (stdout?.trim()) details.push(`stdout: ${jsonSnippet(stdout.trim())}`);
-        const failure = new Error([...new Set(details)].join("\n") || `CLI ${command} failed`);
-        failure.cause = error;
-        failure.command = command;
-        failure.args = execArgs.slice(1);
-        reject(failure);
-        return;
-      }
-      try {
-        resolve(parseJsonWithContext(stdout, `CLI ${command} stdout`));
-      } catch (err) {
-        reject(err);
-      }
-    });
-  });
-}
-
-let deviceCommandExecutor = runCli;
+let activeDeviceAdapter = null;
+let deviceCommandExecutor = async () => {
+  throw new Error("ECHONET adapter has not been initialized");
+};
 
 function setDeviceCommandExecutor(executor) {
   if (typeof executor !== "function") throw new TypeError("device command executor must be a function");
@@ -342,42 +300,51 @@ function setDeviceCommandExecutor(executor) {
 
 async function configureDeviceCommandAdapter() {
   const modulePath = process.env.DEVICE_COMMAND_ADAPTER_MODULE;
-  if (!modulePath) return;
-  if (process.env.NODE_ENV !== "test") {
-    throw new Error("DEVICE_COMMAND_ADAPTER_MODULE may only be used when NODE_ENV=test");
+  let adapter;
+  if (modulePath) {
+    if (process.env.NODE_ENV !== "test") {
+      throw new Error("DEVICE_COMMAND_ADAPTER_MODULE may only be used when NODE_ENV=test");
+    }
+    const resolvedPath = path.isAbsolute(modulePath) ? modulePath : path.resolve(__dirname, modulePath);
+    const adapterModule = await import(pathToFileURL(resolvedPath).href);
+    if (typeof adapterModule.createDeviceCommandAdapter !== "function") {
+      throw new Error(`${resolvedPath} must export createDeviceCommandAdapter()`);
+    }
+    adapter = await adapterModule.createDeviceCommandAdapter({ environment: process.env });
+  } else {
+    adapter = await createEchonetCommandAdapter({
+      timeout: ECHONET_TIMEOUT_MS / 1000,
+      netif: process.env.ECHONET_NETIF ?? "",
+      debug: process.env.ECHONET_DEBUG === "1",
+    });
   }
-  const resolvedPath = path.isAbsolute(modulePath) ? modulePath : path.resolve(__dirname, modulePath);
-  const adapterModule = await import(pathToFileURL(resolvedPath).href);
-  if (typeof adapterModule.createDeviceCommandAdapter !== "function") {
-    throw new Error(`${resolvedPath} must export createDeviceCommandAdapter()`);
-  }
-  const adapter = await adapterModule.createDeviceCommandAdapter({ environment: process.env });
   const execute = typeof adapter === "function" ? adapter : adapter?.execute?.bind(adapter);
   if (typeof execute !== "function") {
-    throw new Error(`${resolvedPath} createDeviceCommandAdapter() must return a function or an object with execute()`);
+    throw new Error("Device adapter must be a function or an object with execute()");
   }
+  activeDeviceAdapter = adapter;
   setDeviceCommandExecutor(execute);
 }
 
-function cliCommandPriority(command) {
+function deviceCommandPriority(command) {
   if (["set-mode", "charge", "discharge", "vendor-profile", "discharge-limit", "osaifu-charge-window", "osaifu-discharge-window", "raw-set"].includes(command)) return 0;
   if (["energy-status", "meter-status"].includes(command)) return 10;
   if (["discover", "probe", "inspect-host", "dump-eoj", "dump-vendor"].includes(command)) return 30;
   return 20;
 }
 
-async function runNextCliTask() {
-  if (cliQueueRunning || !cliQueue.length) return;
-  cliQueueRunning = true;
+async function runNextDeviceTask() {
+  if (deviceCommandQueueRunning || !deviceCommandQueue.length) return;
+  deviceCommandQueueRunning = true;
   const now = Date.now();
-  cliQueue.sort((left, right) => {
-    const leftStarved = now - left.queuedAt >= CLI_QUEUE_STARVATION_MS;
-    const rightStarved = now - right.queuedAt >= CLI_QUEUE_STARVATION_MS;
+  deviceCommandQueue.sort((left, right) => {
+    const leftStarved = now - left.queuedAt >= DEVICE_QUEUE_STARVATION_MS;
+    const rightStarved = now - right.queuedAt >= DEVICE_QUEUE_STARVATION_MS;
     if (leftStarved !== rightStarved) return leftStarved ? -1 : 1;
     if (leftStarved) return left.sequence - right.sequence;
     return left.priority - right.priority || left.sequence - right.sequence;
   });
-  const queued = cliQueue.shift();
+  const queued = deviceCommandQueue.shift();
   clearTimeout(queued.queueTimeout);
   try {
     const startedMs = Date.now();
@@ -386,29 +353,29 @@ async function runNextCliTask() {
       host: queued.args.host || queued.args["battery-host"] || queued.args["solar-host"] || null,
       startedAt: new Date(startedMs).toISOString(),
     };
-    activeCliContext = context;
+    activeEchonetContext = context;
     try {
       queued.resolve(await deviceCommandExecutor(queued.command, queued.args, queued.positional));
     } catch (error) {
       queued.reject(error);
     } finally {
-      recentCliTimings.push({
+      recentEchonetTimings.push({
         ...context,
-        sequence: ++cliTimingSequence,
+        sequence: ++echonetTimingSequence,
         durationMs: Date.now() - startedMs,
       });
-      if (recentCliTimings.length > 100) recentCliTimings.shift();
-      if (activeCliContext === context) activeCliContext = null;
+      if (recentEchonetTimings.length > 100) recentEchonetTimings.shift();
+      if (activeEchonetContext === context) activeEchonetContext = null;
     }
   } finally {
-    cliQueueRunning = false;
-    queueMicrotask(runNextCliTask);
+    deviceCommandQueueRunning = false;
+    queueMicrotask(runNextDeviceTask);
   }
 }
 
-function runCliQueued(command, args = {}, positional = [], options = {}) {
-  const priority = Number.isFinite(Number(options.priority)) ? Number(options.priority) : cliCommandPriority(command);
-  if (cliQueue.length >= 100 && priority > 0) {
+function runDeviceCommandQueued(command, args = {}, positional = [], options = {}) {
+  const priority = Number.isFinite(Number(options.priority)) ? Number(options.priority) : deviceCommandPriority(command);
+  if (deviceCommandQueue.length >= 100 && priority > 0) {
     return Promise.reject(new Error(`device command queue is full; ${command} was not queued`));
   }
   let queued;
@@ -418,24 +385,24 @@ function runCliQueued(command, args = {}, positional = [], options = {}) {
       args,
       positional,
       priority,
-      sequence: ++cliQueueSequence,
+      sequence: ++deviceCommandQueueSequence,
       queuedAt: Date.now(),
       queueTimeout: null,
       resolve,
       reject,
     };
-    cliQueue.push(queued);
+    deviceCommandQueue.push(queued);
   });
   const queueTimeoutMs = Number.isFinite(Number(options.queueTimeoutMs))
     ? Math.max(1, Number(options.queueTimeoutMs))
-    : CLI_QUEUE_TIMEOUT_MS;
+    : DEVICE_QUEUE_TIMEOUT_MS;
   queued.queueTimeout = setTimeout(() => {
-    const index = cliQueue.indexOf(queued);
+    const index = deviceCommandQueue.indexOf(queued);
     if (index < 0) return;
-    cliQueue.splice(index, 1);
-    queued.reject(new Error(`CLI ${command} timed out after waiting ${queueTimeoutMs}ms in the device command queue`));
+    deviceCommandQueue.splice(index, 1);
+    queued.reject(new Error(`ECHONET ${command} timed out after waiting ${queueTimeoutMs}ms in the device command queue`));
   }, queueTimeoutMs);
-  runNextCliTask();
+  runNextDeviceTask();
   return task;
 }
 
@@ -6213,7 +6180,7 @@ async function readMeterStatus(config) {
   try {
     return {
       configured: true,
-      ...(await runCliQueued("meter-status", { host: config.meterHost, eoj: config.meterEoj })),
+      ...(await runDeviceCommandQueued("meter-status", { host: config.meterHost, eoj: config.meterEoj })),
     };
   } catch (err) {
     return {
@@ -6227,7 +6194,7 @@ async function readMeterStatus(config) {
 
 async function safeCli(command, args = {}, positional = []) {
   try {
-    return await runCliQueued(command, args, positional);
+    return await runDeviceCommandQueued(command, args, positional);
   } catch (err) {
     return { error: err.message };
   }
@@ -6259,8 +6226,8 @@ async function settingWithCache(config, key, reader) {
 }
 
 async function readAllStatus(onProbeComplete = () => {}) {
-  // One dashboard refresh fans out into several short CLI calls. The queue keeps
-  // node-echonet-lite from fighting itself over UDP port 3610.
+  // One dashboard refresh fans out into several ECHONET operations. The queue
+  // serializes access to the persistent UDP client and prioritizes writes.
   const config = await readConfig();
   const energyArgs = {
     "battery-host": config.batteryHost,
@@ -6508,7 +6475,7 @@ const DEVICE_ACTIONS = new Set([
 
 async function executeActionCore(action, payload = {}, { source = "manual" } = {}) {
   // Settings and direct actions share this path so scheduled jobs exercise the
-  // same validation and CLI writes as button clicks in the UI.
+  // same validation and ECHONET writes as button clicks in the UI.
   await assertActionAllowedByOperationalOverride(source, action);
   if (source === "manual") await pauseAdaptiveChargingForManualAction(action);
   const config = await readConfig();
@@ -6517,12 +6484,12 @@ async function executeActionCore(action, payload = {}, { source = "manual" } = {
     case "vendor-profile":
       if (!payload.mode) throw new Error("mode is required");
       return assertDeviceCommandResult(
-        await runCliQueued("vendor-profile", { host }, [payload.mode]),
+        await runDeviceCommandQueued("vendor-profile", { host }, [payload.mode]),
         `charging profile ${payload.mode}`,
       );
     case "discharge-limit":
       return assertDeviceCommandResult(
-        await runCliQueued("discharge-limit", { host }, [
+        await runDeviceCommandQueued("discharge-limit", { host }, [
           numberInRange(payload.percent, "percent", 0, 100, 10),
         ]),
         "discharge limit",
@@ -6531,7 +6498,7 @@ async function executeActionCore(action, payload = {}, { source = "manual" } = {
       const startHour = numberInRange(payload.startHour, "startHour", 0, 23);
       const endHour = numberInRange(payload.endHour, "endHour", 0, 23);
       return assertDeviceCommandResult(
-        await runCliQueued("osaifu-charge-window", { host }, [startHour, endHour]),
+        await runDeviceCommandQueued("osaifu-charge-window", { host }, [startHour, endHour]),
         "osaifu charge window",
       );
     }
@@ -6539,14 +6506,14 @@ async function executeActionCore(action, payload = {}, { source = "manual" } = {
       const startHour = numberInRange(payload.startHour, "startHour", 0, 23);
       const endHour = numberInRange(payload.endHour, "endHour", 0, 23);
       return assertDeviceCommandResult(
-        await runCliQueued("osaifu-discharge-window", { host }, [startHour, endHour]),
+        await runDeviceCommandQueued("osaifu-discharge-window", { host }, [startHour, endHour]),
         "osaifu discharge window",
       );
     }
     case "set-mode":
       if (!payload.mode) throw new Error("mode is required");
       return assertDeviceCommandResult(
-        await runCliQueued("set-mode", { host }, [payload.mode]),
+        await runDeviceCommandQueued("set-mode", { host }, [payload.mode]),
         `operation mode ${payload.mode}`,
       );
     case "charge":
@@ -6556,7 +6523,7 @@ async function executeActionCore(action, payload = {}, { source = "manual" } = {
         args["target-wh"] = numberInRange(payload.targetWh, "targetWh", 0, 999999999);
       }
       return assertDeviceCommandResult(
-        await runCliQueued(action, args),
+        await runDeviceCommandQueued(action, args),
         `${action} request`,
       );
     }
@@ -6613,7 +6580,7 @@ async function verifyBatterySetting(result, host, command, expected, readObserve
   for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
     if (attempt > 1 && delayMs > 0) await sleep(delayMs);
     try {
-      const readback = await runCliQueued(command, { host }, [], { priority: 0 });
+      const readback = await runDeviceCommandQueued(command, { host }, [], { priority: 0 });
       observed = readObserved(readback);
       lastReadError = null;
       if (JSON.stringify(observed) === JSON.stringify(expected)) {
@@ -6790,7 +6757,7 @@ function batteryOperationModeFromReadback(status) {
 async function verifyBatteryOperationMode(result, host, expectedMode, {
   attempts = OPERATION_MODE_VERIFY_ATTEMPTS,
   delayMs = OPERATION_MODE_VERIFY_DELAY_MS,
-  readStatus = () => runCliQueued(
+  readStatus = () => runDeviceCommandQueued(
     "raw-get",
     { host, eoj: "0x027D01", timeout: 3 },
     ["0xDA"],
@@ -7079,7 +7046,7 @@ function automationRuleList(rules) {
   return rules.map(automationRuleLabel).join(", ") || "none";
 }
 
-function activeCliLabel(context) {
+function activeEchonetLabel(context) {
   if (!context) return "none";
   const elapsedMs = Date.now() - new Date(context.startedAt).getTime();
   return `${context.command}${context.host ? ` on ${context.host}` : ""} (${elapsedMs}ms)`;
@@ -7244,7 +7211,7 @@ function nextLocalMidnight(now = new Date()) {
 }
 
 async function readBatteryChargingProfile(host) {
-  const result = await runCliQueued("vendor-profile", { host });
+  const result = await runDeviceCommandQueued("vendor-profile", { host });
   const profile = result?.decoded?.mode ?? result?.mode;
   if (!BATTERY_PROFILES.has(profile)) {
     throw new Error(`Unable to verify battery charging profile${result?.error ? `: ${result.error}` : ""}`);
@@ -9275,7 +9242,7 @@ async function runAutomationRules(context = {}) {
   }
   context.phase = `reading device status for ${automationRuleList(enabledRules)}`;
   const statusReadStartedAt = Date.now();
-  const cliSequenceStart = cliTimingSequence;
+  const echonetSequenceStart = echonetTimingSequence;
   const probeTimings = [];
   const status = await getStatusSnapshot({
     maxAgeMs: Math.min(5_000, Math.max(0, Number(config.updateIntervalSeconds) * 1000 || 0)),
@@ -9288,12 +9255,12 @@ async function runAutomationRules(context = {}) {
   });
   const statusReadDurationMs = Date.now() - statusReadStartedAt;
   if (statusReadDurationMs > AUTOMATION_CHECK_INTERVAL_MS) {
-    const cliProbes = recentCliTimings
-      .filter(({ sequence }) => sequence > cliSequenceStart)
+    const echonetProbes = recentEchonetTimings
+      .filter(({ sequence }) => sequence > echonetSequenceStart)
       .map(({ command, host, durationMs }) => `${command}${host ? ` on ${host}` : ""}=${durationMs}ms`)
       .join(", ");
     console.warn(
-      `automation: device status read for ${automationRuleList(enabledRules)} took ${statusReadDurationMs}ms, longer than ${AUTOMATION_CHECK_INTERVAL_MS}ms interval; CLI probe durations: ${cliProbes || "none"}`,
+      `automation: device status read for ${automationRuleList(enabledRules)} took ${statusReadDurationMs}ms, longer than ${AUTOMATION_CHECK_INTERVAL_MS}ms interval; ECHONET operation durations: ${echonetProbes || "none"}`,
     );
   }
   let changed = false;
@@ -9401,7 +9368,7 @@ async function runAutomationRulesScheduled() {
     const rules = automationRunContext?.enabledRules?.join(", ") || "not loaded yet";
     const phase = automationRunContext?.phase || "unknown phase";
     console.warn(
-      `automation: previous check still running${duration}; current phase: ${phase}; active CLI probe: ${activeCliLabel(activeCliContext)}; enabled rules: ${rules}; skipping this scheduled interval`,
+      `automation: previous check still running${duration}; current phase: ${phase}; active ECHONET operation: ${activeEchonetLabel(activeEchonetContext)}; enabled rules: ${rules}; skipping this scheduled interval`,
     );
     return;
   }
@@ -9680,7 +9647,7 @@ async function enrichDiscoveredDevices(devices, config, progress = () => {}) {
       const eoj = probe.eoj;
       let detected = false;
       try {
-        const result = await runCliQueued("inspect-host", { host, eoj, timeout: 2 });
+        const result = await runDeviceCommandQueued("inspect-host", { host, eoj, timeout: 2 });
         const entry = result?.[eoj.toLowerCase()];
         detected = entry && !entry.error;
       } catch {
@@ -9689,7 +9656,7 @@ async function enrichDiscoveredDevices(devices, config, progress = () => {}) {
       for (const epc of probe.epcs) {
         if (detected) break;
         try {
-          const result = await runCliQueued("raw-get", { host, eoj, timeout: 2 }, [epc]);
+          const result = await runDeviceCommandQueued("raw-get", { host, eoj, timeout: 2 }, [epc]);
           detected = typeof result?.raw === "string" && result.raw.startsWith("0x");
         } catch {
           // Not every device exposes every role. Keep trying the remaining hints.
@@ -9775,7 +9742,7 @@ async function discoverDevices(timeout = 5, mode = "broadcast", progress = () =>
     (patch) => progress({ ...patch, network }),
   );
   progress({ phase: "broadcast", total: 0, scanned: 0, found: Object.keys(activeDevices).length, network });
-  const broadcastDevices = await runCliQueued("discover", { timeout: scanTimeout });
+  const broadcastDevices = await runDeviceCommandQueued("discover", { timeout: scanTimeout });
   progress({ phase: "broadcast", total: 0, scanned: 0, found: Object.keys(mergeDiscoveredDevices(activeDevices, broadcastDevices)).length, network });
   const devices = await enrichDiscoveredDevices(
     mergeDiscoveredDevices(activeDevices, broadcastDevices),
@@ -9934,7 +9901,7 @@ async function waitForDatabaseWriters(timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
   while (automationRunInProgress
     || activeDeviceCommands.size > 0
-    || cliQueueRunning
+    || deviceCommandQueueRunning
     || runningScheduleIds.size > 0
     || retentionRunPromise
     || statusRefreshPromise) {
@@ -10998,7 +10965,7 @@ export {
   readHistorySummaryRange,
   readAdaptiveChargingDemandProfileDays,
   recoverConcatenatedJsonValue,
-  runCliQueued,
+  runDeviceCommandQueued,
   sampleFromStatus,
   setDeviceCommandExecutor,
   shouldTriggerDemandGuard,
@@ -11059,7 +11026,8 @@ process.on("SIGTERM", () => {
   if (recorderTimer) clearTimeout(recorderTimer);
   if (retentionTimer) clearInterval(retentionTimer);
   clearAdaptiveChargingSlotEndTimer();
-  server.close(() => {
+  server.close(async () => {
+    await activeDeviceAdapter?.close?.();
     historyStore.close();
     process.exit(0);
   });

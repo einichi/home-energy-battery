@@ -3,8 +3,8 @@
 HOME ENERGY & BATTERY is a local LAN tool for discovering, monitoring, and
 controlling ECHONET Lite home-energy devices that are specific to my home. It uses
 [`futomi/node-echonet-lite`](https://github.com/futomi/node-echonet-lite) for
-UDP/LAN communication and adds a focused CLI, a small HTTP API, and a Dockerized
-Web UI.
+UDP/LAN communication directly through the web application and provides a
+Dockerized React UI.
 
 <img width="3350" height="2336" alt="image" src="https://github.com/user-attachments/assets/f8081b99-bc15-4df6-942c-9fc2f7d97b35" />
 
@@ -35,21 +35,15 @@ The `--ignore-scripts` flag avoids possible native `serialport` build failures w
 only need ECHONET Lite over LAN/IPv4. `node-echonet-lite` binds UDP port `3610`,
 so stop other ECHONET clients before using this tool.
 
-## CLI Quick Start
+## ECHONET integration
 
-Replace the addresses below with known device addresses from your own LAN.
+The web server talks to ECHONET Lite devices directly through
+`lib/echonet-service.js`. It keeps one UDP client open and serializes reads,
+writes, and discovery through a priority queue, so frequent dashboard refreshes
+do not launch extra Node processes or repeatedly compete for UDP port `3610`.
+Device commands and scheduled automation use this same in-process service.
 
-```bash
-node home-energy-battery-node.js --help
-node home-energy-battery-node.js discover
-node home-energy-battery-node.js inspect-host --host 192.0.2.10
-node home-energy-battery-node.js energy-status \
-  --battery-host 192.0.2.10 \
-  --solar-host 192.0.2.10 \
-  --fuel-cell-host 192.0.2.30
-```
-
-The energy-status command reads:
+The integrated status service reads:
 
 - solar instantaneous generation: `0x027901 / 0xE0`
 - battery instantaneous power: `0x027D01 / 0xD3`
@@ -81,6 +75,10 @@ Example `.env`:
 ```bash
 TZ=Asia/Tokyo
 PORT=8787
+# Optional request timeout for the in-process ECHONET client
+ECHONET_TIMEOUT_MS=15000
+# Optional LAN interface address when automatic selection is unsuitable
+# ECHONET_NETIF=10.0.0.20
 ```
 
 `TZ` is applied by the container entrypoint at startup. Device addresses are

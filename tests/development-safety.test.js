@@ -37,7 +37,7 @@ for (const [label, patch] of [
   ["non-test NODE_ENV", { NODE_ENV: "development" }],
   ["external I/O enabled", { DISABLE_EXTERNAL_IO: "0" }],
   ["missing simulator", { DEVICE_COMMAND_ADAPTER_MODULE: "" }],
-  ["different adapter", { DEVICE_COMMAND_ADAPTER_MODULE: "./home-energy-battery-node.js" }],
+  ["different adapter", { DEVICE_COMMAND_ADAPTER_MODULE: "./lib/echonet-service.js" }],
   ["production data directory", { DATA_DIR: path.join(projectDir, "data") }],
 ]) {
   test(`UI development rejects ${label}`, () => {

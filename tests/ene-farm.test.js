@@ -6,7 +6,7 @@ import {
   EDT_TO_FUEL_CELL_INTERCONNECTION,
   EDT_TO_FUEL_CELL_STATUS,
   EPC,
-} from "../home-energy-battery-node.js";
+} from "../lib/echonet-service.js";
 
 const generation = decodeFuelCellCumulative({
   host: "192.0.2.30",

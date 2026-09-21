@@ -18,7 +18,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts --omit=dev
 
-COPY home-energy-battery-node.js server.js ./
+COPY server.js ./
 COPY lib ./lib
 COPY public ./public
 COPY --from=ui-build /app/public/ui ./public/ui

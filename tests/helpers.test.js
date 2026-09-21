@@ -95,7 +95,7 @@ import {
   predictAwayDemand,
   rateForTimestamp,
   recoverConcatenatedJsonValue,
-  runCliQueued,
+  runDeviceCommandQueued,
   sampleFromStatus,
   setDeviceCommandExecutor,
   shouldTriggerDemandGuard,
@@ -206,9 +206,9 @@ const restoreQueuedExecutor = setDeviceCommandExecutor(async (command) => {
   }
   return { ok: true };
 });
-const blockedCli = runCliQueued("inspect-host", { host: "192.0.2.10" }, [], { queueTimeoutMs: 1000 });
+const blockedCli = runDeviceCommandQueued("inspect-host", { host: "192.0.2.10" }, [], { queueTimeoutMs: 1000 });
 await assert.rejects(
-  runCliQueued("probe", { host: "192.0.2.11" }, [], { queueTimeoutMs: 5 }),
+  runDeviceCommandQueued("probe", { host: "192.0.2.11" }, [], { queueTimeoutMs: 5 }),
   /timed out after waiting 5ms in the device command queue/,
 );
 releaseBlockedCli({ ok: true });

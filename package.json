@@ -5,7 +5,6 @@
   "description": "ECHONET Lite tools for local HEMS energy devices.",
   "type": "module",
   "scripts": {
-    "node:help": "node home-energy-battery-node.js --help",
     "start": "node server.js",
     "dev:ui": "node scripts/dev-ui-safe.mjs",
     "build:ui": "vite build --config frontend/vite.config.ts",
@@ -16,8 +15,8 @@
     "test:ui:visual": "npm run build:ui && node scripts/ui-visual-regression.mjs",
     "test:ui:a11y": "npm run build:ui && node scripts/ui-accessibility.mjs",
     "test:ui:lifecycle": "npm run build:ui && node scripts/ui-lifecycle.mjs",
-    "test:server": "node tests/helpers.test.js && node tests/history-store.test.js && node tests/database-upgrade.test.js && node tests/database-upgrade-server.test.js && node tests/device-simulator.test.js && node tests/device-adapter-integration.test.js && node tests/command-lifecycle-scenarios.test.js && node tests/development-safety.test.js && node tests/adaptive-charging-isolation.test.js && node tests/ene-farm.test.js && node tests/gas-tariffs.test.js",
-    "check": "node --check home-energy-battery-node.js && node --check server.js && npm run typecheck:ui && npm run lint:ui && npm run build:ui",
+    "test:server": "node tests/helpers.test.js && node tests/history-store.test.js && node tests/database-upgrade.test.js && node tests/database-upgrade-server.test.js && node tests/echonet-service.test.js && node tests/device-simulator.test.js && node tests/device-adapter-integration.test.js && node tests/command-lifecycle-scenarios.test.js && node tests/development-safety.test.js && node tests/adaptive-charging-isolation.test.js && node tests/ene-farm.test.js && node tests/gas-tariffs.test.js",
+    "check": "node --check server.js && node --check lib/echonet-service.js && npm run typecheck:ui && npm run lint:ui && npm run build:ui",
     "test": "npm run test:server && npm run test:ui"
   },
   "engines": {
