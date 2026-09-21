@@ -54,6 +54,12 @@ const DEFAULT_DEVICE_STATE = Object.freeze({
   },
   unavailableHosts: [],
   pollAdvanceMs: 0,
+  commandBehavior: {
+    delayMs: 0,
+    rejectCommands: [],
+    timeoutCommands: [],
+    ignoreMutationCommands: [],
+  },
 });
 
 const DEVICE_SCENARIOS = Object.freeze({
@@ -75,6 +81,10 @@ const DEVICE_SCENARIOS = Object.freeze({
   "ene-farm-stopped": {
     fuelCell: { instantPowerW: 0, generationStatus: "stopped" },
   },
+  "command-delay": { commandBehavior: { delayMs: 75 } },
+  "command-rejection": { commandBehavior: { rejectCommands: ["set-mode"] } },
+  "command-timeout": { commandBehavior: { timeoutCommands: ["set-mode"] } },
+  "readback-mismatch": { commandBehavior: { ignoreMutationCommands: ["set-mode"] } },
 });
 
 function clone(value) {
@@ -377,6 +387,16 @@ export function createDeviceSimulator(options = {}) {
       if (fault.kind === "reject") return { ok: false, acknowledged: false, esv: fault.esv };
       throw new Error(fault.message);
     }
+    const behavior = state.commandBehavior ?? {};
+    if (Number(behavior.delayMs) > 0) {
+      await new Promise((resolve) => setTimeout(resolve, Number(behavior.delayMs)));
+    }
+    if (behavior.rejectCommands?.includes(command)) {
+      return { ok: false, acknowledged: false, esv: "SetC_SNA" };
+    }
+    if (behavior.timeoutCommands?.includes(command)) {
+      throw new Error(`${command} simulated command timeout`);
+    }
 
     switch (command) {
       case "energy-status": return clone(energyStatus(args));
@@ -388,9 +408,11 @@ export function createDeviceSimulator(options = {}) {
         return clone(batterySetting(command, positional));
       case "set-mode": {
         const mode = String(positional[0]);
-        state.battery.operationMode = mode;
-        state.battery.workingStatus = mode;
-        state.battery.instantPowerW = mode === "standby" || mode === "auto" ? 0 : state.battery.instantPowerW;
+        if (!behavior.ignoreMutationCommands?.includes(command)) {
+          state.battery.operationMode = mode;
+          state.battery.workingStatus = mode;
+          state.battery.instantPowerW = mode === "standby" || mode === "auto" ? 0 : state.battery.instantPowerW;
+        }
         return { ok: true, esv: "Set_Res", mode, host: args.host ?? state.battery.host, eoj: BATTERY_EOJ, epc: "0xDA", raw: modeRaw(mode) };
       }
       case "charge":

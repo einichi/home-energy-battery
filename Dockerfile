@@ -1,3 +1,14 @@
+FROM node:24-bookworm-slim AS ui-build
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
+
+COPY frontend ./frontend
+COPY eslint.config.js ./
+RUN npm run build:ui
+
 FROM node:24-bookworm-slim
 
 WORKDIR /app
@@ -10,6 +21,7 @@ RUN npm ci --ignore-scripts --omit=dev
 COPY home-energy-battery-node.js server.js ./
 COPY lib ./lib
 COPY public ./public
+COPY --from=ui-build /app/public/ui ./public/ui
 COPY docker-entrypoint.sh ./
 RUN chmod +x ./docker-entrypoint.sh
 

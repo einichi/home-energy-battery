@@ -19,6 +19,7 @@ assert.deepEqual(normalizeRetentionPolicy({}, 730), {
   dailyAggregatesDays: null,
   adaptiveChargingHistoryDays: null,
   automationEventDays: null,
+  commandReceiptDays: 365,
   notificationDeliveryDays: 365,
 });
 
@@ -155,6 +156,22 @@ try {
     type: "pause",
     message: "Manual set-mode action paused Adaptive Charging",
   });
+  store.recordEvent({
+    eventKey: "command:test:succeeded",
+    at: "2024-01-01T00:20:00.000Z",
+    category: "command",
+    type: "succeeded",
+    message: "set-mode was verified",
+    payload: { commandId: "test", action: "set-mode" },
+  });
+  assert.deepEqual(store.recentEvents("command", 1)[0], {
+    eventKey: "command:test:succeeded",
+    at: "2024-01-01T00:20:00.000Z",
+    type: "succeeded",
+    message: "set-mode was verified",
+    payload: { commandId: "test", action: "set-mode" },
+  });
+  assert.equal(store.eventsByKeyPrefix("command:test:").length, 1);
   assert.equal(store.eventsBetween(
     "adaptiveCharging",
     Date.parse("2024-01-01T00:10:00.000Z"),
@@ -198,6 +215,7 @@ try {
     dailyAggregatesDays: null,
     adaptiveChargingHistoryDays: null,
     automationEventDays: null,
+    commandReceiptDays: 365,
     notificationDeliveryDays: 365,
   }, new Date("2026-01-01T00:00:00.000Z"));
   stats = await store.stats();
@@ -206,6 +224,7 @@ try {
   assert.equal(stats.rollups.daily, 1);
   assert.equal(stats.events.notification ?? 0, 0);
   assert.equal(stats.events.adaptiveCharging, 2);
+  assert.equal(stats.events.command ?? 0, 0);
   store.close();
 
   store = createHistoryStore({ dataDir, logger: { log() {}, warn() {} } });

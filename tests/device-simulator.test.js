@@ -4,6 +4,10 @@ import { createDeviceSimulator, DEVICE_SCENARIOS } from "./support/device-simula
 assert.ok(DEVICE_SCENARIOS.normal);
 assert.ok(DEVICE_SCENARIOS["high-demand"]);
 assert.ok(DEVICE_SCENARIOS["solar-export"]);
+assert.ok(DEVICE_SCENARIOS["command-delay"]);
+assert.ok(DEVICE_SCENARIOS["command-rejection"]);
+assert.ok(DEVICE_SCENARIOS["command-timeout"]);
+assert.ok(DEVICE_SCENARIOS["readback-mismatch"]);
 
 const simulator = createDeviceSimulator();
 const energy = await simulator.execute("energy-status", {
@@ -88,5 +92,21 @@ assert.equal(exportMeter.grid_export_power.value, 650);
 
 const demandSimulator = createDeviceSimulator({ scenario: "high-demand" });
 assert.equal((await demandSimulator.execute("meter-status", { host: "10.250.0.20" })).house_demand_power.value, 4700);
+
+const delayedSimulator = createDeviceSimulator({ scenario: "command-delay" });
+const delayStarted = Date.now();
+await delayedSimulator.execute("set-mode", { host: "10.250.0.10" }, ["standby"]);
+assert.ok(Date.now() - delayStarted >= 60);
+
+const rejectionSimulator = createDeviceSimulator({ scenario: "command-rejection" });
+assert.equal((await rejectionSimulator.execute("set-mode", {}, ["standby"])).ok, false);
+
+const timeoutSimulator = createDeviceSimulator({ scenario: "command-timeout" });
+await assert.rejects(() => timeoutSimulator.execute("set-mode", {}, ["standby"]), /simulated command timeout/);
+
+const mismatchSimulator = createDeviceSimulator({ scenario: "readback-mismatch" });
+const modeBeforeMismatch = mismatchSimulator.snapshot().battery.operationMode;
+await mismatchSimulator.execute("set-mode", {}, ["standby"]);
+assert.equal(mismatchSimulator.snapshot().battery.operationMode, modeBeforeMismatch);
 
 console.log("device simulator tests passed");

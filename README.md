@@ -84,7 +84,7 @@ PORT=8787
 ```
 
 `TZ` is applied by the container entrypoint at startup. Device addresses are
-configured from the Settings page and saved in the `home-energy-battery-data`
+configured from System and saved in the `home-energy-battery-data`
 Docker volume.
 
 Open:
@@ -97,13 +97,51 @@ The Web UI has live graphs, status widgets, battery profile settings,
 osaifu-mode charge/discharge windows, discharge limit, direct charge/discharge
 actions, schedules, device discovery, and simple historical recording.
 
+### UI development (simulator only)
+
+The React UI is the sole application interface. It includes Overview, consolidated
+Energy history, verified Battery controls and schedules, Disaster Prep, Automation,
+Insights, and routed System administration in English and Japanese. Start its
+development environment with:
+
+```bash
+npm run dev:ui
+```
+
+This is the only supported command for UI development. It creates a temporary
+data directory, forces the device simulator, disables external I/O, and starts:
+
+- React/Vite UI: `http://127.0.0.1:5173/ui/`
+- simulated API: `http://127.0.0.1:8797/`
+
+The UI displays a persistent simulated-environment banner. The launcher refuses
+the production API port, a real device adapter, a non-temporary data directory,
+or enabled external I/O. Do not point Vite at the household instance or copy
+production addresses, databases, credentials, or notification recipients into
+development fixtures.
+
+Run the frontend quality gates with:
+
+```bash
+npm run typecheck:ui
+npm run lint:ui
+npm run test:ui
+npm run test:ui:browser
+npm run test:ui:visual
+npm run build:ui
+```
+
+The production build is written to `public/ui/` and is generated during the
+Docker image build. `/` redirects to the React application at `/ui/`. Visual
+fixtures write simulator screenshots and a manifest under `test-results/ui-visual/`.
+
 Adaptive Charging includes an Away Schedule for exact From/Until periods. Future
 periods can be edited or deleted, while an active period can be ended with Back
 Home or extended. Completed periods are hidden from the management table but
 remain in SQLite so Away demand can be learned separately from normal household
 demand and reused in later charging plans.
 
-SMTP notifications are configured from the Notifications panel in Settings and
+SMTP notifications are configured from System → Notifications and
 are disabled by default. They can report Charging Demand Guard transitions,
 schedule failures, device outages and recoveries, Adaptive Charging availability,
 discounted charging-window shortfalls, and an optional low-SOC threshold.
@@ -119,7 +157,7 @@ upgrade, existing `/data/history/samples.jsonl` and `/data/adaptive-charging/*.j
 imported in restart-safe batches. The original files are retained as migration
 backups and are no longer appended after the import.
 
-Retention is configured in Settings. Defaults preserve raw telemetry for 1,095
+Retention is configured in System → Data & backups. Defaults preserve raw telemetry for 1,095
 days, 30-minute and daily aggregates indefinitely, Adaptive Charging and automation
 history indefinitely, and notification deliveries for 365 days. Automatic
 maintenance runs daily and deletes old records in small batches.

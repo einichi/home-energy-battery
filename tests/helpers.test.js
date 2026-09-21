@@ -338,6 +338,7 @@ assert.equal(simple.retention.intervalAggregatesDays, null);
 assert.equal(simple.retention.dailyAggregatesDays, null);
 assert.equal(simple.retention.adaptiveChargingHistoryDays, null);
 assert.equal(simple.retention.automationEventDays, null);
+assert.equal(simple.retention.commandReceiptDays, 365);
 assert.equal(simple.retention.notificationDeliveryDays, 365);
 assert.equal(simple.retention.automaticMaintenance, true);
 assert.equal(cleanConfig({ historyRetentionDays: 730 }).retention.rawTelemetryDays, 730);

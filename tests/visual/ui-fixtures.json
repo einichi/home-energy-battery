@@ -1,0 +1,16 @@
+[
+  { "name": "overview-desktop-light-en", "path": "/ui/", "width": 1440, "height": 1000, "theme": "light", "language": "en", "heading": "Home energy overview" },
+  { "name": "overview-phone-dark-en", "path": "/ui/", "width": 390, "height": 844, "theme": "dark", "language": "en", "heading": "Home energy overview" },
+  { "name": "energy-tablet-light-en", "path": "/ui/energy", "width": 768, "height": 1024, "theme": "light", "language": "en", "heading": "Energy" },
+  { "name": "battery-phone-dark-ja", "path": "/ui/battery/backup", "width": 390, "height": 844, "theme": "dark", "language": "ja", "heading": "停電対策" },
+  { "name": "automation-desktop-dark-en", "path": "/ui/automation", "width": 1440, "height": 1000, "theme": "dark", "language": "en", "heading": "Automation" },
+  { "name": "system-tablet-light-ja", "path": "/ui/system/equipment", "width": 768, "height": 1024, "theme": "light", "language": "ja", "heading": "システム" },
+  { "name": "overview-phone-stale", "path": "/ui/", "width": 390, "height": 844, "theme": "light", "language": "en", "heading": "Home energy overview", "scenario": "stale" },
+  { "name": "overview-desktop-warning", "path": "/ui/", "width": 1440, "height": 1000, "theme": "dark", "language": "en", "heading": "Home energy overview", "scenario": "warning" },
+  { "name": "energy-tablet-empty", "path": "/ui/energy", "width": 768, "height": 1024, "theme": "light", "language": "en", "heading": "Energy", "scenario": "empty-history" },
+  { "name": "battery-phone-manual", "path": "/ui/battery", "width": 390, "height": 844, "theme": "dark", "language": "en", "heading": "Battery", "scenario": "manual-override" },
+  { "name": "overview-phone-offline", "path": "/ui/", "width": 390, "height": 844, "theme": "light", "language": "en", "heading": "Home energy overview", "scenario": "offline" },
+  { "name": "automation-desktop-learning", "path": "/ui/automation", "width": 1440, "height": 1000, "theme": "light", "language": "en", "heading": "Automation", "scenario": "learning" },
+  { "name": "more-phone-dark-ja", "path": "/ui/more", "width": 390, "height": 844, "theme": "dark", "language": "ja", "heading": "その他" },
+  { "name": "ene-farm-phone-light-ja", "path": "/ui/energy/ene-farm", "width": 390, "height": 844, "theme": "light", "language": "ja", "heading": "エネファーム" }
+]
