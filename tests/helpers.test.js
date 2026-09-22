@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createDeviceSimulator } from "./support/device-simulator.js";
@@ -67,9 +67,6 @@ import {
   learnedSolarFactor,
   logAdaptiveChargingInitialHeadroomWait,
   logAdaptiveChargingBreakerWait,
-  migrateLegacyAdaptiveChargingData,
-  migrateLegacyFuelCellControlData,
-  migrateBatteryLearningState,
   normalizeCircuitLabels,
   normalizeDashboardWidgets,
   normalizeRateBands,
@@ -94,7 +91,6 @@ import {
   filterDemandDaysByOccupancy,
   predictAwayDemand,
   rateForTimestamp,
-  recoverConcatenatedJsonValue,
   runDeviceCommandQueued,
   sampleFromStatus,
   setDeviceCommandExecutor,
@@ -390,173 +386,6 @@ assert.equal(cleanConfig({ batteryCapabilities: { maximumChargeWatts: 2200 } }).
 assert.equal(cleanConfig({ batteryCapabilities: { maximumChargeWatts: 2192 } }).batteryCapabilities.maximumChargeWatts, 2192);
 assert.equal(cleanConfig({ batteryCapabilities: { maximumChargeWatts: 2192.4 } }).batteryCapabilities.maximumChargeWatts, 2192);
 assert.equal(cleanConfig({ batteryCapabilities: { maximumChargeWatts: 2192.5 } }).batteryCapabilities.maximumChargeWatts, 2193);
-
-const migrationDir = await mkdtemp(path.join(os.tmpdir(), "adaptive-charging-migration-"));
-try {
-  await mkdir(path.join(migrationDir, "solar-planner"), { recursive: true });
-  await writeFile(path.join(migrationDir, "config.json"), JSON.stringify({
-    adaptiveCharging: null,
-    solarPlanner: { enabled: true, latitude: 35, longitude: 139, arrayPeakKw: 4 },
-    retention: { plannerHistoryDays: 1800 },
-    notifications: { triggers: { plannerUnavailable: { enabled: false, cooldownMinutes: 90 } } },
-  }));
-  await writeFile(path.join(migrationDir, "solar-planner-state.json"), JSON.stringify({
-    owner: "planner",
-    log: [{ at: "2026-07-11T00:00:00.000Z", message: "existing decision" }],
-  }));
-  await writeFile(path.join(migrationDir, "adaptive-charging-state.json"), "{invalid canonical state");
-  await writeFile(
-    path.join(migrationDir, "solar-planner", "demand-day-profiles.json"),
-    JSON.stringify({ version: 1, days: {} }),
-  );
-  await migrateLegacyAdaptiveChargingData(migrationDir, { info() {}, warn() {} });
-  const migratedConfig = JSON.parse(await readFile(path.join(migrationDir, "config.json"), "utf8"));
-  assert.equal(migratedConfig.adaptiveCharging.enabled, true);
-  assert.equal(migratedConfig.solarPlanner, undefined);
-  assert.equal(migratedConfig.retention.adaptiveChargingHistoryDays, 1800);
-  assert.equal(migratedConfig.notifications.triggers.adaptiveChargingUnavailable.enabled, false);
-  const migratedState = JSON.parse(await readFile(path.join(migrationDir, "adaptive-charging-state.json"), "utf8"));
-  assert.equal(migratedState.owner, "adaptiveCharging");
-  assert.equal(
-    JSON.parse(await readFile(path.join(migrationDir, "adaptive-charging", "demand-day-profiles.json"), "utf8")).version,
-    1,
-  );
-  await assert.rejects(readFile(path.join(migrationDir, "solar-planner-state.json"), "utf8"), { code: "ENOENT" });
-} finally {
-  await rm(migrationDir, { recursive: true, force: true });
-}
-
-const fuelCellControlMigrationDir = await mkdtemp(path.join(os.tmpdir(), "fuel-cell-control-migration-"));
-try {
-  await writeFile(path.join(fuelCellControlMigrationDir, "config.json"), JSON.stringify({
-    fuelCell: {
-      automation: {
-        enabled: true,
-        includeInAdaptiveCharging: true,
-        schedules: [{ label: "Morning", days: [1], start: "08:00" }],
-      },
-      gasCo2KgPerM3: 2.21,
-    },
-  }));
-  await writeFile(path.join(fuelCellControlMigrationDir, "fuel-cell-automation-state.json"), JSON.stringify({
-    lastCommand: "start",
-  }));
-  await migrateLegacyFuelCellControlData(fuelCellControlMigrationDir);
-  const migratedFuelCellConfig = JSON.parse(await readFile(
-    path.join(fuelCellControlMigrationDir, "config.json"),
-    "utf8",
-  ));
-  assert.equal(migratedFuelCellConfig.fuelCell.includeInAdaptiveCharging, true);
-  assert.equal("automation" in migratedFuelCellConfig.fuelCell, false);
-  assert.equal(migratedFuelCellConfig.fuelCell.gasCo2KgPerM3, 2.21);
-  await assert.rejects(
-    readFile(path.join(fuelCellControlMigrationDir, "fuel-cell-automation-state.json"), "utf8"),
-    { code: "ENOENT" },
-  );
-} finally {
-  await rm(fuelCellControlMigrationDir, { recursive: true, force: true });
-}
-
-const batteryModelMigrationDir = await mkdtemp(path.join(os.tmpdir(), "battery-model-migration-"));
-try {
-  const legacyState = {
-    owner: null,
-    plan: { available: true, plannedChargeKwh: 4.2 },
-    learnedConversionActive: true,
-    chargingPerformance: {
-      sessions: [{
-        startedAt: "2026-07-10T01:00:00.000Z",
-        endedAt: "2026-07-10T02:00:00.000Z",
-        deliveredWh: 1900,
-        capacityKwh: 4.4,
-        estimatedStorageEfficiencyPercent: 79,
-      }],
-    },
-    windowSummaries: [{
-      key: "legacy-window",
-      windowStart: "2026-07-10T01:00:00.000Z",
-      windowEnd: "2026-07-10T05:00:00.000Z",
-      deliveredWh: 1900,
-    }],
-  };
-  await writeFile(
-    path.join(batteryModelMigrationDir, "adaptive-charging-state.json"),
-    JSON.stringify(legacyState),
-  );
-  const batteryMigration = await migrateBatteryLearningState(
-    batteryModelMigrationDir,
-    { info() {} },
-  );
-  assert.equal(batteryMigration.migrated, true);
-  const canonical = JSON.parse(await readFile(
-    path.join(batteryModelMigrationDir, "adaptive-charging-state.json"),
-    "utf8",
-  ));
-  assert.equal(canonical.batteryLearning.version, 3);
-  assert.equal(canonical.plan, null);
-  assert.equal(canonical.pendingPlanReason, "battery model migration");
-  assert.equal(canonical.learnedConversionActive, undefined);
-  assert.equal(canonical.chargingPerformance.sessions[0].modelVersion, 1);
-  assert.equal(canonical.chargingPerformance.sessions[0].estimatedStorageEfficiencyPercent, undefined);
-  assert.equal(canonical.chargingPerformance.sessions[0].capacityKwh, undefined);
-  assert.equal(canonical.windowSummaries[0].modelVersion, 1);
-  assert.deepEqual(
-    JSON.parse(await readFile(path.join(
-      batteryModelMigrationDir,
-      "adaptive-charging",
-      "migrations",
-      "adaptive-charging-state-model-v1.json",
-    ), "utf8")),
-    legacyState,
-  );
-  assert.equal((await migrateBatteryLearningState(batteryModelMigrationDir, { info() {} })).migrated, false);
-} finally {
-  await rm(batteryModelMigrationDir, { recursive: true, force: true });
-}
-
-const activeBatteryModelMigrationDir = await mkdtemp(
-  path.join(os.tmpdir(), "active-battery-model-migration-"),
-);
-try {
-  const activeMigrationSlotEnd = new Date(Date.now() + 60 * 60_000).toISOString();
-  await writeFile(
-    path.join(activeBatteryModelMigrationDir, "adaptive-charging-state.json"),
-    JSON.stringify({
-      owner: "adaptiveCharging",
-      plan: { available: true, plannedChargeKwh: 1.2 },
-      activeSlot: { targetWh: 900, end: activeMigrationSlotEnd },
-      activeChargedKwh: 0.25,
-      batteryLearning: {
-        version: 2,
-        migratedAt: "2026-07-19T00:00:00.000Z",
-        charge: { source: "learned", activeWhPerSocPoint: 52 },
-        discharge: { source: "configured", activeWhPerSocPoint: 54 },
-        power: { source: "configured", activeWatts: 2192 },
-      },
-      activeChargeSession: {
-        startedAt: "2026-07-10T01:00:00.000Z",
-        requestedWh: 900,
-        capacityKwh: 4.4,
-      },
-    }),
-  );
-  await migrateBatteryLearningState(activeBatteryModelMigrationDir, { info() {} });
-  const activeCanonical = JSON.parse(await readFile(
-    path.join(activeBatteryModelMigrationDir, "adaptive-charging-state.json"),
-    "utf8",
-  ));
-  assert.equal(activeCanonical.owner, "adaptiveCharging");
-  assert.equal(activeCanonical.plan.plannedChargeKwh, 1.2);
-  assert.equal(activeCanonical.activeSlot.targetWh, 900);
-  assert.equal(activeCanonical.activeChargedKwh, 0.25);
-  assert.equal(activeCanonical.pendingPlanReason, null);
-  assert.equal(activeCanonical.batteryLearning.version, 3);
-  assert.equal(activeCanonical.batteryLearning.charge.source, "learned");
-  assert.equal(activeCanonical.batteryLearning.charge.activeWhPerSocPoint, 52);
-  assert.equal(activeCanonical.batteryLearning.switchAfterSlotEnd, activeMigrationSlotEnd);
-} finally {
-  await rm(activeBatteryModelMigrationDir, { recursive: true, force: true });
-}
 
 const timelineView = buildAdaptiveChargingTimelineView({
   timeline: [
@@ -2653,20 +2482,6 @@ assert.throws(
   () => parseJsonWithContext("[1]\n[2]", "test.json"),
   /test\.json at line 2, column 1, position 4/,
 );
-const recoveredState = recoverConcatenatedJsonValue(
-  '{"old":{"lastResult":{"ok":false}}}\n{"new":{"lastResult":{"ok":true}}}',
-  (value) => value && typeof value === "object" && !Array.isArray(value),
-);
-assert.equal(recoveredState.documentCount, 2);
-assert.deepEqual(recoveredState.value, { new: { lastResult: { ok: true } } });
-assert.equal(
-  recoverConcatenatedJsonValue(
-    '[{"id":"old"}]\n[{"id":"new"}]',
-    (value) => value && typeof value === "object" && !Array.isArray(value),
-  ),
-  null,
-);
-
 assert.deepEqual(normalizeSubnets(["192.168.1.0/24", "bad", "192.168.1.0/24"]), ["192.168.1.0/24"]);
 
 const bands = normalizeRateBands({
@@ -3403,6 +3218,7 @@ assert.deepEqual(smtpTransportOptions({
 const notificationDir = await mkdtemp(path.join(os.tmpdir(), "home-energy-notifications-"));
 const sentMessages = [];
 const recordedNotificationEvents = [];
+let notificationState = {};
 const notificationConfig = normalizeNotificationConfig({
   enabled: true,
   channels: [{
@@ -3430,6 +3246,11 @@ const notificationService = createNotificationService({
     close() {},
   }),
   recordEvent: async (event) => recordedNotificationEvents.push(event),
+  stateStore: {
+    isReady: () => true,
+    read: (_key, fallback) => notificationState ?? fallback,
+    write: (_key, value) => { notificationState = structuredClone(value); },
+  },
 });
 await notificationService.updateSecret({ channelId: "primary-email", password: "secret" });
 assert.equal((await notificationService.view()).passwordConfigured, true);

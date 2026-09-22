@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,8 @@ import {
   UI_DEVELOPMENT_DATA_PREFIX,
   assertSafeUiDevelopmentEnvironment,
 } from "../lib/development-safety.js";
+import { createApplicationStore } from "../lib/application-store.js";
+import { createHistoryStore } from "../lib/history-store.js";
 
 const projectDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const apiPort = Number(process.env.UI_DEV_API_PORT ?? 8797);
@@ -22,7 +24,12 @@ if (!Number.isInteger(uiPort) || uiPort < 1024 || uiPort > 65535 || uiPort === a
 
 const dataDir = await mkdtemp(path.join(os.tmpdir(), UI_DEVELOPMENT_DATA_PREFIX));
 const simulatorPath = path.join(projectDir, "tests/support/device-simulator.js");
-await writeFile(path.join(dataDir, "config.json"), `${JSON.stringify({
+const historyStore = createHistoryStore({ dataDir });
+await historyStore.initialize();
+historyStore.close();
+const applicationStore = createApplicationStore({ dataDir });
+await applicationStore.initialize();
+applicationStore.writeDocument("config", {
   batteryHost: "10.250.0.10",
   meterHost: "10.250.0.20",
   meterEoj: "0x028701",
@@ -35,7 +42,8 @@ await writeFile(path.join(dataDir, "config.json"), `${JSON.stringify({
   fuelCellEnabled: true,
   adaptiveCharging: { enabled: false },
   notifications: { enabled: false },
-}, null, 2)}\n`);
+});
+applicationStore.close();
 const sharedEnvironment = {
   ...process.env,
   NODE_ENV: "test",

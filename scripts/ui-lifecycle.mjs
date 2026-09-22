@@ -60,13 +60,10 @@ try {
   };
   const startHeap = await heap();
   const destinations = [
-    ["/ui/energy", "Energy"],
-    ["/ui/energy/ene-farm", "Ene-Farm"],
+    ["/ui/reports", "Reports"],
     ["/ui/battery", "Battery"],
     ["/ui/automation", "Automation"],
-    ["/ui/insights", "Insights"],
     ["/ui/system/equipment", "System"],
-    ["/ui/more", "More"],
     ["/ui/", "Home energy overview"],
   ];
   for (let cycle = 0; cycle < 5; cycle += 1) {

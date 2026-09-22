@@ -97,9 +97,9 @@ actions, schedules, device discovery, and simple historical recording.
 
 ### UI development (simulator only)
 
-The React UI is the sole application interface. It includes Overview, consolidated
-Energy history, verified Battery controls and schedules, Disaster Prep, Automation,
-Insights, and routed System administration in English and Japanese. Start its
+The React UI is the sole application interface. It includes a today-focused Overview,
+historical Reports, verified Battery controls and schedules, Disaster Prep, Automation,
+and routed System administration in English and Japanese. Start its
 development environment with:
 
 ```bash
@@ -147,37 +147,30 @@ Non-secret settings and delivery state are stored transactionally in
 `/data/history.sqlite`. The SMTP password remains separately stored in
 `/data/notification-secrets.json` and is never returned by the API.
 
-### Architecture bridge release
+### Final storage architecture
 
-This release performs a one-time architecture bridge before opening the ECHONET
-client or starting automation. Configuration, schedules, automation definitions
-and state, Adaptive Charging state, operational overrides, and notification state
-are copied from their former JSON files into SQLite. The import and architecture
-marker are transactional and restart-safe.
+Application configuration and state, schedules, automation data, telemetry,
+aggregates, Adaptive Charging context, and notification delivery history are all
+stored in `/data/history.sqlite`. SMTP credentials remain separately stored in
+`/data/notification-secrets.json` so secrets are not returned by the API.
 
-Before importing, the application creates
-`/data/backups/architecture-v1-before-<timestamp>/`. It contains an online SQLite
-snapshot, all other existing `/data` content (including notification secrets and
-earlier backups when present), and a SHA-256 manifest. The bridge checks SQLite integrity,
-source-document equality, history and event row counts and ranges, and backup
-coverage before normal startup. The ECHONET adapter is initialized only after
-these checks pass.
+Existing installations must run the architecture bridge release before upgrading
+to this cleanup release. Confirm the bridge result through `/api/config`:
+`runtime.architecture.state` and `runtime.architecture.validation.state` must be
+`complete`/`passed`, and `runtime.architecture.architectureVersion` must be `1`.
+This release refuses to start with an older or unversioned database instead of
+accessing devices with incomplete application state. New installations create the
+current architecture directly and require no migration.
 
-The former JSON files are deliberately retained by this bridge release but are no
-longer read or written after migration. Confirm the result through `/api/config`:
-`runtime.architecture.state` and `runtime.architecture.validation.state` must both
-be `complete`/`passed`, and `runtime.architecture.architectureVersion` must be `1`.
-Keep the bridge image and its architecture backup until the migrated instance has
-restarted successfully. A later cleanup release can then remove the one-time
-import code and obsolete JSON files.
+The cleanup release no longer reads, writes, or imports the former JSON and JSONL
+stores. They may be removed from `/data` after the bridge backup has been retained
+and the cleanup release has restarted successfully. Do not remove
+`history.sqlite`, `notification-secrets.json`, or the `backups/` directory.
 
 ### History storage
 
 Telemetry, aggregates, Adaptive Charging context, automation events, and notification
-delivery history are stored in `/data/history.sqlite`. On first startup after an
-upgrade, existing `/data/history/samples.jsonl` and `/data/adaptive-charging/*.jsonl` files are
-imported in restart-safe batches. The original files are retained as migration
-backups and are no longer appended after the import.
+delivery history are stored in `/data/history.sqlite`.
 
 Retention is configured in System → Data & backups. Defaults preserve raw telemetry for 1,095
 days, 30-minute and daily aggregates indefinitely, Adaptive Charging and automation

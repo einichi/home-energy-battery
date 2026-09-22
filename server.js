@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import dgram from "node:dgram";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -15,17 +15,15 @@ import {
   SCHEMA_VERSION,
   createHistoryStore,
   inspectHistoryDatabase,
-  migrateHistoryDatabase,
   normalizeRetentionPolicy,
 } from "./lib/history-store.js";
 import {
-  backupDatabaseBeforeUpgrade,
   backupDatabaseManually,
   cleanupExtractedDatabaseBackup,
   deleteDatabaseBackup,
   extractAndValidateDatabaseBackup,
   listDatabaseBackups,
-} from "./lib/database-upgrade.js";
+} from "./lib/database-backup.js";
 import {
   applicableGasDiscount,
   applicableGasTariffBand,
@@ -59,13 +57,6 @@ const PORT = Number(process.env.PORT ?? 8787);
 const DATA_DIR = process.env.DATA_DIR ?? path.join(__dirname, "data");
 const UI_DEVELOPMENT_MODE = uiDevelopmentMode(process.env);
 const EXTERNAL_IO_DISABLED = externalIoDisabled(process.env);
-const SCHEDULES_FILE = path.join(DATA_DIR, "schedules.json");
-const AUTOMATION_RULES_FILE = path.join(DATA_DIR, "automation-rules.json");
-const AUTOMATION_RULE_STATE_FILE = path.join(DATA_DIR, "automation-rule-state.json");
-const ADAPTIVE_CHARGING_STATE_FILE = path.join(DATA_DIR, "adaptive-charging-state.json");
-const OPERATIONAL_OVERRIDES_FILE = path.join(DATA_DIR, "operational-overrides.json");
-const ADAPTIVE_CHARGING_DIR = path.join(DATA_DIR, "adaptive-charging");
-const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 const DATABASE_BACKUP_DIR = path.join(DATA_DIR, "backups");
 const ECHONET_TIMEOUT_MS = Number(process.env.ECHONET_TIMEOUT_MS ?? 15000);
 const DEVICE_QUEUE_TIMEOUT_MS = Math.max(30_000, ECHONET_TIMEOUT_MS * 4);
@@ -234,8 +225,6 @@ let backgroundProcessesEnabled = false;
 let adaptiveChargingSlotEndTimer = null;
 let adaptiveChargingSlotEndTimerKey = null;
 let applicationStarted = false;
-let serverListening = false;
-let startupPromise = null;
 let databaseOperation = {
   busy: false,
   type: null,
@@ -249,22 +238,6 @@ let databaseOperation = {
   completedAt: null,
   error: null,
   result: null,
-};
-let databaseUpgrade = {
-  required: false,
-  state: "checking",
-  phase: "checking",
-  percent: 0,
-  processed: 0,
-  total: 0,
-  unit: null,
-  sourceVersion: null,
-  targetVersion: SCHEMA_VERSION,
-  databaseBytes: null,
-  backupDirectory: DATABASE_BACKUP_DIR,
-  backup: null,
-  decision: null,
-  error: null,
 };
 let automationRunInProgress = false;
 let automationRunContext = null;
@@ -419,7 +392,6 @@ function runDeviceCommandQueued(command, args = {}, positional = [], options = {
 
 async function ensureDataDir() {
   await mkdir(DATA_DIR, { recursive: true });
-  await mkdir(ADAPTIVE_CHARGING_DIR, { recursive: true });
 }
 
 function numericMetric(item) {
@@ -600,61 +572,6 @@ function parseJsonWithContext(text, source) {
     err.jsonSnippet = jsonSnippetNear(text, position);
     throw err;
   }
-}
-
-function splitTopLevelJsonDocuments(text) {
-  const docs = [];
-  let start = null;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text[i];
-    if (start === null) {
-      if (/\s/.test(ch)) continue;
-      if (ch !== "[" && ch !== "{") return [];
-      start = i;
-    }
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === "\\") {
-        escaped = true;
-      } else if (ch === "\"") {
-        inString = false;
-      }
-      continue;
-    }
-    if (ch === "\"") {
-      inString = true;
-    } else if (ch === "[" || ch === "{") {
-      depth += 1;
-    } else if (ch === "]" || ch === "}") {
-      depth -= 1;
-      if (depth < 0) return [];
-      if (depth === 0) {
-        docs.push({ start, end: i + 1, text: text.slice(start, i + 1) });
-        start = null;
-      }
-    }
-  }
-  return start === null && !inString && depth === 0 ? docs : [];
-}
-
-function recoverConcatenatedJsonValue(text, isValidValue) {
-  const docs = splitTopLevelJsonDocuments(text);
-  if (docs.length <= 1) return null;
-  const values = [];
-  for (const doc of docs) {
-    try {
-      const value = JSON.parse(doc.text);
-      if (isValidValue(value)) values.push({ ...doc, value });
-    } catch {
-      return null;
-    }
-  }
-  if (values.length !== docs.length) return null;
-  return { ...values.at(-1), documentCount: docs.length };
 }
 
 function logDetailedError(label, err) {
@@ -888,12 +805,6 @@ async function readAdaptiveChargingDemandProfileDays() {
   return adaptiveChargingDemandProfileIndexPromise;
 }
 
-async function writeJsonFileAtomic(file, data) {
-  const tmp = `${file}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
-  await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`);
-  await rename(tmp, file);
-}
-
 const BATTERY_PROFILES = new Set(["osaifu", "eco", "backup"]);
 const BACKUP_PREPARATION_LOG_LIMIT = 50;
 
@@ -933,39 +844,12 @@ function appendBackupPreparationLog(state, message, kind = "info", now = new Dat
 }
 
 async function readOperationalOverridesState() {
-  await ensureDataDir();
-  if (applicationStore.isReady()) {
-    return cleanOperationalOverridesState(applicationStore.readDocument("operationalOverrides", {}));
-  }
-  try {
-    const source = await readFile(OPERATIONAL_OVERRIDES_FILE, "utf8");
-    let parsed;
-    let recovered = null;
-    try {
-      parsed = parseJsonWithContext(source, OPERATIONAL_OVERRIDES_FILE);
-    } catch (error) {
-      recovered = recoverConcatenatedJsonValue(source, (value) => value && typeof value === "object" && !Array.isArray(value));
-      if (!recovered) throw error;
-      logDetailedError("operational-overrides-state", error);
-      parsed = recovered.value;
-    }
-    const cleaned = cleanOperationalOverridesState(parsed);
-    if (recovered) await writeJsonFileAtomic(OPERATIONAL_OVERRIDES_FILE, cleaned);
-    return cleaned;
-  } catch (error) {
-    if (error.code === "ENOENT") return cleanOperationalOverridesState();
-    throw error;
-  }
+  return cleanOperationalOverridesState(applicationStore.readDocument("operationalOverrides", {}));
 }
 
 async function writeOperationalOverridesState(state) {
   const cleaned = cleanOperationalOverridesState(state);
-  await ensureDataDir();
-  if (applicationStore.isReady()) {
-    applicationStore.writeDocument("operationalOverrides", cleaned);
-    return cleaned;
-  }
-  await writeJsonFileAtomic(OPERATIONAL_OVERRIDES_FILE, cleaned);
+  applicationStore.writeDocument("operationalOverrides", cleaned);
   return cleaned;
 }
 
@@ -1014,211 +898,6 @@ async function assertActionAllowedByOperationalOverride(source, action) {
   if (backupPreparationAllowsActionSource(state, source)) return;
   await recordBlockedBackupPreparationAction(source, action);
   throw requestError(409, `Backup Preparation is active; ${action} is blocked until it is ended`);
-}
-
-async function pathExists(file) {
-  try {
-    await stat(file);
-    return true;
-  } catch (err) {
-    if (err.code === "ENOENT") return false;
-    throw err;
-  }
-}
-
-async function migrateLegacyAdaptiveChargingData(dataDir = DATA_DIR, logger = console) {
-  await mkdir(dataDir, { recursive: true });
-  const configFile = path.join(dataDir, "config.json");
-  if (await pathExists(configFile)) {
-    const parsed = parseJsonWithContext(await readFile(configFile, "utf8"), configFile);
-    let changed = false;
-    if (Object.prototype.hasOwnProperty.call(parsed, "solarPlanner")) {
-      const canonicalValid = parsed.adaptiveCharging
-        && typeof parsed.adaptiveCharging === "object"
-        && !Array.isArray(parsed.adaptiveCharging);
-      const legacyValid = parsed.solarPlanner
-        && typeof parsed.solarPlanner === "object"
-        && !Array.isArray(parsed.solarPlanner);
-      if (!canonicalValid && legacyValid) {
-        parsed.adaptiveCharging = parsed.solarPlanner;
-      } else {
-        logger.warn?.("Adaptive Charging migration: canonical configuration already exists; discarding obsolete solar planner configuration");
-      }
-      delete parsed.solarPlanner;
-      changed = true;
-    }
-    if (parsed.retention && Object.prototype.hasOwnProperty.call(parsed.retention, "plannerHistoryDays")) {
-      if (!Object.prototype.hasOwnProperty.call(parsed.retention, "adaptiveChargingHistoryDays")) {
-        parsed.retention.adaptiveChargingHistoryDays = parsed.retention.plannerHistoryDays;
-      }
-      delete parsed.retention.plannerHistoryDays;
-      changed = true;
-    }
-    const triggerRenames = {
-      plannerUnavailable: "adaptiveChargingUnavailable",
-      plannerRecovered: "adaptiveChargingRecovered",
-      plannerWindowShortfall: "adaptiveChargingWindowShortfall",
-    };
-    for (const [legacyId, canonicalId] of Object.entries(triggerRenames)) {
-      const triggers = parsed.notifications?.triggers;
-      if (!triggers || !Object.prototype.hasOwnProperty.call(triggers, legacyId)) continue;
-      if (!Object.prototype.hasOwnProperty.call(triggers, canonicalId)) {
-        triggers[canonicalId] = triggers[legacyId];
-      }
-      delete triggers[legacyId];
-      changed = true;
-    }
-    if (changed) {
-      await writeJsonFileAtomic(configFile, parsed);
-      logger.info?.("Adaptive Charging migration: updated configuration");
-    }
-  }
-
-  const legacyStateFile = path.join(dataDir, "solar-planner-state.json");
-  const stateFile = path.join(dataDir, "adaptive-charging-state.json");
-  if (await pathExists(legacyStateFile)) {
-    const readMigratingState = async (file) => {
-      const text = await readFile(file, "utf8");
-      let parsed;
-      try {
-        parsed = parseJsonWithContext(text, file);
-      } catch (err) {
-        const recovered = recoverConcatenatedJsonValue(
-          text,
-          (value) => value && typeof value === "object" && !Array.isArray(value),
-        );
-        if (!recovered) throw err;
-        parsed = recovered.value;
-      }
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
-    };
-    let canonicalState = null;
-    if (await pathExists(stateFile)) {
-      try {
-        canonicalState = await readMigratingState(stateFile);
-      } catch (err) {
-        logger.warn?.(`Adaptive Charging migration: canonical state is invalid and will be replaced: ${err.message}`);
-      }
-    }
-    if (!canonicalState) {
-      const legacyState = await readMigratingState(legacyStateFile);
-      if (legacyState.owner === "planner") legacyState.owner = "adaptiveCharging";
-      await writeJsonFileAtomic(stateFile, legacyState);
-    } else {
-      logger.warn?.("Adaptive Charging migration: canonical state already exists; discarding obsolete solar planner state");
-    }
-    await rm(legacyStateFile, { force: true });
-    logger.info?.("Adaptive Charging migration: updated state file");
-  }
-
-  const legacyDir = path.join(dataDir, "solar-planner");
-  const canonicalDir = path.join(dataDir, "adaptive-charging");
-  if (await pathExists(legacyDir)) {
-    await mkdir(canonicalDir, { recursive: true });
-    for (const entry of await readdir(legacyDir, { withFileTypes: true })) {
-      const source = path.join(legacyDir, entry.name);
-      const target = path.join(canonicalDir, entry.name);
-      if (!(await pathExists(target))) {
-        await rename(source, target);
-      } else {
-        logger.warn?.(`Adaptive Charging migration: keeping canonical ${entry.name} and discarding obsolete copy`);
-        await rm(source, { recursive: entry.isDirectory(), force: true });
-      }
-    }
-    await rm(legacyDir, { recursive: true, force: true });
-    logger.info?.("Adaptive Charging migration: updated data directory");
-  }
-}
-
-async function migrateLegacyFuelCellControlData(dataDir = DATA_DIR) {
-  await mkdir(dataDir, { recursive: true });
-  const configFile = path.join(dataDir, "config.json");
-  if (await pathExists(configFile)) {
-    const parsed = parseJsonWithContext(await readFile(configFile, "utf8"), configFile);
-    const fuelCell = parsed.fuelCell;
-    if (fuelCell && typeof fuelCell === "object" && !Array.isArray(fuelCell)) {
-      let changed = false;
-      if (!Object.prototype.hasOwnProperty.call(fuelCell, "includeInAdaptiveCharging")) {
-        if (Object.prototype.hasOwnProperty.call(fuelCell.automation ?? {}, "includeInAdaptiveCharging")) {
-          fuelCell.includeInAdaptiveCharging = fuelCell.automation.includeInAdaptiveCharging === true;
-        } else if (Object.prototype.hasOwnProperty.call(fuelCell, "plannerInfluence")) {
-          fuelCell.includeInAdaptiveCharging = fuelCell.plannerInfluence === "active";
-        }
-      }
-      for (const key of ["automation", "generationModel", "plannerInfluence", "fixedWindows"]) {
-        if (Object.prototype.hasOwnProperty.call(fuelCell, key)) {
-          delete fuelCell[key];
-          changed = true;
-        }
-      }
-      if (changed) await writeJsonFileAtomic(configFile, parsed);
-    }
-  }
-  await rm(path.join(dataDir, "fuel-cell-automation-state.json"), { force: true });
-}
-
-async function migrateBatteryLearningState(dataDir = DATA_DIR, logger = console) {
-  const stateFile = path.join(dataDir, "adaptive-charging-state.json");
-  let text;
-  try {
-    text = await readFile(stateFile, "utf8");
-  } catch (error) {
-    if (error.code === "ENOENT") return { migrated: false, migratedAt: null };
-    throw error;
-  }
-  const parsed = parseJsonWithContext(text, stateFile);
-  if (Number(parsed.batteryLearning?.version) === BATTERY_LEARNING_MODEL_VERSION) {
-    return { migrated: false, migratedAt: parsed.batteryLearning.migratedAt ?? null };
-  }
-  const sourceVersion = Math.max(1, Math.round(Number(parsed.batteryLearning?.version) || 1));
-  const migratedAt = new Date().toISOString();
-  const migrationDir = path.join(dataDir, "adaptive-charging", "migrations");
-  const backupFile = path.join(migrationDir, `adaptive-charging-state-model-v${sourceVersion}.json`);
-  await mkdir(migrationDir, { recursive: true });
-  if (!(await pathExists(backupFile))) {
-    const backupTmp = `${backupFile}.${process.pid}.${Date.now()}.tmp`;
-    await writeFile(backupTmp, text);
-    await rename(backupTmp, backupFile);
-  }
-  const chargingPerformance = {
-    ...(parsed.chargingPerformance ?? {}),
-    sessions: (parsed.chargingPerformance?.sessions ?? []).map((session) => {
-      const { estimatedStorageEfficiencyPercent, ...rawSession } = session;
-      return { ...rawSession, modelVersion: Number(session.modelVersion) || sourceVersion };
-    }),
-  };
-  const ownerActive = parsed.owner === "adaptiveCharging";
-  const activeSlotEnd = parsed.activeSlot?.end ?? null;
-  const deferModelSwitch = ownerActive && new Date(activeSlotEnd).getTime() > Date.now();
-  const switchAfterSlotEnd = deferModelSwitch ? activeSlotEnd : null;
-  const migrated = {
-    ...parsed,
-    plan: ownerActive ? parsed.plan ?? null : null,
-    pendingPlanReason: deferModelSwitch ? null : "battery model migration",
-    pendingPlanRequestId: deferModelSwitch ? null : `battery-model-migration:${migratedAt}`,
-    pendingPlanRequestedAt: deferModelSwitch ? null : migratedAt,
-    chargingPerformance,
-    windowSummaries: (parsed.windowSummaries ?? []).map((summary) => ({
-      ...summary,
-      modelVersion: Number(summary.modelVersion) || sourceVersion,
-    })),
-    batteryLearning: cleanBatteryLearningModel({
-      ...(sourceVersion >= 2 ? parsed.batteryLearning : {}),
-      migratedAt,
-      switchAfterSlotEnd,
-      power: {
-        ...(sourceVersion >= 2 ? parsed.batteryLearning?.power : {}),
-        curve: [],
-      },
-    }),
-  };
-  if (!ownerActive && migrated.activeChargeSession) {
-    const { capacityKwh, ...activeChargeSession } = migrated.activeChargeSession;
-    migrated.activeChargeSession = activeChargeSession;
-  }
-  await writeJsonFileAtomic(stateFile, cleanAdaptiveChargingState(migrated));
-  logger.info?.(`Adaptive Charging battery model migrated to version ${BATTERY_LEARNING_MODEL_VERSION}; backup saved at ${backupFile}`);
-  return { migrated: true, migratedAt };
 }
 
 function cleanBatteryLearningCoefficient(value = {}) {
@@ -1517,29 +1196,7 @@ function cleanAdaptiveChargingPerformance(value = {}) {
 }
 
 async function readAdaptiveChargingState() {
-  await ensureDataDir();
-  if (applicationStore.isReady()) {
-    return cleanAdaptiveChargingState(applicationStore.readDocument("adaptiveChargingState", {}));
-  }
-  try {
-    const text = await readFile(ADAPTIVE_CHARGING_STATE_FILE, "utf8");
-    let parsed;
-    let recovered = null;
-    try {
-      parsed = parseJsonWithContext(text, ADAPTIVE_CHARGING_STATE_FILE);
-    } catch (err) {
-      recovered = recoverConcatenatedJsonValue(text, (value) => value && typeof value === "object" && !Array.isArray(value));
-      if (!recovered) throw err;
-      logDetailedError("adaptive-charging-state", err);
-      parsed = recovered.value;
-    }
-    const cleaned = cleanAdaptiveChargingState(parsed);
-    if (recovered) await writeJsonFileAtomic(ADAPTIVE_CHARGING_STATE_FILE, cleaned);
-    return cleaned;
-  } catch (err) {
-    if (err.code === "ENOENT") return cleanAdaptiveChargingState();
-    throw err;
-  }
+  return cleanAdaptiveChargingState(applicationStore.readDocument("adaptiveChargingState", {}));
 }
 
 async function commitAdaptiveChargingState(state) {
@@ -1553,9 +1210,7 @@ async function commitAdaptiveChargingState(state) {
     revision: expectedRevision + 1,
     updatedAt: new Date().toISOString(),
   });
-  await ensureDataDir();
-  if (applicationStore.isReady()) applicationStore.writeDocument("adaptiveChargingState", cleaned);
-  else await writeJsonFileAtomic(ADAPTIVE_CHARGING_STATE_FILE, cleaned);
+  applicationStore.writeDocument("adaptiveChargingState", cleaned);
   if (historyStore.isReady()) {
     for (const entry of cleaned.log) {
       historyStore.recordEvent({
@@ -5506,14 +5161,14 @@ async function systemAlertsView(snapshot, now = new Date()) {
       href: "/system/notifications",
     });
   }
-  if (databaseOperation.busy || databaseOperation.error || databaseUpgrade.required || databaseUpgrade.error) {
+  if (databaseOperation.busy || databaseOperation.error) {
     add({
       id: "database",
       source: "Application database",
-      severity: databaseOperation.error || databaseUpgrade.error ? "critical" : "warning",
-      title: databaseOperation.busy ? "Database maintenance in progress" : databaseUpgrade.required ? "Database upgrade required" : "Database operation failed",
+      severity: databaseOperation.error ? "critical" : "warning",
+      title: databaseOperation.busy ? "Database maintenance in progress" : "Database operation failed",
       startedAt: databaseOperation.startedAt ?? now.toISOString(),
-      impact: databaseOperation.error ?? databaseUpgrade.error ?? "Historical data administration is temporarily limiting application work.",
+      impact: databaseOperation.error ?? "Historical data administration is temporarily limiting application work.",
       suggestedAction: "Review database health, maintenance, and backup state.",
       href: "/system/data",
     });
@@ -5531,28 +5186,12 @@ async function trimHistory(retention) {
 }
 
 async function readSchedules() {
-  await ensureDataDir();
-  if (applicationStore.isReady()) {
-    const stored = applicationStore.readDocument("schedules", []);
-    return Array.isArray(stored) ? stored : [];
-  }
-  try {
-    const text = await readFile(SCHEDULES_FILE, "utf8");
-    const parsed = parseJsonWithContext(text, SCHEDULES_FILE);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (err) {
-    if (err.code === "ENOENT") return [];
-    throw err;
-  }
+  const stored = applicationStore.readDocument("schedules", []);
+  return Array.isArray(stored) ? stored : [];
 }
 
 async function writeSchedules(schedules) {
-  await ensureDataDir();
-  if (applicationStore.isReady()) {
-    applicationStore.writeDocument("schedules", schedules);
-    return;
-  }
-  await writeJsonFileAtomic(SCHEDULES_FILE, schedules);
+  applicationStore.writeDocument("schedules", schedules);
 }
 
 function mutateSchedules(mutator) {
@@ -5802,35 +5441,7 @@ function cleanConfig(input = {}) {
 }
 
 async function readConfig() {
-  await ensureDataDir();
-  if (applicationStore.isReady()) {
-    const parsed = applicationStore.readDocument("config", DEFAULT_CONFIG);
-    const cleaned = cleanConfig(parsed);
-    const legacyFuelCellConfig = parsed.fuelCell && ["automation", "generationModel", "plannerInfluence", "fixedWindows"]
-      .some((key) => Object.prototype.hasOwnProperty.call(parsed.fuelCell, key));
-    if (Object.prototype.hasOwnProperty.call(parsed, "automation")
-      || Object.prototype.hasOwnProperty.call(parsed, "historyRetentionDays")
-      || legacyFuelCellConfig) {
-      applicationStore.writeDocument("config", cleaned);
-    }
-    return cleaned;
-  }
-  try {
-    const text = await readFile(CONFIG_FILE, "utf8");
-    const parsed = parseJsonWithContext(text, CONFIG_FILE);
-    const cleaned = cleanConfig(parsed);
-    const legacyFuelCellConfig = parsed.fuelCell && ["automation", "generationModel", "plannerInfluence", "fixedWindows"]
-      .some((key) => Object.prototype.hasOwnProperty.call(parsed.fuelCell, key));
-    if (Object.prototype.hasOwnProperty.call(parsed, "automation")
-      || Object.prototype.hasOwnProperty.call(parsed, "historyRetentionDays")
-      || legacyFuelCellConfig) {
-      await writeJsonFileAtomic(CONFIG_FILE, cleaned);
-    }
-    return cleaned;
-  } catch (err) {
-    if (err.code === "ENOENT") return cleanConfig(DEFAULT_CONFIG);
-    throw err;
-  }
+  return cleanConfig(applicationStore.readDocument("config", DEFAULT_CONFIG));
 }
 
 async function commitConfig(previous, config) {
@@ -5935,8 +5546,7 @@ async function commitConfig(previous, config) {
     }
     await writeAdaptiveChargingState(state);
   }
-  if (applicationStore.isReady()) applicationStore.writeDocument("config", cleaned);
-  else await writeJsonFileAtomic(CONFIG_FILE, cleaned);
+  applicationStore.writeDocument("config", cleaned);
   if (hostChanged) {
     lastRecordedSample = null;
     invalidateStatusSnapshot();
@@ -5959,50 +5569,14 @@ function writeConfig(config) {
 }
 
 async function readAutomationRules() {
-  await ensureDataDir();
-  const { configs, legacyStates } = await readAutomationRuleConfigs();
+  const configs = await readAutomationRuleConfigs();
   const states = await readAutomationRuleStates();
-  let shouldWriteState = false;
-  const rules = configs.map((config) => {
-    const state = states[config.id] ?? legacyStates[config.id] ?? {};
-    if (!states[config.id] && legacyStates[config.id]) shouldWriteState = true;
-    return mergeAutomationRule(config, state);
-  });
-  if (shouldWriteState) {
-    await writeAutomationRuleStates(rules);
-    await writeAutomationRules(rules);
-  }
-  return rules;
+  return configs.map((config) => mergeAutomationRule(config, states[config.id] ?? {}));
 }
 
 async function readAutomationRuleConfigs() {
-  await ensureDataDir();
-  if (applicationStore.isReady()) {
-    const parsed = applicationStore.readDocument("automationRules", []);
-    const source = Array.isArray(parsed) ? parsed : [];
-    const configs = source.map(cleanAutomationRuleConfig);
-    const legacyStates = Object.fromEntries(
-      source
-        .filter((rule) => rule && (rule.lastResult !== undefined || rule.state !== undefined || rule.log !== undefined))
-        .map((rule) => [String(rule.id), cleanAutomationRuleState(rule)]),
-    );
-    return { configs, legacyStates };
-  }
-  try {
-    const text = await readFile(AUTOMATION_RULES_FILE, "utf8");
-    const parsed = parseJsonWithContext(text, AUTOMATION_RULES_FILE);
-    const source = Array.isArray(parsed) ? parsed : [];
-    const configs = source.map(cleanAutomationRuleConfig);
-    const legacyStates = Object.fromEntries(
-      source
-        .filter((rule) => rule && (rule.lastResult !== undefined || rule.state !== undefined || rule.log !== undefined))
-        .map((rule) => [String(rule.id), cleanAutomationRuleState(rule)]),
-    );
-    return { configs, legacyStates };
-  } catch (err) {
-    if (err.code === "ENOENT") return { configs: [], legacyStates: {} };
-    throw err;
-  }
+  const parsed = applicationStore.readDocument("automationRules", []);
+  return (Array.isArray(parsed) ? parsed : []).map(cleanAutomationRuleConfig);
 }
 
 function normalizeAutomationRuleStateFile(value = {}) {
@@ -6015,58 +5589,20 @@ function normalizeAutomationRuleStateFile(value = {}) {
 }
 
 async function readAutomationRuleStates() {
-  await ensureDataDir();
-  if (applicationStore.isReady()) {
-    return normalizeAutomationRuleStateFile(applicationStore.readDocument("automationRuleState", {}));
-  }
-  try {
-    const text = await readFile(AUTOMATION_RULE_STATE_FILE, "utf8");
-    let parsed;
-    let recovered = null;
-    try {
-      parsed = parseJsonWithContext(text, AUTOMATION_RULE_STATE_FILE);
-    } catch (err) {
-      recovered = recoverConcatenatedJsonValue(
-        text,
-        (value) => value && typeof value === "object" && !Array.isArray(value),
-      );
-      if (!recovered) throw err;
-      logDetailedError("automation-rule-state", err);
-      console.error(
-        `automation-rule-state: recovered state from JSON document ${recovered.documentCount} at bytes ${recovered.start}-${recovered.end}`,
-      );
-      parsed = recovered.value;
-    }
-    const cleaned = normalizeAutomationRuleStateFile(parsed);
-    if (recovered) {
-      await writeJsonFileAtomic(AUTOMATION_RULE_STATE_FILE, cleaned);
-      console.error("automation-rule-state: repaired automation-rule-state.json after recovery");
-    }
-    return cleaned;
-  } catch (err) {
-    if (err.code === "ENOENT") return {};
-    throw err;
-  }
+  return normalizeAutomationRuleStateFile(applicationStore.readDocument("automationRuleState", {}));
 }
 
 async function writeAutomationRules(rules) {
-  await ensureDataDir();
   const cleaned = rules.map(cleanAutomationRuleConfig);
-  if (applicationStore.isReady()) {
-    applicationStore.writeDocument("automationRules", cleaned);
-    return cleaned;
-  }
-  await writeJsonFileAtomic(AUTOMATION_RULES_FILE, cleaned);
+  applicationStore.writeDocument("automationRules", cleaned);
   return cleaned;
 }
 
 async function writeAutomationRuleStates(rules) {
-  await ensureDataDir();
   const states = Object.fromEntries(
     rules.map((rule) => [rule.id, cleanAutomationRuleState(rule)]),
   );
-  if (applicationStore.isReady()) applicationStore.writeDocument("automationRuleState", states);
-  else await writeJsonFileAtomic(AUTOMATION_RULE_STATE_FILE, states);
+  applicationStore.writeDocument("automationRuleState", states);
   if (historyStore.isReady()) {
     for (const rule of rules) {
       for (const entry of rule.log ?? []) {
@@ -10177,7 +9713,7 @@ async function restoreDatabaseBackup(filename) {
       await rename(extracted.snapshotFile, databaseFile);
       extracted = null;
       await historyStore.initialize();
-      await applicationStore.initializeBridge();
+      await applicationStore.initialize();
       databaseReady = true;
       await rm(originalFile, { force: true });
       originalMoved = false;
@@ -10222,7 +9758,7 @@ async function restoreDatabaseBackup(filename) {
           await rename(originalFile, databaseFile);
           originalMoved = false;
           await historyStore.initialize();
-          await applicationStore.initializeBridge();
+          await applicationStore.initialize();
           databaseReady = true;
           lastRecordedSample = historyStore.latestSample();
         } catch (rollbackError) {
@@ -10232,7 +9768,7 @@ async function restoreDatabaseBackup(filename) {
       } else if (!databaseReady) {
         try {
           await historyStore.initialize();
-          await applicationStore.initializeBridge();
+          await applicationStore.initialize();
           databaseReady = true;
           lastRecordedSample = historyStore.latestSample();
         } catch (reopenError) {
@@ -10767,177 +10303,20 @@ async function serveStatic(res, pathname) {
   }
 }
 
-function databaseUpgradeView() {
-  return {
-    ...databaseUpgrade,
-    applicationReady: applicationStarted,
-  };
-}
-
-async function serveDatabaseUpgradeStatic(res, pathname) {
-  const files = {
-    "/database-upgrade": "database-upgrade.html",
-    "/database-upgrade.html": "database-upgrade.html",
-    "/database-upgrade.css": "database-upgrade.css",
-    "/database-upgrade.js": "database-upgrade.js",
-  };
-  const filename = files[pathname];
-  if (!filename) {
-    res.writeHead(302, { Location: "/database-upgrade" });
-    res.end();
-    return;
-  }
-  await serveStatic(res, `/${filename}`);
-}
-
 async function initializeApplication() {
   if (applicationStarted) return;
-  let existingArchitectureVersion = null;
-  try {
-    await stat(historyStore.databaseFile);
-    existingArchitectureVersion = architectureVersionForDatabase(historyStore.databaseFile);
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-  }
-  let batteryLearningMigration = { migrated: false, migratedAt: null };
-  if (existingArchitectureVersion !== ARCHITECTURE_VERSION) {
-    await migrateLegacyAdaptiveChargingData();
-    await migrateLegacyFuelCellControlData();
-    batteryLearningMigration = await migrateBatteryLearningState();
-  }
   await historyStore.initialize();
-  const architectureMigration = await applicationStore.initializeBridge();
-  if (architectureMigration?.migratedAt) {
-    historyStore.recordEvent({
-      eventKey: `application:architecture:${architectureMigration.architectureVersion}:${architectureMigration.migratedAt}`,
-      at: architectureMigration.migratedAt,
-      category: "application",
-      type: "architecture-migration",
-      message: `Application state migrated to architecture version ${architectureMigration.architectureVersion}`,
-      payload: architectureMigration,
-    });
-  }
+  await applicationStore.initialize();
   if (!activeDeviceAdapter) await configureDeviceCommandAdapter();
-  if (batteryLearningMigration.migrated) {
-    historyStore.tagEventsBefore("adaptiveCharging", batteryLearningMigration.migratedAt, { modelVersion: 1 });
-  }
   lastRecordedSample = historyStore.latestSample();
   const startupConfig = await readConfig();
   const startupAdaptiveChargingState = await readAdaptiveChargingState();
   await refreshBatteryLearning(startupConfig, startupAdaptiveChargingState);
   await writeAdaptiveChargingState(startupAdaptiveChargingState);
-  if (batteryLearningMigration.migrated) {
-    historyStore.recordEvent({
-      eventKey: `adaptiveCharging:battery-model-migration:${batteryLearningMigration.migratedAt}`,
-      at: batteryLearningMigration.migratedAt,
-      category: "adaptiveCharging",
-      type: "battery-model-migration",
-      message: `Battery learning migrated to model version ${BATTERY_LEARNING_MODEL_VERSION}; legacy derived efficiency values were invalidated`,
-      payload: { modelVersion: BATTERY_LEARNING_MODEL_VERSION },
-    });
-  }
   await writeAutomationRuleStates(await readAutomationRules());
   await reconcileBackupPreparationOnStartup();
-  const notificationHistory = await notificationService.view();
-  for (const delivery of notificationHistory.deliveries) {
-    const at = delivery.at ?? delivery.event?.occurredAt;
-    historyStore.recordEvent({
-      eventKey: `notification:legacy:${at}:${delivery.event?.dedupeKey ?? "delivery"}`,
-      at,
-      category: "notification",
-      type: delivery.ok ? "delivered" : "failed",
-      message: delivery.event?.message,
-      payload: delivery,
-    });
-  }
   startApplicationBackgroundProcesses();
   applicationStarted = true;
-}
-
-async function performDatabaseUpgrade(backupRequested) {
-  if (startupPromise) throw requestError(409, "Database upgrade is already running");
-  const inspection = await inspectHistoryDatabase(DATA_DIR);
-  if (inspection.state !== "upgrade") {
-    throw requestError(409, inspection.error ?? `Database is no longer upgradeable (${inspection.state})`);
-  }
-  const originalSourceVersion = inspection.version;
-  databaseUpgrade.sourceVersion = originalSourceVersion;
-  databaseUpgrade.targetVersion = SCHEMA_VERSION;
-  databaseUpgrade.decision = backupRequested ? "backup" : "skip";
-  databaseUpgrade.error = null;
-  databaseUpgrade.percent = 0;
-  databaseUpgrade.processed = 0;
-  databaseUpgrade.total = 0;
-  databaseUpgrade.unit = null;
-  if (!backupRequested) databaseUpgrade.backup = null;
-  startupPromise = (async () => {
-    try {
-      if (backupRequested) {
-        databaseUpgrade.state = "backing-up";
-        databaseUpgrade.phase = "preparing";
-        databaseUpgrade.backup = await backupDatabaseBeforeUpgrade({
-          databaseFile: inspection.databaseFile,
-          backupDir: DATABASE_BACKUP_DIR,
-          sourceVersion: inspection.version,
-          targetVersion: SCHEMA_VERSION,
-          onProgress(progress) {
-            Object.assign(databaseUpgrade, progress);
-          },
-        });
-      }
-      databaseUpgrade.state = "migrating";
-      databaseUpgrade.phase = "migrating";
-      databaseUpgrade.percent = 0;
-      await migrateHistoryDatabase(DATA_DIR, {
-        onProgress(progress) {
-          const { fromVersion, toVersion } = progress;
-          databaseUpgrade.sourceVersion = fromVersion;
-          databaseUpgrade.migratingToVersion = toVersion;
-          if (progress.phase === "compacting") {
-            databaseUpgrade.phase = "compacting";
-            databaseUpgrade.percent = progress.percent;
-            databaseUpgrade.processed = progress.processed;
-            databaseUpgrade.total = progress.total;
-            databaseUpgrade.unit = progress.unit;
-            return;
-          }
-          databaseUpgrade.phase = "migrating";
-          databaseUpgrade.percent = Math.round(((toVersion - originalSourceVersion) / (SCHEMA_VERSION - originalSourceVersion)) * 100);
-          databaseUpgrade.processed = toVersion - originalSourceVersion;
-          databaseUpgrade.total = SCHEMA_VERSION - originalSourceVersion;
-          databaseUpgrade.unit = "versions";
-        },
-      });
-      databaseUpgrade.phase = "starting";
-      databaseUpgrade.percent = 100;
-      await initializeApplication();
-      historyStore.recordEvent({
-        eventKey: `database:upgrade:${originalSourceVersion}:${SCHEMA_VERSION}:${new Date().toISOString()}`,
-        at: new Date().toISOString(),
-        category: "database",
-        type: "schema-upgrade",
-        message: `Database upgraded from v${originalSourceVersion} to v${SCHEMA_VERSION}`,
-        payload: {
-          decision: databaseUpgrade.decision,
-          backupFilename: databaseUpgrade.backup?.filename ?? null,
-          backupCompressedBytes: databaseUpgrade.backup?.compressedBytes ?? null,
-          backupDurationMs: databaseUpgrade.backup?.durationMs ?? null,
-          migrationResult: "complete",
-        },
-      });
-      databaseUpgrade.state = "complete";
-      databaseUpgrade.phase = "complete";
-      databaseUpgrade.required = false;
-      console.log(`database upgrade: v${originalSourceVersion} to v${SCHEMA_VERSION}; decision=${databaseUpgrade.decision}; backup=${databaseUpgrade.backup?.path ?? "none"}`);
-    } catch (error) {
-      databaseUpgrade.state = "failed";
-      databaseUpgrade.phase = "failed";
-      databaseUpgrade.error = error.message;
-      logDetailedError("database-upgrade", error);
-    } finally {
-      startupPromise = null;
-    }
-  })();
 }
 
 export const server = http.createServer(async (req, res) => {
@@ -10945,23 +10324,6 @@ export const server = http.createServer(async (req, res) => {
   try {
     if (!requestHasValidOrigin(req)) {
       return json(res, 403, { error: "cross-origin state-changing requests are not allowed" });
-    }
-    if (req.method === "GET" && url.pathname === "/api/database-upgrade/status") {
-      const incompatible = databaseUpgrade.state === "invalid" || databaseUpgrade.state === "newer";
-      return json(res, incompatible ? 409 : 200, databaseUpgradeView());
-    }
-    if (!applicationStarted) {
-      if (req.method === "POST" && url.pathname === "/api/database-upgrade/decision") {
-        if (!databaseUpgrade.required) return json(res, 409, { error: "Database upgrade is not awaiting a decision" });
-        const body = await readBody(req);
-        if (typeof body.backup !== "boolean") return json(res, 400, { error: "backup must be true or false" });
-        await performDatabaseUpgrade(body.backup);
-        return json(res, 202, databaseUpgradeView());
-      }
-      if (url.pathname.startsWith("/api/")) {
-        return json(res, 503, { error: "Database upgrade must be completed before the application can start", upgrade: databaseUpgradeView() });
-      }
-      return serveDatabaseUpgradeStatic(res, url.pathname);
     }
     if (url.pathname.startsWith("/api/")) {
       await api(req, res, url);
@@ -11028,9 +10390,6 @@ export {
   fuelCellHotWaterEmptyNotificationActive,
   learnedSolarFactor,
   extractBatteryLearningObservations,
-  migrateLegacyAdaptiveChargingData,
-  migrateLegacyFuelCellControlData,
-  migrateBatteryLearningState,
   logAdaptiveChargingInitialHeadroomWait,
   logAdaptiveChargingBreakerWait,
   normalizeCircuitLabels,
@@ -11061,7 +10420,6 @@ export {
   rateForTimestamp,
   readHistorySummaryRange,
   readAdaptiveChargingDemandProfileDays,
-  recoverConcatenatedJsonValue,
   runDeviceCommandQueued,
   sampleFromStatus,
   setDeviceCommandExecutor,
@@ -11090,25 +10448,12 @@ async function main() {
   assertSafeUiDevelopmentEnvironment(process.env, { projectDir: __dirname });
   await ensureDataDir();
   const inspection = await inspectHistoryDatabase(DATA_DIR);
-  databaseUpgrade = {
-    ...databaseUpgrade,
-    required: inspection.state === "upgrade",
-    state: inspection.state === "upgrade" ? "awaiting-decision" : inspection.state,
-    phase: inspection.state === "upgrade" ? "awaiting-decision" : inspection.state,
-    sourceVersion: inspection.version ?? null,
-    targetVersion: SCHEMA_VERSION,
-    databaseBytes: inspection.databaseBytes,
-    error: inspection.error ?? (inspection.state === "newer" ? `Database schema v${inspection.version} is newer than supported v${SCHEMA_VERSION}` : null),
-  };
-  if (inspection.state === "new" || inspection.state === "current") {
-    await initializeApplication();
-    databaseUpgrade.state = "complete";
-    databaseUpgrade.phase = "complete";
+  if (inspection.state !== "new" && inspection.state !== "current") {
+    throw new Error(inspection.error ?? `Database is not usable (${inspection.state})`);
   }
+  await initializeApplication();
   server.listen(PORT, "0.0.0.0", () => {
-    serverListening = true;
     console.log(`HOME ENERGY & BATTERY listening on http://0.0.0.0:${PORT}`);
-    if (databaseUpgrade.required) console.log(`database upgrade: awaiting decision for v${inspection.version} to v${SCHEMA_VERSION}`);
   });
 }
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -83,28 +83,16 @@ assert.equal(interpretedRecovery.energyQuality.gridExportKwh, "integrated");
 
 const dataDir = await mkdtemp(path.join(os.tmpdir(), "history-store-"));
 try {
-  await mkdir(path.join(dataDir, "history"), { recursive: true });
-  await mkdir(path.join(dataDir, "adaptive-charging"), { recursive: true });
-  const legacy = [
+  const samples = [
     sample("2024-01-01T00:00:00.000Z", { houseDemandW: 1000, solarPowerW: null, fuelCellHotWaterLevel: 2 }),
     sample("2024-01-01T00:30:00.000Z", { houseDemandW: 2000, solarPowerW: 500, fuelCellHotWaterLevel: 4 }),
     sample("2024-01-01T01:00:00.000Z", { houseDemandW: null, solarPowerW: null }),
   ];
-  await writeFile(
-    path.join(dataDir, "history", "samples.jsonl"),
-    `${legacy.map((value) => JSON.stringify(value)).join("\n")}\n{"truncated":\n`,
-  );
-  await writeFile(
-    path.join(dataDir, "adaptive-charging", "forecast-snapshots.jsonl"),
-    `${JSON.stringify({ fetchedAt: "2024-01-01T00:00:00.000Z", hours: [] })}\n`,
-  );
-  await writeFile(
-    path.join(dataDir, "adaptive-charging", "historical-weather.jsonl"),
-    `${JSON.stringify({ time: "2024-01-01T00:00:00.000Z", temperature: 10 })}\n`,
-  );
-
   let store = createHistoryStore({ dataDir, logger: { log() {}, warn() {} } });
   await store.initialize();
+  for (const value of samples) store.appendSample(value);
+  store.recordForecast({ fetchedAt: "2024-01-01T00:00:00.000Z", hours: [] });
+  store.recordWeather([{ time: "2024-01-01T00:00:00.000Z", temperature: 10 }]);
   let stats = await store.stats();
   assert.equal(stats.sampleCount, 3);
   assert.equal(stats.rollups.interval, 3);
@@ -230,7 +218,7 @@ try {
   store = createHistoryStore({ dataDir, logger: { log() {}, warn() {} } });
   await store.initialize();
   stats = await store.stats();
-  assert.equal(stats.sampleCount, 0, "completed legacy migration must not reinsert retained rows");
+  assert.equal(stats.sampleCount, 0, "restart must not reinsert retained rows");
   assert.equal(stats.rollups.interval, 3);
   store.close();
 } finally {

@@ -90,6 +90,8 @@ try {
       if (fixture.scenario === "empty-history") {
         await page.route("**/api/history?**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ samples: [], summary: { sampleCount: 0, dataQuality: {}, energySources: {} } }) }));
         await page.route("**/api/history/summary?**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ sampleCount: 0, dataQuality: {}, energySources: {} }) }));
+        await page.route("**/api/reports/energy?**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ buckets: [], totals: {} }) }));
+        await page.route("**/api/reports/ene-farm?**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ buckets: [], totals: {} }) }));
       }
     }
     await page.addInitScript((theme) => localStorage.setItem("home-energy-theme", theme), fixture.theme);

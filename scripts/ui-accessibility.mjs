@@ -46,13 +46,11 @@ try {
   browser = await chromium.launch({ executablePath: await browserExecutable(), headless: true });
   const cases = [
     { path: "/ui/", width: 390, height: 844 },
-    { path: "/ui/energy", width: 1440, height: 1000 },
-    { path: "/ui/energy/ene-farm", width: 390, height: 844 },
+    { path: "/ui/reports", width: 1440, height: 1000 },
+    { path: "/ui/reports", width: 390, height: 844 },
     { path: "/ui/battery", width: 390, height: 844 },
     { path: "/ui/automation", width: 1440, height: 1000 },
-    { path: "/ui/insights", width: 1440, height: 1000 },
     { path: "/ui/system/equipment", width: 768, height: 1024 },
-    { path: "/ui/more", width: 390, height: 844 },
     { path: "/ui/", width: 390, height: 844, theme: "dark" },
     { path: "/ui/system/equipment", width: 1440, height: 1000, theme: "dark" },
   ];

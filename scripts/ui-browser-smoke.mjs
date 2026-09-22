@@ -169,7 +169,7 @@ try {
   assert(await page.getByText("62%", { exact: true }).first().isVisible(), "Expected simulator battery SOC");
   assert(await page.getByText("850 W", { exact: true }).first().isVisible(), "Expected simulator solar power");
   assert((await page.getByRole("img", { name: "Last 24 hours of home energy" }).count()) === 0, "Overview still duplicates the detailed Energy history chart");
-  assert(await page.getByRole("link", { name: "Full history →" }).isVisible(), "Overview does not link to detailed Energy history");
+  assert(await page.getByRole("link", { name: "Open reports →" }).isVisible(), "Overview does not link to historical reports");
   assert(await page.getByRole("heading", { name: "Energy outcomes" }).isVisible(), "Overview daily outcomes did not render");
   assert(await page.getByRole("heading", { name: "Circuits consuming most power" }).isVisible(), "Overview top circuit demand is missing");
   assert((await page.locator(".top-circuits-panel li").count()) > 1, "Overview did not list several reporting circuits");
@@ -212,26 +212,15 @@ try {
   assert((await page.locator("html").getAttribute("data-theme")) === "dark", "Dark theme was not applied");
   assert((await page.locator('meta[name="theme-color"]').getAttribute("content")) === "#101716", "Mobile browser chrome did not adopt the dark theme color");
 
-  await page.goto(`${apiOrigin}/ui/energy`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${apiOrigin}/ui/reports`, { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Reports", exact: true }).waitFor();
+  assert(await page.getByRole("heading", { name: "Period comparison" }).isVisible(), "Reports period comparison is missing");
   const metricToggle = page.locator(".series-picker label").filter({ hasText: "Solar" });
   await metricToggle.waitFor();
-  assert(await page.getByText("Analysis period", { exact: true }).isVisible(), "Shared Energy analysis-period control is missing");
-  assert((await page.locator(".analysis-period-control .segmented-control").count()) === 1, "Analysis period control is not at workspace level");
-  assert((await page.locator(".history-workspace .segmented-control").count()) === 0, "Period control is still nested inside Combined history");
-  const delayHistory = async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 350));
-    await route.continue();
-  };
-  await page.route(/\/api\/history\?/, delayHistory);
-  const sevenDayRequest = page.waitForRequest((request) => request.url().includes("/api/history?") && new URL(request.url()).searchParams.has("start"));
-  await page.getByRole("button", { name: "7d", exact: true }).click();
-  assert(await page.getByText("Loading 7d data…", { exact: true }).isVisible(), "Period change did not expose a loading state");
-  assert((await page.locator(".period-results").getAttribute("aria-busy")) === "true", "Selected-period results were not marked busy");
-  const sevenDayUrl = new URL((await sevenDayRequest).url());
-  assert(new Date(sevenDayUrl.searchParams.get("end")).getTime() - new Date(sevenDayUrl.searchParams.get("start")).getTime() === 7 * 24 * 60 * 60_000, "7-day selection did not request a 7-day history range");
-  await page.getByText("Loading 7d data…", { exact: true }).waitFor({ state: "hidden" });
-  assert((await page.getByText("Selected period: 7d", { exact: true }).count()) > 2, "Selected-period cards do not identify the active range");
-  await page.unroute(/\/api\/history\?/, delayHistory);
+  const reportPeriod = page.locator(".insight-controls label").filter({ hasText: "Period" }).locator("select");
+  await reportPeriod.selectOption("7d");
+  assert((await reportPeriod.inputValue()) === "7d", "7-day report period was not selected");
+  await page.getByRole("heading", { name: "Period comparison" }).waitFor();
   assert(await metricToggle.isVisible(), "Visible metric controls did not render");
   assert((await page.getByLabel("Chart series").count()) === 0, "Combined history repeats the Visible Metrics legend below the chart");
   await metricToggle.hover();
@@ -240,6 +229,7 @@ try {
   assert(!(await page.getByRole("checkbox", { name: "Solar" }).isChecked()), "Visible metric control did not hide its series");
   await page.getByRole("checkbox", { name: "Solar" }).click();
   assert(await page.getByRole("checkbox", { name: "Solar" }).isChecked(), "Visible metric control did not restore its series");
+  await page.getByRole("button", { name: "Circuits" }).click();
   assert(await page.getByRole("heading", { name: "Circuit history" }).isVisible(), "Smart Cosmo circuit history is missing");
   assert((await page.getByRole("button", { name: "Edit labels", exact: true }).count()) === 0, "Circuit editing is still exposed in Energy history");
   assert((await page.locator(".circuit-label-input").count()) === 0, "Circuit label fields are still exposed in Energy history");
@@ -251,11 +241,12 @@ try {
   assert((await circuitTwoRow.getAttribute("aria-selected")) === "true", "Clicked circuit row was not marked selected");
   assert(await page.getByRole("heading", { name: "Circuit 2", exact: true }).isVisible(), "Selected circuit heading did not update");
   assert(await page.getByRole("img", { name: "Circuit 2 circuit power history" }).isVisible(), "Circuit selection did not update the history graph");
-  await page.locator(".selectable-circuit-table thead button").filter({ hasText: "Power now" }).click();
+  await page.locator(".selectable-circuit-table thead button").filter({ hasText: "Latest power" }).click();
   assert((await page.locator('.selectable-circuit-table thead th[aria-sort="ascending"]').count()) === 1, "Circuit power column did not sort numerically");
+  await page.getByRole("button", { name: "Ene-Farm" }).click();
   assert(await page.getByText("Electricity generated", { exact: true }).isVisible(), "Ene-Farm generated electricity statistic is missing");
   assert(await page.getByText("Gas used", { exact: true }).isVisible(), "Ene-Farm gas statistic is missing");
-  assert(await page.getByText("Last stop", { exact: true }).isVisible(), "Ene-Farm last-stop statistic is missing");
+  assert(await page.getByRole("heading", { name: "Ene-Farm detail" }).isVisible(), "Ene-Farm report detail is missing");
 
   await page.goto(`${apiOrigin}/ui/automation`, {
     waitUntil: "domcontentloaded",
@@ -300,20 +291,16 @@ try {
   assert(await page.getByRole("heading", { name: "Adaptive Charging configuration" }).isVisible(), "Adaptive Charging settings did not migrate into Automation");
   assert(await page.getByRole("heading", { name: "Demand Guard configuration" }).isVisible(), "Demand Guard settings did not migrate into Automation");
 
-  await page.goto(`${apiOrigin}/ui/insights`, {
+  await page.goto(`${apiOrigin}/ui/reports`, {
     waitUntil: "domcontentloaded",
   });
-  await page.getByRole("heading", { name: "Insights" }).waitFor();
-  assert(await page.getByRole("heading", { name: "Insights" }).isVisible(), "Insights did not render");
+  await page.getByRole("heading", { name: "Reports" }).waitFor();
   await page.getByRole("heading", { name: "Period comparison" }).waitFor();
-  assert(await page.getByRole("heading", { name: "Period comparison" }).isVisible(), "Insights period comparison is missing");
-  assert(await page.getByRole("heading", { name: "Estimated savings breakdown" }).isVisible(), "Insights savings detail is missing");
   await page.locator(".insight-controls label").filter({ hasText: "Period" }).locator("select").selectOption("custom");
-  assert(await page.getByLabel("Start date").isVisible(), "Insights custom report start date is missing");
-  assert(await page.getByLabel("End date").isVisible(), "Insights custom report end date is missing");
-  await page.getByRole("button", { name: "Ene-Farm" }).click();
-  await page.getByRole("heading", { name: "Ene-Farm detail" }).waitFor();
-  assert(await page.getByRole("heading", { name: "Ene-Farm detail" }).isVisible(), "Ene-Farm Insights are missing");
+  assert(await page.getByLabel("Start date").isVisible(), "Reports custom start date is missing");
+  assert(await page.getByLabel("End date").isVisible(), "Reports custom end date is missing");
+  await page.getByRole("button", { name: "Costs & savings" }).click();
+  assert(await page.getByRole("heading", { name: "Tariff basis and coverage" }).isVisible(), "Reports savings detail is missing");
 
   await page.goto(`${apiOrigin}/ui/system/equipment`, {
     waitUntil: "domcontentloaded",
@@ -419,8 +406,8 @@ try {
   await page.getByRole("button", { name: "Send command" }).click();
   await page.getByText("Command completed and device state was verified.").waitFor();
   await page.getByRole("button", { name: "Close receipt" }).click();
-  await page.goto(`${apiOrigin}/ui/energy`, { waitUntil: "domcontentloaded" });
-  await page.getByRole("heading", { name: "Energy", exact: true }).waitFor();
+  await page.goto(`${apiOrigin}/ui/reports`, { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Reports", exact: true }).waitFor();
   await assertOperationalBanner(page, "Disaster Prep", "Disaster Prep was not persistent across the app");
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -428,9 +415,9 @@ try {
   assert(!(await page.locator(".sidebar").isVisible()), "Desktop sidebar is visible at phone width");
   assert(await page.locator(".mobile-header .theme-control select").isVisible(), "Theme control is not reachable on phone");
   assert((await page.locator(".mobile-navigation a").count()) === 5, "Phone navigation must keep the planned five primary destinations");
-  assert(await page.locator(".analysis-period-control").isVisible(), "Shared Energy period control is not visible at phone width");
-  assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "Energy analysis workspace overflows the phone viewport");
-  assert(await page.locator(".mobile-navigation").getByRole("link", { name: "More" }).isVisible(), "The phone More destination is missing");
+  assert(await page.locator(".insight-controls").isVisible(), "Report controls are not visible at phone width");
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "Reports workspace overflows the phone viewport");
+  assert(await page.locator(".mobile-navigation").getByRole("link", { name: "Settings" }).isVisible(), "The phone Settings destination is missing");
   await page.locator(".mobile-header .theme-control select").selectOption("light");
   assert((await page.locator("html").getAttribute("data-theme")) === "light", "Phone theme control did not apply light mode");
   assert((await page.locator('meta[name="theme-color"]').getAttribute("content")) === "#f4f6f5", "Mobile browser chrome did not adopt the light theme color");
@@ -444,27 +431,23 @@ try {
   assert(await page.getByRole("heading", { name: "Adaptive Charging configuration" }).isVisible(), "Automation configuration is not reachable on phone");
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "Automation configuration overflows the phone viewport");
 
-  await page.locator(".mobile-navigation").getByRole("link", { name: "More" }).click();
-  await page.getByRole("heading", { name: "More", level: 1 }).waitFor();
-  assert(await page.getByRole("link", { name: /Insights/ }).isVisible(), "Insights is not reachable from the phone More hub");
-  assert(await page.getByRole("link", { name: /System/ }).isVisible(), "System is not reachable from the phone More hub");
-  await page.getByRole("link", { name: /Insights/ }).click();
-  await page.getByRole("heading", { name: "Insights" }).waitFor();
-  assert(await page.getByRole("heading", { name: "Insights" }).isVisible(), "Insights did not render from phone navigation");
-  assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "Insights overflows the phone viewport");
+  await page.locator(".mobile-navigation").getByRole("link", { name: "Reports" }).click();
+  await page.getByRole("heading", { name: "Reports" }).waitFor();
+  assert(await page.getByRole("heading", { name: "Reports" }).isVisible(), "Reports did not render from phone navigation");
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "Reports overflows the phone viewport");
 
-  await page.goto(`${apiOrigin}/ui/energy`, { waitUntil: "domcontentloaded" });
-  await page.getByRole("heading", { name: "Energy", exact: true }).waitFor();
-  assert(await page.getByRole("heading", { name: "Energy", exact: true }).isVisible(), "Production deep link did not render");
+  await page.goto(`${apiOrigin}/ui/reports`, { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "Reports", exact: true }).waitFor();
+  assert(await page.getByRole("heading", { name: "Reports", exact: true }).isVisible(), "Production Reports deep link did not render");
   const simulatorBanner = page.getByText("Simulated environment", {
     exact: false,
   });
   await simulatorBanner.waitFor();
   assert(await simulatorBanner.isVisible(), "Production build lost the simulator banner");
-  await page.getByRole("img", { name: "24h energy history" }).waitFor();
-  assert(await page.getByRole("img", { name: "24h energy history" }).isVisible(), "Combined Energy chart did not render");
+  await page.getByRole("img", { name: /Energy use, solar generation/ }).waitFor();
+  assert(await page.getByRole("img", { name: /Energy use, solar generation/ }).isVisible(), "Reports energy chart did not render");
+  await page.getByRole("button", { name: "Circuits" }).click();
   assert(await page.getByRole("heading", { name: "Circuit history" }).isVisible(), "Circuit history did not render");
-  assert(await page.getByRole("checkbox", { name: "Battery SOC" }).isVisible(), "Battery SOC history selector is missing");
 
   await page.goto(`${apiOrigin}/`, { waitUntil: "domcontentloaded" });
   await page.getByRole("heading", { name: "Home energy overview" }).waitFor();
@@ -474,7 +457,7 @@ try {
   assert(failedResponses.length === 0, `Failed browser requests: ${failedResponses.join(", ")}`);
   assert(browserErrors.length === 0, `Browser errors: ${browserErrors.join("; ")}`);
 
-  console.log("UI browser smoke test passed: simulator boundary, React root cutover, Overview, Energy, Automation controls, Battery command lifecycle, themes, and phone layout");
+  console.log("UI browser smoke test passed: simulator boundary, React root cutover, Overview, Reports, Automation controls, Battery command lifecycle, themes, and phone layout");
 } finally {
   await browser?.close();
   if (launcher.exitCode === null) {
