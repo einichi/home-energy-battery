@@ -46,6 +46,11 @@ import {
   uiDevelopmentMode,
 } from "./lib/development-safety.js";
 import { createEchonetCommandAdapter } from "./lib/echonet-service.js";
+import {
+  ARCHITECTURE_VERSION,
+  architectureVersionForDatabase,
+  createApplicationStore,
+} from "./lib/application-store.js";
 
 timestampConsole();
 
@@ -267,10 +272,16 @@ let discoveryRunContext = null;
 let activeEchonetContext = null;
 
 const historyStore = createHistoryStore({ dataDir: DATA_DIR });
+const applicationStore = createApplicationStore({ dataDir: DATA_DIR });
 const notificationService = createNotificationService({
   dataDir: DATA_DIR,
   getConfig: () => readConfig(),
   recordEvent: (event) => historyStore.isReady() && historyStore.recordEvent(event),
+  stateStore: {
+    isReady: () => applicationStore.isReady(),
+    read: (key, fallback) => applicationStore.readDocument(key, fallback),
+    write: (key, value) => applicationStore.writeDocument(key, value),
+  },
 });
 let echonetTimingSequence = 0;
 const recentEchonetTimings = [];
@@ -923,6 +934,9 @@ function appendBackupPreparationLog(state, message, kind = "info", now = new Dat
 
 async function readOperationalOverridesState() {
   await ensureDataDir();
+  if (applicationStore.isReady()) {
+    return cleanOperationalOverridesState(applicationStore.readDocument("operationalOverrides", {}));
+  }
   try {
     const source = await readFile(OPERATIONAL_OVERRIDES_FILE, "utf8");
     let parsed;
@@ -947,6 +961,10 @@ async function readOperationalOverridesState() {
 async function writeOperationalOverridesState(state) {
   const cleaned = cleanOperationalOverridesState(state);
   await ensureDataDir();
+  if (applicationStore.isReady()) {
+    applicationStore.writeDocument("operationalOverrides", cleaned);
+    return cleaned;
+  }
   await writeJsonFileAtomic(OPERATIONAL_OVERRIDES_FILE, cleaned);
   return cleaned;
 }
@@ -1500,6 +1518,9 @@ function cleanAdaptiveChargingPerformance(value = {}) {
 
 async function readAdaptiveChargingState() {
   await ensureDataDir();
+  if (applicationStore.isReady()) {
+    return cleanAdaptiveChargingState(applicationStore.readDocument("adaptiveChargingState", {}));
+  }
   try {
     const text = await readFile(ADAPTIVE_CHARGING_STATE_FILE, "utf8");
     let parsed;
@@ -1533,7 +1554,8 @@ async function commitAdaptiveChargingState(state) {
     updatedAt: new Date().toISOString(),
   });
   await ensureDataDir();
-  await writeJsonFileAtomic(ADAPTIVE_CHARGING_STATE_FILE, cleaned);
+  if (applicationStore.isReady()) applicationStore.writeDocument("adaptiveChargingState", cleaned);
+  else await writeJsonFileAtomic(ADAPTIVE_CHARGING_STATE_FILE, cleaned);
   if (historyStore.isReady()) {
     for (const entry of cleaned.log) {
       historyStore.recordEvent({
@@ -5510,6 +5532,10 @@ async function trimHistory(retention) {
 
 async function readSchedules() {
   await ensureDataDir();
+  if (applicationStore.isReady()) {
+    const stored = applicationStore.readDocument("schedules", []);
+    return Array.isArray(stored) ? stored : [];
+  }
   try {
     const text = await readFile(SCHEDULES_FILE, "utf8");
     const parsed = parseJsonWithContext(text, SCHEDULES_FILE);
@@ -5522,6 +5548,10 @@ async function readSchedules() {
 
 async function writeSchedules(schedules) {
   await ensureDataDir();
+  if (applicationStore.isReady()) {
+    applicationStore.writeDocument("schedules", schedules);
+    return;
+  }
   await writeJsonFileAtomic(SCHEDULES_FILE, schedules);
 }
 
@@ -5773,6 +5803,18 @@ function cleanConfig(input = {}) {
 
 async function readConfig() {
   await ensureDataDir();
+  if (applicationStore.isReady()) {
+    const parsed = applicationStore.readDocument("config", DEFAULT_CONFIG);
+    const cleaned = cleanConfig(parsed);
+    const legacyFuelCellConfig = parsed.fuelCell && ["automation", "generationModel", "plannerInfluence", "fixedWindows"]
+      .some((key) => Object.prototype.hasOwnProperty.call(parsed.fuelCell, key));
+    if (Object.prototype.hasOwnProperty.call(parsed, "automation")
+      || Object.prototype.hasOwnProperty.call(parsed, "historyRetentionDays")
+      || legacyFuelCellConfig) {
+      applicationStore.writeDocument("config", cleaned);
+    }
+    return cleaned;
+  }
   try {
     const text = await readFile(CONFIG_FILE, "utf8");
     const parsed = parseJsonWithContext(text, CONFIG_FILE);
@@ -5893,7 +5935,8 @@ async function commitConfig(previous, config) {
     }
     await writeAdaptiveChargingState(state);
   }
-  await writeJsonFileAtomic(CONFIG_FILE, cleaned);
+  if (applicationStore.isReady()) applicationStore.writeDocument("config", cleaned);
+  else await writeJsonFileAtomic(CONFIG_FILE, cleaned);
   if (hostChanged) {
     lastRecordedSample = null;
     invalidateStatusSnapshot();
@@ -5934,6 +5977,17 @@ async function readAutomationRules() {
 
 async function readAutomationRuleConfigs() {
   await ensureDataDir();
+  if (applicationStore.isReady()) {
+    const parsed = applicationStore.readDocument("automationRules", []);
+    const source = Array.isArray(parsed) ? parsed : [];
+    const configs = source.map(cleanAutomationRuleConfig);
+    const legacyStates = Object.fromEntries(
+      source
+        .filter((rule) => rule && (rule.lastResult !== undefined || rule.state !== undefined || rule.log !== undefined))
+        .map((rule) => [String(rule.id), cleanAutomationRuleState(rule)]),
+    );
+    return { configs, legacyStates };
+  }
   try {
     const text = await readFile(AUTOMATION_RULES_FILE, "utf8");
     const parsed = parseJsonWithContext(text, AUTOMATION_RULES_FILE);
@@ -5962,6 +6016,9 @@ function normalizeAutomationRuleStateFile(value = {}) {
 
 async function readAutomationRuleStates() {
   await ensureDataDir();
+  if (applicationStore.isReady()) {
+    return normalizeAutomationRuleStateFile(applicationStore.readDocument("automationRuleState", {}));
+  }
   try {
     const text = await readFile(AUTOMATION_RULE_STATE_FILE, "utf8");
     let parsed;
@@ -5995,6 +6052,10 @@ async function readAutomationRuleStates() {
 async function writeAutomationRules(rules) {
   await ensureDataDir();
   const cleaned = rules.map(cleanAutomationRuleConfig);
+  if (applicationStore.isReady()) {
+    applicationStore.writeDocument("automationRules", cleaned);
+    return cleaned;
+  }
   await writeJsonFileAtomic(AUTOMATION_RULES_FILE, cleaned);
   return cleaned;
 }
@@ -6004,7 +6065,8 @@ async function writeAutomationRuleStates(rules) {
   const states = Object.fromEntries(
     rules.map((rule) => [rule.id, cleanAutomationRuleState(rule)]),
   );
-  await writeJsonFileAtomic(AUTOMATION_RULE_STATE_FILE, states);
+  if (applicationStore.isReady()) applicationStore.writeDocument("automationRuleState", states);
+  else await writeJsonFileAtomic(AUTOMATION_RULE_STATE_FILE, states);
   if (historyStore.isReady()) {
     for (const rule of rules) {
       for (const entry of rule.log ?? []) {
@@ -10078,6 +10140,13 @@ async function restoreDatabaseBackup(filename) {
       if (extracted.schemaVersion !== SCHEMA_VERSION) {
         throw requestError(409, `Backup contains schema v${extracted.schemaVersion}; application requires schema v${SCHEMA_VERSION}`);
       }
+      const backupArchitectureVersion = architectureVersionForDatabase(extracted.snapshotFile);
+      if (backupArchitectureVersion !== ARCHITECTURE_VERSION) {
+        throw requestError(
+          409,
+          `Backup uses application architecture ${backupArchitectureVersion ?? "unversioned"}; version ${ARCHITECTURE_VERSION} is required`,
+        );
+      }
 
       onProgress({ phase: "safety-backup", percent: 0, processed: 0, total: 0, unit: null });
       const safetyBackup = await backupDatabaseManually({
@@ -10094,6 +10163,7 @@ async function restoreDatabaseBackup(filename) {
       stopApplicationBackgroundProcesses();
       backgroundStopped = true;
       await waitForDatabaseWriters();
+      applicationStore.close();
       historyStore.close();
       databaseReady = false;
       await Promise.all([
@@ -10107,6 +10177,7 @@ async function restoreDatabaseBackup(filename) {
       await rename(extracted.snapshotFile, databaseFile);
       extracted = null;
       await historyStore.initialize();
+      await applicationStore.initializeBridge();
       databaseReady = true;
       await rm(originalFile, { force: true });
       originalMoved = false;
@@ -10140,6 +10211,7 @@ async function restoreDatabaseBackup(filename) {
     } catch (error) {
       if (originalMoved) {
         try {
+          applicationStore.close();
           historyStore.close();
           databaseReady = false;
           await Promise.all([
@@ -10150,6 +10222,7 @@ async function restoreDatabaseBackup(filename) {
           await rename(originalFile, databaseFile);
           originalMoved = false;
           await historyStore.initialize();
+          await applicationStore.initializeBridge();
           databaseReady = true;
           lastRecordedSample = historyStore.latestSample();
         } catch (rollbackError) {
@@ -10159,6 +10232,7 @@ async function restoreDatabaseBackup(filename) {
       } else if (!databaseReady) {
         try {
           await historyStore.initialize();
+          await applicationStore.initializeBridge();
           databaseReady = true;
           lastRecordedSample = historyStore.latestSample();
         } catch (reopenError) {
@@ -10247,6 +10321,7 @@ async function api(req, res, url) {
         uiDevelopment: UI_DEVELOPMENT_MODE,
         simulatedDevices: UI_DEVELOPMENT_MODE,
         externalIoDisabled: EXTERNAL_IO_DISABLED,
+        architecture: applicationStore.status(),
       },
     });
   }
@@ -10717,10 +10792,32 @@ async function serveDatabaseUpgradeStatic(res, pathname) {
 
 async function initializeApplication() {
   if (applicationStarted) return;
-  await migrateLegacyAdaptiveChargingData();
-  await migrateLegacyFuelCellControlData();
-  const batteryLearningMigration = await migrateBatteryLearningState();
+  let existingArchitectureVersion = null;
+  try {
+    await stat(historyStore.databaseFile);
+    existingArchitectureVersion = architectureVersionForDatabase(historyStore.databaseFile);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  let batteryLearningMigration = { migrated: false, migratedAt: null };
+  if (existingArchitectureVersion !== ARCHITECTURE_VERSION) {
+    await migrateLegacyAdaptiveChargingData();
+    await migrateLegacyFuelCellControlData();
+    batteryLearningMigration = await migrateBatteryLearningState();
+  }
   await historyStore.initialize();
+  const architectureMigration = await applicationStore.initializeBridge();
+  if (architectureMigration?.migratedAt) {
+    historyStore.recordEvent({
+      eventKey: `application:architecture:${architectureMigration.architectureVersion}:${architectureMigration.migratedAt}`,
+      at: architectureMigration.migratedAt,
+      category: "application",
+      type: "architecture-migration",
+      message: `Application state migrated to architecture version ${architectureMigration.architectureVersion}`,
+      payload: architectureMigration,
+    });
+  }
+  if (!activeDeviceAdapter) await configureDeviceCommandAdapter();
   if (batteryLearningMigration.migrated) {
     historyStore.tagEventsBefore("adaptiveCharging", batteryLearningMigration.migratedAt, { modelVersion: 1 });
   }
@@ -10991,7 +11088,6 @@ export {
 
 async function main() {
   assertSafeUiDevelopmentEnvironment(process.env, { projectDir: __dirname });
-  await configureDeviceCommandAdapter();
   await ensureDataDir();
   const inspection = await inspectHistoryDatabase(DATA_DIR);
   databaseUpgrade = {
@@ -11028,6 +11124,7 @@ process.on("SIGTERM", () => {
   clearAdaptiveChargingSlotEndTimer();
   server.close(async () => {
     await activeDeviceAdapter?.close?.();
+    applicationStore.close();
     historyStore.close();
     process.exit(0);
   });

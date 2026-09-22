@@ -143,9 +143,33 @@ SMTP notifications are configured from System → Notifications and
 are disabled by default. They can report Charging Demand Guard transitions,
 schedule failures, device outages and recoveries, Adaptive Charging availability,
 discounted charging-window shortfalls, and an optional low-SOC threshold.
-Non-secret settings are stored in `/data/config.json`; the SMTP password is stored separately in
-`/data/notification-secrets.json` and is never returned by the API. Delivery
-cooldowns and recent results are stored in `/data/notification-state.json`.
+Non-secret settings and delivery state are stored transactionally in
+`/data/history.sqlite`. The SMTP password remains separately stored in
+`/data/notification-secrets.json` and is never returned by the API.
+
+### Architecture bridge release
+
+This release performs a one-time architecture bridge before opening the ECHONET
+client or starting automation. Configuration, schedules, automation definitions
+and state, Adaptive Charging state, operational overrides, and notification state
+are copied from their former JSON files into SQLite. The import and architecture
+marker are transactional and restart-safe.
+
+Before importing, the application creates
+`/data/backups/architecture-v1-before-<timestamp>/`. It contains an online SQLite
+snapshot, all other existing `/data` content (including notification secrets and
+earlier backups when present), and a SHA-256 manifest. The bridge checks SQLite integrity,
+source-document equality, history and event row counts and ranges, and backup
+coverage before normal startup. The ECHONET adapter is initialized only after
+these checks pass.
+
+The former JSON files are deliberately retained by this bridge release but are no
+longer read or written after migration. Confirm the result through `/api/config`:
+`runtime.architecture.state` and `runtime.architecture.validation.state` must both
+be `complete`/`passed`, and `runtime.architecture.architectureVersion` must be `1`.
+Keep the bridge image and its architecture backup until the migrated instance has
+restarted successfully. A later cleanup release can then remove the one-time
+import code and obsolete JSON files.
 
 ### History storage
 

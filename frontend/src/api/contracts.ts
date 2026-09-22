@@ -262,6 +262,21 @@ export type RuntimeInformation = {
   uiDevelopment: boolean;
   simulatedDevices: boolean;
   externalIoDisabled: boolean;
+  architecture?: {
+    architectureVersion: number | null;
+    state: string;
+    migratedAt?: string;
+    sourceDocuments?: string[];
+    backupDirectory?: string | null;
+    validation?: {
+      state: string;
+      database: string;
+      history?: { count: number; earliest: string | null; latest: string | null };
+      events?: { count: number; earliest: string | null; latest: string | null };
+      itemCounts?: Record<string, number>;
+      secretsBackedUp?: boolean;
+    };
+  };
 };
 
 export type AppConfig = {

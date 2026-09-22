@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { SCHEMA_VERSION } from "../lib/history-store.js";
 
 const dataDir = await mkdtemp(path.join(os.tmpdir(), "device-adapter-integration-"));
@@ -308,7 +309,11 @@ try {
   assert.equal(skippedSchedule.completed, true);
   assert.equal((await request(baseUrl, "/api/status")).payload.energy.battery.vendor_profile.value, "backup");
 
-  const persistedOverride = JSON.parse(await readFile(path.join(dataDir, "operational-overrides.json"), "utf8"));
+  const persistedDatabase = new DatabaseSync(path.join(dataDir, "history.sqlite"), { readOnly: true });
+  const persistedOverride = JSON.parse(persistedDatabase.prepare(
+    "SELECT payload_json FROM application_documents WHERE key = 'operationalOverrides'",
+  ).get().payload_json);
+  persistedDatabase.close();
   assert.equal(persistedOverride.backupPreparation.active, true);
   assert.equal(persistedOverride.backupPreparation.previousProfile, "eco");
 
