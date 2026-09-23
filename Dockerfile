@@ -20,7 +20,6 @@ RUN npm ci --ignore-scripts --omit=dev
 
 COPY server.js ./
 COPY lib ./lib
-COPY public ./public
 COPY --from=ui-build /app/public/ui ./public/ui
 COPY docker-entrypoint.sh ./
 RUN chmod +x ./docker-entrypoint.sh
