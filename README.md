@@ -37,11 +37,23 @@ so stop other ECHONET clients before using this tool.
 
 ## ECHONET integration
 
-The web server talks to ECHONET Lite devices directly through
-`lib/echonet-service.js`. It keeps one UDP client open and serializes reads,
+The TypeScript web server talks to ECHONET Lite devices directly through
+`lib/echonet-service.ts`. It keeps one UDP client open and serializes reads,
 writes, and discovery through a priority queue, so frequent dashboard refreshes
 do not launch extra Node processes or repeatedly compete for UDP port `3610`.
 Device commands and scheduled automation use this same in-process service.
+
+For a local production-style run, compile the backend and UI before starting
+the emitted server:
+
+```bash
+npm run build:server
+npm run build:ui
+npm start
+```
+
+Production runs `dist/server.js`; backend TypeScript sources are not interpreted
+at runtime.
 
 The integrated status service reads:
 
@@ -127,6 +139,13 @@ npm run test:ui
 npm run test:ui:browser
 npm run test:ui:visual
 npm run build:ui
+```
+
+Run all TypeScript and backend checks with:
+
+```bash
+npm run check
+npm run test:server
 ```
 
 The production build is written to `public/ui/` and is generated during the

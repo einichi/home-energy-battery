@@ -1,25 +1,16 @@
 import { getJson, sendJson } from "./client";
 import type {
   BackupPreparation,
+  BatteryAction,
   BatterySchedule,
   CommandOutcome,
   CommandReceipt,
 } from "./contracts";
 
-export type BatteryAction =
-  | "vendor-profile"
-  | "discharge-limit"
-  | "osaifu-charge-window"
-  | "osaifu-discharge-window"
-  | "set-mode"
-  | "charge"
-  | "discharge";
+export type { BatteryAction };
 
 export function runBatteryAction(action: BatteryAction, payload: Record<string, unknown>) {
-  const group = ["vendor-profile", "discharge-limit", "osaifu-charge-window", "osaifu-discharge-window"].includes(action)
-    ? "settings"
-    : "actions";
-  return sendJson<CommandOutcome>(`/api/${group}/${action}`, "POST", payload);
+  return sendJson<CommandOutcome>(`/api/device-actions/${action}`, "POST", payload);
 }
 
 export function startBatteryAction(action: BatteryAction, payload: Record<string, unknown>) {

@@ -346,7 +346,8 @@ frontend/
   vite.config.ts
 
 public/ui/                    generated production frontend; not hand-edited
-server.js                     existing API and static-serving host
+server.ts                     compiled backend composition root
+lib/                          typed domain, service, HTTP, runtime, and adapter modules
 tests/support/
   device-simulator.js         only device adapter allowed in UI development
 ```
@@ -395,7 +396,7 @@ Additional architectural changes:
 
 The UI overhaul must not send discovery probes or control commands to production household equipment during development, automated testing, visual review, or screenshot generation.
 
-- Use the existing `tests/support/device-simulator.js` adapter and isolated temporary data directories for all development and test states.
+- Use the typed `tests/support/device-simulator.ts` adapter (compiled before launch) and isolated temporary data directories for all development and test states.
 - Add a dedicated development command that always sets `NODE_ENV=test`, `DEVICE_COMMAND_ADAPTER_MODULE`, a simulator scenario, a non-production port, and a temporary `DATA_DIR`.
 - Fail closed: development mode must refuse to fall back to the real ECHONET Lite adapter if the simulator is missing or fails to initialize.
 - Do not copy production device addresses, SMTP credentials, notification recipients, history databases, or secret files into development fixtures.
@@ -421,7 +422,7 @@ Preserve unrelated work, keep the overhaul isolated from ongoing device/automati
 
 The architectural decision and branch are ready. Begin implementation in this order:
 
-1. **Add the safe development launcher first.** It must create an isolated temporary data directory, force `NODE_ENV=test`, force `tests/support/device-simulator.js`, disable outbound side effects, use a documented non-production port, and abort if any real adapter or production data path is selected.
+1. **Add the safe development launcher first.** It must create an isolated temporary data directory, force `NODE_ENV=test`, force the compiled `tests/support/device-simulator.ts` adapter, disable outbound side effects, use a documented non-production port, and abort if any real adapter or production data path is selected.
 2. **Add React, React DOM, TypeScript, Vite, and the official Vite React plugin.** Record exact supported versions in the lockfile and keep the first dependency set intentionally small.
 3. **Create the `frontend/` source tree and build contract.** Define development proxying to the existing API, production output location, source maps, static asset handling, and Node fallback behavior for client routes.
 4. **Establish quality gates before feature work.** Add type-check, production-build, unit-test, lint, and simulator-backed browser-test commands. Existing server tests remain mandatory.

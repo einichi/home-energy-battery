@@ -1,5 +1,7 @@
 # Node dependencies
 node_modules
+dist
+.test-dist
 
 # Build artifacts and local files
 __pycache__

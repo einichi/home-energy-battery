@@ -10,7 +10,7 @@ for the same telemetry, health, and command states.
 | --- | --- | --- | --- |
 | Overview | `/ui/` | `GET /api/status`, `GET /api/config`, `GET /api/history` | Read-only live flow, battery state, daily composition and outcomes; detailed history belongs to Energy |
 | Energy and history | `/ui/energy`, `/ui/energy#circuits`, `/ui/energy/ene-farm` | `/api/history`, `/api/history/summary`, `/api/ene-farm`, status telemetry | Bounded combined history, compact Overview summary, circuit analysis, and focused Ene-Farm detail implemented |
-| Battery | `/ui/battery` | status battery fields, `/api/actions/*`, `/api/settings/*`, schedules, backup preparation, command receipts | Phase 2 operational workspace |
+| Battery | `/ui/battery` | status battery fields, `/api/device-actions/*`, schedules, backup preparation, command receipts | Phase 2 operational workspace |
 | Automation | `/ui/automation` | adaptive charging, away periods, automation rules, command receipts, status/config | Phase 3 control center implemented with Plan, Performance, Configuration, and simulator-verified mutations |
 | Insights | `/ui/insights` | energy and Ene-Farm reports, savings and emissions data | Phase 4 outcome-oriented reporting implemented |
 | System | `/ui/system/*` | config, discovery, notifications, retention, tariffs, database backup/restore | Phase 4 routed administration implemented |

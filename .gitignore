@@ -1,5 +1,7 @@
 # Node dependencies
 node_modules/
+dist/
+.test-dist/
 
 # Generated React UI build
 public/ui/

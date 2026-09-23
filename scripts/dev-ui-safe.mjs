@@ -7,9 +7,9 @@ import { fileURLToPath } from "node:url";
 import {
   UI_DEVELOPMENT_DATA_PREFIX,
   assertSafeUiDevelopmentEnvironment,
-} from "../lib/development-safety.js";
-import { createApplicationStore } from "../lib/application-store.js";
-import { createHistoryStore } from "../lib/history-store.js";
+} from "../dist/lib/development-safety.js";
+import { createApplicationStore } from "../dist/lib/application-store.js";
+import { createHistoryStore } from "../dist/lib/history-store.js";
 
 const projectDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const apiPort = Number(process.env.UI_DEV_API_PORT ?? 8797);
@@ -23,7 +23,7 @@ if (!Number.isInteger(uiPort) || uiPort < 1024 || uiPort > 65535 || uiPort === a
 }
 
 const dataDir = await mkdtemp(path.join(os.tmpdir(), UI_DEVELOPMENT_DATA_PREFIX));
-const simulatorPath = path.join(projectDir, "tests/support/device-simulator.js");
+const simulatorPath = path.join(projectDir, "dist/tests/support/device-simulator.js");
 const historyStore = createHistoryStore({ dataDir });
 await historyStore.initialize();
 historyStore.close();
@@ -54,7 +54,7 @@ const sharedEnvironment = {
   DEVICE_SIMULATOR_SCENARIO: process.env.DEVICE_SIMULATOR_SCENARIO || "normal",
 };
 
-assertSafeUiDevelopmentEnvironment(sharedEnvironment, { projectDir });
+assertSafeUiDevelopmentEnvironment(sharedEnvironment, { projectDir: path.join(projectDir, "dist") });
 
 const children = new Set();
 let stopping = false;
@@ -97,7 +97,7 @@ console.log(`Simulator data: ${dataDir}`);
 console.log(`React UI: http://127.0.0.1:${uiPort}/ui/`);
 console.log(`Simulated API: http://127.0.0.1:${apiPort}`);
 
-start("simulated API", [path.join(projectDir, "server.js")], {
+start("simulated API", [path.join(projectDir, "dist/server.js")], {
   ...sharedEnvironment,
   PORT: String(apiPort),
 });
