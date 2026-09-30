@@ -794,10 +794,10 @@ describe("React application shell", () => {
     expect(screen.getByRole("heading", { name: "Installed equipment" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Smart Cosmo circuits" })).toBeVisible();
     expect(screen.getByLabelText("Circuit 1 label")).toBeVisible();
-    expect(screen.getByLabelText("Battery address")).toHaveValue("");
-    expect(screen.getByLabelText("Battery address")).toHaveAttribute("placeholder", "192.0.2.10");
-    expect(screen.getByLabelText("Discovery subnets")).toHaveValue("");
-    expect(screen.getByLabelText("Discovery subnets")).toHaveAttribute("placeholder", "192.0.2.0/24");
+    expect(screen.getByLabelText("Battery address")).toHaveValue("192.0.2.10");
+    expect(screen.getByLabelText("Battery address")).not.toHaveAttribute("placeholder");
+    expect(screen.getByLabelText("Discovery subnets")).toHaveValue("192.0.2.0/24");
+    expect(screen.getByLabelText("Discovery subnets")).toHaveAttribute("placeholder", "192.168.1.0/24");
     fireEvent.click(screen.getByRole("button", { name: "Save equipment" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/config", expect.objectContaining({ method: "PUT" })));
     const equipmentResult = await screen.findByText("Equipment settings saved.");
@@ -964,6 +964,7 @@ describe("React application shell", () => {
     expect(screen.getByRole("checkbox", { name: "Solar" })).not.toBeChecked();
     expect(screen.queryByLabelText("Chart series")).not.toBeInTheDocument();
     expect(screen.getAllByText("Kitchen").length).toBeGreaterThan(0);
+    expect(screen.getByRole("link", { name: "All circuits →" })).toHaveAttribute("href", "#today-circuits");
     expect(screen.getByText(/minimum coverage 100%/)).toBeVisible();
     expect(screen.getAllByText("3.2 kWh").length).toBeGreaterThan(0);
     expect(screen.getByRole("heading", { name: "Circuit history" })).toBeVisible();
@@ -986,6 +987,8 @@ describe("React application shell", () => {
     fireEvent.click(screen.getByRole("button", { name: /Circuit/ }));
     expect(circuitTable.querySelector("tbody tr:first-child")).toHaveTextContent("Kitchen");
     expect(screen.getByRole("heading", { name: "Ene-Farm Activity" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: /^Ene-Farm$/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Current state")).toBeVisible();
     expect(screen.getByText("Electricity generated")).toBeVisible();
     expect(screen.queryByRole("button", { name: /charge|discharge|backup/i })).not.toBeInTheDocument();
   });

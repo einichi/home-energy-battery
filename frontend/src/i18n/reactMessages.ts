@@ -554,8 +554,9 @@ export const reactJapanese: Record<string, string> = {
   "· schema v": "· スキーマ v",
   "System data:": "システムデータ:",
   "Loading system configuration…": "システム設定を読み込み中…",
-  "Enable only equipment present in this home. Current addresses are shown as suggestions; enter a value only to replace one.":
-    "この住宅に設置されている機器だけを有効にしてください。現在のアドレスは候補として表示され、変更する場合だけ入力します。",
+  "Enable only equipment present in this home. Review or edit the configured addresses below.":
+    "この住宅に設置されている機器だけを有効にしてください。以下の設定済みアドレスを確認または編集できます。",
+  "Ene-Farm activity timeline": "エネファーム稼働タイムライン",
   "Discovery in progress…": "機器を探索中…",
   "Scanning subnet…": "サブネットをスキャン中…",
   "Searching for devices…": "機器を探索しています…",

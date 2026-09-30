@@ -177,6 +177,7 @@ try {
   assert((await page.getByRole("heading", { name: "Current measurements" }).count()) === 0, "Overview still duplicates Live Power in a Snapshot section");
   assert(await page.getByRole("heading", { name: "Energy Sources" }).isVisible(), "Energy Sources composition is missing");
   assert(await page.getByRole("heading", { name: "Ene-Farm Activity" }).isVisible(), "Ene-Farm activity bar is missing");
+  assert((await page.getByRole("heading", { name: "Ene-Farm Activity" }).count()) === 1, "Ene-Farm activity has duplicate headings");
   const activitySegment = page.locator(".ene-farm-state-strip i").first();
   await activitySegment.hover();
   assert(await page.getByRole("tooltip").isVisible(), "Ene-Farm activity interval tooltip did not render");
@@ -188,6 +189,14 @@ try {
       .isVisible(),
     "Ene-Farm activity tooltip is missing its duration",
   );
+  const allCircuitsLink = page.getByRole("link", { name: "All circuits →" });
+  assert((await allCircuitsLink.getAttribute("href")) === "#today-circuits", "All circuits does not use an in-page target");
+  await allCircuitsLink.click();
+  await page.waitForURL(/#today-circuits$/);
+  assert(await page.locator("#today-circuits").evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return bounds.top >= 0 && bounds.top < window.innerHeight;
+  }), "All circuits did not scroll the circuit section into view");
   assert(await page.getByRole("heading", { name: "Estimated Off-Peak Savings" }).isVisible(), "Off-Peak Savings is missing");
   await page.getByRole("button", { name: "Grid use", exact: true }).click();
   assert((await page.getByRole("button", { name: "Grid use", exact: true }).getAttribute("aria-pressed")) === "true", "Off-Peak Savings did not switch to grid use");
@@ -307,8 +316,8 @@ try {
   });
   await page.getByRole("heading", { name: "Installed equipment" }).waitFor();
   assert(await page.getByRole("heading", { name: "Installed equipment" }).isVisible(), "System equipment route did not render");
-  assert((await page.getByLabel("Battery address").inputValue()) === "", "Installed battery address was pre-filled");
-  assert(Boolean(await page.getByLabel("Battery address").getAttribute("placeholder")), "Installed battery address has no suggestion");
+  assert((await page.getByLabel("Battery address").inputValue()) === "10.250.0.10", "Installed battery address was not populated");
+  assert((await page.getByLabel("Battery address").getAttribute("placeholder")) === null, "Installed battery address still uses a suggestion placeholder");
   assert(await page.getByRole("heading", { name: "Smart Cosmo circuits" }).isVisible(), "Smart Cosmo circuit administration is missing");
   await page
     .getByLabel(/Circuit \d+ label/)

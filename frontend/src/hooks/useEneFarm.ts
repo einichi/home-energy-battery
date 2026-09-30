@@ -17,7 +17,7 @@ export function useEneFarm(milliseconds: number, fixedStart?: string, fixedEnd?:
     const start = fixedStart ? new Date(fixedStart) : new Date(end.getTime() - milliseconds);
     getEneFarm(start, end, controller.signal)
       .then((next) => { setSummary(next); setError(null); })
-      .catch((reason: unknown) => { if (!controller.signal.aborted) { setSummary(null); setError(reason instanceof Error ? reason.message : "Ene-Farm data could not be loaded"); } })
+      .catch((reason: unknown) => { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Ene-Farm data could not be loaded"); })
       .finally(() => { if (!controller.signal.aborted) { setSettledRequest(requestKey); setSettledRange(rangeKey); } });
     return () => controller.abort();
   }, [milliseconds, fixedStart, fixedEnd, rangeKey, requestKey]);

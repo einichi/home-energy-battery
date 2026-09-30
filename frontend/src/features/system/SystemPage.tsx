@@ -122,41 +122,18 @@ function EquipmentSettings({
       ),
     ]),
   ].sort((a, b) => Number(a) - Number(b));
-  const configuredOr = (
-    data: FormData,
-    name: string,
-    current: string | undefined,
-  ) => String(data.get(name) ?? "").trim() || current || "";
-  const configuredListOr = (
-    data: FormData,
-    name: string,
-    current: string[] | undefined,
-  ) =>
-    entries(data.get(name)).length ? entries(data.get(name)) : (current ?? []);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     setEquipmentResult(
       await save(
         {
-          batteryHost: configuredOr(data, "batteryHost", config.batteryHost),
-          meterHost: configuredOr(data, "meterHost", config.meterHost),
-          solarHost: configuredOr(data, "solarHost", config.solarHost),
-          fuelCellPrimaryHost: configuredOr(
-            data,
-            "fuelCellPrimaryHost",
-            config.fuelCellPrimaryHost,
-          ),
-          fuelCellProxyHosts: configuredListOr(
-            data,
-            "fuelCellProxyHosts",
-            config.fuelCellProxyHosts,
-          ),
-          discoverySubnets: configuredListOr(
-            data,
-            "discoverySubnets",
-            config.discoverySubnets,
-          ),
+          batteryHost: String(data.get("batteryHost") ?? "").trim(),
+          meterHost: String(data.get("meterHost") ?? "").trim(),
+          solarHost: String(data.get("solarHost") ?? "").trim(),
+          fuelCellPrimaryHost: String(data.get("fuelCellPrimaryHost") ?? "").trim(),
+          fuelCellProxyHosts: entries(data.get("fuelCellProxyHosts")),
+          discoverySubnets: entries(data.get("discoverySubnets")),
           solarEnabled: data.has("solarEnabled"),
           smartCosmoEnabled: data.has("smartCosmoEnabled"),
           fuelCellEnabled: data.has("fuelCellEnabled"),
@@ -256,7 +233,7 @@ function EquipmentSettings({
             <p>
               <T
                 text={
-                  "Enable only equipment present in this home. Current addresses are shown as suggestions; enter a value only to replace one."
+                  "Enable only equipment present in this home. Review or edit the configured addresses below."
                 }
               />
             </p>
@@ -293,50 +270,43 @@ function EquipmentSettings({
             <T text={"Battery address"} />
             <input
               name="batteryHost"
-              defaultValue=""
-              placeholder={config.batteryHost}
+              defaultValue={config.batteryHost}
             />
           </label>
           <label className="field">
             <T text={"Smart Cosmo address"} />
             <input
               name="meterHost"
-              defaultValue=""
-              placeholder={config.meterHost}
+              defaultValue={config.meterHost}
             />
           </label>
           <label className="field">
             <T text={"Solar address"} />
             <input
               name="solarHost"
-              defaultValue=""
-              placeholder={config.solarHost}
+              defaultValue={config.solarHost}
             />
           </label>
           <label className="field">
             <T text={"Ene-Farm primary address"} />
             <input
               name="fuelCellPrimaryHost"
-              defaultValue=""
-              placeholder={config.fuelCellPrimaryHost}
+              defaultValue={config.fuelCellPrimaryHost}
             />
           </label>
           <label className="field">
             <T text={"Ene-Farm fallback proxies"} />
             <input
               name="fuelCellProxyHosts"
-              defaultValue=""
-              placeholder={config.fuelCellProxyHosts?.join(", ")}
+              defaultValue={config.fuelCellProxyHosts?.join(", ")}
             />
           </label>
           <label className="field">
             <T text={"Discovery subnets"} />
             <input
               name="discoverySubnets"
-              defaultValue=""
-              placeholder={
-                config.discoverySubnets?.join(", ") || "192.168.1.0/24"
-              }
+              defaultValue={config.discoverySubnets?.join(", ")}
+              placeholder="192.168.1.0/24"
             />
           </label>
         </div>

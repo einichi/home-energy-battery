@@ -210,9 +210,9 @@ export function OverviewPage() {
               <T text={"Circuits consuming most power"} />
             </h2>
           </div>
-          <Link className="text-link" to="/#today-circuits">
+          <a className="text-link" href="#today-circuits">
             <T text={"All circuits →"} />
-          </Link>
+          </a>
         </div>
         {topCircuits.length ? (
           <ol>

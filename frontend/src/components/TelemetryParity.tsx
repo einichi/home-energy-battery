@@ -36,7 +36,7 @@ export function EnergySourcesBar({ sources, period = "Today", showPeriod = true 
   );
 }
 
-export function EneFarmActivity({ summary, compact = false, period = "Today", loading = false, showPeriod = true }: { summary: EneFarmSummary | null; compact?: boolean; period?: string; loading?: boolean; showPeriod?: boolean }) {
+export function EneFarmActivity({ summary, compact = false, period = "Today", loading = false, showPeriod = true, showHeading = true }: { summary: EneFarmSummary | null; compact?: boolean; period?: string; loading?: boolean; showPeriod?: boolean; showHeading?: boolean }) {
   const { text } = useI18n();
   const [activeIntervalIndex, setActiveIntervalIndex] = useState<number | null>(null);
   const start = new Date(summary?.start ?? "").getTime();
@@ -61,9 +61,9 @@ export function EneFarmActivity({ summary, compact = false, period = "Today", lo
   const activeInterval = activeIntervalIndex === null ? null : intervals[activeIntervalIndex] ?? null;
   const activeCenter = activeInterval ? activeInterval.left + activeInterval.width / 2 : 50;
   return (
-    <section className={`telemetry-card ene-farm-activity${compact ? " compact" : ""}`} aria-labelledby={compact ? "overview-ene-farm-heading" : "ene-farm-activity-heading"}>
-      <div className="section-heading"><div>{showPeriod ? <p className="eyebrow">{period}</p> : null}<h2 id={compact ? "overview-ene-farm-heading" : "ene-farm-activity-heading"}><T text={"Ene-Farm Activity"} /></h2></div><strong>{text(summary?.currentState ? formatState(summary.currentState) : "Unavailable")}</strong></div>
-      {loading ? <p className="telemetry-empty"><T text={"Loading Ene-Farm activity…"} /></p> : intervals.length ? <><div className="ene-farm-state-visual"><div className="ene-farm-state-strip" role="group" aria-label={`Ene-Farm operating states for ${period.toLowerCase()}`}>{intervals.map((interval, index) => {
+    <section className={`telemetry-card ene-farm-activity${compact ? " compact" : ""}`} aria-labelledby={showHeading ? (compact ? "overview-ene-farm-heading" : "ene-farm-activity-heading") : undefined} aria-label={showHeading ? undefined : text("Ene-Farm activity timeline")} aria-busy={loading}>
+      {showHeading ? <div className="section-heading"><div>{showPeriod ? <p className="eyebrow">{period}</p> : null}<h2 id={compact ? "overview-ene-farm-heading" : "ene-farm-activity-heading"}><T text={"Ene-Farm Activity"} /></h2></div><strong>{text(summary?.currentState ? formatState(summary.currentState) : "Unavailable")}</strong></div> : <div className="ene-farm-current-state"><span><T text={"Current state"} /></span><strong>{text(summary?.currentState ? formatState(summary.currentState) : "Unavailable")}</strong></div>}
+      {loading && !summary ? <p className="telemetry-empty"><T text={"Loading Ene-Farm activity…"} /></p> : intervals.length ? <><div className="ene-farm-state-visual"><div className="ene-farm-state-strip" role="group" aria-label={`Ene-Farm operating states for ${period.toLowerCase()}`}>{intervals.map((interval, index) => {
         const state = text(formatState(interval.state));
         const detail = text("{state}. Start {start}. Finish {end}. Duration {duration}.", { state, start: formatExactDateTime(interval.start), end: formatExactDateTime(interval.end), duration: formatPreciseDuration(interval.durationSeconds) });
         return <i key={`${interval.start}:${index}`} data-state={interval.state ?? "unknown"} style={{ width: `${interval.width}%` }} tabIndex={0} role="img" aria-label={detail} onPointerEnter={() => setActiveIntervalIndex(index)} onPointerLeave={() => setActiveIntervalIndex(null)} onFocus={() => setActiveIntervalIndex(index)} onBlur={() => setActiveIntervalIndex(null)} />;

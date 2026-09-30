@@ -140,6 +140,7 @@
 .period-loading-status strong { font-size: .76rem; }
 .period-loading-status small { color: var(--text-muted); font-size: .67rem; }
 .period-results > section { transition: opacity 140ms ease; }
+.period-results > section[id] { scroll-margin-top: 24px; }
 .period-results.is-loading > section { opacity: .42; pointer-events: none; user-select: none; }
 @keyframes period-loading-spin { to { transform: rotate(360deg); } }
 .history-workspace { margin-top: 18px; padding: 24px; }
@@ -166,8 +167,6 @@
 .feature-subnav { display: flex; gap: 8px; margin: -12px 0 20px; overflow-x: auto; }
 .feature-subnav a { padding: 9px 13px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text-muted); font-size: .75rem; font-weight: 800; text-decoration: none; white-space: nowrap; }
 .feature-subnav a[aria-current="page"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
-.ene-farm-panel h2 a { color: inherit; text-decoration: none; }
-.ene-farm-panel h2 a:hover, .ene-farm-panel h2 a:focus-visible { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 .history-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .history-toolbar h2 { max-width: 620px; }
 .segmented-control { display: inline-flex; flex-wrap: wrap; gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-subtle); }
@@ -557,6 +556,11 @@ tbody td { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .performance-summary dd { margin: 5px 0 0; font-size: .86rem; font-weight: 780; }
 .ene-farm-panel { margin-top: 28px; padding: 24px; }
 .ene-farm-panel > .ene-farm-activity { margin-top: 18px; padding: 0; border: 0; }
+.ene-farm-load-state { display: grid; justify-items: end; gap: 3px; min-height: 31px; }
+.ene-farm-load-state small { min-height: 1em; color: var(--text-muted); font-size: .66rem; }
+.ene-farm-current-state { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.ene-farm-current-state span { color: var(--text-muted); font-size: .7rem; font-weight: 720; }
+.ene-farm-current-state strong { color: var(--text-muted); font-size: .82rem; text-transform: capitalize; }
 .ene-farm-metrics { display: grid; grid-template-columns: repeat(5, 1fr); margin: 22px 0 0; border: 1px solid var(--border); border-radius: 11px; }
 .ene-farm-metrics div { min-width: 0; padding: 14px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .ene-farm-metrics div:nth-child(5n) { border-right: 0; }
