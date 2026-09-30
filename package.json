@@ -5,12 +5,55 @@
   "description": "ECHONET Lite tools for local HEMS energy devices.",
   "type": "module",
   "scripts": {
-    "node:help": "node home-energy-battery-node.js --help",
-    "start": "node server.js",
-    "check": "node --check home-energy-battery-node.js && node --check server.js && node --check public/app.js",
-    "test": "node tests/helpers.test.js"
+    "start": "node dist/server.js",
+    "build:server": "node scripts/clean-build.mjs dist && tsc -p tsconfig.backend.json",
+    "build:test-server": "node scripts/clean-build.mjs .test-dist && tsc -p tsconfig.tests.json",
+    "typecheck:server": "tsc -p tsconfig.backend.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.tests.json --noEmit",
+    "dev:ui": "npm run build:server && node scripts/dev-ui-safe.mjs",
+    "build:ui": "vite build --config frontend/vite.config.ts",
+    "typecheck:ui": "tsc -p frontend/tsconfig.json --noEmit",
+    "lint:ui": "eslint frontend/src frontend/*.ts",
+    "lint:server": "eslint server.ts 'lib/**/*.ts' 'shared/**/*.ts' 'types/**/*.d.ts'",
+    "test:ui": "vitest run --config frontend/vitest.config.ts",
+    "test:ui:browser": "npm run build:server && npm run build:ui && node scripts/ui-browser-smoke.mjs",
+    "test:ui:visual": "npm run build:server && npm run build:ui && node scripts/ui-visual-regression.mjs",
+    "test:ui:a11y": "npm run build:server && npm run build:ui && node scripts/ui-accessibility.mjs",
+    "test:ui:lifecycle": "npm run build:server && npm run build:ui && node scripts/ui-lifecycle.mjs",
+    "test:production-build": "npm run build:server && npm run build:ui && node scripts/production-build-smoke.mjs",
+    "test:server": "npm run build:test-server && node --test --test-concurrency=1 .test-dist/tests/*.test.js",
+    "check": "npm run typecheck:server && npm run typecheck:tests && npm run typecheck:ui && npm run lint:server && npm run lint:ui && npm run build:server && npm run build:ui",
+    "test": "npm run test:server && npm run test:ui"
+  },
+  "engines": {
+    "node": ">=24.15.0"
   },
   "dependencies": {
-    "node-echonet-lite": "^0.6.0"
+    "node-echonet-lite": "^0.6.0",
+    "nodemailer": "^10.0.12",
+    "tldts": "^7.4.16"
+  },
+  "devDependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-router-dom": "^7.18.4",
+    "@axe-core/playwright": "^4.13.0",
+    "@eslint/js": "^10.0.1",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^24.19.0",
+    "@types/nodemailer": "^7.0.12",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "eslint": "^10.11.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.12.0",
+    "jsdom": "^30.1.1",
+    "playwright-core": "^1.63.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.0",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2"
   }
 }

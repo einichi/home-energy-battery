@@ -1,0 +1,566 @@
+import type { ApplicationConfig } from "../contracts/configuration.js";
+import type { AdaptiveChargingState, AdaptivePlan } from "../domain/adaptive-state.js";
+import type { AutomationRule } from "../domain/automation-rules.js";
+import type { OperationalOverridesState } from "../domain/operational-overrides.js";
+import type { AwayPeriod } from "../contracts/away-period.js";
+import type { SolarForecastHour } from "../domain/solar-forecast.js";
+import type { AdaptiveEvaluationStatus } from "./automation-orchestrator.js";
+import type { createAdaptiveChargingOperations } from "./adaptive-charging-operations.js";
+import type { createAdaptiveHistoryService } from "./adaptive-history-service.js";
+import type { createAdaptiveForecastService } from "./adaptive-forecast-service.js";
+import {
+  adaptiveChargingBaseAvailability,
+  adaptiveChargingBreakerSettings,
+  buildAdaptiveChargingPlan,
+  forecastIsFresh,
+} from "../domain/adaptive-planning.js";
+import {
+  appendAdaptiveChargingLog,
+  finalizeAdaptiveChargeSession,
+  finalizeExpiredAdaptiveChargingWindow,
+  recordAdaptiveChargeSample,
+  recordAdaptiveChargingSolarHeadroomInterruption,
+  recordAdaptiveChargingWindowInterruption,
+  startAdaptiveChargeSession,
+  syncAdaptiveChargingWindowExecution,
+} from "../domain/adaptive-state.js";
+import {
+  activeAdaptiveChargingSlotStopReason,
+  adaptiveChargingExportEvidence,
+  adaptiveChargingLiveChargeHeadroom,
+  adaptiveChargingLiveImportSafety,
+  adaptiveChargingPlanLogMessage,
+  adaptiveChargingPlanRefreshDecision,
+  adaptiveChargingSlotAt,
+  advanceAdaptiveChargingBreakerRecovery,
+  applyInterruptedChargeCap,
+  beginAdaptiveChargingBreakerRecovery,
+  capAdaptiveChargingSlotToRemainingTime,
+  consumeBatteryLearningModelSwitch,
+  consumeCompletedAdaptiveChargingSlot,
+  logAdaptiveChargingBreakerWait,
+  logAdaptiveChargingInitialHeadroomWait,
+  preserveInterruptedAdaptiveCharge,
+  queueAdaptiveChargingPlanRefresh,
+  updateAdaptiveChargingExportConfirmation,
+  updateAdaptiveChargingSolarHeadroomHold,
+  updateActiveAdaptiveChargingObjective,
+} from "../domain/adaptive-control.js";
+import { backupPreparationBlocksActions } from "../domain/operational-overrides.js";
+import { discountedBandOccurrence, explicitDiscountedBand } from "../domain/tariffs.js";
+import { numericMetric } from "../domain/telemetry.js";
+
+type AdaptiveOperations = ReturnType<typeof createAdaptiveChargingOperations>;
+type AdaptiveHistory = ReturnType<typeof createAdaptiveHistoryService>;
+type AdaptiveForecast = ReturnType<typeof createAdaptiveForecastService>;
+
+export interface AdaptiveChargingEvaluatorDependencies {
+  readState(): Promise<AdaptiveChargingState>;
+  writeState(state: AdaptiveChargingState): Promise<AdaptiveChargingState>;
+  history: {
+    awayPeriods(options: { includeCompleted: boolean; nowMs: number }): AwayPeriod[];
+    historicalWeather(): SolarForecastHour[];
+  };
+  readOperationalOverrides(): Promise<OperationalOverridesState>;
+  executeAction(action: string, payload: Record<string, unknown>): Promise<unknown>;
+  releaseCharge: AdaptiveOperations["release"];
+  suspendInStandby: AdaptiveOperations["suspendInStandby"];
+  startCharge: AdaptiveOperations["start"];
+  recoverIdle: AdaptiveOperations["recoverIdle"];
+  readHistory: AdaptiveHistory["readHistory"];
+  refreshBatteryLearning: AdaptiveHistory["refreshBatteryLearning"];
+  readDemandProfileDays: AdaptiveHistory["readDemandProfileDays"];
+  solarForecastAccuracy: AdaptiveForecast["accuracy"];
+  recordFuelCellPlanForecast(plan: AdaptivePlan | null, now?: Date): number;
+  breakerWaitLogMs: number;
+}
+
+export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEvaluatorDependencies) {
+  const readAdaptiveChargingState = dependencies.readState;
+  const writeAdaptiveChargingState = dependencies.writeState;
+  const historyStore = dependencies.history;
+  const readOperationalOverridesState = dependencies.readOperationalOverrides;
+  const releaseAdaptiveCharge = dependencies.releaseCharge;
+  const suspendAdaptiveChargeInStandby = dependencies.suspendInStandby;
+  const executeAdaptiveChargeStart = dependencies.startCharge;
+  const recoverIdleAdaptiveCharge = dependencies.recoverIdle;
+  const readAdaptiveChargingHistory = dependencies.readHistory;
+  const refreshBatteryLearning = dependencies.refreshBatteryLearning;
+  const readAdaptiveChargingDemandProfileDays = dependencies.readDemandProfileDays;
+  const adaptiveChargingSolarForecastAccuracy = dependencies.solarForecastAccuracy;
+  const recordFuelCellPlanForecast = dependencies.recordFuelCellPlanForecast;
+  const ADAPTIVE_CHARGING_BREAKER_WAIT_LOG_MS = dependencies.breakerWaitLogMs;
+  const executeAdaptiveChargingAction = (action: string, payload: Record<string, unknown> = {}) =>
+    dependencies.executeAction(action, payload);
+
+  return async function evaluateAdaptiveCharging(
+    config: ApplicationConfig,
+    status: AdaptiveEvaluationStatus,
+    rules: AutomationRule[],
+    now: Date = new Date(),
+  ): Promise<AdaptiveChargingState> {
+    let state = await readAdaptiveChargingState();
+    if (consumeBatteryLearningModelSwitch(state, now)) {
+      // Persist the one-shot transition before history/model work so a failed or
+      // overlapping evaluation can retry the queued plan without re-arming it.
+      state = await writeAdaptiveChargingState(state);
+    }
+    const awayPeriods = historyStore.awayPeriods({ includeCompleted: true, nowMs: now.getTime() });
+    const activeAway = awayPeriods.find((period) => period.status === "active") ?? null;
+    const awayStateKey = activeAway ? `away:${activeAway.id}:${activeAway.until}` : "home";
+    if (state.lastAwayStateKey === null && !activeAway) {
+      state.lastAwayStateKey = awayStateKey;
+    } else if (state.lastAwayStateKey !== awayStateKey) {
+      queueAdaptiveChargingPlanRefresh(
+        state,
+        activeAway ? "Away period started" : "Away period ended",
+        now,
+      );
+      state.lastPlanEventKey = null;
+      state.lastAwayStateKey = awayStateKey;
+    }
+    recordAdaptiveChargeSample(state, status, now);
+    const operationalOverrides = await readOperationalOverridesState();
+    if (backupPreparationBlocksActions(operationalOverrides)) {
+      if (state.owner === "adaptiveCharging") {
+        finalizeAdaptiveChargeSession(state, "Backup Preparation activated", now);
+        state.owner = null;
+        state.activeSlot = null;
+        state.activePlanCreatedAt = null;
+        state.activeChargedKwh = 0;
+        state.activeLastCheckedAt = null;
+      }
+      state.interruptedCharge = null;
+      state.breakerRecovery = null;
+      state.standbyHoldUntil = null;
+      if (state.lastResult?.skipped !== "Backup Preparation active") {
+        appendAdaptiveChargingLog(
+          state,
+          "Backup Preparation is active; Adaptive Charging will continue observing data without controlling the battery",
+          "pause",
+          now,
+        );
+      }
+      state.lastResult = { ok: true, at: now.toISOString(), skipped: "Backup Preparation active" };
+      return writeAdaptiveChargingState(state);
+    }
+    if (state.interruptedCharge
+      && new Date(state.interruptedCharge.slotEnd ?? "").getTime() <= now.getTime()) {
+      state.interruptedCharge = null;
+      state.breakerRecovery = null;
+    }
+    const paused = state.pausedUntil && new Date(state.pausedUntil).getTime() > now.getTime();
+    const guardActive = rules.some((rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore);
+    const standbyHoldUntilMs = new Date(state.standbyHoldUntil ?? "").getTime();
+    if (state.standbyHoldUntil
+      && (!Number.isFinite(standbyHoldUntilMs) || standbyHoldUntilMs <= now.getTime())
+      && !guardActive) {
+      await executeAdaptiveChargingAction("set-mode", { mode: "auto" });
+      appendAdaptiveChargingLog(
+        state,
+        "Discounted charging hold ended; restoring operation mode to Auto",
+        "stop",
+        now,
+      );
+      state.standbyHoldUntil = null;
+    }
+    const guardSettings = adaptiveChargingBreakerSettings(rules);
+    const base = adaptiveChargingBaseAvailability(config);
+    const forecastError = state.lastForecastError?.error ? String(state.lastForecastError.error) : null;
+    if (!base.available || !guardSettings.valid || paused || !forecastIsFresh(state.forecast, now) || forecastError) {
+      const unavailableReason = paused
+        ? "Adaptive Charging is paused"
+        : base.reason
+          || (!guardSettings.valid ? "Charging Demand Guard settings are unavailable" : null)
+          || forecastError
+          || "Forecast is unavailable";
+      if (!guardActive && state.owner === "adaptiveCharging") await releaseAdaptiveCharge(state, unavailableReason, now);
+      finalizeExpiredAdaptiveChargingWindow(state, numericMetric(status.energy?.battery?.remaining_percent), now);
+      state.lastResult = { ok: true, at: now.toISOString(), skipped: paused ? "paused after manual action" : unavailableReason };
+      return writeAdaptiveChargingState(state);
+    }
+    if (guardActive) {
+      if (state.owner === "adaptiveCharging") {
+        const interruption = preserveInterruptedAdaptiveCharge(state, now);
+        finalizeAdaptiveChargeSession(state, "Charging Demand Guard interrupted Adaptive Charging", now);
+        state.owner = null;
+        state.activeSlot = null;
+        state.activePlanCreatedAt = null;
+        state.activeChargedKwh = 0;
+        state.activeLastCheckedAt = null;
+        if (!interruption) state.plan = null;
+        if (interruption) {
+          recordAdaptiveChargingWindowInterruption(state);
+          beginAdaptiveChargingBreakerRecovery(state, adaptiveChargingLiveChargeHeadroom(status, config, state, rules), now);
+        }
+        appendAdaptiveChargingLog(
+          state,
+          interruption
+            ? `Charging Demand Guard interrupted Adaptive Charging after ${interruption.deliveredWh} Wh; ${interruption.remainingWh} Wh remains`
+            : "Charging Demand Guard owns battery control; adaptiveCharging is waiting",
+          "guard",
+          now,
+        );
+      }
+      if (state.breakerRecovery) {
+        const headroom = adaptiveChargingLiveChargeHeadroom(status, config, state, rules);
+        const recoveryStatus = advanceAdaptiveChargingBreakerRecovery(state, headroom, now);
+        logAdaptiveChargingBreakerWait(state, headroom, recoveryStatus, now);
+      }
+      finalizeExpiredAdaptiveChargingWindow(state, numericMetric(status.energy?.battery?.remaining_percent), now);
+      state.lastResult = { ok: true, at: now.toISOString(), skipped: "Charging Demand Guard active" };
+      return writeAdaptiveChargingState(state);
+    }
+
+    const liveSoc = numericMetric(status.energy?.battery?.remaining_percent);
+    const liveHouseDemandW = numericMetric(status.meter?.house_demand_power);
+    const liveGridImportW = numericMetric(status.meter?.grid_import_power);
+    const telemetryChecks: Array<[number | null, string]> = [
+      [liveSoc, "battery state of charge"],
+      [liveHouseDemandW, "house demand"],
+      [liveGridImportW, "grid import"],
+    ];
+    const missingTelemetry = telemetryChecks.filter(([value]) => !Number.isFinite(value)).map(([, label]) => label);
+    if (missingTelemetry.length) {
+      const reason = `${missingTelemetry.join(", ")} unavailable`;
+      if (state.owner === "adaptiveCharging") {
+        const interruption = preserveInterruptedAdaptiveCharge(state, now);
+        await releaseAdaptiveCharge(
+          state,
+          interruption
+            ? `${reason} after ${interruption.deliveredWh} Wh; ${interruption.remainingWh} Wh remains in this charge`
+            : reason,
+          now,
+        );
+      }
+      finalizeExpiredAdaptiveChargingWindow(state, liveSoc, now);
+      state.lastResult = { ok: true, at: now.toISOString(), skipped: reason };
+      return writeAdaptiveChargingState(state);
+    }
+
+    const activeDiscountedWindow = discountedBandOccurrence(config, now);
+    const refreshDecision = adaptiveChargingPlanRefreshDecision(state, config, now);
+    if (refreshDecision.refresh) {
+      const samples = await readAdaptiveChargingHistory(now);
+      samples.push({
+        timestamp: now.toISOString(),
+        stateOfChargePercent: liveSoc,
+        batteryPowerW: numericMetric(status.energy?.battery?.instant_power),
+        solarPowerW: numericMetric(status.energy?.solar?.instant_power),
+        houseDemandW: liveHouseDemandW,
+      });
+      state = {
+        ...state,
+        historicalWeather: historyStore.historicalWeather(),
+        solarForecastAccuracy: adaptiveChargingSolarForecastAccuracy(now),
+      };
+      await refreshBatteryLearning(config, state, now);
+      const historicalDemandDays = await readAdaptiveChargingDemandProfileDays();
+      state.plan = buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDays, awayPeriods, now });
+      recordFuelCellPlanForecast(state.plan, now);
+      state.lastPlanEventKey = refreshDecision.eventKey ?? null;
+      state.pendingPlanReason = null;
+      state.pendingPlanRequestId = null;
+      state.pendingPlanRequestedAt = null;
+      if (state.interruptedCharge) {
+        const capped = applyInterruptedChargeCap(
+          state.plan,
+          state.interruptedCharge,
+          config.batteryCapabilities.maximumChargeWatts,
+          now,
+        );
+        state.plan = capped.plan;
+        state.interruptedCharge = capped.interruption;
+      }
+      appendAdaptiveChargingLog(
+        state,
+        adaptiveChargingPlanLogMessage(state.plan, refreshDecision.trigger, liveSoc),
+        state.plan?.warning ? "warning" : "plan",
+        now,
+      );
+    }
+    if (!state.plan?.available) {
+      if (state.owner === "adaptiveCharging") await releaseAdaptiveCharge(state, state.plan?.reason || "Plan is unavailable", now);
+      finalizeExpiredAdaptiveChargingWindow(state, liveSoc, now);
+      state.lastResult = { ok: true, at: now.toISOString(), skipped: state.plan?.reason || "plan unavailable" };
+      return writeAdaptiveChargingState(state);
+    }
+
+    const soc = liveSoc;
+    if (activeDiscountedWindow) {
+      syncAdaptiveChargingWindowExecution(state, activeDiscountedWindow, state.plan, soc, now, refreshDecision.refresh);
+    }
+    else finalizeExpiredAdaptiveChargingWindow(state, soc, now);
+    const exportEvidence = adaptiveChargingExportEvidence(status);
+    const exportConfirmation = updateAdaptiveChargingExportConfirmation(state, exportEvidence, now);
+    const liveExportNeedsHeadroom = exportConfirmation.confirmed;
+    const solarHeadroomHold = updateAdaptiveChargingSolarHeadroomHold(state, exportEvidence.aboveThreshold, now);
+    if (exportConfirmation.pending && exportConfirmation.count === 1) {
+      appendAdaptiveChargingLog(
+        state,
+        `Grid export (${Math.round(Number(exportEvidence.gridExportW))} W) is awaiting confirmation (${exportConfirmation.count}/${exportConfirmation.requiredChecks})`,
+        "observe",
+        now,
+      );
+    }
+    if (exportConfirmation.rejected) {
+      const lastRejectedLogMs = new Date(state.exportConfirmation.lastRejectedLogAt ?? "").getTime();
+      if (!Number.isFinite(lastRejectedLogMs) || now.getTime() - lastRejectedLogMs >= ADAPTIVE_CHARGING_BREAKER_WAIT_LOG_MS) {
+        appendAdaptiveChargingLog(
+          state,
+          `Rejected incoherent grid export (${Math.round(Number(exportEvidence.gridExportW))} W); calculated grid flow is ${Math.round(Number(exportEvidence.expectedGridW))} W (positive is import) with ${Math.round(Number(exportEvidence.residualW))} W residual`,
+          "observe",
+          now,
+        );
+        state.exportConfirmation.lastRejectedLogAt = now.toISOString();
+      }
+    }
+    if (liveExportNeedsHeadroom && exportConfirmation.count === exportConfirmation.requiredChecks) {
+      appendAdaptiveChargingLog(
+        state,
+        `Grid export (${Math.round(Number(exportEvidence.gridExportW))} W) confirmed after ${exportConfirmation.count} checks; preserving solar headroom`,
+        "stop",
+        now,
+      );
+    }
+    if (solarHeadroomHold.released) {
+      appendAdaptiveChargingLog(
+        state,
+        "Grid export remained clear for two checks; releasing solar headroom hold and allowing planned charging to resume",
+        "resume",
+        now,
+      );
+    }
+    if (liveExportNeedsHeadroom && state.standbyHoldUntil) {
+      await executeAdaptiveChargingAction("set-mode", { mode: "auto" });
+      appendAdaptiveChargingLog(
+        state,
+        "Live grid export indicates solar needs battery headroom; releasing Standby hold and restoring operation mode to Auto",
+        "stop",
+        now,
+      );
+      state.standbyHoldUntil = null;
+    }
+    const liveImportSafety = adaptiveChargingLiveImportSafety(status, rules);
+    if (explicitDiscountedBand(config, now) && liveImportSafety.available && !liveExportNeedsHeadroom) {
+      await updateActiveAdaptiveChargingObjective(state, state.plan, now, executeAdaptiveChargingAction, soc);
+    }
+    const activeTargetKwh = Number(state.activeSlot?.targetWh ?? 0) / 1000;
+    const activeTargetSocPercent = Number(state.activeSlot?.targetSocPercent ?? config.adaptiveCharging.targetSocPercent);
+    const activeExpired = state.activeSlot && now.getTime() >= new Date(state.activeSlot.end).getTime();
+    const activePlanStopReason = activeAdaptiveChargingSlotStopReason(state, config, state.plan, now);
+    const activeEnergyTargetReached = state.owner === "adaptiveCharging" && state.activeChargedKwh >= activeTargetKwh;
+    const activeSocTargetReached = state.owner === "adaptiveCharging" && soc !== null && soc >= activeTargetSocPercent;
+    const breakerReserveInterrupted = state.owner === "adaptiveCharging"
+      && !activeExpired
+      && !activePlanStopReason
+      && !liveImportSafety.available
+      && !activeEnergyTargetReached
+      && !activeSocTargetReached
+      && !liveExportNeedsHeadroom;
+    if (state.owner === "adaptiveCharging" && (
+      activeExpired
+      || activePlanStopReason
+      || !liveImportSafety.available
+      || activeEnergyTargetReached
+      || activeSocTargetReached
+      || liveExportNeedsHeadroom
+    )) {
+      const completedSlot = state.activeSlot;
+      let stopReason = "Planned charge target reached";
+      if (activeExpired) {
+        const activeWindowEndMs = new Date(completedSlot?.windowEnd ?? "").getTime();
+        stopReason = Number.isFinite(activeWindowEndMs) && now.getTime() < activeWindowEndMs
+          ? "Planned charging slot ended"
+          : "Planned discounted window ended";
+      }
+      else if (activePlanStopReason) stopReason = activePlanStopReason;
+      else if (!liveImportSafety.available) {
+        const interruption = breakerReserveInterrupted
+          ? preserveInterruptedAdaptiveCharge(state, now)
+          : null;
+        if (interruption) {
+          recordAdaptiveChargingWindowInterruption(state);
+          beginAdaptiveChargingBreakerRecovery(state, adaptiveChargingLiveChargeHeadroom(status, config, state, rules), now);
+        }
+        const importText = Number.isFinite(liveImportSafety.gridImportW)
+          ? `${Math.round(liveImportSafety.gridImportW)} W`
+          : "unavailable";
+        const limitText = Number.isFinite(liveImportSafety.breakerLimitW)
+          ? `${Math.round(liveImportSafety.breakerLimitW)} W`
+          : "unavailable";
+        stopReason = interruption
+          ? `Grid Import (${importText}) reached Charging Demand Guard limit (${limitText}) after ${interruption.deliveredWh} Wh; ${interruption.remainingWh} Wh remains in this charge`
+          : `Grid Import (${importText}) reached Charging Demand Guard limit (${limitText})`;
+      }
+      else if (liveExportNeedsHeadroom) {
+        const interruption = preserveInterruptedAdaptiveCharge(state, now);
+        if (interruption) recordAdaptiveChargingSolarHeadroomInterruption(state);
+        stopReason = interruption
+          ? `Live grid export indicates solar needs battery headroom after ${interruption.deliveredWh} Wh; ${interruption.remainingWh} Wh remains in this charge`
+          : "Live grid export indicates solar needs battery headroom";
+      }
+      if (liveExportNeedsHeadroom && state.activeSlot?.windowEnd) {
+        state.solarHeadroomHoldUntil = state.activeSlot.windowEnd;
+        state.solarHeadroomClearChecks = 0;
+      }
+      const completedWindowEndMs = new Date(completedSlot?.windowEnd ?? "").getTime();
+      const holdStandbyUntilWindowEnd = Boolean(
+        activeDiscountedWindow
+        && !liveExportNeedsHeadroom
+        && Number.isFinite(completedWindowEndMs)
+        && completedWindowEndMs > now.getTime(),
+      );
+      try {
+        if (breakerReserveInterrupted) {
+          await suspendAdaptiveChargeInStandby(state, stopReason, now);
+        } else if (holdStandbyUntilWindowEnd) {
+          await suspendAdaptiveChargeInStandby(
+            state,
+            stopReason,
+            now,
+            null,
+            executeAdaptiveChargingAction,
+            completedSlot?.windowEnd,
+          );
+        } else {
+          await releaseAdaptiveCharge(state, stopReason, now);
+        }
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        appendAdaptiveChargingLog(
+          state,
+          `Failed to stop active charge after ${stopReason.toLowerCase()}: ${message}; will retry on the next check`,
+          "error",
+          now,
+        );
+        state.lastResult = {
+          ok: false,
+          at: now.toISOString(),
+          error: message,
+          kind: "charge-stop-retry",
+          reason: stopReason.toLowerCase(),
+        };
+        return writeAdaptiveChargingState(state);
+      }
+      if (activeEnergyTargetReached || activeSocTargetReached) {
+        state.plan = consumeCompletedAdaptiveChargingSlot(state.plan, completedSlot) as typeof state.plan;
+        state.interruptedCharge = null;
+        state.breakerRecovery = null;
+      }
+    } else if (state.owner === "adaptiveCharging" && state.activePlanCreatedAt !== state.plan.createdAt) {
+      const replacement = adaptiveChargingSlotAt(state.plan, now);
+      state.activeSlot = {
+        ...state.activeSlot,
+        ...replacement,
+        targetWh: Number(state.activeSlot?.targetWh),
+      } as typeof state.activeSlot;
+      state.activePlanCreatedAt = state.plan.createdAt ?? null;
+    }
+
+    // All override, telemetry, SOC, tariff, and live safety stop checks above
+    // must run before idle recovery can release or restart device control.
+    if (liveImportSafety.available && !liveExportNeedsHeadroom) {
+      await recoverIdleAdaptiveCharge(state, status, now);
+    }
+    const plannedSlot = explicitDiscountedBand(config, now) ? adaptiveChargingSlotAt(state.plan, now) : null;
+    const slot = plannedSlot ? capAdaptiveChargingSlotToRemainingTime(
+      plannedSlot,
+      state.plan?.chargePerformance?.effectiveWatts ?? config.batteryCapabilities.maximumChargeWatts,
+      now,
+    ) : null;
+    if (liveExportNeedsHeadroom && slot?.windowEnd) {
+      state.solarHeadroomHoldUntil = slot.windowEnd;
+      state.solarHeadroomClearChecks = 0;
+    }
+    const solarHeadroomHoldActive = Boolean(
+      solarHeadroomHold.active
+      || (state.solarHeadroomHoldUntil && new Date(state.solarHeadroomHoldUntil).getTime() > now.getTime()),
+    );
+    const standbyHoldActive = Boolean(
+      state.standbyHoldUntil && new Date(state.standbyHoldUntil).getTime() > now.getTime(),
+    );
+    const slotTargetReached = slot
+      && soc !== null && Number.isFinite(soc)
+      && soc >= Number(slot.targetSocPercent ?? config.adaptiveCharging.targetSocPercent);
+    if (slot && state.owner !== "adaptiveCharging" && !solarHeadroomHoldActive && !slotTargetReached) {
+      const resumeFromStandby = Boolean(state.breakerRecovery || state.interruptedCharge || standbyHoldActive);
+      const headroom = adaptiveChargingLiveChargeHeadroom(status, config, state, rules);
+      if (!headroom.available) {
+        if (!state.breakerRecovery) logAdaptiveChargingInitialHeadroomWait(state, headroom, now);
+        if (state.breakerRecovery) {
+          const recoveryStatus = advanceAdaptiveChargingBreakerRecovery(state, headroom, now);
+          logAdaptiveChargingBreakerWait(state, headroom, recoveryStatus, now);
+        }
+        state.lastResult = {
+          ok: true,
+          at: now.toISOString(),
+          skipped: "live grid import leaves insufficient breaker headroom",
+          ...headroom,
+        };
+        return writeAdaptiveChargingState(state);
+      }
+      if (state.breakerRecovery) {
+        const recoveryStatus = advanceAdaptiveChargingBreakerRecovery(state, headroom, now);
+        if (!recoveryStatus.ready) {
+          logAdaptiveChargingBreakerWait(state, headroom, recoveryStatus, now);
+          state.lastResult = {
+            ok: true,
+            at: now.toISOString(),
+            skipped: "waiting for stable breaker headroom",
+            ...headroom,
+            ...recoveryStatus,
+          };
+          return writeAdaptiveChargingState(state);
+        }
+      }
+      let result;
+      try {
+        result = await executeAdaptiveChargeStart(slot, { resumeFromStandby });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        appendAdaptiveChargingLog(
+          state,
+          resumeFromStandby
+            ? `Failed to resume charging: ${message}; maintaining Standby operation mode`
+            : `Failed to start charging: ${message}`,
+          "error",
+          now,
+        );
+        state.lastResult = { ok: false, at: now.toISOString(), error: message };
+        await writeAdaptiveChargingState(state);
+        throw error;
+      }
+      state.owner = "adaptiveCharging";
+      state.activeSlot = { ...slot, deviceTargetWh: slot.targetWh } as typeof state.activeSlot;
+      state.activePlanCreatedAt = state.plan?.createdAt ?? null;
+      state.activeChargedKwh = 0;
+      state.activeLastCheckedAt = now.toISOString();
+      startAdaptiveChargeSession(state, slot as Parameters<typeof startAdaptiveChargeSession>[1], soc, now);
+      state.interruptedCharge = null;
+      state.breakerRecovery = null;
+      state.standbyHoldUntil = null;
+      state.lastHeadroomWaitLogAt = null;
+      state.lastResult = { ok: true, at: now.toISOString(), kind: "charge", slot, result };
+      const startImportText = Number.isFinite(headroom.gridImportW) ? `${Math.round(headroom.gridImportW)} W` : "unavailable";
+      const startThresholdText = Number.isFinite(headroom.thresholdW) ? `${Math.round(headroom.thresholdW)} W` : "unrestricted";
+      const startLimitText = Number.isFinite(headroom.breakerLimitW) ? `${Math.round(headroom.breakerLimitW)} W` : "unavailable";
+      appendAdaptiveChargingLog(
+        state,
+        `${resumeFromStandby ? "Restoring operation mode to Auto and resuming" : "Starting"} ${slot.targetWh} Wh charge in ${slot.label} band at ${slot.yenPerKwh} yen/kWh; Grid Import (${startImportText}) is at or below start threshold (${startThresholdText}) from Charging Demand Guard limit (${startLimitText})`,
+        "charge",
+        now,
+      );
+    } else if (slot && state.owner !== "adaptiveCharging" && (solarHeadroomHoldActive || slotTargetReached)) {
+      state.lastResult = {
+        ok: true,
+        at: now.toISOString(),
+        skipped: solarHeadroomHoldActive ? "solar export requires battery headroom for the rest of this window" : "window SOC target already reached",
+      };
+    } else if (!slot && state.owner !== "adaptiveCharging") {
+      state.lastResult = { ok: true, at: now.toISOString(), skipped: "no planned charge is due" };
+    }
+    finalizeExpiredAdaptiveChargingWindow(state, soc, now);
+    return writeAdaptiveChargingState(state);
+  }
+}
