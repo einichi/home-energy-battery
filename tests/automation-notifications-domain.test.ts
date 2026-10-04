@@ -165,6 +165,8 @@ assert.equal(rule.restorePayload.mode, "auto");
 
 assert.equal(rule.dashboardWarningEnabled, true);
 
+assert.equal("cooldownSeconds" in rule, false);
+
 assert.equal(cleanAutomationRule({ dashboardWarningEnabled: false }).dashboardWarningEnabled, false);
 
 assert.equal(cleanAutomationRule({}).conditions.source, "gridImportW");
@@ -237,6 +239,31 @@ const gridImportDoesNotDoubleCountCharging = await evaluateAutomationRule(cleanA
 assert.equal(gridImportDoesNotDoubleCountCharging.result.skipped, "conditions not met");
 
 assert.equal(gridImportDoesNotDoubleCountCharging.result.guardDemandW, 3400);
+
+
+const immediateRetriggerActions: any[] = [];
+
+const immediateRetrigger = await createAutomationRuleEvaluator({
+  execute: async (action: any, payload: any) => {
+    immediateRetriggerActions.push({ action, payload });
+    return { ok: true };
+  },
+  recordGuardTrigger: async () => undefined,
+  notify: () => undefined,
+})(cleanAutomationRule({
+  enabled: true,
+  lastResult: { ok: true, at: "2026-05-31T00:00:00.000Z", kind: "restore" },
+  conditions: { source: "gridImportW", breakerAmps: 40, reserveAmps: 5 },
+}), {
+  energy: { battery: { operation_mode: { value: "auto" }, instant_power: { value: 600 } } },
+  meter: { grid_import_power: { value: 3600 } },
+}, new Date("2026-05-31T00:00:01.000Z"));
+
+assert.equal(immediateRetrigger.changed, true);
+
+assert.equal(immediateRetrigger.result.kind, "guard");
+
+assert.deepEqual(immediateRetriggerActions, [{ action: "set-mode", payload: { mode: "standby" } }]);
 
 
 const guardBatteryConfig: Record<string, any> = { batteryCapabilities: { maximumChargeWatts: 1000 } };

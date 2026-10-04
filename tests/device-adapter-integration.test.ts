@@ -428,7 +428,6 @@ try {
         restoreBelowAmps: 1,
         restoreDelaySeconds: 0,
       },
-      cooldownSeconds: 0,
     },
   });
   assert.equal(guard.response.status, 201);

@@ -4,7 +4,6 @@ import {
   automationDemandWatts,
   batteryChargingWatts,
   batteryOperationMode,
-  canRunAutomation,
   formatWatts,
   cleanAutomationRule,
   shouldTriggerDemandGuard,
@@ -53,7 +52,6 @@ export function createAutomationRuleEvaluator({
     const demandLabel = automationDemandLabel(rule.conditions.source);
 
     if (!rule.state?.awaitingRestore && shouldTriggerDemandGuard({ operationMode, batteryChargingW, guardDemandW, breakerLimitW })) {
-      if (!canRunAutomation(rule, now)) return { changed: false, result: { skipped: "cooldown" } };
       onPhase("executing Standby guard action");
       const result = await execute(rule.action, rule.payload);
       appendAutomationLog(rule, `${demandLabel} (${formatWatts(guardDemandW)}) exceeds Charge Demand Guard limit (${formatWatts(breakerLimitW)}), setting operation mode from ${operationMode} to Standby`, now, "guard");

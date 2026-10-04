@@ -28,7 +28,6 @@ export interface AutomationRuleConfig {
   payload: UnknownRecord;
   restoreAction: string;
   restorePayload: UnknownRecord;
-  cooldownSeconds: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -75,7 +74,6 @@ export function cleanAutomationRuleConfig(value: unknown = {}): AutomationRuleCo
     payload: { mode: "standby" },
     restoreAction: "set-mode",
     restorePayload: { mode: "auto" },
-    cooldownSeconds: configNumber(input.cooldownSeconds, 300, 0, 86400),
     createdAt: String(input.createdAt || new Date().toISOString()),
     updatedAt: String(input.updatedAt || new Date().toISOString()),
   };
@@ -145,13 +143,6 @@ export function shouldTriggerDemandGuard({ operationMode, batteryChargingW, guar
     && Number(batteryChargingW) > 0
     && Number.isFinite(Number(guardDemandW))
     && Number(guardDemandW) >= Number(breakerLimitW);
-}
-
-
-export function canRunAutomation(rule: AutomationRule, now: Date): boolean {
-  if (rule.lastResult?.skipped) return true;
-  const lastAt = rule.lastResult?.at ? new Date(String(rule.lastResult.at)).getTime() : 0;
-  return !lastAt || (now.getTime() - lastAt) / 1000 >= rule.cooldownSeconds;
 }
 
 
