@@ -545,10 +545,12 @@ tbody td { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .performance-domain-grid span { color: var(--text-muted); font-size: .67rem; }
 .performance-domain-grid strong { font-size: 1.12rem; font-variant-numeric: tabular-nums; }
 .performance-domain-grid small { color: var(--text-faint); font-size: .66rem; line-height: 1.45; }
-.performance-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.performance-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .performance-evidence { min-width: 0; padding: 24px; }
-.performance-evidence table { min-width: 620px; margin-top: 18px; }
-.performance-evidence td small { display: block; margin-top: 3px; color: var(--text-faint); font-size: .62rem; }
+.performance-evidence table { min-width: 0; margin-top: 18px; }
+.performance-evidence th, .performance-evidence td { padding-inline: 8px; }
+.performance-evidence th { line-height: 1.3; white-space: normal; }
+.performance-evidence td small { display: block; margin-top: 3px; color: var(--text-faint); font-size: .62rem; line-height: 1.3; white-space: normal; }
 .quality-label { flex: 0 0 auto; padding: 5px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: .64rem; font-weight: 780; }
 .performance-summary { display: grid; grid-template-columns: repeat(2, 1fr); margin: 18px 0 0; border: 1px solid var(--border); border-radius: 10px; }
 .performance-summary div { padding: 12px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
