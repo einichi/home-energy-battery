@@ -380,6 +380,7 @@ const batteryStrategyServiceView = createBatteryStrategyService({
   readCommandReceipts,
   historyReady: historyStore.isReady,
   awayPeriodsView,
+  solarForecastAccuracy: adaptiveChargingSolarForecastAccuracy,
 });
 const discoveryService = createDiscoveryService({
   readConfig,

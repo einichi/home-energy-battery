@@ -203,6 +203,7 @@ const schedule: BatterySchedule = {
   days: [0, 1, 2, 3, 4, 5, 6],
 };
 let strategyConfig = config;
+let strategyForecastLearned = true;
 const strategyView = createBatteryStrategyService({
   readConfig: async () => strategyConfig,
   readAdaptiveChargingState: async () => state,
@@ -212,11 +213,17 @@ const strategyView = createBatteryStrategyService({
   readCommandReceipts: () => [],
   historyReady: () => false,
   awayPeriodsView: () => ({ active: null, next: null, state: "home" }),
+  solarForecastAccuracy: () => ({ learned: strategyForecastLearned }),
 });
 
 const adaptiveStrategy = await strategyView(now);
 assert.equal(adaptiveStrategy.kind, "adaptive-charging");
 assert.equal(adaptiveStrategy.nextSchedule, null, "disabled legacy schedules must not appear while Adaptive Charging is active");
+assert.equal(adaptiveStrategy.nextAction?.confidence, "calibrated", "the next action should use live history-derived forecast accuracy");
+
+strategyForecastLearned = false;
+const initialForecastStrategy = await strategyView(now);
+assert.equal(initialForecastStrategy.nextAction?.confidence, "initial", "the next action should remain initial until forecast history is calibrated");
 
 strategyConfig = cleanConfig({ ...config, adaptiveCharging: { ...config.adaptiveCharging, enabled: false } });
 const scheduledStrategy = await strategyView(now);

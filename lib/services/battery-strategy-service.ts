@@ -32,6 +32,7 @@ export interface BatteryStrategyDependencies {
   readCommandReceipts(limit: number, beforeMs: number): CommandReceipt[];
   historyReady(): boolean;
   awayPeriodsView(now: Date): AwayPeriodsView;
+  solarForecastAccuracy(now: Date): { learned?: boolean };
 }
 
 export function createBatteryStrategyService(dependencies: BatteryStrategyDependencies) {
@@ -63,6 +64,7 @@ export function createBatteryStrategyService(dependencies: BatteryStrategyDepend
       && !(recentTerminal.action === "set-mode" && recentTerminal.request?.mode === "auto");
     const manualProfile = recentTerminal?.state === "succeeded" && recentTerminal.source === "manual" && recentTerminal.action === "vendor-profile";
     const scheduledCommand = recentTerminal?.state === "succeeded" && recentTerminal.source === "schedule";
+    const forecastConfidence = dependencies.solarForecastAccuracy(now).learned ? "calibrated" : "initial";
 
     let strategy: Pick<BatteryStrategy, "kind" | "title" | "description">;
     if (backup.active) {
@@ -103,7 +105,7 @@ export function createBatteryStrategyService(dependencies: BatteryStrategyDepend
           at: adaptive.activeSlot.end ?? adaptive.activeSlot.windowEnd ?? null,
           endAt: adaptive.activeSlot.end ?? adaptive.activeSlot.windowEnd ?? null,
           targetSocPercent: finiteNumberOrNull(adaptive.activeSlot.targetSocPercent),
-          confidence: adaptive.solarForecastAccuracy?.learned ? "calibrated" : "initial",
+          confidence: forecastConfidence,
           href: "/automation",
         }
       : config.adaptiveCharging?.enabled && upcomingAdaptiveSlot
@@ -114,7 +116,7 @@ export function createBatteryStrategyService(dependencies: BatteryStrategyDepend
             at: upcomingAdaptiveSlot.start,
             endAt: upcomingAdaptiveSlot.end,
             targetSocPercent: finiteNumberOrNull(upcomingAdaptiveSlot.targetSocPercent),
-            confidence: adaptive.solarForecastAccuracy?.learned ? "calibrated" : "initial",
+            confidence: forecastConfidence,
             href: "/automation",
           }
         : nextSchedule
@@ -131,7 +133,7 @@ export function createBatteryStrategyService(dependencies: BatteryStrategyDepend
               reason: adaptive.plan?.reason ?? "The battery remains under its current strategy until conditions change.",
               at: null,
               targetSocPercent: null,
-              confidence: config.adaptiveCharging?.enabled ? (adaptive.solarForecastAccuracy?.learned ? "calibrated" : "initial") : null,
+              confidence: config.adaptiveCharging?.enabled ? forecastConfidence : null,
               href: config.adaptiveCharging?.enabled ? "/automation" : "/battery/schedules",
             };
     return {

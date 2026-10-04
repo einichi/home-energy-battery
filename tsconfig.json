@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "strict": true,
+    "noImplicitAny": true,
+    "useUnknownInCatchVariables": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "useDefineForClassFields": true,
+    "jsx": "react-jsx",
+    "types": ["node"]
+  },
+  "include": [
+    "*.ts",
+    "*.js",
+    "lib/**/*.ts",
+    "shared/**/*.ts",
+    "types/**/*.d.ts",
+    "tests/**/*.ts",
+    "scripts/**/*.mjs",
+    "dist/**/*.js",
+    ".test-dist/**/*.js",
+    "public/**/*.js"
+  ],
+  "exclude": ["node_modules", "frontend", "data", "test-results"]
+}
