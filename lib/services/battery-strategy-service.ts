@@ -6,6 +6,7 @@ import type { OperationalOverridesState } from "../domain/operational-overrides.
 import { backupPreparationView } from "../domain/operational-overrides.js";
 import { finiteNumberOrNull } from "../domain/numbers.js";
 import { nextScheduleAt } from "../domain/schedules.js";
+import { adaptiveChargingConfiguredActive } from "../domain/adaptive-control.js";
 import type { AwayPeriod } from "../contracts/away-period.js";
 import type { BatteryStrategy } from "../../shared/api-contracts.js";
 
@@ -49,10 +50,12 @@ export function createBatteryStrategyService(dependencies: BatteryStrategyDepend
     const guard = rules.find((rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore);
     const recentTerminal = dependencies.readCommandReceipts(20, now.getTime())
       .find((receipt) => ["succeeded", "failed", "timed-out", "mismatched"].includes(receipt.state));
-    const nextSchedule = schedules
-      .map((schedule) => ({ schedule, at: nextScheduleAt(schedule, now) }))
-      .filter((item): item is { schedule: BatterySchedule; at: string } => typeof item.at === "string")
-      .sort((left, right) => new Date(left.at).getTime() - new Date(right.at).getTime())[0] ?? null;
+    const nextSchedule = adaptiveChargingConfiguredActive(config)
+      ? null
+      : schedules
+        .map((schedule) => ({ schedule, at: nextScheduleAt(schedule, now) }))
+        .filter((item): item is { schedule: BatterySchedule; at: string } => typeof item.at === "string")
+        .sort((left, right) => new Date(left.at).getTime() - new Date(right.at).getTime())[0] ?? null;
     const paused = adaptive.pausedUntil && new Date(adaptive.pausedUntil).getTime() > now.getTime();
     const manualDirect = recentTerminal?.state === "succeeded"
       && recentTerminal.source === "manual"

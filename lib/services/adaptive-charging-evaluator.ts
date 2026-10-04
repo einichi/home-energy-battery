@@ -32,6 +32,7 @@ import {
   adaptiveChargingPlanLogMessage,
   adaptiveChargingPlanRefreshDecision,
   adaptiveChargingSlotAt,
+  adaptiveChargingConfiguredActive,
   advanceAdaptiveChargingBreakerRecovery,
   applyInterruptedChargeCap,
   beginAdaptiveChargingBreakerRecovery,
@@ -49,6 +50,7 @@ import {
 import { backupPreparationBlocksActions } from "../domain/operational-overrides.js";
 import { discountedBandOccurrence, explicitDiscountedBand } from "../domain/tariffs.js";
 import { numericMetric } from "../domain/telemetry.js";
+import { batteryOperationMode } from "../domain/automation-rules.js";
 
 type AdaptiveOperations = ReturnType<typeof createAdaptiveChargingOperations>;
 type AdaptiveHistory = ReturnType<typeof createAdaptiveHistoryService>;
@@ -92,6 +94,49 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
   const ADAPTIVE_CHARGING_BREAKER_WAIT_LOG_MS = dependencies.breakerWaitLogMs;
   const executeAdaptiveChargingAction = (action: string, payload: Record<string, unknown> = {}) =>
     dependencies.executeAction(action, payload);
+
+  async function ensureDiscountedWindowStandby(
+    state: AdaptiveChargingState,
+    status: AdaptiveEvaluationStatus,
+    windowEnd: string,
+    reason: string,
+    now: Date,
+  ): Promise<void> {
+    const holdUntilMs = new Date(state.standbyHoldUntil ?? "").getTime();
+    const windowEndMs = new Date(windowEnd).getTime();
+    const holdActive = Number.isFinite(holdUntilMs) && holdUntilMs >= windowEndMs && holdUntilMs > now.getTime();
+    const batteryPowerW = numericMetric(status.energy?.battery?.instant_power);
+    const operationMode = batteryOperationMode(status);
+    const needsReassertion = operationMode !== "standby" || (batteryPowerW !== null && batteryPowerW < 0);
+    if (!holdActive || needsReassertion) {
+      try {
+        await executeAdaptiveChargingAction("set-mode", { mode: "standby" });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        appendAdaptiveChargingLog(
+          state,
+          `Failed to prevent battery discharge during the discounted window: ${message}; will retry on the next check`,
+          "error",
+          now,
+        );
+        state.lastResult = {
+          ok: false,
+          at: now.toISOString(),
+          error: message,
+          kind: "discounted-window-standby-retry",
+        };
+        await writeAdaptiveChargingState(state);
+        throw error;
+      }
+      state.standbyHoldUntil = new Date(windowEndMs).toISOString();
+      appendAdaptiveChargingLog(
+        state,
+        `${reason}; holding Standby operation mode until ${state.standbyHoldUntil} to prevent battery discharge during the discounted window`,
+        holdActive ? "maintain" : "guard",
+        now,
+      );
+    }
+  }
 
   return async function evaluateAdaptiveCharging(
     config: ApplicationConfig,
@@ -151,6 +196,7 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
     }
     const paused = state.pausedUntil && new Date(state.pausedUntil).getTime() > now.getTime();
     const guardActive = rules.some((rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore);
+    const activeDiscountedWindow = discountedBandOccurrence(config, now);
     const standbyHoldUntilMs = new Date(state.standbyHoldUntil ?? "").getTime();
     if (state.standbyHoldUntil
       && (!Number.isFinite(standbyHoldUntilMs) || standbyHoldUntilMs <= now.getTime())
@@ -166,6 +212,13 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
     }
     const guardSettings = adaptiveChargingBreakerSettings(rules);
     const base = adaptiveChargingBaseAvailability(config);
+    const shouldProtectDiscountedWindow = Boolean(
+      base.available
+      && adaptiveChargingConfiguredActive(config)
+      && activeDiscountedWindow
+      && !paused
+      && !guardActive,
+    );
     const forecastError = state.lastForecastError?.error ? String(state.lastForecastError.error) : null;
     if (!base.available || !guardSettings.valid || paused || !forecastIsFresh(state.forecast, now) || forecastError) {
       const unavailableReason = paused
@@ -175,6 +228,15 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
           || forecastError
           || "Forecast is unavailable";
       if (!guardActive && state.owner === "adaptiveCharging") await releaseAdaptiveCharge(state, unavailableReason, now);
+      if (shouldProtectDiscountedWindow && activeDiscountedWindow) {
+        await ensureDiscountedWindowStandby(
+          state,
+          status,
+          activeDiscountedWindow.end,
+          `Adaptive Charging is temporarily unavailable (${unavailableReason})`,
+          now,
+        );
+      }
       finalizeExpiredAdaptiveChargingWindow(state, numericMetric(status.energy?.battery?.remaining_percent), now);
       state.lastResult = { ok: true, at: now.toISOString(), skipped: paused ? "paused after manual action" : unavailableReason };
       return writeAdaptiveChargingState(state);
@@ -233,12 +295,20 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
           now,
         );
       }
+      if (shouldProtectDiscountedWindow && activeDiscountedWindow) {
+        await ensureDiscountedWindowStandby(
+          state,
+          status,
+          activeDiscountedWindow.end,
+          `Waiting for ${missingTelemetry.join(", ")} before planned charging`,
+          now,
+        );
+      }
       finalizeExpiredAdaptiveChargingWindow(state, liveSoc, now);
       state.lastResult = { ok: true, at: now.toISOString(), skipped: reason };
       return writeAdaptiveChargingState(state);
     }
 
-    const activeDiscountedWindow = discountedBandOccurrence(config, now);
     const refreshDecision = adaptiveChargingPlanRefreshDecision(state, config, now);
     if (refreshDecision.refresh) {
       const samples = await readAdaptiveChargingHistory(now);
@@ -281,6 +351,15 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
     }
     if (!state.plan?.available) {
       if (state.owner === "adaptiveCharging") await releaseAdaptiveCharge(state, state.plan?.reason || "Plan is unavailable", now);
+      if (shouldProtectDiscountedWindow && activeDiscountedWindow) {
+        await ensureDiscountedWindowStandby(
+          state,
+          status,
+          activeDiscountedWindow.end,
+          state.plan?.reason || "The charging plan is temporarily unavailable",
+          now,
+        );
+      }
       finalizeExpiredAdaptiveChargingWindow(state, liveSoc, now);
       state.lastResult = { ok: true, at: now.toISOString(), skipped: state.plan?.reason || "plan unavailable" };
       return writeAdaptiveChargingState(state);
@@ -331,7 +410,7 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
         now,
       );
     }
-    if (liveExportNeedsHeadroom && state.standbyHoldUntil) {
+    if (liveExportNeedsHeadroom && state.standbyHoldUntil && !activeDiscountedWindow) {
       await executeAdaptiveChargingAction("set-mode", { mode: "auto" });
       appendAdaptiveChargingLog(
         state,
@@ -492,6 +571,15 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
           const recoveryStatus = advanceAdaptiveChargingBreakerRecovery(state, headroom, now);
           logAdaptiveChargingBreakerWait(state, headroom, recoveryStatus, now);
         }
+        if (activeDiscountedWindow) {
+          await ensureDiscountedWindowStandby(
+            state,
+            status,
+            activeDiscountedWindow.end,
+            "Waiting for safe breaker headroom before planned charging",
+            now,
+          );
+        }
         state.lastResult = {
           ok: true,
           at: now.toISOString(),
@@ -504,6 +592,15 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
         const recoveryStatus = advanceAdaptiveChargingBreakerRecovery(state, headroom, now);
         if (!recoveryStatus.ready) {
           logAdaptiveChargingBreakerWait(state, headroom, recoveryStatus, now);
+          if (activeDiscountedWindow) {
+            await ensureDiscountedWindowStandby(
+              state,
+              status,
+              activeDiscountedWindow.end,
+              "Waiting for stable breaker headroom before resuming planned charging",
+              now,
+            );
+          }
           state.lastResult = {
             ok: true,
             at: now.toISOString(),
@@ -519,6 +616,23 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
         result = await executeAdaptiveChargeStart(slot, { resumeFromStandby });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
+        if (activeDiscountedWindow && !resumeFromStandby) {
+          try {
+            await ensureDiscountedWindowStandby(
+              state,
+              status,
+              activeDiscountedWindow.end,
+              "Planned charging could not start",
+              now,
+            );
+          } catch (standbyError: unknown) {
+            throw new AggregateError(
+              [error, standbyError],
+              `${message}; failed to prevent discounted-window discharge after the charge start failed`,
+              { cause: standbyError },
+            );
+          }
+        }
         appendAdaptiveChargingLog(
           state,
           resumeFromStandby
@@ -551,11 +665,21 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
         "charge",
         now,
       );
-    } else if (slot && state.owner !== "adaptiveCharging" && (solarHeadroomHoldActive || slotTargetReached)) {
+    } else if (activeDiscountedWindow && state.owner !== "adaptiveCharging") {
+      const reason = slot && solarHeadroomHoldActive
+        ? "Planned charging is paused while solar export preserves battery headroom"
+        : slot && slotTargetReached
+          ? "The discounted-window SOC target is already reached"
+          : "Waiting for the next planned charge in the discounted window";
+      await ensureDiscountedWindowStandby(state, status, activeDiscountedWindow.end, reason, now);
       state.lastResult = {
         ok: true,
         at: now.toISOString(),
-        skipped: solarHeadroomHoldActive ? "solar export requires battery headroom for the rest of this window" : "window SOC target already reached",
+        skipped: slot && solarHeadroomHoldActive
+          ? "solar export requires battery headroom for the rest of this window"
+          : slot && slotTargetReached
+            ? "window SOC target already reached"
+            : "holding standby until planned discounted charging is due",
       };
     } else if (!slot && state.owner !== "adaptiveCharging") {
       state.lastResult = { ok: true, at: now.toISOString(), skipped: "no planned charge is due" };
