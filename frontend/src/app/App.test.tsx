@@ -1420,7 +1420,7 @@ describe("React application shell", () => {
     expect(screen.getAllByText("Paused by Adaptive Charging")).toHaveLength(2);
     expect(screen.getByRole("button", { name: /Review schedule/ })).toBeDisabled();
     expect(screen.getAllByRole("button", { name: "Disable" })[0]).toBeDisabled();
-    expect(screen.getByText("0 planned changes")).toBeVisible();
+    expect(screen.getByText("No scheduled changes in the next seven days.")).toBeVisible();
   });
 
   it("keeps five direct destinations in phone navigation", async () => {

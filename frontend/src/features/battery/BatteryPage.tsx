@@ -264,9 +264,9 @@ function ScheduleCalendar({ schedules, conflicts }: { schedules: BatterySchedule
     <section className="schedule-calendar" aria-labelledby="schedule-calendar-heading">
       <div className="section-heading">
         <div><p className="eyebrow"><T text={"Calendar"} /></p><h3 id="schedule-calendar-heading"><T text={"Seven-day plan"} /></h3></div>
-        <span className="sample-count">{occurrenceCount} <T text={" planned "} />{occurrenceCount === 1 ? "change" : "changes"}</span>
+        {occurrenceCount ? <span className="sample-count">{occurrenceCount} <T text={" planned "} />{occurrenceCount === 1 ? "change" : "changes"}</span> : null}
       </div>
-      <div className="schedule-calendar-scroll">
+      {occurrenceCount ? <><div className="schedule-calendar-scroll">
         <div className="schedule-calendar-grid">
           {days.map((day) => {
             const occurrences = schedules.flatMap((schedule) => scheduleOccurrencesForDay(schedule, day).map((at) => ({ schedule, at })))
@@ -276,14 +276,13 @@ function ScheduleCalendar({ schedules, conflicts }: { schedules: BatterySchedule
                 <header><strong>{day.toLocaleDateString([], { weekday: "short" })}</strong><span>{day.toLocaleDateString([], { month: "short", day: "numeric" })}</span></header>
                 <ol>
                   {occurrences.map(({ schedule, at }) => <li key={`${schedule.id}:${at.toISOString()}`} data-conflict={conflicts.has(schedule.id) || undefined}><time dateTime={at.toISOString()}>{at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time><strong>{schedule.name}</strong><span>{actionLabels[schedule.action] ?? sentence(schedule.action)}</span></li>)}
-                  {!occurrences.length ? <li className="schedule-calendar-empty"><T text={"No changes"} /></li> : null}
                 </ol>
               </article>
             );
           })}
         </div>
       </div>
-      <p className="calendar-note"><T text={"Enabled schedules appear here. Conflicting times are highlighted and explained in the schedule list below."} /></p>
+      <p className="calendar-note"><T text={"Conflicting times are highlighted in the schedule list below."} /></p></> : <p className="empty-copy"><T text={"No scheduled changes in the next seven days."} /></p>}
     </section>
   );
 }
@@ -522,8 +521,8 @@ export function BatteryPage({ view = "status" }: { view?: "status" | "schedules"
         </section>
 
         <section className="panel control-panel manual-panel">
-          <div className="section-heading"><div><p className="eyebrow"><T text={"Manual control"} /></p><h2><T text={"Direct operation"} /></h2><small><T text={"Charge, discharge, Standby, or return to Auto"} /></small></div></div>
-          <div className="manual-content"><p className="section-copy"><T text={"These commands can temporarily supersede the current charging strategy. Each result is acknowledged and read back before success is shown."} /></p>
+          <div className="section-heading"><div><h2><T text={"Manual operation"} /></h2></div></div>
+          <div className="manual-content"><p className="section-copy"><T text={"Commands temporarily override the current strategy and are verified after execution."} /></p>
           <label className="field"><span><T text={"Optional energy target"} /></span><div className="input-suffix"><input type="number" min="0" step="100" value={chargeTarget} onChange={(event) => setChargeTarget(Number(event.target.value))} /><span><T text={"Wh"} /></span></div></label>
           <div className="command-grid">
             <button className="button primary" type="button" onClick={() => openReview({ action: "charge", label: "Start manual charging", payload: { targetWh: chargeTarget }, impact: "Manual charging may pause Adaptive Charging and increase grid demand." })}><T text={"Charge"} /></button>
@@ -538,7 +537,6 @@ export function BatteryPage({ view = "status" }: { view?: "status" | "schedules"
 
       {view === "backup" ?
       <section className="panel backup-panel">
-        <div><p className="eyebrow"><T text={"Operational mode"} /></p><h2><T text={"Disaster Prep"} /></h2><p><T text={"Temporarily switches the battery to its backup profile so more stored energy is ready for an outage. Adaptive Charging pauses while this mode is active. When stopped, the previous profile is restored and normal automation recalculates before resuming."} /></p></div>
         <div className="backup-state"><strong>{text(backup?.active ? "Active" : "Inactive")}</strong><span>{backup?.active ? text("Since {value}", { value: backup.startedAt ? formatDateTime(backup.startedAt) : text("recently") }) : text("Normal automation can operate")}</span></div>
         {!backup?.active ? <label className="guard-choice"><input type="checkbox" checked={backupAllowDemandGuard} onChange={(event) => setBackupAllowDemandGuard(event.target.checked)} /><span><T text={"Allow Demand Guard to retain breaker protection"} /></span></label> : null}
         <button className={`button${backup?.active ? " secondary" : " primary"}`} type="button" onClick={() => openReview({ action: backup?.active ? "backup-end" : "backup-start", label: backup?.active ? "Stop Disaster Prep" : "Start Disaster Prep", payload: { allowDemandGuard: backupAllowDemandGuard, reserve }, impact: backup?.active ? "Stopping restores the battery profile that was active before Disaster Prep began. Adaptive Charging will then recalculate before normal operation resumes." : `Disaster Prep switches the battery to its backup profile and pauses Adaptive Charging so stored energy is prioritized for an outage. Your ${reserve}% reserve remains unchanged, and Demand Guard will ${backupAllowDemandGuard ? "remain available for breaker protection" : "pause"}. All of these temporary changes are reversed when Disaster Prep is stopped.` })}>{text(backup?.active ? "Stop" : "Start")}</button>
@@ -562,7 +560,6 @@ export function BatteryPage({ view = "status" }: { view?: "status" | "schedules"
         {scheduleReview ? <div className="schedule-review-note" role="status"><span><strong><T text={"Review:"} /></strong> {scheduleName} <T text={" will run "} />{actionLabels[scheduleAction] ?? sentence(scheduleAction)} <T text={" with "} />{Object.values(schedulePayload).join(" → ")} {scheduleRepeat === "daily" ? `at ${scheduleTime} on ${scheduleDays.map((day) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ")}` : `once at ${formatDateTime(scheduleRunAt)}`}.</span><button className="quiet-button" type="button" onClick={() => setScheduleReview(false)}><T text={"Edit"} /></button></div> : null}
         <div className="schedule-list">
           {schedules.map((schedule) => { const next = schedulesDisabled ? null : scheduleNextAt(schedule); return <article key={schedule.id}><div><strong>{schedule.name}</strong><span>{actionLabels[schedule.action] ?? sentence(schedule.action)} · {scheduleRecurrence(schedule)}</span><small>{schedulesDisabled ? "Paused by Adaptive Charging" : `Next run: ${next ? formatDateTime(next) : schedule.enabled ? "No future occurrence" : "Disabled"}`}</small>{schedule.lastResult ? <small data-ok={schedule.lastResult.ok}>{schedule.lastResult.ok ? `Last run succeeded${schedule.lastResult.at ? ` · ${formatDateTime(schedule.lastResult.at)}` : ""}` : formatDateTimesInText(`Last run failed: ${schedule.lastResult.error}`)}</small> : null}{conflictingScheduleIds.has(schedule.id) ? <p className="schedule-conflict"><T text={"Conflicts with another enabled schedule at this time."} /></p> : null}</div><div className="button-row"><button className="quiet-button" disabled={schedulesDisabled} title={schedulesDisabled ? "Adaptive Charging must be turned off before changing schedule status" : undefined} type="button" onClick={() => void updateSchedule(schedule.id, { enabled: !schedule.enabled }).then(loadOperations)}>{schedule.enabled ? "Disable" : "Enable"}</button><button className="quiet-button danger" type="button" onClick={() => void deleteSchedule(schedule.id).then(loadOperations)}><T text={"Delete"} /></button></div></article>; })}
-          {!schedules.length ? <p className="empty-copy"><T text={"No battery schedules are configured."} /></p> : null}
         </div>
       </section> : null}
 

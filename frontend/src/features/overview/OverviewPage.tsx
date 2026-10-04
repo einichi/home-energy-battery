@@ -74,9 +74,6 @@ export function OverviewPage() {
     <main className="page overview-page">
       <header className="page-heading">
         <div>
-          <p className="eyebrow">
-            <T text={"Right now"} />
-          </p>
           <h1>
             <T text={"Home energy overview"} />
           </h1>
@@ -110,9 +107,6 @@ export function OverviewPage() {
         <article className="flow-panel panel">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">
-                <T text={"Live power"} />
-              </p>
               <h2>
                 <T text={"Energy flow"} />
               </h2>
@@ -122,9 +116,6 @@ export function OverviewPage() {
             </span>
           </div>
           <EnergyFlow solar={solarPower} fuelCell={fuelCellPower} battery={batteryPower} demand={demandPower} gridImport={gridImport} gridExport={gridExport} showSolar={config?.solarEnabled !== false && widgetVisible("solarPower")} showFuelCell={config?.fuelCellEnabled !== false && widgetVisible("fuelCellPower")} showBattery={widgetVisible("batteryPower")} showDemand={widgetVisible("houseDemandPower")} showGrid={widgetVisible(gridExport != null && gridExport > 0 ? "gridExportPower" : "gridImportPower")} />
-          <p className="panel-note">
-            <T text={"Direction and magnitude from the latest equipment reading."} />
-          </p>
         </article>
 
         <article className="battery-panel panel">

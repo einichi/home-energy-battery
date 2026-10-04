@@ -230,13 +230,7 @@ function EquipmentSettings({
             <h2>
               <T text={"Installed equipment"} />
             </h2>
-            <p>
-              <T
-                text={
-                  "Enable only equipment present in this home. Review or edit the configured addresses below."
-                }
-              />
-            </p>
+            <p><T text={"Enable installed equipment and confirm its address."} /></p>
           </div>
         </div>
         <div className="system-toggle-grid">
@@ -330,7 +324,7 @@ function EquipmentSettings({
             <p>
               <T
                 text={
-                  "Name detected channels, choose their default visibility, and set their ordering."
+                  "Name, show, and order detected circuits."
                 }
               />
             </p>
@@ -1116,6 +1110,7 @@ function NotificationSettings({
           <legend>
             <T text={"Event triggers"} />
           </legend>
+          <p className="field-help"><T text={"Cooldown (min)"} /></p>
           <div className="trigger-grid">
             {Object.entries(initial.config.triggers).map(([key, trigger]) => (
               <div className="trigger-row" key={key}>
@@ -1128,22 +1123,14 @@ function NotificationSettings({
                   <span>{key.replace(/([A-Z])/g, " $1")}</span>
                 </label>
                 <label>
-                  <span>
-                    <T text={"Cooldown"} />
-                  </span>
-                  <div className="input-suffix">
-                    <input
-                      aria-label={`${key} cooldown`}
-                      name={`cooldown:${key}`}
-                      type="number"
-                      min="0"
-                      max="10080"
-                      defaultValue={trigger.cooldownMinutes}
-                    />
-                    <span>
-                      <T text={"min"} />
-                    </span>
-                  </div>
+                  <input
+                    aria-label={`${key} cooldown`}
+                    name={`cooldown:${key}`}
+                    type="number"
+                    min="0"
+                    max="10080"
+                    defaultValue={trigger.cooldownMinutes}
+                  />
                 </label>
                 {key === "lowBattery" ? (
                   <label>
@@ -1196,9 +1183,7 @@ function NotificationSettings({
               />
             </p>
           </div>
-          <span className="sample-count">
-            {initial.deliveries?.length ?? 0} <T text={" records"} />
-          </span>
+          {initial.deliveries?.length ? <span className="sample-count">{initial.deliveries.length} <T text={" records"} /></span> : null}
         </div>
         <div className="notification-deliveries">
           {initial.deliveries?.length ? (
@@ -1330,11 +1315,6 @@ function DataSettings({
             <h2>
               <T text={"Storage health"} />
             </h2>
-            <p>
-              <T
-                text={"Current local history database and aggregate inventory."}
-              />
-            </p>
           </div>
           <button className="quiet-button" onClick={admin.refresh}>
             <T text={"Refresh"} />
@@ -1734,7 +1714,7 @@ function Preferences({
         <p className="field-help">
           <T
             text={
-              "The mature Overview has a fixed hierarchy. Hide optional widgets without managing numeric priorities."
+              "Choose which optional items appear on Overview."
             }
           />
         </p>
@@ -1802,13 +1782,6 @@ export function SystemPage() {
           <h1>
             <T text={"System"} />
           </h1>
-          <p>
-            <T
-              text={
-                "Configure devices, assumptions, delivery, storage, and application preferences."
-              }
-            />
-          </p>
         </div>
       </header>
       {admin.error ? (

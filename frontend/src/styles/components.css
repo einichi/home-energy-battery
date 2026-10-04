@@ -447,6 +447,8 @@ tbody td { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .trigger-row { display: grid; gap: 8px; padding: 10px; border-radius: 8px; background: var(--surface-subtle); }
 .trigger-row > label { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 6px; color: var(--text-muted); font-size: .66rem; }
 .trigger-row > label:first-child { display: flex; color: var(--text); font-size: .72rem; font-weight: 750; text-transform: capitalize; }
+.trigger-row > label:last-child { display: block; }
+.trigger-row > label:last-child input[type="number"] { width: 100%; }
 .trigger-row .input-suffix { width: 100%; min-width: 0; grid-column: span 2; overflow: hidden; }
 .trigger-row .input-suffix input[type="number"] { width: 100%; min-width: 0; padding: 0 11px; border-radius: 0; background: transparent; color: var(--text); font: inherit; }
 .system-stat-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 9px; margin: 0; }

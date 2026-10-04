@@ -142,9 +142,12 @@ export const reactJapanese: Record<string, string> = {
   "Save everyday controls": "通常設定を保存",
   "Manual control": "手動操作",
   "Direct operation": "直接操作",
+  "Manual operation": "手動操作",
   "Charge, discharge, Standby, or return to Auto": "充電、放電、待機、自動運転への復帰",
   "These commands can temporarily supersede the current charging strategy. Each result is acknowledged and read back before success is shown.":
     "これらの操作は現在の充電方針より一時的に優先されます。成功表示の前に機器応答と読み戻しを確認します。",
+  "Commands temporarily override the current strategy and are verified after execution.":
+    "操作は現在の方針より一時的に優先され、実行後に結果を確認します。",
   "Optional energy target": "任意の電力量目標",
   Charge: "充電",
   Discharge: "放電",
@@ -165,6 +168,8 @@ export const reactJapanese: Record<string, string> = {
   "No changes": "変更なし",
   "Enabled schedules appear here. Conflicting times are highlighted and explained in the schedule list below.":
     "有効なスケジュールを表示します。時刻の競合は強調し、下の一覧で説明します。",
+  "Conflicting times are highlighted in the schedule list below.": "時刻の競合は下のスケジュール一覧で強調されます。",
+  "No scheduled changes in the next seven days.": "今後7日間に予定された変更はありません。",
   Operate: "操作",
   "Schedule name": "スケジュール名",
   "Schedule repeat": "繰り返し",
@@ -306,6 +311,7 @@ export const reactJapanese: Record<string, string> = {
   "Energy detail": "エネルギー詳細",
   "Exact lookup for observed reporting periods. Energy values are sampled or counter-derived according to coverage metadata.":
     "記録期間ごとの詳細です。エネルギー値はデータ網羅情報に基づくサンプル積算値またはメーター値です。",
+  "Observed periods only.": "記録のある期間のみ表示します。",
   "Ene-Farm outcomes": "エネファーム実績",
   "Electricity generated": "発電量",
   "Gas used": "ガス使用量",
@@ -334,6 +340,7 @@ export const reactJapanese: Record<string, string> = {
   Preferences: "環境設定",
   "Refresh and dashboard visibility": "更新間隔と表示項目",
   "Installed equipment": "設置機器",
+  "Enable installed equipment and confirm its address.": "設置されている機器を有効にし、アドレスを確認します。",
   "Enable only equipment present in this home. Addresses are stored locally.": "この住宅にある機器だけを有効にします。アドレスはローカルに保存されます。",
   "Solar generation": "太陽光発電",
   "Smart Cosmo meter": "スマートコスモ分電盤",
@@ -346,6 +353,7 @@ export const reactJapanese: Record<string, string> = {
   "Save equipment": "機器設定を保存",
   "Smart Cosmo circuits": "スマートコスモ回路",
   "Name detected channels, choose their default visibility, and set their ordering.": "検出した回路に名前を付け、初期表示と並び順を設定します。",
+  "Name, show, and order detected circuits.": "検出した回路の名前、表示、並び順を設定します。",
   "Circuit ordering": "回路の並び順",
   "Circuit number": "回路番号",
   "Current demand": "現在の需要",
@@ -444,6 +452,7 @@ export const reactJapanese: Record<string, string> = {
   日本語: "日本語",
   "Refresh interval": "更新間隔",
   "Overview visibility": "概要の表示項目",
+  "Choose which optional items appear on Overview.": "概要画面に表示する任意の項目を選びます。",
   "The mature Overview has a fixed hierarchy. Hide optional widgets without managing numeric priorities.":
     "概要画面の構成は固定されています。数値優先度を管理せず、任意の項目を非表示にできます。",
   "Save preferences": "環境設定を保存",
@@ -468,6 +477,8 @@ export const reactJapanese: Record<string, string> = {
   Demand: "需要",
   "The current API exposes demand-model evidence and the active estimate, but not a separate settled demand-error series.":
     "現在のAPIは需要モデルの根拠と有効な推定値を提供しますが、確定した需要誤差系列は提供しません。",
+  "Demand error history is not available yet.": "需要誤差の履歴はまだありません。",
+  "Cooldown (min)": "クールダウン（分）",
   SOC: "充電率",
   "boundary estimate": "境界推定",
   "No completed charging windows yet.": "完了した充電時間帯はまだありません。",
