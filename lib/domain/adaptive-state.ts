@@ -54,10 +54,12 @@ export interface AdaptivePlan {
   timeline?: Array<{
     start: string;
     end: string;
+    solarW?: number;
     fuelCellP20W?: number;
     fuelCellMedianW?: number;
     fuelCellP80W?: number;
     fuelCellSampleCount?: number;
+    demandW?: number;
   }>;
   predictedFuelCellKwh?: number;
   predictedSolarKwh?: number;
@@ -155,13 +157,14 @@ interface WindowExecution {
   solarHeadroomInterruptionCount: number;
   startSocPercent: number | null;
   latestSocPercent: number | null;
+  peakSocPercent: number | null;
   targetSocPercent: number | null;
   idleRecoveryCount: number;
   startedTrackingAt: string | null;
   updatedAt: string | null;
 }
 
-export interface WindowSummary extends Omit<WindowExecution, "latestSocPercent" | "idleRecoveryCount" | "startedTrackingAt" | "updatedAt"> {
+export interface WindowSummary extends Omit<WindowExecution, "latestSocPercent" | "peakSocPercent" | "idleRecoveryCount" | "startedTrackingAt" | "updatedAt"> {
   unmetWh: number;
   socTargetReached: boolean;
   endSocPercent: number | null;
@@ -329,6 +332,8 @@ export function cleanAdaptiveChargingState(input: unknown = {}): AdaptiveChargin
         ),
         startSocPercent: finiteNumberOrNull(activeWindowExecution.startSocPercent),
         latestSocPercent: finiteNumberOrNull(activeWindowExecution.latestSocPercent),
+        peakSocPercent: finiteNumberOrNull(activeWindowExecution.peakSocPercent)
+          ?? finiteNumberOrNull(activeWindowExecution.startSocPercent),
         targetSocPercent: finiteNumberOrNull(activeWindowExecution.targetSocPercent),
         idleRecoveryCount: Math.max(0, Math.round(Number(activeWindowExecution.idleRecoveryCount) || 0)),
         startedTrackingAt: stringOrNull(activeWindowExecution.startedTrackingAt),
@@ -602,6 +607,7 @@ export function syncAdaptiveChargingWindowExecution(
       solarHeadroomInterruptionCount: 0,
       startSocPercent: finiteNumberOrNull(soc),
       latestSocPercent: finiteNumberOrNull(soc),
+      peakSocPercent: finiteNumberOrNull(soc),
       targetSocPercent,
       idleRecoveryCount: 0,
       startedTrackingAt: now.toISOString(),
@@ -609,6 +615,13 @@ export function syncAdaptiveChargingWindowExecution(
     };
   } else {
     state.activeWindowExecution.latestSocPercent = finiteNumberOrNull(soc);
+    const nextSoc = finiteNumberOrNull(soc);
+    if (nextSoc !== null) {
+      state.activeWindowExecution.peakSocPercent = Math.max(
+        nextSoc,
+        state.activeWindowExecution.peakSocPercent ?? nextSoc,
+      );
+    }
     if (targetSocPercent !== null) state.activeWindowExecution.targetSocPercent = targetSocPercent;
     if (planRecalculated) {
       state.activeWindowExecution.plannedWh = state.activeWindowExecution.deliveredWh + activeDeliveredWh + remainingWh;

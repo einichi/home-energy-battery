@@ -33,6 +33,7 @@ import {
   adaptiveChargingPlanRefreshDecision,
   adaptiveChargingSlotAt,
   adaptiveChargingConfiguredActive,
+  adaptiveChargingWindowSolarOpportunity,
   advanceAdaptiveChargingBreakerRecovery,
   applyInterruptedChargeCap,
   beginAdaptiveChargingBreakerRecovery,
@@ -55,6 +56,8 @@ import { batteryOperationMode } from "../domain/automation-rules.js";
 type AdaptiveOperations = ReturnType<typeof createAdaptiveChargingOperations>;
 type AdaptiveHistory = ReturnType<typeof createAdaptiveHistoryService>;
 type AdaptiveForecast = ReturnType<typeof createAdaptiveForecastService>;
+
+const ADAPTIVE_CHARGING_SOLAR_WINDOW_DISCHARGE_BUDGET_PERCENT = 2;
 
 export interface AdaptiveChargingEvaluatorDependencies {
   readState(): Promise<AdaptiveChargingState>;
@@ -129,10 +132,31 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
         throw error;
       }
       state.standbyHoldUntil = new Date(windowEndMs).toISOString();
+      if (!holdActive) queueAdaptiveChargingPlanRefresh(state, "discounted window Standby established", now);
       appendAdaptiveChargingLog(
         state,
         `${reason}; holding Standby operation mode until ${state.standbyHoldUntil} to prevent battery discharge during the discounted window`,
         holdActive ? "maintain" : "guard",
+        now,
+      );
+    }
+  }
+
+  async function ensureSolarWindowAuto(
+    state: AdaptiveChargingState,
+    status: AdaptiveEvaluationStatus,
+    now: Date,
+  ): Promise<void> {
+    const operationMode = batteryOperationMode(status);
+    const releasingHold = Boolean(state.standbyHoldUntil);
+    if (operationMode === "standby" || releasingHold) {
+      await executeAdaptiveChargingAction("set-mode", { mode: "auto" });
+      state.standbyHoldUntil = null;
+      queueAdaptiveChargingPlanRefresh(state, "solar-capable window entered Auto", now);
+      appendAdaptiveChargingLog(
+        state,
+        "Usable solar is predicted during this discounted window; using Auto before the planned charge and recalculating every five minutes",
+        "solar",
         now,
       );
     }
@@ -370,6 +394,22 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
       syncAdaptiveChargingWindowExecution(state, activeDiscountedWindow, state.plan, soc, now, refreshDecision.refresh);
     }
     else finalizeExpiredAdaptiveChargingWindow(state, soc, now);
+    const solarOpportunity = adaptiveChargingWindowSolarOpportunity(state.plan, activeDiscountedWindow);
+    const solarWindowPeakSoc = state.activeWindowExecution?.peakSocPercent
+      ?? state.activeWindowExecution?.startSocPercent;
+    const solarWindowSocDrop = Number.isFinite(solarWindowPeakSoc) && Number.isFinite(soc)
+      ? Number(solarWindowPeakSoc) - Number(soc)
+      : 0;
+    const solarWindowDischargeBudgetExceeded = solarOpportunity.available
+      && solarWindowSocDrop >= ADAPTIVE_CHARGING_SOLAR_WINDOW_DISCHARGE_BUDGET_PERCENT;
+    const solarResponsiveWindow = solarOpportunity.available && !solarWindowDischargeBudgetExceeded;
+    const activeWindowTargetSoc = activeDiscountedWindow
+      ? state.plan.windows?.find((window) => window.start === activeDiscountedWindow.start
+        && window.end === activeDiscountedWindow.end)?.targetSocPercent
+      : null;
+    const activeWindowTargetReached = Number.isFinite(activeWindowTargetSoc)
+      && Number.isFinite(soc)
+      && Number(soc) >= Number(activeWindowTargetSoc);
     const exportEvidence = adaptiveChargingExportEvidence(status);
     const exportConfirmation = updateAdaptiveChargingExportConfirmation(state, exportEvidence, now);
     const liveExportNeedsHeadroom = exportConfirmation.confirmed;
@@ -661,25 +701,46 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
       const startLimitText = Number.isFinite(headroom.breakerLimitW) ? `${Math.round(headroom.breakerLimitW)} W` : "unavailable";
       appendAdaptiveChargingLog(
         state,
-        `${resumeFromStandby ? "Restoring operation mode to Auto and resuming" : "Starting"} ${slot.targetWh} Wh charge in ${slot.label} band at ${slot.yenPerKwh} yen/kWh; Grid Import (${startImportText}) is at or below start threshold (${startThresholdText}) from Charging Demand Guard limit (${startLimitText})`,
+        `${resumeFromStandby ? "Resuming directly from Standby with" : "Starting"} ${slot.targetWh} Wh charge in ${slot.label} band at ${slot.yenPerKwh} yen/kWh; Grid Import (${startImportText}) is at or below start threshold (${startThresholdText}) from Charging Demand Guard limit (${startLimitText})`,
         "charge",
         now,
       );
+    } else if (activeDiscountedWindow
+      && state.owner !== "adaptiveCharging"
+      && solarResponsiveWindow
+      && !slotTargetReached
+      && !activeWindowTargetReached) {
+      await ensureSolarWindowAuto(state, status, now);
+      state.lastResult = {
+        ok: true,
+        at: now.toISOString(),
+        skipped: "observing solar-capable window before planned charging",
+        solarOpportunity,
+        socDropSinceWindowStart: Math.max(0, solarWindowSocDrop),
+      };
     } else if (activeDiscountedWindow && state.owner !== "adaptiveCharging") {
       const reason = slot && solarHeadroomHoldActive
         ? "Planned charging is paused while solar export preserves battery headroom"
-        : slot && slotTargetReached
+        : (slot && slotTargetReached) || activeWindowTargetReached
           ? "The discounted-window SOC target is already reached"
-          : "Waiting for the next planned charge in the discounted window";
+          : solarWindowDischargeBudgetExceeded
+            ? `The solar-window discharge budget of ${ADAPTIVE_CHARGING_SOLAR_WINDOW_DISCHARGE_BUDGET_PERCENT}% SOC was reached`
+            : "Waiting for the next planned charge in the discounted window";
       await ensureDiscountedWindowStandby(state, status, activeDiscountedWindow.end, reason, now);
       state.lastResult = {
         ok: true,
         at: now.toISOString(),
         skipped: slot && solarHeadroomHoldActive
           ? "solar export requires battery headroom for the rest of this window"
-          : slot && slotTargetReached
+          : (slot && slotTargetReached) || activeWindowTargetReached
             ? "window SOC target already reached"
-            : "holding standby until planned discounted charging is due",
+            : solarWindowDischargeBudgetExceeded
+              ? "solar-window discharge budget reached; holding standby until planned charging is due"
+              : "holding standby until planned discounted charging is due",
+        ...(solarWindowDischargeBudgetExceeded ? {
+          solarOpportunity,
+          socDropSinceWindowStart: Math.max(0, solarWindowSocDrop),
+        } : {}),
       };
     } else if (!slot && state.owner !== "adaptiveCharging") {
       state.lastResult = { ok: true, at: now.toISOString(), skipped: "no planned charge is due" };

@@ -118,6 +118,7 @@ import {
   adaptiveChargingLiveImportSafety,
   adaptiveChargingPlanLogMessage,
   adaptiveChargingPlanRefreshDecision,
+  adaptiveChargingWindowSolarOpportunity,
   adaptiveChargingWindowHasShortfall,
   advanceAdaptiveChargingBreakerRecovery,
   applyInterruptedChargeCap,
@@ -212,6 +213,39 @@ const rebasedAdaptiveChargingState: Record<string, any> = { ...waitingAdaptiveCh
 assert.equal(adaptiveChargingPlanRefreshDecision(rebasedAdaptiveChargingState, adaptiveChargingConfig, rebaseNow).refresh, false);
 
 assert.equal(adaptiveChargingPlanRefreshDecision(rebasedAdaptiveChargingState, adaptiveChargingConfig, new Date(2026, 6, 12, 0, 0)).refresh, true);
+
+const solarWindowPlan = {
+  ...waitingAdaptiveChargingState.plan,
+  timeline: [{
+    start: overnightOccurrence.start,
+    end: overnightOccurrence.end,
+    solarW: 1_000,
+    fuelCellP20W: 0,
+    demandW: 300,
+  }],
+};
+assert.deepEqual(adaptiveChargingWindowSolarOpportunity(solarWindowPlan, overnightOccurrence), {
+  available: true,
+  predictedSolarWh: 2_000,
+  predictedSurplusWh: 1_400,
+  peakSurplusW: 700,
+});
+const solarWindowRefresh = adaptiveChargingPlanRefreshDecision({
+  ...waitingAdaptiveChargingState,
+  plan: solarWindowPlan,
+}, adaptiveChargingConfig, rebaseNow);
+assert.equal(solarWindowRefresh.refresh, true);
+assert.match(String(solarWindowRefresh.trigger), /5-minute solar-window adjustment/);
+assert.equal(adaptiveChargingPlanRefreshDecision({
+  ...waitingAdaptiveChargingState,
+  plan: solarWindowPlan,
+  lastPlanEventKey: solarWindowRefresh.eventKey,
+}, adaptiveChargingConfig, new Date(rebaseNow.getTime() + 4 * 60_000)).refresh, false);
+assert.equal(adaptiveChargingPlanRefreshDecision({
+  ...waitingAdaptiveChargingState,
+  plan: solarWindowPlan,
+  lastPlanEventKey: solarWindowRefresh.eventKey,
+}, adaptiveChargingConfig, new Date(rebaseNow.getTime() + 5 * 60_000)).refresh, true);
 
 const prewindowNow = new Date(2026, 6, 11, 22, 30);
 
@@ -1931,7 +1965,6 @@ await executeAdaptiveChargeStart({ targetWh: 750 }, {
 });
 
 assert.deepEqual(resumedActions, [
-  { action: "set-mode", payload: { mode: "auto" } },
   { action: "charge", payload: { targetWh: 750 } },
 ]);
 
@@ -1948,7 +1981,6 @@ await assert.rejects(executeAdaptiveChargeStart({ targetWh: 750 }, {
 }), /charge failed/);
 
 assert.deepEqual(failedResumeActions, [
-  { action: "set-mode", payload: { mode: "auto" } },
   { action: "charge", payload: { targetWh: 750 } },
   { action: "set-mode", payload: { mode: "standby" } },
 ]);

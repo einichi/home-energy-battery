@@ -88,7 +88,6 @@ export function createAdaptiveChargingOperations({
     options: { resumeFromStandby?: boolean; execute?: DeviceActionExecutor } = {},
   ): Promise<unknown> {
     const actionExecutor = options.execute ?? execute;
-    if (options.resumeFromStandby) await actionExecutor("set-mode", { mode: "auto" });
     try {
       return await actionExecutor("charge", { targetWh: slot.targetWh });
     } catch (error: unknown) {

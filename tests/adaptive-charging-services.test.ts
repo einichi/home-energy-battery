@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 
 import { cleanConfig } from "../lib/domain/configuration.js";
 import { cleanAdaptiveChargingState } from "../lib/domain/adaptive-state.js";
-import { adaptiveChargingScheduledEvent } from "../lib/domain/adaptive-control.js";
+import { adaptiveChargingPlanRefreshDecision, adaptiveChargingScheduledEvent } from "../lib/domain/adaptive-control.js";
 import { cleanAutomationRule } from "../lib/domain/automation-rules.js";
 import { cleanOperationalOverridesState } from "../lib/domain/operational-overrides.js";
 import { createAdaptiveChargingEvaluator } from "../lib/services/adaptive-charging-evaluator.js";
@@ -104,6 +104,9 @@ await evaluator(config, status, [guardRule], now);
 assert.deepEqual(actions, [{ action: "set-mode", payload: { mode: "standby" } }]);
 assert.equal(state.standbyHoldUntil, windowEnd.toISOString());
 assert.equal(state.lastResult?.skipped, "holding standby until planned discounted charging is due");
+state.pendingPlanReason = null;
+state.pendingPlanRequestId = null;
+state.pendingPlanRequestedAt = null;
 
 actions.length = 0;
 status.energy.battery.instant_power.value = 0;
@@ -129,6 +132,10 @@ assert.equal(state.standbyHoldUntil, windowEnd.toISOString());
 actions.length = 0;
 chargeStartError = new Error("simulated charge failure");
 state.standbyHoldUntil = null;
+state.plan = plan;
+state.pendingPlanReason = null;
+state.pendingPlanRequestId = null;
+state.pendingPlanRequestedAt = null;
 state.forecast!.fetchedAt = forecastFetchedAt;
 state.lastPlanEventKey = String(adaptiveChargingScheduledEvent(config, slotStart).eventKey);
 status.energy.battery.instant_power.value = -250;
@@ -136,6 +143,54 @@ status.energy.battery.operation_mode.value = "auto";
 await assert.rejects(evaluator(config, status, [guardRule], slotStart), /simulated charge failure/);
 assert.deepEqual(actions, [{ action: "set-mode", payload: { mode: "standby" } }], "a failed charge start must fall back to Standby for the discounted window");
 assert.equal(state.standbyHoldUntil, windowEnd.toISOString());
+
+actions.length = 0;
+chargeStartError = null;
+state.standbyHoldUntil = null;
+state.pendingPlanReason = null;
+state.pendingPlanRequestId = null;
+state.pendingPlanRequestedAt = null;
+state.activeWindowExecution = null;
+state.plan = {
+  ...plan,
+  timeline: [{
+    start: now.toISOString(),
+    end: windowEnd.toISOString(),
+    solarW: 1_200,
+    fuelCellP20W: 0,
+    demandW: 500,
+  }],
+};
+state.lastPlanEventKey = String(adaptiveChargingScheduledEvent(config, now).eventKey);
+const solarRefresh = adaptiveChargingPlanRefreshDecision(state, config, now);
+state.lastPlanEventKey = String(solarRefresh.eventKey);
+status.energy.battery.remaining_percent.value = 70;
+status.energy.battery.instant_power.value = -300;
+status.energy.battery.operation_mode.value = "auto";
+await evaluator(config, status, [guardRule], now);
+assert.deepEqual(actions, [], "a solar-capable window should remain in Auto before its planned charge");
+assert.equal(state.lastResult?.skipped, "observing solar-capable window before planned charging");
+
+actions.length = 0;
+state.standbyHoldUntil = windowEnd.toISOString();
+status.energy.battery.remaining_percent.value = 69;
+status.energy.battery.instant_power.value = 0;
+status.energy.battery.operation_mode.value = "standby";
+await evaluator(config, status, [guardRule], new Date(now.getTime() + 30_000));
+assert.deepEqual(actions, [{ action: "set-mode", payload: { mode: "auto" } }], "a solar-capable window should release an obsolete Standby hold");
+assert.equal(state.standbyHoldUntil, null);
+
+actions.length = 0;
+state.pendingPlanReason = null;
+state.pendingPlanRequestId = null;
+state.pendingPlanRequestedAt = null;
+state.lastPlanEventKey = String(solarRefresh.eventKey);
+status.energy.battery.remaining_percent.value = 68;
+status.energy.battery.instant_power.value = -300;
+status.energy.battery.operation_mode.value = "auto";
+await evaluator(config, status, [guardRule], new Date(now.getTime() + 60_000));
+assert.deepEqual(actions, [{ action: "set-mode", payload: { mode: "standby" } }], "a two-point SOC drop should exhaust the solar-window discharge budget");
+assert.equal(state.lastResult?.skipped, "solar-window discharge budget reached; holding standby until planned charging is due");
 
 const schedule: BatterySchedule = {
   id: "legacy-schedule",

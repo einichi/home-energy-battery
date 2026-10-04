@@ -22,6 +22,10 @@ import { discountedBandOccurrence, discountedBandOccurrences, explicitDiscounted
 
 const ADAPTIVE_CHARGING_PREWINDOW_MS = 30 * 60_000;
 const ADAPTIVE_CHARGING_SLOT_MS = 30 * 60_000;
+const ADAPTIVE_CHARGING_SOLAR_REPLAN_MS = 5 * 60_000;
+const ADAPTIVE_CHARGING_MIN_SOLAR_WH = 100;
+const ADAPTIVE_CHARGING_MIN_SOLAR_SURPLUS_WH = 50;
+const ADAPTIVE_CHARGING_MIN_SOLAR_SURPLUS_W = 200;
 const ADAPTIVE_CHARGING_BREAKER_RETRY_COOLDOWN_MS = 3 * 60_000;
 const ADAPTIVE_CHARGING_BREAKER_SAFE_CHECKS = 3;
 const ADAPTIVE_CHARGING_SOLAR_HEADROOM_CLEAR_CHECKS = 2;
@@ -97,6 +101,13 @@ interface PlanLike {
   fuelCellModel?: AdaptivePlan["fuelCellModel"];
   slots?: SlotLike[];
   windows?: WindowLike[];
+  timeline?: Array<{
+    start?: string;
+    end?: string;
+    solarW?: number;
+    fuelCellP20W?: number;
+    demandW?: number;
+  }>;
 }
 interface StateLike {
   plan?: PlanLike | null;
@@ -526,6 +537,63 @@ export function adaptiveChargingScheduledEvent(config: ControlConfig, now: Date 
 }
 
 
+export function adaptiveChargingWindowSolarOpportunity(
+  plan: PlanLike | null | undefined,
+  occurrence: { start?: string; end?: string } | null | undefined,
+) {
+  const windowStartMs = new Date(String(occurrence?.start ?? "")).getTime();
+  const windowEndMs = new Date(String(occurrence?.end ?? "")).getTime();
+  if (!Number.isFinite(windowStartMs) || !Number.isFinite(windowEndMs) || windowEndMs <= windowStartMs) {
+    return { available: false, predictedSolarWh: 0, predictedSurplusWh: 0, peakSurplusW: 0 };
+  }
+  let predictedSolarWh = 0;
+  let predictedSurplusWh = 0;
+  let peakSurplusW = 0;
+  for (const interval of plan?.timeline ?? []) {
+    const intervalStartMs = new Date(String(interval.start ?? "")).getTime();
+    const intervalEndMs = new Date(String(interval.end ?? "")).getTime();
+    if (!Number.isFinite(intervalStartMs) || !Number.isFinite(intervalEndMs)) continue;
+    const overlapMs = Math.max(0, Math.min(windowEndMs, intervalEndMs) - Math.max(windowStartMs, intervalStartMs));
+    if (!overlapMs) continue;
+    const durationHours = overlapMs / 3_600_000;
+    const solarW = Math.max(0, Number(interval.solarW) || 0);
+    const fuelCellW = Math.max(0, Number(interval.fuelCellP20W) || 0);
+    const demandW = Math.max(0, Number(interval.demandW) || 0);
+    const surplusW = Math.max(0, solarW + fuelCellW - demandW);
+    predictedSolarWh += solarW * durationHours;
+    predictedSurplusWh += surplusW * durationHours;
+    peakSurplusW = Math.max(peakSurplusW, surplusW);
+  }
+  return {
+    available: predictedSolarWh >= ADAPTIVE_CHARGING_MIN_SOLAR_WH
+      && predictedSurplusWh >= ADAPTIVE_CHARGING_MIN_SOLAR_SURPLUS_WH
+      && peakSurplusW >= ADAPTIVE_CHARGING_MIN_SOLAR_SURPLUS_W,
+    predictedSolarWh: Math.round(predictedSolarWh),
+    predictedSurplusWh: Math.round(predictedSurplusWh),
+    peakSurplusW: Math.round(peakSurplusW),
+  };
+}
+
+
+function adaptiveChargingSolarReplanEvent(
+  state: StateLike,
+  scheduledEvent: ReturnType<typeof adaptiveChargingScheduledEvent>,
+  now: Date,
+) {
+  const activeWindow = scheduledEvent.activeWindow;
+  if (!activeWindow || !adaptiveChargingWindowSolarOpportunity(state.plan, activeWindow).available) return null;
+  const elapsedMs = Math.max(0, now.getTime() - new Date(activeWindow.start).getTime());
+  const intervalIndex = Math.floor(elapsedMs / ADAPTIVE_CHARGING_SOLAR_REPLAN_MS);
+  return {
+    ...scheduledEvent,
+    eventKey: `solar-window:${activeWindow.key}:interval:${intervalIndex}`,
+    trigger: intervalIndex === 0
+      ? `entering solar-capable ${activeWindow.band.label || "discounted window"}`
+      : `5-minute solar-window adjustment in ${activeWindow.band.label || "discounted window"}`,
+  };
+}
+
+
 export function queueAdaptiveChargingPlanRefresh(state: StateLike, reason: unknown, now: Date = new Date(), requestId: unknown = randomUUID()): string {
   state.pendingPlanReason = String(reason);
   state.pendingPlanRequestId = String(requestId);
@@ -562,13 +630,14 @@ export function adaptiveChargingPlanRefreshDecision(state: StateLike, config: Co
       eventKey: scheduledEvent.eventKey ?? `forecast:${forecastFetchedAt}`,
     };
   }
-  if (scheduledEvent.eventKey) {
-    if (state.lastPlanEventKey !== scheduledEvent.eventKey) {
-      return { refresh: true, ...scheduledEvent };
+  const effectiveEvent = adaptiveChargingSolarReplanEvent(state, scheduledEvent, now) ?? scheduledEvent;
+  if (effectiveEvent.eventKey) {
+    if (state.lastPlanEventKey !== effectiveEvent.eventKey) {
+      return { refresh: true, ...effectiveEvent };
     }
-    return { refresh: false, ...scheduledEvent };
+    return { refresh: false, ...effectiveEvent };
   }
-  return { refresh: false, ...scheduledEvent };
+  return { refresh: false, ...effectiveEvent };
 }
 
 
