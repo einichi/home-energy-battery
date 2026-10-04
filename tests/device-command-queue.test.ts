@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import { DeviceCommandQueue } from "../lib/services/device-command-queue.js";
+import { DeviceCommandQueue, deviceCommandPriority } from "../lib/services/device-command-queue.js";
+
+assert.equal(deviceCommandPriority("set-mode"), 0);
+assert.equal(deviceCommandPriority("live-power"), 5);
+assert.equal(deviceCommandPriority("energy-status"), 10);
+assert.equal(deviceCommandPriority("raw-get"), 20);
 
 let releaseBlockedCommand: ((value: unknown) => void) | undefined;
 const queue = new DeviceCommandQueue({

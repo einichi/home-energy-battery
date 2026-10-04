@@ -357,6 +357,36 @@ export function createDeviceSimulator(options: any = {}): any {
     };
   }
 
+  function livePower(args: any): any {
+    const startedAt = new Date().toISOString();
+    const energy = energyStatus(args);
+    const meter = args["no-meter"] === true
+      ? { configured: false }
+      : meterStatus({ host: args["meter-host"] ?? state.meter.host, eoj: args["meter-eoj"] ?? state.meter.eoj });
+    const acquiredAt = new Date().toISOString();
+    const stamp = (value: any) => value && typeof value === "object" ? { ...value, acquired_at: acquiredAt } : value;
+    return {
+      started_at: startedAt,
+      completed_at: acquiredAt,
+      duration_ms: Math.max(0, new Date(acquiredAt).getTime() - new Date(startedAt).getTime()),
+      errors: [...(energy.errors ?? []), ...(meter.errors ?? [])],
+      energy: {
+        solar: energy.solar ? { instant_power: stamp(energy.solar.instant_power) } : null,
+        battery: { instant_power: stamp(energy.battery.instant_power) },
+        fuel_cells: (energy.fuel_cells ?? [])
+          .filter((cell: any) => cell.source_role === "primary")
+          .map((cell: any) => ({ host: cell.host, source_role: cell.source_role, instant_power: stamp(cell.instant_power) })),
+      },
+      meter: args["no-meter"] === true ? meter : {
+        grid_net_power: stamp(meter.grid_net_power),
+        grid_import_power: stamp(meter.grid_import_power),
+        grid_export_power: stamp(meter.grid_export_power),
+        house_demand_power: stamp(meter.house_demand_power),
+        channel_power: { ...meter.channel_power, acquired_at: acquiredAt },
+      },
+    };
+  }
+
   function rawGet(args: any, positional: any): any {
     const epc = String(positional[0] ?? "").toUpperCase();
     const properties: Record<string, any> = {
@@ -399,6 +429,7 @@ export function createDeviceSimulator(options: any = {}): any {
     }
 
     switch (command) {
+      case "live-power": return clone(livePower(args));
       case "energy-status": return clone(energyStatus(args));
       case "meter-status": return clone(meterStatus(args));
       case "vendor-profile":

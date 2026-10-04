@@ -3,6 +3,8 @@ import { isDocumentationHost, deviceStatusFailures, fuelCellHotWaterEmptyNotific
 import { numericMetric, primaryFuelCell } from "../domain/telemetry.js";
 import type { DeviceCommandArguments } from "./device-command-queue.js";
 
+type DeviceCommandOptions = { priority?: number; queueTimeoutMs?: number };
+
 type UnknownRecord = Record<string, unknown>;
 type ProbeProgress = (result: { label: string; durationMs: number }) => void;
 
@@ -16,10 +18,20 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function hasMetricValue(value: unknown): boolean {
+  const item = record(value);
+  return item.value !== null && item.value !== undefined;
+}
+
+function hasDecodedChannels(value: unknown): boolean {
+  const item = record(value);
+  return Array.isArray(record(item.decoded).channels);
+}
+
 export interface StatusCollectionDependencies {
   readConfig(): Promise<ApplicationConfig>;
   updateConfig(mutator: (config: ApplicationConfig) => ApplicationConfig | Promise<ApplicationConfig>): Promise<ApplicationConfig>;
-  runDeviceCommand(command: string, args?: DeviceCommandArguments, positional?: unknown[]): Promise<unknown>;
+  runDeviceCommand(command: string, args?: DeviceCommandArguments, positional?: unknown[], options?: DeviceCommandOptions): Promise<unknown>;
   recordStatusSample(status: UnknownRecord, config: ApplicationConfig): Promise<unknown>;
   readHistoryRange(start: string, end: string, config: ApplicationConfig): Promise<unknown>;
   readCalendarSavings(end: string, config: ApplicationConfig, todaySummary: unknown): unknown;
@@ -44,9 +56,9 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
     };
   }
 
-  async function safeCommand(command: string, args: DeviceCommandArguments = {}, positional: unknown[] = []): Promise<UnknownRecord> {
+  async function safeCommand(command: string, args: DeviceCommandArguments = {}, positional: unknown[] = [], options: DeviceCommandOptions = {}): Promise<UnknownRecord> {
     try {
-      return record(await dependencies.runDeviceCommand(command, args, positional));
+      return record(await dependencies.runDeviceCommand(command, args, positional, options));
     } catch (error: unknown) {
       return { error: message(error) };
     }
@@ -126,7 +138,52 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
     };
     const chargeWindowRead = await probe("osaifu charge window raw fallback", () => hydrateWindowRaw(chargeWindow, "0xF4"));
     const dischargeWindowRead = await probe("osaifu discharge window raw fallback", () => hydrateWindowRaw(dischargeWindow, "0xF5"));
-    const readAt = new Date().toISOString();
+    const livePowerArgs: DeviceCommandArguments = {
+      "battery-host": config.batteryHost,
+      ...(config.solarEnabled ? { "solar-host": config.solarHost } : { "no-solar": true }),
+      ...(config.smartCosmoEnabled && config.meterHost
+        ? { "meter-host": config.meterHost, "meter-eoj": config.meterEoj }
+        : { "no-meter": true }),
+      ...(config.fuelCellEnabled ? fuelCellArgs(config) : { "no-fuel-cell": true }),
+    };
+    const livePower = await probe("live power", () => batteryConfigured
+      ? safeCommand("live-power", livePowerArgs, [], { priority: 5 })
+      : Promise.resolve({ error: "battery host is not configured" }));
+    const liveEnergy = record(livePower.energy);
+    const liveBattery = record(liveEnergy.battery);
+    const liveSolar = record(liveEnergy.solar);
+    const liveMeter = record(livePower.meter);
+    const detailBattery = record(energy.battery);
+    const detailSolar = record(energy.solar);
+    const detailFuelCells = Array.isArray(energy.fuel_cells) ? energy.fuel_cells.map(record) : [];
+    const liveFuelCells = Array.isArray(liveEnergy.fuel_cells) ? liveEnergy.fuel_cells.map(record) : [];
+    const livePrimaryFuelCell = liveFuelCells.find((cell) => cell.source_role === "primary") ?? liveFuelCells[0];
+    const mergedFuelCells = livePrimaryFuelCell
+      ? detailFuelCells.some((cell) => cell.source_role === "primary")
+        ? detailFuelCells.map((cell) => cell.source_role === "primary"
+          ? {
+              ...cell,
+              ...(hasMetricValue(livePrimaryFuelCell.instant_power) ? { instant_power: livePrimaryFuelCell.instant_power } : {}),
+            }
+          : cell)
+        : hasMetricValue(livePrimaryFuelCell.instant_power) ? [...detailFuelCells, livePrimaryFuelCell] : detailFuelCells
+      : detailFuelCells;
+    const mergedEnergy: UnknownRecord = {
+      ...energy,
+      battery: { ...detailBattery, ...(hasMetricValue(liveBattery.instant_power) ? { instant_power: liveBattery.instant_power } : {}) },
+      ...(config.solarEnabled ? { solar: { ...detailSolar, ...(hasMetricValue(liveSolar.instant_power) ? { instant_power: liveSolar.instant_power } : {}) } } : {}),
+      fuel_cells: mergedFuelCells,
+    };
+    const liveMeterKeys = ["grid_net_power", "grid_import_power", "grid_export_power", "house_demand_power"]
+      .filter((key) => hasMetricValue(liveMeter[key]));
+    if (hasDecodedChannels(liveMeter.channel_power)) liveMeterKeys.push("channel_power");
+    const mergedMeter: UnknownRecord = {
+      ...meter,
+      ...Object.fromEntries(
+        liveMeterKeys.map((key) => [key, liveMeter[key]]),
+      ),
+    };
+    const readAt = typeof livePower.completed_at === "string" ? livePower.completed_at : new Date().toISOString();
     const status: UnknownRecord = {
       hosts: {
         battery: config.batteryHost,
@@ -143,8 +200,15 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
         rateMode: config.rateMode,
         offPeakSavingsEnabled: config.offPeakSavingsEnabled,
       },
-      energy,
-      meter,
+      energy: mergedEnergy,
+      meter: mergedMeter,
+      live_power: {
+        started_at: typeof livePower.started_at === "string" ? livePower.started_at : null,
+        completed_at: typeof livePower.completed_at === "string" ? livePower.completed_at : null,
+        duration_ms: Number.isFinite(Number(livePower.duration_ms)) ? Number(livePower.duration_ms) : null,
+        errors: Array.isArray(livePower.errors) ? livePower.errors : [],
+        ...(typeof livePower.error === "string" ? { error: livePower.error } : {}),
+      },
       settings: { mode, discharge_limit: dischargeLimit, osaifu_charge_window: chargeWindowRead, osaifu_discharge_window: dischargeWindowRead, vendor },
       read_at: readAt,
       rates: {

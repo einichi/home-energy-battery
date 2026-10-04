@@ -276,6 +276,141 @@ async function cmdStatus(opts: CommandOptions) {
   });
 }
 
+async function cmdLivePower(opts: CommandOptions) {
+  const batteryHost = String(opts["battery-host"] ?? "192.0.2.10");
+  const solarEnabled = !opts["no-solar"];
+  const solarHost = String(opts["solar-host"] ?? batteryHost);
+  const meterEnabled = !opts["no-meter"];
+  const meterHost = String(opts["meter-host"] ?? "192.0.2.20");
+  const meterEojText = String(opts["meter-eoj"] ?? POWER_METER_EOJ);
+  const fuelCellEnabled = !opts["no-fuel-cell"];
+  const legacyFuelCellHosts = values(opts["fuel-cell-host"], []);
+  const fuelCellPrimaryHost = String(opts["fuel-cell-primary-host"] ?? legacyFuelCellHosts[0] ?? "192.0.2.30");
+
+  return withClient(opts, async (client) => {
+    const startedAt = new Date().toISOString();
+    const errors: Array<Record<string, unknown>> = [];
+    async function read(host: string, eoj: unknown, epc: number): Promise<{ raw: Buffer | null; acquiredAt: string }> {
+      try {
+        const res = await client.get(host, parseEoj(eoj), epc);
+        return { raw: propRaw(res, epc), acquiredAt: new Date().toISOString() };
+      } catch (error: unknown) {
+        const acquiredAt = new Date().toISOString();
+        errors.push({
+          host,
+          eoj,
+          epc: `0x${epc.toString(16).padStart(2, "0").toUpperCase()}`,
+          error: errorMessage(error),
+          acquired_at: acquiredAt,
+        });
+        return { raw: null, acquiredAt };
+      }
+    }
+    const timestamped = (value: Record<string, unknown>, acquiredAt: string) => ({ ...value, acquired_at: acquiredAt });
+
+    // Keep the balance-critical reads adjacent inside one queue item. Writes may
+    // still run before this command, but slower settings and counter reads cannot
+    // be interleaved between these measurements.
+    const solarPower = solarEnabled ? await read(solarHost, SOLAR_EOJ, EPC.SOLAR_INSTANT_POWER_W) : null;
+    const batteryPower = await read(batteryHost, STORAGE_BATTERY_EOJ, EPC.INSTANT_POWER_W);
+    const fuelCellPower = fuelCellEnabled ? await read(fuelCellPrimaryHost, FUEL_CELL_EOJ, EPC.FUEL_CELL_INSTANT_POWER_W) : null;
+    const gridPower = meterEnabled ? await read(meterHost, meterEojText, EPC.METER_INSTANT_POWER_W) : null;
+    const channelPowerRaw = meterEnabled ? await read(meterHost, meterEojText, EPC.METER_INSTANT_POWER_LIST) : null;
+    const netGridWatts = gridPower?.raw && gridPower.raw.length === 4 ? gridPower.raw.readInt32BE(0) : null;
+    const channelPower = decodeInstantPowerList(channelPowerRaw?.raw ?? null);
+    const houseDemandWatts = sumInstantPowerChannels(channelPower);
+    const completedAt = new Date().toISOString();
+
+    return {
+      started_at: startedAt,
+      completed_at: completedAt,
+      duration_ms: Math.max(0, new Date(completedAt).getTime() - new Date(startedAt).getTime()),
+      errors,
+      energy: {
+        solar: solarPower ? {
+          instant_power: timestamped(decodeUnsigned({
+            host: solarHost,
+            eoj: SOLAR_EOJ,
+            epc: EPC.SOLAR_INSTANT_POWER_W,
+            name: "solar_instant_power",
+            raw: solarPower.raw,
+            unit: "W",
+          }), solarPower.acquiredAt),
+        } : null,
+        battery: {
+          instant_power: timestamped(decodeSignedW({
+            host: batteryHost,
+            eoj: STORAGE_BATTERY_EOJ,
+            epc: EPC.INSTANT_POWER_W,
+            name: "battery_instant_power",
+            raw: batteryPower.raw,
+          }), batteryPower.acquiredAt),
+        },
+        fuel_cells: fuelCellPower ? [{
+          host: fuelCellPrimaryHost,
+          source_role: "primary",
+          instant_power: timestamped(decodeUnsigned({
+            host: fuelCellPrimaryHost,
+            eoj: FUEL_CELL_EOJ,
+            epc: EPC.FUEL_CELL_INSTANT_POWER_W,
+            name: "fuel_cell_instant_power",
+            raw: fuelCellPower.raw,
+            unit: "W",
+          }), fuelCellPower.acquiredAt),
+        }] : [],
+      },
+      meter: meterEnabled ? {
+        grid_net_power: timestamped(decodeSignedW({
+          host: meterHost,
+          eoj: meterEojText,
+          epc: EPC.METER_INSTANT_POWER_W,
+          name: "grid_net_power",
+          raw: gridPower?.raw ?? null,
+        }), gridPower?.acquiredAt ?? completedAt),
+        grid_import_power: timestamped(metric({
+          host: meterHost,
+          eoj: meterEojText,
+          epc: EPC.METER_INSTANT_POWER_W,
+          name: "grid_import_power",
+          raw: gridPower?.raw ?? null,
+          value: netGridWatts === null ? undefined : Math.max(netGridWatts, 0),
+          unit: "W",
+          human: netGridWatts === null ? undefined : `${Math.max(netGridWatts, 0)} W`,
+        }), gridPower?.acquiredAt ?? completedAt),
+        grid_export_power: timestamped(metric({
+          host: meterHost,
+          eoj: meterEojText,
+          epc: EPC.METER_INSTANT_POWER_W,
+          name: "grid_export_power",
+          raw: gridPower?.raw ?? null,
+          value: netGridWatts === null ? undefined : Math.max(-netGridWatts, 0),
+          unit: "W",
+          human: netGridWatts === null ? undefined : `${Math.max(-netGridWatts, 0)} W`,
+        }), gridPower?.acquiredAt ?? completedAt),
+        house_demand_power: timestamped(metric({
+          host: meterHost,
+          eoj: meterEojText,
+          epc: EPC.METER_INSTANT_POWER_LIST,
+          name: "house_demand_power",
+          raw: channelPowerRaw?.raw ?? null,
+          value: houseDemandWatts ?? undefined,
+          unit: "W",
+          human: houseDemandWatts === null ? undefined : `${houseDemandWatts} W`,
+        }), channelPowerRaw?.acquiredAt ?? completedAt),
+        channel_power: {
+          host: meterHost,
+          eoj: meterEojText,
+          epc: "0xB7",
+          name: "channel_instant_power",
+          raw: rawHex(channelPowerRaw?.raw ?? null),
+          acquired_at: channelPowerRaw?.acquiredAt ?? completedAt,
+          decoded: channelPower,
+        },
+      } : { configured: false },
+    };
+  });
+}
+
 async function cmdEnergyStatus(opts: CommandOptions) {
   const solarEnabled = !opts["no-solar"];
   const fuelCellEnabled = !opts["no-fuel-cell"];
@@ -793,6 +928,7 @@ const COMMAND_HANDLERS: Record<string, CommandHandler> = {
   "raw-get": cmdRawGet,
   "raw-set": cmdRawSet,
   status: cmdStatus,
+  "live-power": cmdLivePower,
   "energy-status": cmdEnergyStatus,
   "meter-status": cmdMeterStatus,
   "set-mode": cmdSetMode,

@@ -34,7 +34,7 @@ type QueueItem = {
 };
 
 function hostArgument(arguments_: DeviceCommandArguments): string | null {
-  for (const key of ["host", "battery-host", "solar-host"]) {
+  for (const key of ["host", "battery-host", "solar-host", "meter-host"]) {
     const value = arguments_[key];
     if (typeof value === "string" && value) return value;
   }
@@ -43,6 +43,7 @@ function hostArgument(arguments_: DeviceCommandArguments): string | null {
 
 export function deviceCommandPriority(command: string): number {
   if (["set-mode", "charge", "discharge", "vendor-profile", "discharge-limit", "osaifu-charge-window", "osaifu-discharge-window", "raw-set"].includes(command)) return 0;
+  if (command === "live-power") return 5;
   if (["energy-status", "meter-status"].includes(command)) return 10;
   if (["discover", "probe", "inspect-host", "dump-eoj", "dump-vendor"].includes(command)) return 30;
   return 20;

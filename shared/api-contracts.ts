@@ -2,6 +2,7 @@ export type Metric<T = number> = {
   value?: T | null;
   human?: string | null;
   error?: string | null;
+  acquired_at?: string | null;
 };
 
 export type BatteryStatus = {
@@ -186,6 +187,13 @@ export type EneFarmReport = {
 
 export type StatusSnapshot = {
   read_at?: string;
+  live_power?: {
+    started_at?: string | null;
+    completed_at?: string | null;
+    duration_ms?: number | null;
+    errors?: Array<{ error?: string | null }>;
+    error?: string | null;
+  };
   statusRefreshPaused?: boolean;
   statusRefreshPausedReason?: string | null;
   alerts?: SystemAlert[];

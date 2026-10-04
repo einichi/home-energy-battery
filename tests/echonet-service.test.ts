@@ -9,11 +9,13 @@ let initCalls = 0;
 let closeCalls = 0;
 let getCalls = 0;
 let setCalls = 0;
+const getRequests: Array<{ host: string; epc: number }> = [];
 const fakeClient: Record<string, any> = {
   async init(): Promise<any> { initCalls += 1; },
   async close(): Promise<any> { closeCalls += 1; },
-  async get(_host: any, _eoj: any, epc: any): Promise<any> {
+  async get(host: any, _eoj: any, epc: any): Promise<any> {
     getCalls += 1;
+    getRequests.push({ host: String(host), epc: Number(epc) });
     const values: Record<string, any> = {
       0x80: Buffer.from([0x30]),
       0xd3: Buffer.from([0x00, 0x00, 0x01, 0x2c]),
@@ -21,6 +23,10 @@ const fakeClient: Record<string, any> = {
       0xda: Buffer.from([0x46]),
       0xe4: Buffer.from([64]),
       0xf0: Buffer.from([0x03]),
+      0xe0: Buffer.from([0x03, 0x52]),
+      0xc4: Buffer.from([0x02, 0x8a]),
+      0xc6: Buffer.from([0x00, 0x00, 0x03, 0x98]),
+      0xb7: Buffer.from([0x01, 0x02, 0x00, 0x00, 0x01, 0x40, 0x00, 0x00, 0x01, 0xe0]),
     };
     const buffer = values[epc] ?? Buffer.alloc(0);
     return { message: { data: buffer, prop: [{ epc, buffer }] } };
@@ -47,6 +53,29 @@ assert.equal(standby.edt, "0x44");
 const status = await adapter.execute("status", { host: "192.0.2.10" }) as Record<string, any>;
 assert.equal(status["0xE4"].raw, "0x40");
 assert.equal(getCalls, 6);
+
+getRequests.length = 0;
+const livePower = await adapter.execute("live-power", {
+  "battery-host": "192.0.2.10",
+  "solar-host": "192.0.2.10",
+  "fuel-cell-primary-host": "192.0.2.30",
+  "meter-host": "192.0.2.20",
+  "meter-eoj": "0x028701",
+}) as Record<string, any>;
+assert.deepEqual(getRequests, [
+  { host: "192.0.2.10", epc: 0xe0 },
+  { host: "192.0.2.10", epc: 0xd3 },
+  { host: "192.0.2.30", epc: 0xc4 },
+  { host: "192.0.2.20", epc: 0xc6 },
+  { host: "192.0.2.20", epc: 0xb7 },
+]);
+assert.equal(livePower.energy.solar.instant_power.value, 850);
+assert.equal(livePower.energy.battery.instant_power.value, 300);
+assert.equal(livePower.energy.fuel_cells[0].instant_power.value, 650);
+assert.equal(livePower.meter.grid_import_power.value, 920);
+assert.equal(livePower.meter.house_demand_power.value, 800);
+assert.equal(typeof livePower.energy.battery.instant_power.acquired_at, "string");
+assert.equal(typeof livePower.completed_at, "string");
 
 const acknowledged = await adapter.execute("set-mode", { host: "192.0.2.10" }, ["auto"]) as Record<string, any>;
 assert.equal(acknowledged.acknowledged, true);
