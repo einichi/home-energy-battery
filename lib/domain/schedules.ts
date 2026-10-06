@@ -44,11 +44,26 @@ export function isDue(schedule: BatterySchedule, now: Date): boolean {
   if (schedule.repeat === "daily") {
     const days = Array.isArray(schedule.days) && schedule.days.length ? schedule.days : ALL_DAYS;
     if (!days.includes(now.getDay())) return false;
-    const current = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}`;
+    const match = /^(\d{2}):(\d{2})$/.exec(schedule.time ?? "");
+    if (!match) return false;
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (hour > 23 || minute > 59) return false;
     const todayKey = localDayKey(now);
-    return schedule.time === current
-      && schedule.lastRunDate !== todayKey
-      && schedule.lastAttemptDate !== todayKey;
+    if (schedule.lastRunDate === todayKey || schedule.lastAttemptDate === todayKey) return false;
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const scheduledMinutes = hour * 60 + minute;
+    // Run on the first tick at or after the scheduled minute so a delayed tick,
+    // a restart, or a DST spring-forward gap does not silently skip the day.
+    if (nowMinutes < scheduledMinutes) return false;
+    // Do not fire a schedule that was created after its time today; wait for the
+    // next occurrence instead of running it immediately on creation.
+    const createdMs = new Date(schedule.createdAt ?? "").getTime();
+    if (Number.isFinite(createdMs) && localDayKey(new Date(createdMs)) === todayKey) {
+      const createdMinutes = new Date(createdMs).getHours() * 60 + new Date(createdMs).getMinutes();
+      if (createdMinutes > scheduledMinutes) return false;
+    }
+    return true;
   }
   return Boolean(schedule.runAt && new Date(schedule.runAt) <= now && !schedule.executionIntent);
 }
