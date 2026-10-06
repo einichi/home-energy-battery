@@ -1,5 +1,5 @@
 import { finiteNumberOrNull } from "./numbers.js";
-import { percentile, weightedMedian } from "./statistics.js";
+import { median, percentile, weightedMedian } from "./statistics.js";
 import { halfHourIndex, isAwayAt, localDayKey } from "./time.js";
 import type { AwayPeriod } from "./time.js";
 
@@ -198,7 +198,6 @@ export function buildFuelCellGenerationModel(
     key: string;
     date: Date;
     buckets: Map<number, { sum: number; count: number; states: Map<unknown, number> }>;
-    generating?: boolean;
   };
   const days = new Map<string, FuelCellDay>();
   for (const sample of powerSamples) {
@@ -214,7 +213,6 @@ export function buildFuelCellGenerationModel(
     bucket.count += 1;
     if (sample.state) bucket.states.set(sample.state, Number(bucket.states.get(sample.state) ?? 0) + 1);
     day.buckets.set(bucketIndex, bucket);
-    if (sample.watts > 25 || sample.state === "generating") day.generating = true;
     days.set(key, day);
   }
   const dailyBuckets = [...days.values()].map((day) => ({
@@ -262,7 +260,7 @@ export function buildFuelCellGenerationModel(
       .filter((value): value is number => value !== undefined && Number.isFinite(value));
     return {
       p20W: percentile(values, 0.2) ?? 0,
-      medianW: percentile(values, 0.5) ?? 0,
+      medianW: median(values) ?? 0,
       p80W: percentile(values, 0.8) ?? 0,
       sampleCount: values.length,
     };

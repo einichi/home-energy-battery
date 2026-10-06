@@ -122,7 +122,6 @@ interface BatteryLearningInterval {
   energyWh: number;
   coverageSeconds: number;
   durationSeconds: number;
-  mixed: boolean;
   manualAction: boolean;
 }
 
@@ -336,7 +335,6 @@ export function batteryLearningRollupInterval(sample: HistorySample): BatteryLea
     energyWh,
     coverageSeconds: Number.isFinite(coveredSeconds) ? coveredSeconds : durationSeconds,
     durationSeconds,
-    mixed,
     manualAction: sample?.manualAction === true,
   };
 }

@@ -12,6 +12,7 @@ import { applyGuardDeliverabilityToTiming, guardDeliverabilityForWindow } from "
 import type { GuardDeliverabilityModel, GuardWindowOutcome } from "./guard-deliverability.js";
 import type { ApplicationConfig, RateBand } from "../contracts/configuration.js";
 import {
+  firstLocalSlotBoundary,
   latestFiniteSocPercent,
   mergeAdaptiveChargingSlots,
 } from "./adaptive-plan-utils.js";
@@ -200,7 +201,7 @@ export function optimizeDiscountedChargeSlots({
   const startMs = new Date(start).getTime();
   const endMs = new Date(end).getTime();
   const stepMs = slotMinutes * 60_000;
-  for (let time = Math.ceil(startMs / stepMs) * stepMs; time < endMs; time += stepMs) {
+  for (let time = firstLocalSlotBoundary(startMs, slotMinutes); time < endMs; time += stepMs) {
     const date = new Date(time);
     const band = explicitDiscountedBand(config, date);
     if (!band) continue;

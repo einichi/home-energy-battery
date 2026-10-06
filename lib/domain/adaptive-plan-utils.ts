@@ -10,6 +10,16 @@ export function latestFiniteSocPercent(samples: readonly DemandSample[]): number
   return finiteNumberOrNull(sample?.stateOfChargePercent);
 }
 
+export function firstLocalSlotBoundary(startMs: number, slotMinutes: number): number {
+  // Align to a local clock boundary (e.g. :00/:30) rather than an epoch multiple.
+  const date = new Date(startMs);
+  date.setSeconds(0, 0);
+  const remainder = date.getMinutes() % slotMinutes;
+  if (remainder !== 0) date.setMinutes(date.getMinutes() + (slotMinutes - remainder));
+  if (date.getTime() < startMs) date.setMinutes(date.getMinutes() + slotMinutes);
+  return date.getTime();
+}
+
 export function mergeAdaptiveChargingSlots(slots: AdaptiveChargeSlot[] = []): AdaptiveChargeSlot[] {
   const merged: AdaptiveChargeSlot[] = [];
   for (const slot of [...slots].sort((left, right) => new Date(left.start).getTime() - new Date(right.start).getTime())) {
