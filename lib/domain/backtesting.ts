@@ -95,7 +95,7 @@ export function simulateModelOnlyExecution(
   const startSoc = firstFinite(samples, ["startStateOfChargePercent", "stateOfChargePercent"]);
   if (capacityKwh === null || capacityKwh <= 0 || startSoc === null) return null;
   const floor = reserveFloor(config);
-  const chargeToStoredRatio = Math.max(0.5, Math.min(1, finite(plan.batteryModel?.chargeToStoredRatio) ?? 1));
+  const chargeToStoredRatio = Math.max(0.5, Math.min(1.5, finite(plan.batteryModel?.chargeToStoredRatio) ?? 1));
   let storedKwh = capacityKwh * startSoc / 100;
   let reserveViolation = false;
   let gridCostYen = 0;
@@ -108,7 +108,11 @@ export function simulateModelOnlyExecution(
     if (forcedCharge > 0) {
       storedKwh = Math.min(capacityKwh, storedKwh + forcedCharge * chargeToStoredRatio);
     } else if (netGridKwh > 0) {
-      const available = Math.max(0, storedKwh - capacityKwh * floor / 100);
+      const reserveKwh = capacityKwh * floor / 100;
+      const available = Math.max(0, storedKwh - reserveKwh);
+      // A reserve breach is when the plan's demand requires discharging below the
+      // reserve floor, not merely reaching it (the simulation clamps to the floor).
+      if (netGridKwh > available + 1e-9) reserveViolation = true;
       const discharged = Math.min(available, netGridKwh);
       storedKwh -= discharged;
       netGridKwh -= discharged;
@@ -120,7 +124,6 @@ export function simulateModelOnlyExecution(
     const timestamp = sample.rollupStart ?? sample.timestamp;
     const rate = rateForTimestamp(config.rateBands, timestamp, config.standardRateYenPerKwh).yenPerKwh;
     gridCostYen += Math.max(0, netGridKwh) * rate;
-    reserveViolation ||= storedKwh <= capacityKwh * floor / 100 + 0.0001;
   }
   const endingSocPercent = storedKwh / capacityKwh * 100;
   const target = finite(plan.expectedSunsetSocPercent ?? plan.targetSocPercent);
@@ -166,7 +169,7 @@ export function evaluateBacktestCase({ snapshot, samples }: BacktestCaseInput): 
     asOperated: evaluable ? {
       gridCostYen: actualGridCost(samples, snapshot.config),
       targetMet: target === null || endingSoc === null ? null : endingSoc >= target - 1,
-      reserveViolation: Number.isFinite(minimumSoc) && minimumSoc <= floor,
+      reserveViolation: Number.isFinite(minimumSoc) && minimumSoc < floor,
       endingSocPercent: endingSoc,
     } : null,
     modelOnly: evaluable ? simulateModelOnlyExecution(plan, samples, snapshot.config) : null,

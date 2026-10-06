@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createHistoryStore, inspectHistoryDatabase, SCHEMA_VERSION } from "../lib/history-store.js";
 import { createHistorySchema } from "../lib/persistence/history-database.js";
 import { createBacktestService } from "../lib/services/backtest-service.js";
-import { CURRENT_BACKTEST_MODEL, evaluateBacktestCase } from "../lib/domain/backtesting.js";
+import { CURRENT_BACKTEST_MODEL, evaluateBacktestCase, simulateModelOnlyExecution } from "../lib/domain/backtesting.js";
 import type { AdaptivePlanSnapshot } from "../lib/contracts/backtesting.js";
 
 const config: AdaptivePlanSnapshot["config"] = {
@@ -67,6 +67,47 @@ assert.equal(evaluated.evaluable, true);
 assert.equal(evaluated.components.demand.errorKwh, 0);
 assert.equal(evaluated.asOperated?.gridCostYen, 30);
 assert.ok(evaluated.modelOnly && evaluated.modelOnly.gridCostYen >= 0);
+
+const simConfig = {
+  rateBands: [{ start: "00:00", end: "00:00", yenPerKwh: 20, label: "Test" }],
+  standardRateYenPerKwh: 20,
+  batteryCapabilities: { usableCapacityKwh: 10, maximumChargeWatts: 3000 },
+};
+const simSample = {
+  rollupStart: "2026-01-01T00:00:00.000Z",
+  rollupEnd: "2026-01-01T00:30:00.000Z",
+  startStateOfChargePercent: 50,
+  houseDemandKwh: 0,
+  solarGenerationKwh: 0,
+  fuelCellKwh: 0,
+  coverageSeconds: { houseDemandKwh: 1800 },
+};
+
+// A charge-to-stored ratio above 1 must be honoured, matching the planner's
+// [0.5, 1.5] clamp (10 kWh * 50% + 1 kWh * 1.4 = 6.4 kWh = 64%).
+const clamped = simulateModelOnlyExecution({
+  slots: [{ start: "2026-01-01T00:00:00.000Z", end: "2026-01-01T00:30:00.000Z", targetWh: 1000, yenPerKwh: 20, label: "Test" }],
+  batteryModel: { chargeToStoredRatio: 1.4 },
+  expectedSunsetSocPercent: 55,
+} as any, [simSample] as any, simConfig as any);
+assert.ok(clamped);
+assert.ok(Math.abs((clamped.endingSocPercent ?? -1) - 64) < 1e-6);
+
+// A reserve breach is demand that would discharge below the 20% floor, not
+// merely reaching it.
+const reserveConfig = { ...simConfig, settingCache: { discharge_limit: { lastKnown: { decoded: { percent: 20 } } } } };
+const breach = simulateModelOnlyExecution(
+  { slots: [], expectedSunsetSocPercent: 55 } as any,
+  [{ ...simSample, houseDemandKwh: 4 }] as any,
+  reserveConfig as any,
+);
+assert.equal(breach?.reserveViolation, true);
+const noBreach = simulateModelOnlyExecution(
+  { slots: [], expectedSunsetSocPercent: 55 } as any,
+  [{ ...simSample, houseDemandKwh: 2 }] as any,
+  reserveConfig as any,
+);
+assert.equal(noBreach?.reserveViolation, false);
 
 const migrationDir = await mkdtemp(path.join(os.tmpdir(), "backtest-schema-"));
 try {
