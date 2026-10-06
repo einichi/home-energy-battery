@@ -209,7 +209,8 @@ export function createDiscoveryService(dependencies: DiscoveryServiceDependencie
         let detected = false;
         try {
           const result = record(await dependencies.runDeviceCommand("inspect-host", { host, eoj, timeout: 2 }));
-          const entry = record(result[eoj.toLowerCase()]);
+          // inspect-host keys its output with the upper-case eojHex() form.
+          const entry = record(result[eoj.toUpperCase()]);
           detected = Object.keys(entry).length > 0 && !entry.error;
         } catch {
           // Silent hosts are normal during subnet discovery.
