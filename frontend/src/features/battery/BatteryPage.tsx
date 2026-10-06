@@ -22,6 +22,7 @@ import { withLatestStatus } from "../../core/energy";
 import { useEnergyStatus } from "../../hooks/useEnergyStatus";
 import { useHistoryRange } from "../../hooks/useHistoryRange";
 import { formatDateTime, formatDateTimesInText, formatMonthDay, formatPower, formatSoc, formatTime, formatWeekdayShort } from "../../core/format";
+import { useDialogFocus } from "../../hooks/useDialogFocus";
 import { T, useI18n } from "../../i18n";
 
 type ReviewCommand = DeviceCommand & {
@@ -93,6 +94,7 @@ function CommandDialog({ command, close, completed }: {
   const { state, dispatch } = useCommandLifecycle();
   const [liveReceipt, setLiveReceipt] = useState<CommandReceipt | null>(null);
   const active = state.phase !== "idle" ? state.command.id === command.id : false;
+  const dialogRef = useDialogFocus<HTMLElement>(close);
   const phase = active ? state.phase : "confirming";
   const pending = ["sending", "acknowledged", "verifying"].includes(phase);
   const run = async () => {
@@ -139,7 +141,7 @@ function CommandDialog({ command, close, completed }: {
 
   return (
     <div className="modal-backdrop" role="presentation">
-      <section className="command-dialog panel" role="dialog" aria-modal="true" aria-labelledby="command-title">
+      <section className="command-dialog panel" role="dialog" aria-modal="true" aria-labelledby="command-title" ref={dialogRef} tabIndex={-1}>
         <p className="eyebrow"><T text={"Physical device command"} /></p>
         <h2 id="command-title">{command.label}</h2>
         <dl className="command-review">

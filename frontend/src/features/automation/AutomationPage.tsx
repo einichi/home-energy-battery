@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { Link } from "react-router-dom";
+import { useDialogFocus } from "../../hooks/useDialogFocus";
 import {
   createAwayPeriod,
   deleteAwayPeriod,
@@ -166,6 +167,7 @@ function Activity({ adaptive, guard, receipts }: { adaptive: AdaptiveChargingSta
 
 function ConfirmationDialog({ confirmation, close }: { confirmation: NonNullable<Confirmation>; close: () => void }) {
   const [busy, setBusy] = useState(false);
+  const dialogRef = useDialogFocus<HTMLElement>(close);
   const run = async () => {
     setBusy(true);
     try {
@@ -177,7 +179,7 @@ function ConfirmationDialog({ confirmation, close }: { confirmation: NonNullable
   };
   return (
     <div className="modal-backdrop" role="presentation">
-      <section className="command-dialog panel" role="dialog" aria-modal="true" aria-labelledby="automation-confirm-title">
+      <section className="command-dialog panel" role="dialog" aria-modal="true" aria-labelledby="automation-confirm-title" ref={dialogRef} tabIndex={-1}>
         <p className="eyebrow"><T text={"Review automation change"} /></p>
         <h2 id="automation-confirm-title">{confirmation.title}</h2>
         <p className="impact-note">{confirmation.impact}</p>

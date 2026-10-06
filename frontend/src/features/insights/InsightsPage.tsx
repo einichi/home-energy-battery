@@ -75,7 +75,7 @@ function Trend({ report }: { report: EnergyReport }) {
   return <div className="insights-chart-wrap"><svg className="insights-chart" role="img" aria-label={text("Energy use, solar generation, and grid import by reporting period")} viewBox={`0 0 ${width} ${height}`}>
     {[0, .5, 1].map((tick) => <g key={tick}><line x1={pad} x2={width - pad} y1={y(max * tick)} y2={y(max * tick)} /><text x={pad - 8} y={y(max * tick) + 4}>{number(max * tick)}</text></g>)}
     {series.flatMap((item) => segments(item.key).map((points, index) => <polyline key={`${item.key}-${index}`} className={item.className} points={points} />))}
-    {rows.flatMap((row, index) => Number(row.sampleCount ?? 0) > 0 ? series.filter((item) => Number.isFinite(row[item.key])).map((item) => <circle key={`${row.key}-${item.key}`} className={item.className} tabIndex={0} cx={x(index)} cy={y(Number(row[item.key]))} r="4"><title>{row.label}: {text(item.label)} {formatEnergy(Number(row[item.key]))}</title></circle>) : [])}
+    {rows.flatMap((row, index) => Number(row.sampleCount ?? 0) > 0 ? series.filter((item) => Number.isFinite(row[item.key])).map((item) => <circle key={`${row.key}-${item.key}`} className={item.className} cx={x(index)} cy={y(Number(row[item.key]))} r="4"><title>{row.label}: {text(item.label)} {formatEnergy(Number(row[item.key]))}</title></circle>) : [])}
   </svg><div className="chart-legend" aria-label={text("Chart legend")}><span className="demand"><T text={"Demand"} /></span><span className="solar"><T text={"Solar"} /></span><span className="grid"><T text={"Grid import"} /></span></div></div>;
 }
 
