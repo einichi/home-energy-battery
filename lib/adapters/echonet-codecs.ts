@@ -29,6 +29,14 @@ const EPC: Record<string, number> = {
   FUEL_CELL_CUMULATIVE_GAS: 0xc8,
   FUEL_CELL_GENERATION_STATUS: 0xcb,
   FUEL_CELL_INTERCONNECTION_STATUS: 0xd0,
+  // Vendor EPC, verified against the real hardware in this project. The ECHONET
+  // standard fuel-cell class (0x027C) defines "measured remaining hot water
+  // amount" as 0xE1, but this Panasonic Ene-Farm does not implement 0xE1 (a Get
+  // returns Get_SNA) and reports the level through 0xF4 instead (a 1-byte 0-5
+  // value). EPCs are scoped per device class, so this 0xF4 does NOT collide with
+  // the storage battery's vendor osaifu window (0xF4 on class 0x027D).
+  // Do not "correct" this to 0xE1 without re-probing the device; a genuinely
+  // standards-compliant fuel cell would need 0xE1 AND a different value encoding.
   FUEL_CELL_HOT_WATER_LEVEL: 0xf4,
   METER_CUMULATIVE_NORMAL: 0xc0,
   METER_CUMULATIVE_REVERSE: 0xc1,

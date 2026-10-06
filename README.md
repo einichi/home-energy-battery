@@ -64,6 +64,10 @@ The integrated status service reads:
 - charging profile: `0x027D01 / 0xF0`
 - fuel cell instantaneous generation: `0x027C01 / 0xC4`
 - fuel cell generation status: `0x027C01 / 0xCB`
+- fuel cell hot-water level: `0x027C01 / 0xF4` (vendor EPC — this Panasonic
+  Ene-Farm does not implement the ECHONET standard remaining-hot-water property
+  `0xE1`, which returns `Get_SNA`; see the note on `FUEL_CELL_HOT_WATER_LEVEL` in
+  `lib/adapters/echonet-codecs.ts`)
 
 ## Web UI
 
