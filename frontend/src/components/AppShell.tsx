@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet } from "react-router-dom";
 import { HealthCenter } from "./HealthCenter";
 import { useTheme } from "../app/providers";
 import { formatDateTimesInText } from "../core/format";
@@ -86,14 +86,14 @@ export function AppShell() {
           <div className="operational-banner" role="status">
             <strong>{text(strategy.title)}</strong>
             <span>{formatDateTimesInText(text(strategy.description))}</span>
-            <a href={strategy.kind === "backup-preparation" ? "/ui/battery/backup" : "/ui/battery"}><T text={"Review battery →"} /></a>
+            <Link to={strategy.kind === "backup-preparation" ? "/battery/backup" : "/battery"}><T text={"Review battery →"} /></Link>
           </div>
         ) : null}
         {status?.statusRefreshPaused ? (
           <div className="operational-banner" data-severity="warning" role="status">
             <strong><T text={"Live readings paused"} /></strong>
             <span>{text("The latest values remain visible while {value}.", { value: status.statusRefreshPausedReason ?? "equipment discovery is running" })}</span>
-            <a href="/ui/system/equipment"><T text={"Review equipment →"} /></a>
+            <Link to="/system/equipment"><T text={"Review equipment →"} /></Link>
           </div>
         ) : null}
         <div id="main-content" tabIndex={-1}><Outlet /></div>

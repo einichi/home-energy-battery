@@ -40,6 +40,16 @@ export function formatTime(value?: Date | string | null): string {
     : "—";
 }
 
+export function formatWeekdayShort(value?: Date | string | null): string {
+  const date = value instanceof Date ? value : new Date(value ?? "");
+  return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat(localeName(), { weekday: "short" }).format(date) : "—";
+}
+
+export function formatMonthDay(value?: Date | string | null): string {
+  const date = value instanceof Date ? value : new Date(value ?? "");
+  return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat(localeName(), { month: "short", day: "numeric" }).format(date) : "—";
+}
+
 export function formatDateTimeRange(startValue: Date | string, endValue: Date | string): string {
   const start = startValue instanceof Date ? startValue : new Date(startValue);
   const end = endValue instanceof Date ? endValue : new Date(endValue);

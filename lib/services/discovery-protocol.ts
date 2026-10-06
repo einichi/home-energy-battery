@@ -32,7 +32,6 @@ export function inferDevice(instances: readonly unknown[]): string[] {
   if (set.has("0287")) roles.push("Smart Cosmo / home power meter");
   if (set.has("027c")) roles.push("Ene-Farm");
   if (set.has("0272")) roles.push("Water heater");
-  if ([...set].some((item) => item.startsWith("0f"))) roles.push("Controller");
   return roles.length ? roles : ["Unknown energy device"];
 }
 

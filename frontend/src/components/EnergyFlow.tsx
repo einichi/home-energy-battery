@@ -278,7 +278,7 @@ export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridE
       rects[id] = { left: rect.left - rootRect.left, top: rect.top - rootRect.top, right: rect.right - rootRect.left, bottom: rect.bottom - rootRect.top };
     });
     const connectors = computeFlowConnectors(rects, visible, mobile);
-    const signature = `${Math.round(rootRect.width)}x${Math.round(rootRect.height)}|${connectors.map((connector) => `${connector.id}:${connector.active ? 1 : 0}:${connector.path}`).join(";")}`;
+    const signature = `${Math.round(rootRect.width)}x${Math.round(rootRect.height)}|${connectors.map((connector) => `${connector.id}:${connector.active ? 1 : 0}:${connector.weight}:${connector.path}`).join(";")}`;
     if (signature === lastSignature.current) return;
     lastSignature.current = signature;
     setGeometry({ width: rootRect.width, height: rootRect.height, connectors });

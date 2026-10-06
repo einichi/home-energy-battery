@@ -13,7 +13,12 @@ const sourceDefinitions = [
 
 export function EnergySourcesBar({ sources, period = "Today", showPeriod = true }: { sources?: EnergySources; period?: string; showPeriod?: boolean }) {
   const { text } = useI18n();
-  const values = sourceDefinitions.map((item) => Number(sources?.[item.value])).map((value) => Number.isFinite(value) ? Math.max(0, value) : null);
+  const values = sourceDefinitions.map((item) => {
+    const raw = sources?.[item.value];
+    if (raw === null || raw === undefined) return null;
+    const value = Number(raw);
+    return Number.isFinite(value) ? Math.max(0, value) : null;
+  });
   const measuredTotal = values.some((value) => value !== null) ? values.reduce<number>((sum, value) => sum + (value ?? 0), 0) : null;
   const total = Number.isFinite(Number(sources?.totalKwh)) ? Number(sources?.totalKwh) : measuredTotal;
   const segments = sourceDefinitions.map((item, index) => {

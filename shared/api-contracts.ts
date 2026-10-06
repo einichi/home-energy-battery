@@ -357,7 +357,7 @@ export type AppConfig = {
   solarEnabled: boolean;
   smartCosmoEnabled: boolean;
   fuelCellEnabled: boolean;
-  rateMode?: "simple" | "off-peak" | "multi" | string;
+  rateMode?: "simple" | "offPeak" | "multi" | string;
   runtime?: RuntimeInformation;
   batteryHost?: string;
   meterHost?: string;

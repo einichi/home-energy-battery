@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
+import { Link } from "react-router-dom";
 import {
   createAwayPeriod,
   deleteAwayPeriod,
@@ -65,9 +66,9 @@ function initialAwayDraft(): AwayDraft {
 function prerequisites(config: AppConfig | null): Prerequisite[] {
   const adaptive = config?.adaptiveCharging;
   return [
-    { label: "Off-peak electricity pricing", ready: Boolean(config && config.rateMode !== "simple"), detail: "One discounted off-peak window is enough; a multi-rate plan is optional.", action: "Open rate settings", href: "/ui/system/rates" },
-    { label: "Solar generation", ready: config?.solarEnabled !== false, detail: "Solar production must be available for the next-day forecast.", action: "Open equipment settings", href: "/ui/system/equipment" },
-    { label: "House demand", ready: config?.smartCosmoEnabled !== false, detail: "Whole-home demand history is required to predict consumption.", action: "Open equipment settings", href: "/ui/system/equipment" },
+    { label: "Off-peak electricity pricing", ready: Boolean(config && config.rateMode !== "simple"), detail: "One discounted off-peak window is enough; a multi-rate plan is optional.", action: "Open rate settings", href: "/system/rates" },
+    { label: "Solar generation", ready: config?.solarEnabled !== false, detail: "Solar production must be available for the next-day forecast.", action: "Open equipment settings", href: "/system/equipment" },
+    { label: "House demand", ready: config?.smartCosmoEnabled !== false, detail: "Whole-home demand history is required to predict consumption.", action: "Open equipment settings", href: "/system/equipment" },
     { label: "Home location", ready: Number.isFinite(Number(adaptive?.latitude)) && Number.isFinite(Number(adaptive?.longitude)), detail: "Latitude and longitude drive sunrise and weather forecasts.", action: "Review planning settings", href: "#adaptive-settings" },
     { label: "Solar array", ready: Number(adaptive?.arrayPeakKw) > 0, detail: "Array peak capacity is required to scale the solar forecast.", action: "Review planning settings", href: "#adaptive-settings" },
     { label: "Battery capacity and charge power", ready: Number(config?.batteryCapabilities?.usableCapacityKwh) > 0 && Number(config?.batteryCapabilities?.maximumChargeWatts) > 0, detail: "Usable capacity and maximum charging power bound the plan.", action: "Review planning settings", href: "#adaptive-settings" },
@@ -245,11 +246,11 @@ function AwayWorkspace({ away, busy, result, onSubmit, onDelete, onBackHome }: {
 }
 
 function formatWh(value?: number | null) {
-  return Number.isFinite(Number(value)) ? `${Math.round(Number(value))} Wh` : "—";
+  return value === null || value === undefined ? "—" : Number.isFinite(Number(value)) ? `${Math.round(Number(value))} Wh` : "—";
 }
 
 function signedEnergy(value?: number | null) {
-  if (!Number.isFinite(Number(value))) return "—";
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return "—";
   const number = Number(value);
   return `${number >= 0 ? "+" : ""}${number.toFixed(2)} kWh`;
 }
@@ -297,13 +298,17 @@ function PerformanceView({ adaptive }: { adaptive: AdaptiveChargingStatus | null
       const start = new Date(outcome.start ?? outcome.targetStart ?? "");
       const end = new Date(outcome.end ?? "");
       const hours = Math.max(0, end.getTime() - start.getTime()) / 3_600_000;
-      const predictedKwh = Number(outcome.medianW) * hours / 1000;
-      const actualKwh = Number(outcome.actualKwh);
-      return { ...outcome, start, end, predictedKwh, actualKwh, errorKwh: actualKwh - predictedKwh };
-    }).filter((outcome) => Number.isFinite(outcome.start.getTime()) && Number.isFinite(outcome.end.getTime()) && Number.isFinite(outcome.predictedKwh) && Number.isFinite(outcome.actualKwh));
+      const predictedKwh = outcome.medianW === null || outcome.medianW === undefined ? null : Number(outcome.medianW) * hours / 1000;
+      const actualKwh = outcome.actualKwh === null || outcome.actualKwh === undefined ? null : Number(outcome.actualKwh);
+      return { ...outcome, start, end, predictedKwh, actualKwh, errorKwh: predictedKwh !== null && actualKwh !== null ? actualKwh - predictedKwh : null };
+    }).filter((outcome) => Number.isFinite(outcome.start.getTime()) && Number.isFinite(outcome.end.getTime()) && outcome.predictedKwh !== null && outcome.actualKwh !== null);
   }, [adaptive?.fuelCellForecastOutcomes]);
-  const solarMae = solarOutcomes.map((outcome) => Math.abs(Number(outcome.errorKwh))).filter(Number.isFinite);
-  const fuelMae = fuelOutcomes.map((outcome) => Math.abs(outcome.errorKwh));
+  const solarMae = solarOutcomes
+    .map((outcome) => outcome.errorKwh === null || outcome.errorKwh === undefined ? null : Math.abs(Number(outcome.errorKwh)))
+    .filter((value): value is number => value !== null && Number.isFinite(value));
+  const fuelMae = fuelOutcomes
+    .map((outcome) => outcome.errorKwh === null || outcome.errorKwh === undefined ? null : Math.abs(outcome.errorKwh))
+    .filter((value): value is number => value !== null && Number.isFinite(value));
 
   return (
     <section className="automation-view-stack" aria-label="Automation performance">
@@ -556,7 +561,7 @@ export function AutomationPage() {
 
       {view === "performance" ? <PerformanceView adaptive={adaptive} /> : null}
 
-      {view === "configuration" ? <section className="automation-view-stack" aria-label="Automation configuration"><section className="panel setup-checklist"><div className="section-heading"><div><p className="eyebrow"><T text={"Prerequisites"} /></p><h2><T text={"Setup checklist"} /></h2></div><span className="sample-count">{checks.filter((item) => item.ready).length}/{checks.length} <T text={" ready"} /></span></div><ul>{checks.map((item) => <li key={item.label} data-ready={item.ready}><i aria-hidden="true">{item.ready ? "✓" : "!"}</i><div><strong>{item.label}</strong><span>{item.detail}</span><a href={item.href}>{item.action}<span aria-hidden="true"> →</span></a></div></li>)}</ul></section>
+      {view === "configuration" ? <section className="automation-view-stack" aria-label="Automation configuration"><section className="panel setup-checklist"><div className="section-heading"><div><p className="eyebrow"><T text={"Prerequisites"} /></p><h2><T text={"Setup checklist"} /></h2></div><span className="sample-count">{checks.filter((item) => item.ready).length}/{checks.length} <T text={" ready"} /></span></div><ul>{checks.map((item) => <li key={item.label} data-ready={item.ready}><i aria-hidden="true">{item.ready ? "✓" : "!"}</i><div><strong>{item.label}</strong><span>{item.detail}</span>{item.href.startsWith("#") ? <a href={item.href}>{item.action}<span aria-hidden="true"> →</span></a> : <Link to={item.href}>{item.action}<span aria-hidden="true"> →</span></Link>}</div></li>)}</ul></section>
         <form id="adaptive-settings" className="panel automation-settings-form" key={`adaptive:${JSON.stringify(config?.adaptiveCharging)}:${JSON.stringify(config?.batteryCapabilities)}`} onSubmit={submitAdaptive}><div className="section-heading"><div><p className="eyebrow"><T text={"Planning settings"} /></p><h2><T text={"Adaptive Charging configuration"} /></h2><p className="section-copy"><T text={"Changes invalidate the current plan and queue a recalculation."} /></p></div></div><label className="automation-toggle"><input name="enabled" type="checkbox" defaultChecked={config?.adaptiveCharging?.enabled === true} /><span><strong><T text={"Enable Adaptive Charging"} /></strong><small><T text={"Allow the application to select and operate discounted charging windows."} /></small></span></label><div className="automation-form-grid"><label className="field"><T text={"Latitude"} /><input name="latitude" type="number" min="-90" max="90" step="0.000001" required defaultValue={config?.adaptiveCharging?.latitude ?? ""} /></label><label className="field"><T text={"Longitude"} /><input name="longitude" type="number" min="-180" max="180" step="0.000001" required defaultValue={config?.adaptiveCharging?.longitude ?? ""} /></label><label className="field"><T text={"Array peak capacity"} /><div className="input-suffix"><input name="arrayPeakKw" type="number" min="0.1" step="0.1" required defaultValue={config?.adaptiveCharging?.arrayPeakKw ?? ""} /><span><T text={"kW"} /></span></div></label><label className="field"><T text={"Panel tilt"} /><div className="input-suffix"><input name="panelTiltDegrees" type="number" min="0" max="90" step="1" required defaultValue={config?.adaptiveCharging?.panelTiltDegrees ?? 30} /><span>°</span></div></label><label className="field"><T text={"Panel azimuth"} /><div className="input-suffix"><input name="panelAzimuthDegrees" type="number" min="-180" max="180" step="1" required defaultValue={config?.adaptiveCharging?.panelAzimuthDegrees ?? 0} /><span>°</span></div></label><label className="field"><T text={"Initial system loss"} /><div className="input-suffix"><input name="systemLossPercent" type="number" min="0" max="50" step="1" required defaultValue={config?.adaptiveCharging?.systemLossPercent ?? 14} /><span>%</span></div></label><label className="field"><T text={"Maximum off-peak SOC"} /><div className="input-suffix"><input name="targetSocPercent" type="number" min="50" max="100" step="1" required defaultValue={config?.adaptiveCharging?.targetSocPercent ?? 100} /><span>%</span></div></label><label className="field"><T text={"Forecast confidence margin"} /><div className="input-suffix"><input name="forecastMarginPercent" type="number" min="0" max="50" step="1" required defaultValue={config?.adaptiveCharging?.forecastMarginPercent ?? 10} /><span>%</span></div></label><label className="field"><T text={"Usable battery capacity"} /><div className="input-suffix"><input name="usableCapacityKwh" type="number" min="0.1" step="0.1" required defaultValue={config?.batteryCapabilities?.usableCapacityKwh ?? ""} /><span><T text={"kWh"} /></span></div></label><label className="field"><T text={"Maximum charge power"} /><div className="input-suffix"><input name="maximumChargeWatts" type="number" min="50" step="1" required defaultValue={config?.batteryCapabilities?.maximumChargeWatts ?? ""} /><span><T text={"W"} /></span></div></label></div><div className="form-footer"><button className="button primary" type="submit" disabled={busy !== null || !config}>{busy === "adaptive-config" ? "Saving…" : "Review and save"}</button>{adaptiveResult ? <p className={`inline-save-result ${adaptiveResult.ok ? "success" : "failure"}`} role={adaptiveResult.ok ? "status" : "alert"}>{adaptiveResult.message}</p> : null}</div></form>
         <form className="panel automation-settings-form" key={`guard:${JSON.stringify(guard)}`} onSubmit={submitGuard}><div className="section-heading"><div><p className="eyebrow"><T text={"Breaker protection"} /></p><h2><T text={"Demand Guard configuration"} /></h2><p className="section-copy"><T text={"Demand Guard pauses battery charging before grid import reaches the configured breaker margin."} /></p></div></div><label className="automation-toggle"><input name="enabled" type="checkbox" defaultChecked={guard?.enabled === true} /><span><strong><T text={"Enable Demand Guard"} /></strong><small><T text={"Permit Standby and Auto mode changes when protecting breaker headroom."} /></small></span></label><label className="automation-toggle compact"><input name="dashboardWarningEnabled" type="checkbox" defaultChecked={guard?.dashboardWarningEnabled !== false} /><span><strong><T text={"Show breaker-risk warning"} /></strong><small><T text={"Surface approaching interventions in global status."} /></small></span></label><div className="automation-form-grid guard"><label className="field"><T text={"Breaker limit"} /><div className="input-suffix"><input name="breakerAmps" type="number" min="1" max="400" step="1" required defaultValue={guard?.conditions?.breakerAmps ?? 40} /><span><T text={"A"} /></span></div></label><label className="field"><T text={"Reserved headroom"} /><div className="input-suffix"><input name="reserveAmps" type="number" min="0" max="200" step="1" required defaultValue={guard?.conditions?.reserveAmps ?? 5} /><span><T text={"A"} /></span></div></label><label className="field"><T text={"Restore below"} /><div className="input-suffix"><input name="restoreBelowAmps" type="number" min="1" max="400" step="1" required defaultValue={guard?.conditions?.restoreBelowAmps ?? 30} /><span><T text={"A"} /></span></div></label><label className="field"><T text={"Restore delay"} /><div className="input-suffix"><input name="restoreDelaySeconds" type="number" min="0" max="86400" step="30" required defaultValue={guard?.conditions?.restoreDelaySeconds ?? 300} /><span><T text={"sec"} /></span></div></label></div><div className="form-footer"><button className="button primary" type="submit" disabled={busy !== null}>{busy === "guard-config" ? "Saving…" : "Save Demand Guard"}</button>{guardResult ? <p className={`inline-save-result ${guardResult.ok ? "success" : "failure"}`} role={guardResult.ok ? "status" : "alert"}>{guardResult.message}</p> : null}</div></form></section> : null}
 

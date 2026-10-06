@@ -3,15 +3,10 @@ import type {
   BackupPreparation,
   BatteryAction,
   BatterySchedule,
-  CommandOutcome,
   CommandReceipt,
 } from "./contracts";
 
 export type { BatteryAction };
-
-export function runBatteryAction(action: BatteryAction, payload: Record<string, unknown>) {
-  return sendJson<CommandOutcome>(`/api/device-actions/${action}`, "POST", payload);
-}
 
 export function startBatteryAction(action: BatteryAction, payload: Record<string, unknown>) {
   return sendJson<{ commandId: string; commandState: "requested" }>("/api/device-commands", "POST", { action, payload });

@@ -1166,7 +1166,7 @@ describe("React application shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Configuration" }));
     expect(screen.getByRole("heading", { name: "Setup checklist" })).toBeVisible();
     expect(screen.getByText("6/6 ready")).toBeVisible();
-    expect(screen.getByRole("link", { name: /Open rate settings/ })).toHaveAttribute("href", "/ui/system/rates");
+    expect(screen.getByRole("link", { name: /Open rate settings/ })).toHaveAttribute("href", "/system/rates");
     expect(screen.getByText("Off-peak electricity pricing")).toBeVisible();
     expect(screen.queryByText("Multi-rate electricity pricing")).not.toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: /Review planning settings/ })[0]).toHaveAttribute("href", "#adaptive-settings");

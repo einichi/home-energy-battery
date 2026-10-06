@@ -8,7 +8,7 @@ export function useReports(start: Date, end: Date, bucket: ReportBucket) {
   const [energy, setEnergy] = useState<EnergyReport | null>(null);
   const [eneFarm, setEneFarm] = useState<EneFarmReport | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [settled, setSettled] = useState(0);
+  const [settledKey, setSettledKey] = useState<string | null>(null);
   const [sequence, setSequence] = useState(0);
   const key = `${start.toISOString()}:${end.toISOString()}:${bucket}:${sequence}`;
 
@@ -23,10 +23,10 @@ export function useReports(start: Date, end: Date, bucket: ReportBucket) {
       if (eneFarmResult.status === "fulfilled") setEneFarm(eneFarmResult.value);
       const failures = [energyResult, eneFarmResult].filter((item) => item.status === "rejected") as PromiseRejectedResult[];
       setError(failures.length ? failures.map((item) => item.reason instanceof Error ? item.reason.message : String(item.reason)).join("; ") : null);
-      setSettled(sequence + 1);
+      setSettledKey(key);
     });
     return () => controller.abort();
   }, [key, start, end, bucket, sequence]);
 
-  return { energy, eneFarm, error, loading: settled !== sequence + 1, refresh: useCallback(() => setSequence((value) => value + 1), []) };
+  return { energy, eneFarm, error, loading: settledKey !== key, refresh: useCallback(() => setSequence((value) => value + 1), []) };
 }

@@ -1,5 +1,6 @@
 import { Component } from "react";
 import type { ErrorInfo, ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { T } from "../i18n";
 import { formatDateTimesInText } from "../core/format";
 
@@ -24,7 +25,7 @@ export class ErrorBoundary extends Component<Props, State> {
           <p className="eyebrow"><T text={"Interface error"} /></p>
           <h1><T text={"This view could not be displayed"} /></h1>
           <p>{formatDateTimesInText(this.state.error.message)}</p>
-          <a className="button" href="/ui/"><T text={"Return to Overview"} /></a>
+          <Link className="button" to="/"><T text={"Return to Overview"} /></Link>
         </main>
       );
     }

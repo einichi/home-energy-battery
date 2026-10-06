@@ -21,7 +21,7 @@ import type { TimelineOverlay } from "../../components/CombinedEnergyChart";
 import { withLatestStatus } from "../../core/energy";
 import { useEnergyStatus } from "../../hooks/useEnergyStatus";
 import { useHistoryRange } from "../../hooks/useHistoryRange";
-import { formatDateTime, formatDateTimesInText, formatPower, formatSoc, formatTime } from "../../core/format";
+import { formatDateTime, formatDateTimesInText, formatMonthDay, formatPower, formatSoc, formatTime, formatWeekdayShort } from "../../core/format";
 import { T, useI18n } from "../../i18n";
 
 type ReviewCommand = DeviceCommand & {
@@ -273,9 +273,9 @@ function ScheduleCalendar({ schedules, conflicts }: { schedules: BatterySchedule
               .sort((left, right) => left.at.getTime() - right.at.getTime());
             return (
               <article className="schedule-calendar-day" key={day.toISOString()}>
-                <header><strong>{day.toLocaleDateString([], { weekday: "short" })}</strong><span>{day.toLocaleDateString([], { month: "short", day: "numeric" })}</span></header>
+                <header><strong>{formatWeekdayShort(day)}</strong><span>{formatMonthDay(day)}</span></header>
                 <ol>
-                  {occurrences.map(({ schedule, at }) => <li key={`${schedule.id}:${at.toISOString()}`} data-conflict={conflicts.has(schedule.id) || undefined}><time dateTime={at.toISOString()}>{at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time><strong>{schedule.name}</strong><span>{actionLabels[schedule.action] ?? sentence(schedule.action)}</span></li>)}
+                  {occurrences.map(({ schedule, at }) => <li key={`${schedule.id}:${at.toISOString()}`} data-conflict={conflicts.has(schedule.id) || undefined}><time dateTime={at.toISOString()}>{formatTime(at)}</time><strong>{schedule.name}</strong><span>{actionLabels[schedule.action] ?? sentence(schedule.action)}</span></li>)}
                 </ol>
               </article>
             );
@@ -470,7 +470,10 @@ export function BatteryPage({ view = "status" }: { view?: "status" | "schedules"
         enabled: true,
       });
       setScheduleReview(false);
+      setLoadError(null);
       await loadOperations();
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "Schedule could not be saved");
     } finally {
       setScheduleBusy(false);
     }
@@ -560,7 +563,7 @@ export function BatteryPage({ view = "status" }: { view?: "status" | "schedules"
         </form>
         {scheduleReview ? <div className="schedule-review-note" role="status"><span><strong><T text={"Review:"} /></strong> {scheduleName} <T text={" will run "} />{actionLabels[scheduleAction] ?? sentence(scheduleAction)} <T text={" with "} />{Object.values(schedulePayload).join(" → ")} {scheduleRepeat === "daily" ? `at ${scheduleTime} on ${scheduleDays.map((day) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ")}` : `once at ${formatDateTime(scheduleRunAt)}`}.</span><button className="quiet-button" type="button" onClick={() => setScheduleReview(false)}><T text={"Edit"} /></button></div> : null}
         <div className="schedule-list">
-          {schedules.map((schedule) => { const next = schedulesDisabled ? null : scheduleNextAt(schedule); return <article key={schedule.id}><div><strong>{schedule.name}</strong><span>{actionLabels[schedule.action] ?? sentence(schedule.action)} · {scheduleRecurrence(schedule)}</span><small>{schedulesDisabled ? "Paused by Adaptive Charging" : `Next run: ${next ? formatDateTime(next) : schedule.enabled ? "No future occurrence" : "Disabled"}`}</small>{schedule.lastResult ? <small data-ok={schedule.lastResult.ok}>{schedule.lastResult.ok ? `Last run succeeded${schedule.lastResult.at ? ` · ${formatDateTime(schedule.lastResult.at)}` : ""}` : formatDateTimesInText(`Last run failed: ${schedule.lastResult.error}`)}</small> : null}{conflictingScheduleIds.has(schedule.id) ? <p className="schedule-conflict"><T text={"Conflicts with another enabled schedule at this time."} /></p> : null}</div><div className="button-row"><button className="quiet-button" disabled={schedulesDisabled} title={schedulesDisabled ? "Adaptive Charging must be turned off before changing schedule status" : undefined} type="button" onClick={() => void updateSchedule(schedule.id, { enabled: !schedule.enabled }).then(loadOperations)}>{schedule.enabled ? "Disable" : "Enable"}</button><button className="quiet-button danger" type="button" onClick={() => void deleteSchedule(schedule.id).then(loadOperations)}><T text={"Delete"} /></button></div></article>; })}
+          {schedules.map((schedule) => { const next = schedulesDisabled ? null : scheduleNextAt(schedule); return <article key={schedule.id}><div><strong>{schedule.name}</strong><span>{actionLabels[schedule.action] ?? sentence(schedule.action)} · {scheduleRecurrence(schedule)}</span><small>{schedulesDisabled ? "Paused by Adaptive Charging" : `Next run: ${next ? formatDateTime(next) : schedule.enabled ? "No future occurrence" : "Disabled"}`}</small>{schedule.lastResult ? <small data-ok={schedule.lastResult.ok}>{schedule.lastResult.ok ? `Last run succeeded${schedule.lastResult.at ? ` · ${formatDateTime(schedule.lastResult.at)}` : ""}` : formatDateTimesInText(`Last run failed: ${schedule.lastResult.error}`)}</small> : null}{conflictingScheduleIds.has(schedule.id) ? <p className="schedule-conflict"><T text={"Conflicts with another enabled schedule at this time."} /></p> : null}</div><div className="button-row"><button className="quiet-button" disabled={schedulesDisabled} title={schedulesDisabled ? "Adaptive Charging must be turned off before changing schedule status" : undefined} type="button" onClick={() => { void updateSchedule(schedule.id, { enabled: !schedule.enabled }).then(loadOperations).catch((error) => setLoadError(error instanceof Error ? error.message : "Schedule could not be updated")); }}>{schedule.enabled ? "Disable" : "Enable"}</button><button className="quiet-button danger" type="button" onClick={() => { void deleteSchedule(schedule.id).then(loadOperations).catch((error) => setLoadError(error instanceof Error ? error.message : "Schedule could not be deleted")); }}><T text={"Delete"} /></button></div></article>; })}
         </div>
       </section> : null}
 
