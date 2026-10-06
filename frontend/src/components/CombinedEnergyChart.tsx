@@ -173,7 +173,7 @@ export function CombinedEnergyChart({ samples, selected, label = "Energy history
               return (
                 <g key={definition.key}>
                   <circle cx={tooltipX + 14} cy={chart.top + 44 + index * 18} r="3" fill={definition.color} />
-                  <text className="chart-tooltip-value" x={tooltipX + 23} y={chart.top + 48 + index * 18}>{definition.label}: {value === null ? "—" : definition.display(value)}</text>
+                  <text className="chart-tooltip-value" x={tooltipX + 23} y={chart.top + 48 + index * 18}>{text(definition.label)}: {value === null ? "—" : definition.display(value)}</text>
                 </g>
               );
             })}
@@ -185,7 +185,7 @@ export function CombinedEnergyChart({ samples, selected, label = "Energy history
       </svg>
       {showSeriesLegend ? (
         <div className="chart-series-legend" aria-label={text("Chart series")}>
-          {definitions.map((definition) => <span key={definition.key}><i style={{ background: definition.color }} aria-hidden="true" />{definition.label}</span>)}
+          {definitions.map((definition) => <span key={definition.key}><i style={{ background: definition.color }} aria-hidden="true" />{text(definition.label)}</span>)}
         </div>
       ) : null}
       {overlays.length ? <div className="chart-overlay-legend" aria-label={text("Timeline overlays")}><span data-tone="charge"><T text={"Charge window"} /></span><span data-tone="discharge"><T text={"Discharge window"} /></span><span data-tone="schedule"><T text={"Scheduled command"} /></span></div> : null}
@@ -194,7 +194,7 @@ export function CombinedEnergyChart({ samples, selected, label = "Energy history
         <summary><T text={"View chart as data table"} /></summary>
         <div className="table-scroll">
           <table>
-            <thead><tr><th><T text={"Time"} /></th>{definitions.map((definition) => <th key={definition.key}>{definition.label}</th>)}</tr></thead>
+            <thead><tr><th><T text={"Time"} /></th>{definitions.map((definition) => <th key={definition.key}>{text(definition.label)}</th>)}</tr></thead>
             <tbody>
               {tableSamples.map((sample) => (
                 <tr key={sample.timestamp}>

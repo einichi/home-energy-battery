@@ -19,7 +19,20 @@ const defaultI18n: I18nContextValue = {
   text: (english = "", values) => interpolate(english, values),
 };
 const I18nContext = createContext<I18nContextValue>(defaultI18n);
-const legacyEnglishToKey = new Map(Object.entries(messages.en).map(([key, value]) => [String(value).replace(/<[^>]+>/g, ""), key as MessageKey]));
+// Build the English->key fallback, but exclude English strings that map to more
+// than one key: choosing one arbitrarily mistranslates the other (e.g. "Time" is
+// both clock time and a duration axis). Ambiguous strings fall back to English.
+const legacyEnglishToKey = (() => {
+  const map = new Map<string, MessageKey>();
+  const ambiguous = new Set<string>();
+  for (const [key, value] of Object.entries(messages.en)) {
+    const english = String(value).replace(/<[^>]+>/g, "");
+    if (map.has(english)) ambiguous.add(english);
+    else map.set(english, key as MessageKey);
+  }
+  for (const english of ambiguous) map.delete(english);
+  return map;
+})();
 
 function interpolate(message: string, values?: Values) {
   return values ? message.replace(/\{(\w+)\}/g, (_, key: string) => String(values[key] ?? "")) : message;
