@@ -33,13 +33,13 @@ export function createAdaptiveStateService({
 
   async function commit(state: AdaptiveChargingState): Promise<AdaptiveChargingState> {
     const current = await read();
-    const expectedRevision = Math.max(0, Math.floor(Number(state?.revision) || 0));
-    if (current.revision !== expectedRevision) {
-      throw new Error(`stale Adaptive Charging state revision ${expectedRevision}; current revision is ${current.revision}`);
-    }
+    // Rebase onto the current revision instead of throwing when another writer
+    // advanced the state between the caller's read and this write. Surfacing a
+    // 500 for a lost race is worse than last-write-wins here; the periodic
+    // evaluator re-reads on its next tick.
     const cleaned = cleanAdaptiveChargingState({
       ...state,
-      revision: expectedRevision + 1,
+      revision: current.revision + 1,
       updatedAt: now().toISOString(),
     });
     documents.writeDocument("adaptiveChargingState", cleaned);
