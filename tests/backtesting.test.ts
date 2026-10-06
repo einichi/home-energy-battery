@@ -119,6 +119,7 @@ try {
   await store.initialize();
   assert.equal((await inspectHistoryDatabase(migrationDir)).state, "current");
   assert.equal((await store.stats()).schemaVersion, SCHEMA_VERSION);
+  assert.equal((await store.stats()).energyCalculationVersion, 4);
   store.close();
 } finally {
   await rm(migrationDir, { recursive: true, force: true });

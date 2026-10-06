@@ -226,10 +226,13 @@ export function migrateHistorySchema(database: DatabaseSync, versions: HistorySc
   database.exec("BEGIN IMMEDIATE");
   try {
     createBacktestSchema(database);
-    database.prepare(`
-      INSERT INTO metadata(key, value) VALUES ('schemaVersion', ?)
+    const setMetadata = database.prepare(`
+      INSERT INTO metadata(key, value) VALUES (?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `).run(JSON.stringify(versions.schemaVersion));
+    `);
+    setMetadata.run("schemaVersion", JSON.stringify(versions.schemaVersion));
+    setMetadata.run("energyCalculationVersion", JSON.stringify(versions.energyCalculationVersion));
+    setMetadata.run("architectureVersion", JSON.stringify(versions.architectureVersion));
     database.exec("COMMIT");
   } catch (error: unknown) {
     database.exec("ROLLBACK");
