@@ -68,6 +68,39 @@ try {
         if (fixture.scenario === "stale") body.read_at = new Date(Date.now() - 30 * 60_000).toISOString();
         if (fixture.scenario === "warning") body.alerts = [{ id: "fixture-warning", severity: "warning", title: "Meter contact delayed", startedAt: new Date().toISOString(), impact: "Circuit readings may be behind live conditions.", suggestedAction: "Review meter connectivity.", href: "/system/equipment", resolution: "active" }];
         if (fixture.scenario === "manual-override") body.batteryStrategy = { kind: "manual", title: "Manual override", description: "Battery automation is waiting for the active manual setting to end.", manualOverride: { active: true, label: "Manual override", untilChanged: true } };
+        if (fixture.scenario === "high-import") {
+          body.energy.solar.instant_power.value = 610;
+          body.energy.fuel_cells[0].instant_power.value = 0;
+          body.energy.battery.instant_power.value = 0;
+          body.energy.battery.remaining_percent.value = 32;
+          body.meter.house_demand_power.value = 3900;
+          body.meter.grid_import_power.value = 3300;
+          body.meter.grid_export_power.value = 0;
+        }
+        if (fixture.scenario === "flow-grid-export") {
+          body.energy.solar.instant_power.value = 4500;
+          body.energy.fuel_cells[0].instant_power.value = 0;
+          body.energy.battery.instant_power.value = 0;
+          body.meter.house_demand_power.value = 1500;
+          body.meter.grid_import_power.value = 0;
+          body.meter.grid_export_power.value = 3000;
+        }
+        if (fixture.scenario === "flow-battery-charge") {
+          body.energy.solar.instant_power.value = 2500;
+          body.energy.fuel_cells[0].instant_power.value = 500;
+          body.energy.battery.instant_power.value = 1200;
+          body.meter.house_demand_power.value = 1800;
+          body.meter.grid_import_power.value = 0;
+          body.meter.grid_export_power.value = 0;
+        }
+        if (fixture.scenario === "flow-battery-discharge") {
+          body.energy.solar.instant_power.value = 300;
+          body.energy.fuel_cells[0].instant_power.value = 0;
+          body.energy.battery.instant_power.value = -1500;
+          body.meter.house_demand_power.value = 2000;
+          body.meter.grid_import_power.value = 200;
+          body.meter.grid_export_power.value = 0;
+        }
         await route.fulfill({ response: upstream, json: body });
       });
       if (fixture.scenario === "learning") {
@@ -97,6 +130,44 @@ try {
     await page.addInitScript((theme) => localStorage.setItem("home-energy-theme", theme), fixture.theme);
     await page.goto(`${uiOrigin}${fixture.path}`, { waitUntil: "networkidle" });
     await page.getByRole("heading", { name: fixture.heading, level: 1 }).waitFor();
+    if (fixture.path === "/ui/" && fixture.scenario !== "offline") {
+      const arrowAnchors = await page.evaluate(() => {
+        const svg = [...document.querySelectorAll(".flow-lines")].find((candidate) => getComputedStyle(candidate).display !== "none");
+        if (!svg) return [];
+        const distanceToSegment = (point, start, end) => {
+          const dx = end.x - start.x;
+          const dy = end.y - start.y;
+          const lengthSquared = dx * dx + dy * dy;
+          const ratio = lengthSquared ? Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared)) : 0;
+          return Math.hypot(point.x - (start.x + ratio * dx), point.y - (start.y + ratio * dy));
+        };
+        return [...svg.querySelectorAll(".flow-path[data-active='true']")].map((path) => {
+          const localPoint = path.getPointAtLength(path.getTotalLength());
+          const screenPoint = new DOMPoint(localPoint.x, localPoint.y).matrixTransform(path.getScreenCTM());
+          const targetSelector = path.dataset.target;
+          const target = document.querySelector(targetSelector);
+          const rect = target.getBoundingClientRect();
+          const point = { x: screenPoint.x, y: screenPoint.y };
+          const corners = [
+            { x: rect.left, y: rect.top },
+            { x: rect.right, y: rect.top },
+            { x: rect.right, y: rect.bottom },
+            { x: rect.left, y: rect.bottom },
+          ];
+          const boundaryDistance = Math.min(...corners.map((corner, index) => distanceToSegment(point, corner, corners[(index + 1) % corners.length])));
+          return { className: path.getAttribute("class"), targetSelector, boundaryDistance, hasEndMarker: path.hasAttribute("marker-end"), hasStartMarker: path.hasAttribute("marker-start") };
+        });
+      });
+      assert(arrowAnchors.length > 0, `${fixture.name}: no active energy-flow arrows rendered`);
+      for (const arrow of arrowAnchors) {
+        assert(arrow.hasEndMarker && !arrow.hasStartMarker, `${fixture.name}: ${arrow.className} does not use the consistent end-marker geometry`);
+        assert(arrow.boundaryDistance <= 2, `${fixture.name}: ${arrow.className} arrow misses ${arrow.targetSelector} by ${arrow.boundaryDistance.toFixed(2)}px`);
+      }
+      const incorrectMarkerTips = await page.locator(".flow-lines:visible marker").evaluateAll((markers) => markers.filter((marker) => marker.getAttribute("refX") !== "10").map((marker) => marker.id));
+      assert(incorrectMarkerTips.length === 0, `${fixture.name}: marker tips are offset from their path endpoints: ${incorrectMarkerTips.join(", ")}`);
+      const incorrectLineCaps = await page.locator(".flow-path[data-active='true']").evaluateAll((paths) => paths.filter((path) => getComputedStyle(path).strokeLinecap !== "butt").map((path) => path.getAttribute("class")));
+      assert(incorrectLineCaps.length === 0, `${fixture.name}: arrow lines extend past their tips: ${incorrectLineCaps.join(", ")}`);
+    }
     await page.addStyleTag({ content: "*,*::before,*::after{animation:none!important;transition:none!important} time,.freshness{visibility:hidden!important}" });
     const state = await page.evaluate(() => ({
       theme: document.documentElement.dataset.theme,
