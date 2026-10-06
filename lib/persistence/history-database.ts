@@ -116,6 +116,7 @@ export function createHistorySchema(database: DatabaseSync, versions: HistorySch
       PRIMARY KEY(resolution, bucket_start_ms)
     );
     CREATE INDEX IF NOT EXISTS rollups_range_idx ON rollups(resolution, bucket_start_ms, bucket_end_ms);
+    CREATE INDEX IF NOT EXISTS rollups_end_idx ON rollups(resolution, bucket_end_ms);
     CREATE TABLE IF NOT EXISTS events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       event_key TEXT NOT NULL UNIQUE,
@@ -165,8 +166,6 @@ export function createHistorySchema(database: DatabaseSync, versions: HistorySch
       completed_at TEXT,
       PRIMARY KEY(target_date, issued_at_ms)
     );
-    CREATE INDEX IF NOT EXISTS solar_forecast_daily_target_idx
-      ON solar_forecast_daily(target_date, issued_at_ms);
     CREATE INDEX IF NOT EXISTS solar_forecast_daily_period_idx
       ON solar_forecast_daily(period_end_ms, completed_at);
     CREATE TABLE IF NOT EXISTS gas_tariff_snapshots (
@@ -181,8 +180,6 @@ export function createHistorySchema(database: DatabaseSync, versions: HistorySch
       payload_json TEXT NOT NULL,
       UNIQUE(provider, billing_month, version)
     );
-    CREATE INDEX IF NOT EXISTS gas_tariff_snapshots_month_idx
-      ON gas_tariff_snapshots(provider, billing_month, version DESC);
     CREATE TABLE IF NOT EXISTS gas_tariff_overrides (
       provider TEXT NOT NULL,
       billing_month TEXT NOT NULL,
@@ -201,8 +198,6 @@ export function createHistorySchema(database: DatabaseSync, versions: HistorySch
       completed_at TEXT,
       PRIMARY KEY(target_start_ms, issued_at_ms)
     );
-    CREATE INDEX IF NOT EXISTS fuel_cell_forecasts_target_idx
-      ON fuel_cell_forecasts(target_start_ms, issued_at_ms);
   `);
   createBacktestSchema(database);
   const setMetadata = database.prepare(`
