@@ -708,11 +708,12 @@ const api = createApiHandler({
   writeAutomationRules,
   writeConfig,
 });
-
 const serveStatic = createStaticHandler(path.join(APP_ROOT, "public"));
 const apiRouter = new NativeRouter().post(
   "/api/device-actions/:action",
   async ({ request, response, params }) => {
+    const operation = databaseAdministration.getOperation();
+    if (operation.busy) return void json(response, 503, { error: `Database ${operation.type} is in progress`, operation: { ...operation } });
     const body = await readBody(request);
     const action = params.action ?? "";
     if (!DEVICE_ACTIONS.has(action)) throw requestError(404, `unknown action: ${action}`);
@@ -720,7 +721,6 @@ const apiRouter = new NativeRouter().post(
     json(response, 200, result);
   },
 );
-
 const applicationInitializer = createApplicationInitializer({
   initializeHistory: historyStore.initialize,
   initializeDocuments: applicationStore.initialize,
