@@ -230,19 +230,32 @@ interface MetricInput {
   value?: unknown;
   unit?: string;
   human?: string;
+  error?: string;
 }
 
-function metric({ host, eoj, epc, name, raw, value, unit, human }: MetricInput): Record<string, unknown> {
+function metric({ host, eoj, epc, name, raw, value, unit, human, error }: MetricInput): Record<string, unknown> {
   const out: Record<string, unknown> = { host, eoj, epc: `0x${epc.toString(16).padStart(2, "0").toUpperCase()}`, name, raw: rawHex(raw) };
   if (value !== undefined) out.value = value;
   if (unit !== undefined) out.unit = unit;
   if (human !== undefined) out.human = human;
+  if (error !== undefined) out.error = error;
   return out;
 }
 
 function decodeUnsigned({ host, eoj, epc, name, raw, unit }: MetricInput): Record<string, unknown> {
   if (!raw) return metric({ host, eoj, epc, name, raw });
   const value = raw.readUIntBE(0, raw.length);
+  return metric({ host, eoj, epc, name, raw, value, unit, human: `${value} ${unit}` });
+}
+
+function decodePercent({ host, eoj, epc, name, raw, unit }: MetricInput): Record<string, unknown> {
+  if (!raw) return metric({ host, eoj, epc, name, raw });
+  const value = raw.readUIntBE(0, raw.length);
+  // A percentage must be 0-100. Some devices use a wider scale; treat anything
+  // outside the range as an error instead of feeding it to charging decisions.
+  if (value > 100) {
+    return metric({ host, eoj, epc, name, raw, error: `out-of-range ${value}${unit ?? ""} (expected 0-100)` });
+  }
   return metric({ host, eoj, epc, name, raw, value, unit, human: `${value} ${unit}` });
 }
 
@@ -455,6 +468,7 @@ export {
   decodeFuelCellHotWaterLevel,
   decodeInstantPowerList,
   decodeOsaifuWindow,
+  decodePercent,
   decodeSignedW,
   decodeUnsigned,
   decodeVendorProfile,

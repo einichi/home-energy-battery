@@ -11,7 +11,7 @@ interface DeviceStatus {
   energy?: {
     error?: string;
     errors?: StatusError[];
-    battery?: { error?: string };
+    battery?: { error?: string; remaining_percent?: { error?: string | null } };
     solar?: { error?: string };
     fuel_cells?: Array<{ error?: string }>;
     fuelCells?: Array<{ error?: string }>;
@@ -41,7 +41,7 @@ export function deviceStatusFailures(
     .filter((item) => item?.host === host && item?.error)
     .map((item) => `${item.epc ?? "property"}: ${item.error}`);
   if (config.batteryHost && !isDocumentationHost(config.batteryHost)) {
-    const errors = [energyError ?? status.energy?.battery?.error, ...errorsForHost(config.batteryHost)].filter(Boolean);
+    const errors = [energyError ?? status.energy?.battery?.error, status.energy?.battery?.remaining_percent?.error, ...errorsForHost(config.batteryHost)].filter(Boolean);
     if (errors.length) failures.push(`Battery: ${errors.join(", ")}`);
   }
   if (config.smartCosmoEnabled && config.meterHost && !isDocumentationHost(config.meterHost)) {

@@ -489,6 +489,7 @@ export function BatteryPage({ view = "status" }: { view?: "status" | "schedules"
       {view === "status" ? <>
       <section className="battery-hero panel">
         <div><p className="eyebrow"><T text={"Current state"} /></p><strong className="battery-soc">{formatSoc(battery?.remaining_percent?.value ?? null)}</strong><p>{sentence(battery?.working_status?.value)} · {formatPower(battery?.instant_power?.value ?? null)}</p></div>
+        {battery?.remaining_percent?.error ? <p className="status-banner" role="alert">{battery.remaining_percent.error}</p> : null}
         <dl className="battery-state-grid">
           <div><dt><T text={"Verified operation mode"} /></dt><dd>{sentence(battery?.operation_mode?.value)}</dd></div>
           <div><dt><T text={"Charging profile"} /></dt><dd>{sentence(profile)}</dd></div>

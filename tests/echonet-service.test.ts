@@ -3,6 +3,7 @@ import {
   createEchonetCommandAdapter,
   executeEchonetCommand,
 } from "../lib/echonet-service.js";
+import { decodePercent } from "../lib/adapters/echonet-codecs.js";
 import type { EchonetClient } from "../lib/adapters/echonet-transport.js";
 
 let initCalls = 0;
@@ -105,5 +106,11 @@ await assert.rejects(
   adapter.execute("set-mode", { host: "192.0.2.10", "dry-run": true }, ["auto"]),
   /ECHONET client is closed/,
 );
+
+const inRange = decodePercent({ host: "h", eoj: "0x027D01", epc: 0xe4, name: "battery_remaining_percent", raw: Buffer.from([64]), unit: "%" });
+assert.deepEqual(inRange, { host: "h", eoj: "0x027D01", epc: "0xE4", name: "battery_remaining_percent", raw: "0x40", value: 64, unit: "%", human: "64 %" });
+const outOfRange = decodePercent({ host: "h", eoj: "0x027D01", epc: 0xe4, name: "battery_remaining_percent", raw: Buffer.from([150]), unit: "%" });
+assert.equal(outOfRange.value, undefined);
+assert.match(String(outOfRange.error), /out-of-range 150/);
 
 console.log("ECHONET service tests passed");

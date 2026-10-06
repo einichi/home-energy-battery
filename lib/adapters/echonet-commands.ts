@@ -22,6 +22,7 @@ import {
   decodeFuelCellHotWaterLevel,
   decodeInstantPowerList,
   decodeOsaifuWindow,
+  decodePercent,
   decodeSignedW,
   decodeUnsigned,
   decodeVendorProfile,
@@ -463,7 +464,7 @@ async function cmdEnergyStatus(opts: CommandOptions) {
           name: "battery_instant_power",
           raw: batteryPower,
         }),
-        remaining_percent: decodeUnsigned({
+        remaining_percent: decodePercent({
           host: batteryHost,
           eoj: STORAGE_BATTERY_EOJ,
           epc: EPC.REMAINING_PERCENT,
