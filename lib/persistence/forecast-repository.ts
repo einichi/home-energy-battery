@@ -108,7 +108,7 @@ export function createForecastRepository(dependencies: ForecastRepositoryDepende
     const update = requireDatabase().prepare(`
       UPDATE solar_forecast_daily
       SET actual_kwh = ?, actual_coverage_seconds = ?, completed_at = ?
-      WHERE target_date = ? AND completed_at IS NULL
+      WHERE target_date = ? AND period_start_ms = ? AND period_end_ms = ? AND completed_at IS NULL
     `);
     let settled = 0;
     for (const day of pending) {
@@ -138,6 +138,8 @@ export function createForecastRepository(dependencies: ForecastRepositoryDepende
         coverageSeconds,
         (now instanceof Date ? now : new Date(nowMs!)).toISOString(),
         String(day.target_date ?? ""),
+        day.period_start_ms as number,
+        day.period_end_ms as number,
       );
       settled += Number(result.changes);
     }
