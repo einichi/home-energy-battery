@@ -174,14 +174,15 @@ export function addReportQuality(
   sample: HistorySample,
   previousSample: HistorySample | null,
   range: TimeRange,
+  bucketKey: string = key,
 ): void {
   const fraction = intervalOverlapFraction(sample, key, previousSample ?? undefined, range, false);
   const seconds = Number(sample.coverageSeconds?.[key]);
   if (Number.isFinite(seconds)) {
-    bucket._coverageSeconds[key] = Number(bucket._coverageSeconds[key] ?? 0) + Math.max(0, seconds) * fraction;
+    bucket._coverageSeconds[bucketKey] = Number(bucket._coverageSeconds[bucketKey] ?? 0) + Math.max(0, seconds) * fraction;
   }
   const quality = sample.energyQuality?.[key];
-  if (quality) bucket._qualities[key] = [...new Set([...(bucket._qualities[key] ?? []), quality])];
+  if (quality) bucket._qualities[bucketKey] = [...new Set([...(bucket._qualities[bucketKey] ?? []), quality])];
 }
 
 
@@ -346,7 +347,7 @@ export function createEnergyReportAccumulator({
         samplePowerKwh(sample, "batteryChargeKwh", "batteryPowerW", prev, reportRange),
         hasPowerSample(sample, "batteryChargeKwh", "batteryPowerW", prev),
       );
-      addReportQuality(row, "batteryChargeKwh", sample, prev, reportRange);
+      addReportQuality(row, "batteryChargeKwh", sample, prev, reportRange, "batteryChargedKwh");
       addReportEnergy(
         row,
         "batteryDischargedKwh",
@@ -359,7 +360,7 @@ export function createEnergyReportAccumulator({
         ),
         hasPowerSample(sample, "batteryDischargeKwh", "batteryPowerW", prev),
       );
-      addReportQuality(row, "batteryDischargeKwh", sample, prev, reportRange);
+      addReportQuality(row, "batteryDischargeKwh", sample, prev, reportRange, "batteryDischargedKwh");
       const solarGenerationKwh = sampleSolarGenerationKwh(sample, prev, reportRange);
       addReportEnergy(
         row,

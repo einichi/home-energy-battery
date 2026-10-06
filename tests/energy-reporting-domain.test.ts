@@ -618,3 +618,7 @@ assert.equal(
   100,
   "partial calendar buckets report coverage against the selected range",
 );
+
+assert.equal(partialRangeReport.buckets[0].dataQuality.batteryChargedKwh.quality, "integrated");
+assert.equal(partialRangeReport.buckets[0].dataQuality.batteryChargedKwh.coveragePercent, 100);
+assert.equal(partialRangeReport.buckets[0].dataQuality.batteryDischargedKwh.quality, "unavailable");
