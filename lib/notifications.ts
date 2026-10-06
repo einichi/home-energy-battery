@@ -1,4 +1,5 @@
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import nodemailer from "nodemailer";
 import type { ApplicationConfig } from "./contracts/configuration.js";
@@ -199,7 +200,7 @@ async function readJson(file: string, fallback: unknown): Promise<unknown> {
 
 async function writeJsonAtomic(file: string, value: unknown, mode: number | null = null): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, mode ? { mode } : undefined);
   await rename(temporary, file);
   if (mode) await chmod(file, mode);
