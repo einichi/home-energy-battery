@@ -43,11 +43,9 @@ export function sampleSolarGenerationKwh(
   previousSample: HistorySample | null = null,
   range: TimeRange = {},
 ): number {
-  const direct = finiteNumberOrNull(sample.solarGenerationKwh);
-  if (Number.isFinite(direct)) {
-    return Number(direct) * intervalOverlapFraction(sample, "solarGenerationKwh", previousSample ?? undefined, range, false);
-  }
-  return 0;
+  // Integrate instantaneous solar power when the pre-computed kWh value is
+  // missing, so a power-only sample is not counted as valid but contributing 0.
+  return samplePowerKwh(sample, "solarGenerationKwh", "solarPowerW", previousSample, range);
 }
 
 

@@ -62,7 +62,7 @@ import {
   verifyBatteryOperationMode,
 } from "../lib/services/command-verification.js";
 
-import { summarizeCalendarSavings, summarizeSamples } from "../lib/domain/energy-summary.js";
+import { sampleSolarGenerationKwh, summarizeCalendarSavings, summarizeSamples } from "../lib/domain/energy-summary.js";
 
 import { aggregateEnergyReportSamples } from "../lib/domain/energy-report.js";
 
@@ -588,6 +588,14 @@ const recordingGapSummary = summarizeSamples([
 ]);
 
 assert.equal(recordingGapSummary.gridImportKwh, 0, "recording gaps must not be filled with invented energy");
+
+// A power-only sample integrates instantaneous solar power instead of
+// contributing 0 kWh while being reported as valid.
+assert.ok(Math.abs(sampleSolarGenerationKwh(
+  { timestamp: "2026-05-31T00:30:00.000Z", solarPowerW: 2000 },
+  { timestamp: "2026-05-31T00:00:00.000Z", solarPowerW: 1000 },
+  {},
+) - 0.75) < 1e-9);
 
 
 const partialRangeReport = aggregateEnergyReportSamples([{
