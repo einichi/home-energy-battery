@@ -6,7 +6,17 @@ import { createScheduleRunner } from "../lib/services/schedule-runner.js";
 
 type ScheduleRunnerDependencies = Parameters<typeof createScheduleRunner>[0];
 
-function runnerFor({ schedules, guardActive }: { schedules: BatterySchedule[]; guardActive: boolean }) {
+function runnerFor({
+  schedules,
+  guardActive,
+  writeSchedules,
+  onExecute,
+}: {
+  schedules: BatterySchedule[];
+  guardActive: boolean;
+  writeSchedules?: (value: BatterySchedule[]) => Promise<BatterySchedule[]>;
+  onExecute?: () => void;
+}) {
   const executed: string[] = [];
   const dependencies = {
     readConfig: async () => ({ adaptiveCharging: { enabled: false } }),
@@ -15,9 +25,10 @@ function runnerFor({ schedules, guardActive }: { schedules: BatterySchedule[]; g
       ? [{ id: "guard", enabled: true, type: "backup-demand-guard", state: { awaitingRestore: true } }]
       : []),
     mutateSchedules: async (mutator: (value: BatterySchedule[]) => unknown) => mutator(schedules),
-    writeSchedules: async (value: BatterySchedule[]) => value,
+    writeSchedules: writeSchedules ?? (async (value: BatterySchedule[]) => value),
     executeAction: async (action: string) => {
       executed.push(action);
+      onExecute?.();
       return { ok: true };
     },
     notify: () => undefined,
@@ -59,4 +70,38 @@ function dueOneTimeSchedule(): BatterySchedule {
   assert.equal(schedules[0].enabled, false);
   assert.equal(schedules[0].completed, true);
   assert.equal(schedules[0].executionIntent?.state, "succeeded");
+}
+
+// The running intent is persisted exactly once before execution; the mutation
+// layer persists the final state, so there is no second write from the runner.
+{
+  const schedules = [dueOneTimeSchedule()];
+  let writes = 0;
+  const { runner, executed } = runnerFor({
+    schedules,
+    guardActive: false,
+    writeSchedules: async (value: BatterySchedule[]) => { writes += 1; return value; },
+  });
+  await runner.run();
+  assert.equal(writes, 1);
+  assert.deepEqual(executed, ["charge"]);
+  assert.equal(schedules[0].running, false);
+  assert.equal(schedules[0].runningSince, null);
+}
+
+// If persisting the running intent fails, the action is not executed and the
+// schedule is not left stuck running.
+{
+  const schedules = [dueOneTimeSchedule()];
+  let executeCount = 0;
+  const { runner } = runnerFor({
+    schedules,
+    guardActive: false,
+    writeSchedules: async () => { throw new Error("disk full"); },
+    onExecute: () => { executeCount += 1; },
+  });
+  await runner.run();
+  assert.equal(executeCount, 0);
+  assert.equal(schedules[0].running, false);
+  assert.equal(schedules[0].runningSince, null);
 }

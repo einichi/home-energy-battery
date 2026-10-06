@@ -71,8 +71,11 @@ export function createScheduleRunner(dependencies: ScheduleRunnerDependencies) {
         runningIds.add(schedule.id);
         schedule.running = true;
         schedule.runningSince = attemptAt;
-        await dependencies.writeSchedules(schedules);
         try {
+          // Persist the running intent before executing so a crash mid-action is
+          // recovered by clearStaleScheduleRuns on restart; mutateSchedules()
+          // persists the final state after this mutator returns.
+          await dependencies.writeSchedules(schedules);
           const result = await dependencies.executeAction(schedule.action, schedule.payload, { source: "schedule" });
           schedule.lastResult = { ok: true, at: new Date().toISOString(), result };
           schedule.executionIntent.state = "succeeded";
@@ -96,7 +99,6 @@ export function createScheduleRunner(dependencies: ScheduleRunnerDependencies) {
           runningIds.delete(schedule.id);
           schedule.running = false;
           schedule.runningSince = null;
-          await dependencies.writeSchedules(schedules);
         }
       }
     });
