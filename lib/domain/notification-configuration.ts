@@ -69,6 +69,18 @@ export function isSupportedSmtpPort(value: unknown): boolean {
     && Number.isInteger(Number(value));
 }
 
+export function smtpSecurityWarning(settings: { port?: unknown; security?: unknown }): string | null {
+  const port = Number(settings.port);
+  const security = String(settings.security ?? "");
+  if (port === 465 && security !== "tls") {
+    return "Port 465 normally requires TLS (implicit TLS); this combination will likely fail to connect.";
+  }
+  if ((port === 25 || port === 587) && security === "tls") {
+    return `Port ${port} normally uses STARTTLS; implicit TLS will likely fail to connect.`;
+  }
+  return null;
+}
+
 function record(value: unknown): UnknownRecord {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as UnknownRecord

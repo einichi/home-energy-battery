@@ -16,6 +16,8 @@ import {
   validateSmtpSettings,
 } from "../lib/notifications.js";
 
+import { smtpSecurityWarning } from "../lib/domain/notification-configuration.js";
+
 import { localIsoTimestamp, timestampConsole } from "../lib/console-timestamps.js";
 
 import { parseJsonWithContext } from "../lib/domain/json.js";
@@ -2648,3 +2650,8 @@ const alignedSolarFactor = learnedSolarFactor(alignedSolarSamples, alignedWeathe
 assert.equal(alignedSolarFactor.learned, true);
 
 assert.equal(alignedSolarFactor.factor, 2);
+
+assert.match(String(smtpSecurityWarning({ port: 465, security: "starttls" })), /465/);
+assert.match(String(smtpSecurityWarning({ port: 587, security: "tls" })), /STARTTLS/);
+assert.equal(smtpSecurityWarning({ port: 465, security: "tls" }), null);
+assert.equal(smtpSecurityWarning({ port: 587, security: "starttls" }), null);

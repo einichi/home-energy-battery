@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ApiDependencies } from "../api.js";
 import type { AppConfig, StatusSnapshot } from "../../../shared/api-contracts.js";
 import { invalidDiscoverySubnets } from "../../domain/discovery-subnets.js";
-import { isSupportedSmtpPort } from "../../domain/notification-configuration.js";
+import { isSupportedSmtpPort, smtpSecurityWarning } from "../../domain/notification-configuration.js";
 
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -128,7 +128,9 @@ export function createSystemRouteHandler(dependencies: SystemRouteDependencies) 
         password: body.password,
         clearPassword: body.clearPassword === true,
       });
-      return json(res, 200, await notificationService.view(config));
+      const view = await notificationService.view(config);
+      const warning = smtpSecurityWarning(notifications.channels[0].settings);
+      return json(res, 200, warning ? { ...view, warning } : view);
     }
     if (req.method === "POST" && url.pathname === "/api/notifications/test") {
       if (EXTERNAL_IO_DISABLED) throw requestError(403, "External notification delivery is disabled in simulated UI development");

@@ -973,7 +973,8 @@ function NotificationSettings({
         clearPassword: data.has("clearPassword"),
       });
       setView(view);
-      setResult({ ok: true, message: "Notification settings saved." });
+      const warning = (view as unknown as { warning?: unknown }).warning;
+      setResult({ ok: true, message: typeof warning === "string" ? `Notification settings saved. ${warning}` : "Notification settings saved." });
     } catch (error) {
       setResult({
         ok: false,
