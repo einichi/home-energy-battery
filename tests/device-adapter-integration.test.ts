@@ -310,6 +310,33 @@ try {
     },
   });
   assert.equal(schedule.response.status, 201);
+  const patchTarget = await request(baseUrl, "/api/schedules", {
+    method: "POST",
+    body: { name: "Patch target", action: "set-mode", payload: { mode: "auto" }, repeat: "daily", time: "03:15", days: [1] },
+  });
+  assert.equal(patchTarget.response.status, 201);
+  const patched = await request(baseUrl, `/api/schedules/${patchTarget.payload.id}`, {
+    method: "PATCH",
+    body: {
+      name: "Renamed schedule",
+      enabled: true,
+      running: true,
+      completed: true,
+      executionIntent: { id: "injected", state: "pending", attemptedAt: "2020-01-01T00:00:00.000Z", action: "charge" },
+      lastRunDate: "2099-01-01",
+      lastAttemptDate: "2099-01-01",
+      id: "hijacked",
+      createdAt: "2000-01-01T00:00:00.000Z",
+    },
+  });
+  assert.equal(patched.response.status, 200);
+  assert.equal(patched.payload.id, patchTarget.payload.id);
+  assert.equal(patched.payload.name, "Renamed schedule");
+  assert.notEqual(patched.payload.running, true);
+  assert.equal(patched.payload.completed ?? false, false);
+  assert.equal(patched.payload.executionIntent ?? null, null);
+  assert.equal(patched.payload.lastRunDate ?? null, null);
+  assert.equal(patched.payload.createdAt, patchTarget.payload.createdAt);
   await waitFor(async () => {
     const schedules = await request(baseUrl, "/api/schedules");
     return schedules.payload.find((item: any) => item.id === schedule.payload.id)?.lastResult?.ok === true;

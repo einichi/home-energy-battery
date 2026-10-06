@@ -11,6 +11,21 @@ type AutomationRouteDependencies = Pick<ApiDependencies,
   | "writeAutomationRuleStates" | "writeAutomationRules"
 >;
 
+function applySchedulePatch(existing: BatterySchedule, body: Record<string, unknown>): void {
+  // Only user-editable fields may be patched; never allow id, running state,
+  // executionIntent, completion, or run-history fields to be overwritten.
+  if (typeof body.name === "string") existing.name = body.name;
+  if (typeof body.action === "string") existing.action = body.action;
+  if ("payload" in body) existing.payload = body.payload;
+  if (body.repeat === "daily" || body.repeat === "once") existing.repeat = body.repeat;
+  if (Array.isArray(body.days)) {
+    existing.days = body.days.map(Number).filter((day: number) => day >= 0 && day <= 6);
+  }
+  if (typeof body.time === "string") existing.time = body.time;
+  if (typeof body.runAt === "string") existing.runAt = body.runAt;
+  if (typeof body.enabled === "boolean") existing.enabled = body.enabled;
+}
+
 export function createAutomationRouteHandler(dependencies: AutomationRouteDependencies) {
   const {
     ALL_DAYS, adaptiveChargingConfiguredActive, cleanAutomationRule, json, mergeAutomationRule,
@@ -106,8 +121,8 @@ export function createAutomationRouteHandler(dependencies: AutomationRouteDepend
       const schedule = await mutateSchedules((schedules: BatterySchedule[]) => {
         const existing = schedules.find((item) => item.id === id);
         if (!existing) return null;
-        Object.assign(existing, body);
-        if ("runAt" in body || "time" in body || "repeat" in body) existing.runAt = parseRunAt(existing);
+        applySchedulePatch(existing, body);
+        existing.runAt = parseRunAt(existing);
         return existing;
       });
       if (!schedule) return json(res, 404, { error: "schedule not found" });
