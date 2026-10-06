@@ -752,6 +752,14 @@ export function discountedPlanStatus(plan: Partial<ChronologicalPlan> = {}) {
 }
 
 
+export function latestFiniteSocPercent(samples: readonly DemandSample[]): number | null {
+  // A trailing sample whose SOC is null/undefined/"" must not be coerced to 0 by
+  // Number(); skip those and fall back to the most recent genuinely finite value.
+  const sample = samples.findLast((item) => finiteNumberOrNull(item.stateOfChargePercent) !== null);
+  return finiteNumberOrNull(sample?.stateOfChargePercent);
+}
+
+
 export function buildAdaptiveChargingPlan({
   config,
   state,
@@ -777,9 +785,8 @@ export function buildAdaptiveChargingPlan({
   if (!sunset) return unavailable("no discounted window is available before the forecast horizon ends");
   const historicalWeather = state.historicalWeather ?? [];
   const temperatures = temperatureByDayFromWeather([...historicalWeather, ...forecast.hours]);
-  const latestSocSample = samples.findLast((sample) => Number.isFinite(Number(sample.stateOfChargePercent)));
-  const soc = Number(latestSocSample?.stateOfChargePercent);
-  if (!Number.isFinite(soc)) return unavailable("battery state of charge is unavailable");
+  const soc = latestFiniteSocPercent(samples);
+  if (soc === null) return unavailable("battery state of charge is unavailable");
   const batteryModel = effectiveBatteryLearningModel(config, state);
   const capacityKwh = Number(batteryModel.capacityKwh);
   const cachedDischargeLimit = config.settingCache?.discharge_limit;

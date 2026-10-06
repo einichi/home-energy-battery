@@ -95,6 +95,7 @@ import {
   buildAdaptiveChargingTimelineView,
   discountedPlanStatus,
   forecastIsFresh,
+  latestFiniteSocPercent,
   mergeAdaptiveChargingSlots,
   optimizeDiscountedChargeSlots,
   planChronologicalDiscountedCharging,
@@ -1558,6 +1559,15 @@ assert.deepEqual(adaptiveChargingAvailability(adaptiveChargingConfig, []), {
 });
 
 assert.equal(adaptiveChargingAvailability(adaptiveChargingConfig, enabledGuardRules).available, true);
+
+// A trailing sample with a null/empty SOC must not be coerced to 0%, and 0% is a
+// legitimate value when it is genuinely reported.
+assert.equal(latestFiniteSocPercent([{ timestamp: "2026-07-11T10:00:00.000Z", stateOfChargePercent: 40 }, { timestamp: "2026-07-11T11:00:00.000Z", stateOfChargePercent: null }]), 40);
+assert.equal(latestFiniteSocPercent([{ timestamp: "2026-07-11T11:00:00.000Z", stateOfChargePercent: null }]), null);
+assert.equal(latestFiniteSocPercent([{ timestamp: "2026-07-11T11:00:00.000Z", stateOfChargePercent: "" }]), null);
+assert.equal(latestFiniteSocPercent([{ timestamp: "2026-07-11T11:00:00.000Z", stateOfChargePercent: undefined }]), null);
+assert.equal(latestFiniteSocPercent([{ timestamp: "2026-07-11T10:00:00.000Z", stateOfChargePercent: 40 }, { timestamp: "2026-07-11T11:00:00.000Z", stateOfChargePercent: 0 }]), 0);
+assert.equal(latestFiniteSocPercent([]), null);
 
 const missingGuardHeadroom = adaptiveChargingLiveChargeHeadroom({
   meter: { grid_import_power: { value: 0 } },
