@@ -3,12 +3,54 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 export interface HistoryDatabaseInspection {
-  state: "new" | "current" | "invalid" | "incompatible";
+  state: "new" | "current" | "migratable" | "invalid" | "incompatible";
   databaseFile: string;
   databaseBytes: number | null;
   version?: number | null;
   targetVersion?: number;
   error?: string;
+}
+
+function createBacktestSchema(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS adaptive_plan_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at_ms INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      model_version TEXT NOT NULL,
+      trigger TEXT,
+      payload_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS adaptive_plan_snapshots_time_idx
+      ON adaptive_plan_snapshots(created_at_ms, id);
+    CREATE TABLE IF NOT EXISTS backtest_runs (
+      id TEXT PRIMARY KEY,
+      started_at_ms INTEGER NOT NULL,
+      started_at TEXT NOT NULL,
+      completed_at TEXT,
+      status TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      model_version TEXT NOT NULL,
+      range_name TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      period_start_ms INTEGER NOT NULL,
+      period_end_ms INTEGER NOT NULL,
+      summary_json TEXT,
+      error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS backtest_runs_started_idx
+      ON backtest_runs(started_at_ms DESC);
+    CREATE TABLE IF NOT EXISTS backtest_outcomes (
+      run_id TEXT NOT NULL REFERENCES backtest_runs(id) ON DELETE CASCADE,
+      plan_key TEXT NOT NULL,
+      evaluation_at_ms INTEGER NOT NULL,
+      outcome_json TEXT NOT NULL,
+      PRIMARY KEY(run_id, plan_key)
+    );
+    CREATE INDEX IF NOT EXISTS backtest_outcomes_run_time_idx
+      ON backtest_outcomes(run_id, evaluation_at_ms);
+  `);
 }
 
 export interface HistorySchemaVersions {
@@ -162,6 +204,7 @@ export function createHistorySchema(database: DatabaseSync, versions: HistorySch
     CREATE INDEX IF NOT EXISTS fuel_cell_forecasts_target_idx
       ON fuel_cell_forecasts(target_start_ms, issued_at_ms);
   `);
+  createBacktestSchema(database);
   const setMetadata = database.prepare(`
     INSERT INTO metadata(key, value) VALUES (?, ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -169,6 +212,29 @@ export function createHistorySchema(database: DatabaseSync, versions: HistorySch
   setMetadata.run("schemaVersion", JSON.stringify(versions.schemaVersion));
   setMetadata.run("energyCalculationVersion", JSON.stringify(versions.energyCalculationVersion));
   setMetadata.run("architectureVersion", JSON.stringify(versions.architectureVersion));
+}
+
+export function migrateHistorySchema(database: DatabaseSync, versions: HistorySchemaVersions): void {
+  const row = database.prepare("SELECT value FROM metadata WHERE key = 'schemaVersion'").get() as
+    | { value?: unknown }
+    | undefined;
+  const version = Number(row ? parseJson(row.value) : Number.NaN);
+  if (version === versions.schemaVersion) return;
+  if (version !== 7 || versions.schemaVersion !== 8) {
+    throw new Error(`history database schema ${Number.isInteger(version) ? version : "unknown"} cannot be migrated to ${versions.schemaVersion}`);
+  }
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    createBacktestSchema(database);
+    database.prepare(`
+      INSERT INTO metadata(key, value) VALUES ('schemaVersion', ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(JSON.stringify(versions.schemaVersion));
+    database.exec("COMMIT");
+  } catch (error: unknown) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 export async function inspectHistoryDatabase(
@@ -202,6 +268,15 @@ export async function inspectHistoryDatabase(
       const version = Number(row ? parseJson(row.value) : Number.NaN);
       if (!Number.isInteger(version) || version < 1) {
         return { state: "invalid", databaseFile, databaseBytes, error: "Schema version is missing or invalid" };
+      }
+      if (version === 7 && schemaVersion === 8) {
+        return {
+          state: "migratable",
+          databaseFile,
+          databaseBytes,
+          version,
+          targetVersion: schemaVersion,
+        };
       }
       if (version !== schemaVersion) {
         return {

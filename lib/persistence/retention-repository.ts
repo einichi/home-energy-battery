@@ -48,6 +48,7 @@ export function createRetentionRepository(dependencies: Dependencies) {
       await deleteInChunks("DELETE FROM weather WHERE time_ms IN (SELECT time_ms FROM weather WHERE time_ms < ? ORDER BY time_ms LIMIT 10000)", [cutoffMs]);
       await deleteInChunks("DELETE FROM solar_forecast_daily WHERE rowid IN (SELECT rowid FROM solar_forecast_daily WHERE period_end_ms < ? ORDER BY period_end_ms LIMIT 10000)", [cutoffMs]);
       await deleteInChunks("DELETE FROM fuel_cell_forecasts WHERE rowid IN (SELECT rowid FROM fuel_cell_forecasts WHERE target_start_ms < ? ORDER BY target_start_ms LIMIT 10000)", [cutoffMs]);
+      deleted.adaptivePlanSnapshots = await deleteInChunks("DELETE FROM adaptive_plan_snapshots WHERE id IN (SELECT id FROM adaptive_plan_snapshots WHERE created_at_ms < ? ORDER BY created_at_ms LIMIT 10000)", [cutoffMs]);
     }
     dependencies.database().exec("PRAGMA wal_checkpoint(PASSIVE)");
     return { policy, before, after: await dependencies.stats(), deleted };

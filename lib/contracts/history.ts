@@ -3,6 +3,9 @@ export interface HistorySample {
   timestamp?: string;
   rollupStart?: string;
   rollupEnd?: string;
+  startStateOfChargePercent?: number | null;
+  endStateOfChargePercent?: number | null;
+  minimumStateOfChargePercent?: number | null;
   rollupSampleCount?: number;
   expectedIntervalSeconds?: number;
   energyIntervalStart?: Record<string, string>;

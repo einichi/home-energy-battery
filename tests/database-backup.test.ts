@@ -7,11 +7,15 @@ import { ARCHITECTURE_VERSION, createApplicationStore } from "../lib/application
 import {
   backupDatabaseManually,
   cleanupExtractedDatabaseBackup,
+  databaseBackupMetadata,
   deleteDatabaseBackup,
   extractAndValidateDatabaseBackup,
   listDatabaseBackups,
 } from "../lib/database-backup.js";
 import { SCHEMA_VERSION, createHistoryStore } from "../lib/history-store.js";
+
+assert.equal(databaseBackupMetadata("history-v7-manual-20260922T000000Z.sqlite.zst", 8).compatible, true);
+assert.equal(databaseBackupMetadata("history-v6-manual-20260922T000000Z.sqlite.zst", 8).compatible, false);
 
 const dataDir = await mkdtemp(path.join(os.tmpdir(), "database-backup-"));
 try {

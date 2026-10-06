@@ -8,6 +8,7 @@ import {
 import { ARCHITECTURE_VERSION } from "./application-store.js";
 import {
   createHistorySchema,
+  migrateHistorySchema,
   inspectHistoryDatabase as inspectHistoryDatabaseFile,
 } from "./persistence/history-database.js";
 import { createEventRepository } from "./persistence/event-repository.js";
@@ -17,6 +18,7 @@ import {
 } from "./persistence/gas-tariff-repository.js";
 import { createForecastRepository } from "./persistence/forecast-repository.js";
 import { createHistoryStatisticsRepository } from "./persistence/history-statistics-repository.js";
+import { createBacktestRepository } from "./persistence/backtest-repository.js";
 import { createRetentionRepository } from "./persistence/retention-repository.js";
 import {
   createHistoryQueryRepository,
@@ -26,7 +28,7 @@ import type { HistorySample } from "./contracts/history.js";
 
 export { historyDatabaseFile } from "./persistence/history-database.js";
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 export const ENERGY_CALCULATION_VERSION = 4;
 const MAX_RAW_AUTO_SAMPLES = 10_000;
 const MAX_RAW_AUTO_BYTES = 32 * 1024 * 1024;
@@ -667,6 +669,7 @@ export function createHistoryStore({
     intervalEnergy,
     solarForecastMinimumCoverageRatio: SOLAR_FORECAST_MIN_COVERAGE_RATIO,
   });
+  const backtestRepository = createBacktestRepository(requireDatabase);
   const statisticsRepository = createHistoryStatisticsRepository({ database: requireDatabase, databaseFile, metadataGet });
   const retentionRepository = createRetentionRepository({ database: requireDatabase, stats: statisticsRepository.stats });
   const queryRepository = createHistoryQueryRepository({
@@ -821,7 +824,13 @@ export function createHistoryStore({
       const table = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'metadata'").get();
       const row = table ? database.prepare("SELECT value FROM metadata WHERE key = 'schemaVersion'").get() as { value?: unknown } | undefined : null;
       const version = row ? parseJson(row.value, null as number | null) : null;
-      if (version !== SCHEMA_VERSION) {
+      if (version === 7 && SCHEMA_VERSION === 8) {
+        migrateHistorySchema(database, {
+          schemaVersion: SCHEMA_VERSION,
+          energyCalculationVersion: ENERGY_CALCULATION_VERSION,
+          architectureVersion: ARCHITECTURE_VERSION,
+        });
+      } else if (version !== SCHEMA_VERSION) {
         database.close();
         database = null;
         throw new Error(`history database schema ${version ?? "unknown"} is not ready for application schema ${SCHEMA_VERSION}`);
@@ -857,7 +866,14 @@ export function createHistoryStore({
     isReady: ready,
     latestSample: latestRawSample,
     batteryChargeCurveSamples,
+    adaptivePlanSnapshots: backtestRepository.planSnapshots,
+    backtestOutcomes: backtestRepository.outcomes,
+    backtestRuns: backtestRepository.listRuns,
+    completeBacktestRun: backtestRepository.completeRun,
+    createBacktestRun: backtestRepository.createRun,
     querySamples,
+    recordAdaptivePlanSnapshot: backtestRepository.recordPlanSnapshot,
+    saveBacktestOutcome: backtestRepository.saveOutcome,
     recordEvent,
     recentEvents,
     recordGasTariffSnapshot,

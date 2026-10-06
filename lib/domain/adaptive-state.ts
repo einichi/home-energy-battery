@@ -24,6 +24,17 @@ export interface AdaptivePlanWindow {
   schedulingWatts?: number;
   timingReserveMs?: number;
   schedulingSource?: string;
+  guardDeliverability?: {
+    learned?: boolean;
+    sampleCount?: number;
+    interruptedSampleCount?: number;
+    distinctDays?: number;
+    deliveryFactor?: number;
+    observedDeliveryRatio?: number;
+    recoveryTimeFactor?: number;
+    interruptionReserveMs?: number;
+    blockers?: string[];
+  };
 }
 
 export interface AdaptivePlan {
@@ -154,6 +165,8 @@ interface WindowExecution {
   deliveredWh: number;
   estimatedDeliveryWh: number;
   interruptionCount: number;
+  guardInterruptedMs: number;
+  guardInterruptionStartedAt: string | null;
   solarHeadroomInterruptionCount: number;
   startSocPercent: number | null;
   latestSocPercent: number | null;
@@ -164,7 +177,7 @@ interface WindowExecution {
   updatedAt: string | null;
 }
 
-export interface WindowSummary extends Omit<WindowExecution, "latestSocPercent" | "peakSocPercent" | "idleRecoveryCount" | "startedTrackingAt" | "updatedAt"> {
+export interface WindowSummary extends Omit<WindowExecution, "latestSocPercent" | "peakSocPercent" | "guardInterruptionStartedAt" | "idleRecoveryCount" | "startedTrackingAt" | "updatedAt"> {
   unmetWh: number;
   socTargetReached: boolean;
   endSocPercent: number | null;
@@ -326,6 +339,8 @@ export function cleanAdaptiveChargingState(input: unknown = {}): AdaptiveChargin
         deliveredWh: Math.max(0, Math.round(Number(activeWindowExecution.deliveredWh) || 0)),
         estimatedDeliveryWh: Math.max(0, Math.round(Number(activeWindowExecution.estimatedDeliveryWh) || 0)),
         interruptionCount: Math.max(0, Math.round(Number(activeWindowExecution.interruptionCount) || 0)),
+        guardInterruptedMs: Math.max(0, Math.round(Number(activeWindowExecution.guardInterruptedMs) || 0)),
+        guardInterruptionStartedAt: stringOrNull(activeWindowExecution.guardInterruptionStartedAt),
         solarHeadroomInterruptionCount: Math.max(
           0,
           Math.round(Number(activeWindowExecution.solarHeadroomInterruptionCount) || 0),
@@ -356,6 +371,7 @@ export function cleanAdaptiveChargingState(input: unknown = {}): AdaptiveChargin
         targetSocPercent: finiteNumberOrNull(summary.targetSocPercent),
         socTargetReached: summary.socTargetReached === true,
         interruptionCount: Math.max(0, Math.round(Number(summary.interruptionCount) || 0)),
+        guardInterruptedMs: Math.max(0, Math.round(Number(summary.guardInterruptedMs) || 0)),
         solarHeadroomInterruptionCount: Math.max(
           0,
           Math.round(Number(summary.solarHeadroomInterruptionCount) || 0),
@@ -534,6 +550,10 @@ export function finalizeAdaptiveChargingWindowExecution(
   const targetSocPercent = finiteNumberOrNull(active.targetSocPercent);
   const socTargetReached = Number.isFinite(endSoc) && Number.isFinite(targetSocPercent)
     && Number(endSoc) >= Number(targetSocPercent);
+  const activeGuardStartedMs = new Date(active.guardInterruptionStartedAt ?? "").getTime();
+  const additionalGuardInterruptedMs = Number.isFinite(activeGuardStartedMs)
+    ? Math.max(0, now.getTime() - activeGuardStartedMs)
+    : 0;
   const summary: WindowSummary = {
     key: active.key,
     windowStart: active.windowStart,
@@ -547,6 +567,7 @@ export function finalizeAdaptiveChargingWindowExecution(
     targetSocPercent,
     socTargetReached,
     interruptionCount: active.interruptionCount,
+    guardInterruptedMs: Math.max(0, Math.round(active.guardInterruptedMs + additionalGuardInterruptedMs)),
     solarHeadroomInterruptionCount: Math.max(
       0,
       Math.round(Number(active.solarHeadroomInterruptionCount) || 0),
@@ -564,7 +585,7 @@ export function finalizeAdaptiveChargingWindowExecution(
   state.activeWindowExecution = null;
   appendAdaptiveChargingLog(
     state,
-    `${active.label || "Discounted window"} summary: ${summary.plannedWh} Wh planned, ${summary.deliveredWh} Wh delivered${summary.estimatedDeliveryWh > 0 ? ` (${summary.estimatedDeliveryWh} Wh estimated at exact boundaries)` : ""}, ${summary.unmetWh} Wh ${socTargetReached ? "unused (SOC target achieved)" : "unmet"}, ${summary.interruptionCount} breaker interruptions, ${summary.solarHeadroomInterruptionCount} solar-headroom pauses, SOC ${summary.startSocPercent ?? "--"}% to ${summary.endSocPercent ?? "--"}%`,
+    `${active.label || "Discounted window"} summary: ${summary.plannedWh} Wh planned, ${summary.deliveredWh} Wh delivered${summary.estimatedDeliveryWh > 0 ? ` (${summary.estimatedDeliveryWh} Wh estimated at exact boundaries)` : ""}, ${summary.unmetWh} Wh ${socTargetReached ? "unused (SOC target achieved)" : "unmet"}, ${summary.interruptionCount} breaker interruptions (${Math.round(summary.guardInterruptedMs / 60_000)} min), ${summary.solarHeadroomInterruptionCount} solar-headroom pauses, SOC ${summary.startSocPercent ?? "--"}% to ${summary.endSocPercent ?? "--"}%`,
     summary.unmetWh > 0 && !socTargetReached ? "warning" : "summary",
     now,
   );
@@ -604,6 +625,8 @@ export function syncAdaptiveChargingWindowExecution(
       deliveredWh: 0,
       estimatedDeliveryWh: 0,
       interruptionCount: 0,
+      guardInterruptedMs: 0,
+      guardInterruptionStartedAt: null,
       solarHeadroomInterruptionCount: 0,
       startSocPercent: finiteNumberOrNull(soc),
       latestSocPercent: finiteNumberOrNull(soc),
@@ -645,10 +668,24 @@ export function finalizeExpiredAdaptiveChargingWindow(
 }
 
 
-export function recordAdaptiveChargingWindowInterruption(state: AdaptiveChargingState): number {
+export function recordAdaptiveChargingWindowInterruption(state: AdaptiveChargingState, now: Date = new Date()): number {
   if (!state.activeWindowExecution) return 0;
-  state.activeWindowExecution.interruptionCount += 1;
+  if (!state.activeWindowExecution.guardInterruptionStartedAt) {
+    state.activeWindowExecution.interruptionCount += 1;
+    state.activeWindowExecution.guardInterruptionStartedAt = now.toISOString();
+  }
   return state.activeWindowExecution.interruptionCount;
+}
+
+
+export function completeAdaptiveChargingWindowInterruption(state: AdaptiveChargingState, now: Date = new Date()): number {
+  const execution = state.activeWindowExecution;
+  if (!execution?.guardInterruptionStartedAt) return 0;
+  const startedMs = new Date(execution.guardInterruptionStartedAt).getTime();
+  const elapsedMs = Number.isFinite(startedMs) ? Math.max(0, now.getTime() - startedMs) : 0;
+  execution.guardInterruptedMs = Math.max(0, execution.guardInterruptedMs + elapsedMs);
+  execution.guardInterruptionStartedAt = null;
+  return elapsedMs;
 }
 
 

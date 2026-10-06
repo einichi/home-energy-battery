@@ -1,5 +1,5 @@
 import { getJson, sendJson } from "./client";
-import type { AdaptiveChargingStatus, AutomationRule, AwayPeriod, AwayPeriodsView } from "./contracts";
+import type { AdaptiveChargingStatus, AutomationRule, AwayPeriod, AwayPeriodsView, BacktestRunRequest, BacktestRunSummary, BacktestRunsResponse } from "./contracts";
 
 export function getAdaptiveCharging(signal?: AbortSignal) {
   return getJson<AdaptiveChargingStatus>("/api/adaptive-charging", signal);
@@ -11,6 +11,14 @@ export function getAutomationRules(signal?: AbortSignal) {
 
 export function getAwayPeriods(signal?: AbortSignal) {
   return getJson<AwayPeriodsView>("/api/away-periods", signal);
+}
+
+export function getBacktests(signal?: AbortSignal) {
+  return getJson<BacktestRunsResponse>("/api/backtests", signal);
+}
+
+export function runBacktest(request: BacktestRunRequest) {
+  return sendJson<BacktestRunSummary>("/api/backtests", "POST", request);
 }
 
 export function recalculateAdaptiveCharging() {

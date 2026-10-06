@@ -103,6 +103,7 @@ import {
 import {
   cleanAdaptiveChargingPerformance,
   cleanAdaptiveChargingState,
+  completeAdaptiveChargingWindowInterruption,
   finalizeAdaptiveChargeSession,
   finalizeAdaptiveChargingWindowExecution,
   recordAdaptiveChargingSolarHeadroomInterruption,
@@ -320,7 +321,20 @@ const recalculationLog = adaptiveChargingPlanLogMessage({
     discharge: { whPerSocPoint: 50, source: "learned" },
     power: { effectiveWatts: 2192, source: "configured" },
   },
-  windows: [{ label: "Cheapest", targetSocPercent: 52, plannedChargeKwh: 1.97 }],
+  windows: [{
+    label: "Cheapest",
+    targetSocPercent: 52,
+    plannedChargeKwh: 1.97,
+    schedulingWatts: 1644,
+    timingReserveMs: 1_800_000,
+    schedulingSource: "learned+guard-history",
+    guardDeliverability: {
+      learned: true,
+      deliveryFactor: 0.75,
+      sampleCount: 6,
+      interruptionReserveMs: 900_000,
+    },
+  }],
   slots: [{ start: "2026-07-11T04:03:42.000Z", end: "2026-07-11T05:00:00.000Z", targetWh: 1970 }],
 }, "entering Cheapest", 10);
 
@@ -331,6 +345,8 @@ assert.match(recalculationLog, /targets \[Cheapest 52%\/1\.97 kWh\]/);
 assert.match(recalculationLog, /slots \[.*1970 Wh\]/);
 
 assert.match(recalculationLog, /test warning/);
+
+assert.match(recalculationLog, /guard 75% reliable from 6 windows, 15 min observed recovery reserve/);
 
 assert.match(recalculationLog, /battery model v2 \[charge 54\.0 Wh\/SOC \(configured\), discharge 50\.0 Wh\/SOC \(learned\), power 2192 W \(configured\)\]/);
 
@@ -1312,7 +1328,15 @@ executionState.activeChargedKwh = 0.6;
 
 finalizeAdaptiveChargeSession(executionState as ReturnType<typeof cleanAdaptiveChargingState>, "breaker interruption", new Date("2026-07-11T12:20:00.000Z"));
 
-recordAdaptiveChargingWindowInterruption(executionState as ReturnType<typeof cleanAdaptiveChargingState>);
+recordAdaptiveChargingWindowInterruption(
+  executionState as ReturnType<typeof cleanAdaptiveChargingState>,
+  new Date("2026-07-11T12:20:00.000Z"),
+);
+
+assert.equal(completeAdaptiveChargingWindowInterruption(
+  executionState as ReturnType<typeof cleanAdaptiveChargingState>,
+  new Date("2026-07-11T12:30:00.000Z"),
+), 10 * 60_000);
 
 syncAdaptiveChargingWindowExecution(executionState as ReturnType<typeof cleanAdaptiveChargingState>, executionOccurrence as { start: string; end: string; band: { label: string; yenPerKwh: number } }, {
   slots: [{
@@ -1337,6 +1361,8 @@ assert.equal(executionSummary!.deliveredWh, 600);
 assert.equal(executionSummary!.unmetWh, 400);
 
 assert.equal(executionSummary!.interruptionCount, 1);
+
+assert.equal(executionSummary!.guardInterruptedMs, 10 * 60_000);
 
 assert.equal(executionSummary!.estimatedDeliveryWh, 0);
 

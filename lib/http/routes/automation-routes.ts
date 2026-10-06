@@ -5,6 +5,7 @@ import type { ApiDependencies } from "../api.js";
 
 type AutomationRouteDependencies = Pick<ApiDependencies,
   | "ALL_DAYS" | "adaptiveChargingConfiguredActive" | "cleanAutomationRule" | "json"
+  | "backtestService"
   | "mergeAutomationRule" | "mutateSchedules" | "parseRunAt" | "randomUUID"
   | "readAutomationRules" | "readBody" | "readConfig" | "readSchedules"
   | "writeAutomationRuleStates" | "writeAutomationRules"
@@ -22,6 +23,19 @@ export function createAutomationRouteHandler(dependencies: AutomationRouteDepend
     res: ServerResponse,
     url: URL,
   ): Promise<void | false> {
+    if (req.method === "GET" && url.pathname === "/api/backtests") {
+      return json(res, 200, dependencies.backtestService.list());
+    }
+    if (req.method === "POST" && url.pathname === "/api/backtests") {
+      const body = await readBody(req);
+      return json(res, 201, await dependencies.backtestService.run({
+        range: body.range === "all" ? "all" : body.range === "90d" || body.range === undefined ? "90d" : body.range as never,
+        mode: body.mode === "as-operated" || body.mode === "model-only" || body.mode === "both" || body.mode === undefined
+          ? body.mode
+          : body.mode as never,
+        modelId: typeof body.modelId === "string" ? body.modelId : undefined,
+      }));
+    }
     if (req.method === "GET" && url.pathname === "/api/schedules") {
       return json(res, 200, await readSchedules());
     }

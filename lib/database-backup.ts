@@ -111,7 +111,10 @@ export function databaseBackupMetadata(filename: string, currentVersion: number 
     schemaVersion,
     targetVersion: null,
     createdAt: backupTimestamp(name),
-    compatible: Number.isInteger(schemaVersion) && schemaVersion === currentVersion,
+    compatible: Number.isInteger(schemaVersion) && (
+      schemaVersion === currentVersion
+      || (schemaVersion === 7 && currentVersion === 8)
+    ),
   };
 }
 

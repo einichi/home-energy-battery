@@ -823,7 +823,13 @@ export function adaptiveChargingPlanLogMessage(plan: PlanLike | null | undefined
       && Number.isFinite(Number(window.timingReserveMs)))
     .map((window) => {
       const details = window as Record<string, unknown>;
-      return `${String(details.label ?? "")} ${Math.round(Number(details.schedulingWatts))} W/${Math.round(Number(details.timingReserveMs) / 60_000)} min reserve/${String(details.schedulingSource ?? "")}`;
+      const guard = details.guardDeliverability && typeof details.guardDeliverability === "object"
+        ? details.guardDeliverability as Record<string, unknown>
+        : null;
+      const guardSummary = guard?.learned === true
+        ? `/guard ${Math.round(Number(guard.deliveryFactor) * 100)}% reliable from ${Number(guard.sampleCount)} windows, ${Math.round(Number(guard.interruptionReserveMs) / 60_000)} min observed recovery reserve`
+        : "";
+      return `${String(details.label ?? "")} ${Math.round(Number(details.schedulingWatts))} W/${Math.round(Number(details.timingReserveMs) / 60_000)} min reserve/${String(details.schedulingSource ?? "")}${guardSummary}`;
     })
     .join(", ");
   const timingSummary = timing ? `; timing [${timing}]` : "";

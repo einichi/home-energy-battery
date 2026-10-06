@@ -27,6 +27,7 @@ type EneFarmReportingService = ReturnType<typeof import("../services/ene-farm-re
 type AwayPeriodService = ReturnType<typeof import("../services/away-period-service.js").createAwayPeriodService>;
 type DeviceCommandService = ReturnType<typeof import("../services/device-command-service.js").createDeviceCommandService>;
 type SystemAlertService = ReturnType<typeof import("../services/system-alert-service.js").createSystemAlertService>;
+type BacktestService = ReturnType<typeof import("../services/backtest-service.js").createBacktestService>;
 
 export interface ApiDependencies {
   ALL_DAYS: number[];
@@ -48,6 +49,7 @@ export interface ApiDependencies {
   awayTimestamp: AwayPeriodService["timestamp"];
   backupPreparationView: typeof import("../domain/operational-overrides.js").backupPreparationView;
   batteryStrategyView(now?: Date): Promise<BatteryStrategy>;
+  backtestService: BacktestService;
   billingPeriodKey: typeof import("../domain/ene-farm.js").billingPeriodKey;
   buildAdaptiveChargingPlan: typeof import("../domain/adaptive-planning.js").buildAdaptiveChargingPlan;
   cleanAutomationRule: typeof import("../domain/automation-rules.js").cleanAutomationRule;

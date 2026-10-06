@@ -111,7 +111,7 @@ import { createStatusHistoryService } from "./services/status-history-service.js
 import { createConfigurationCommitService } from "./services/configuration-commit-service.js";
 import { createScheduledAutomationService } from "./services/scheduled-automation-service.js";
 import { createApplicationInitializer } from "./services/application-initializer.js";
-
+import { createBacktestService } from "./services/backtest-service.js";
 export interface ApplicationDependencies {
   environment?: NodeJS.ProcessEnv;
   createHistoryStore?: typeof createHistoryStore;
@@ -231,6 +231,7 @@ const adaptiveForecastService = createAdaptiveForecastService({
   readHistory: readAdaptiveChargingHistory,
   logError: logDetailedError,
 });
+const backtestService = createBacktestService({ history: historyStore, randomUUID });
 const refreshAdaptiveChargingForecast = adaptiveForecastService.refresh;
 const adaptiveChargingSolarForecastAccuracy = adaptiveForecastService.accuracy;
 const historyReportingService = createHistoryReportingService({
@@ -525,6 +526,7 @@ const evaluateAdaptiveCharging = createAdaptiveChargingEvaluator({
   readDemandProfileDays: readAdaptiveChargingDemandProfileDays,
   solarForecastAccuracy: adaptiveChargingSolarForecastAccuracy,
   recordFuelCellPlanForecast,
+  recordPlanSnapshot: historyStore.recordAdaptivePlanSnapshot,
   breakerWaitLogMs: ADAPTIVE_CHARGING_BREAKER_WAIT_LOG_MS,
 });
 
@@ -624,6 +626,7 @@ const api = createApiHandler({
   adaptiveChargingScheduledEvent,
   adaptiveChargingSolarForecastAccuracy,
   adaptiveChargingView,
+  backtestService,
   appendAdaptiveChargingLog,
   applicationArchitectureStatus: applicationStore.status,
   applyInterruptedChargeCap,
@@ -764,7 +767,6 @@ const server = http.createServer(async (req, res) => {
     });
   }
 });
-
 async function start(): Promise<void> {
   await startRuntime({
     server,
@@ -774,14 +776,13 @@ async function start(): Promise<void> {
     validateStorage: async () => {
       await ensureDataDir();
       const inspection = await inspectHistoryDatabase(DATA_DIR);
-      if (inspection.state !== "new" && inspection.state !== "current") {
+      if (inspection.state !== "new" && inspection.state !== "current" && inspection.state !== "migratable") {
         throw new Error(inspection.error ?? `Database is not usable (${inspection.state})`);
       }
     },
     initializeApplication: applicationInitializer.initialize,
   });
 }
-
 async function stop(): Promise<void> {
   await stopRuntime({
     server,
@@ -794,6 +795,5 @@ async function stop(): Promise<void> {
     },
   });
 }
-
   return { server, start, stop };
 }

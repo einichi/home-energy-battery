@@ -192,6 +192,45 @@ await evaluator(config, status, [guardRule], new Date(now.getTime() + 60_000));
 assert.deepEqual(actions, [{ action: "set-mode", payload: { mode: "standby" } }], "a two-point SOC drop should exhaust the solar-window discharge budget");
 assert.equal(state.lastResult?.skipped, "solar-window discharge budget reached; holding standby until planned charging is due");
 
+const blockedState = cleanAdaptiveChargingState({
+  forecast: { fetchedAt: forecastFetchedAt },
+  plan,
+  lastPlanEventKey: adaptiveChargingScheduledEvent(config, slotStart).eventKey,
+  lastAwayStateKey: "home",
+});
+const blockedEvaluator = createAdaptiveChargingEvaluator({
+  readState: async () => blockedState,
+  writeState: async (next) => next,
+  history: { awayPeriods: () => [], historicalWeather: () => [] },
+  readOperationalOverrides: async () => cleanOperationalOverridesState(),
+  executeAction: async () => ({ ok: true }),
+  releaseCharge: async () => false,
+  suspendInStandby: async () => false,
+  startCharge: async () => ({ ok: true }),
+  recoverIdle: async () => false,
+  readHistory: async () => [],
+  refreshBatteryLearning: async () => blockedState.batteryLearning,
+  readDemandProfileDays: async () => [],
+  solarForecastAccuracy: () => ({}) as never,
+  recordFuelCellPlanForecast: () => 0,
+  breakerWaitLogMs: 60_000,
+});
+const activeGuardRule = {
+  ...guardRule,
+  state: { ...guardRule.state, awaitingRestore: true },
+};
+
+await blockedEvaluator(config, status, [activeGuardRule], slotStart);
+assert.equal(blockedState.activeWindowExecution?.interruptionCount, 1);
+assert.equal(blockedState.activeWindowExecution?.guardInterruptionStartedAt, slotStart.toISOString());
+
+await blockedEvaluator(config, status, [activeGuardRule], new Date(slotStart.getTime() + 5_000));
+assert.equal(blockedState.activeWindowExecution?.interruptionCount, 1, "one guard incident must not be counted on every refresh");
+
+await blockedEvaluator(config, status, [guardRule], new Date(slotStart.getTime() + 10_000));
+assert.equal(blockedState.activeWindowExecution?.guardInterruptionStartedAt, null);
+assert.equal(blockedState.activeWindowExecution?.guardInterruptedMs, 10_000);
+
 const schedule: BatterySchedule = {
   id: "legacy-schedule",
   name: "set-mode",

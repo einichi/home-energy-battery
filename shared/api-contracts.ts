@@ -5,6 +5,69 @@ export type Metric<T = number> = {
   acquired_at?: string | null;
 };
 
+export type BacktestRange = "90d" | "all";
+export type BacktestMode = "both" | "as-operated" | "model-only";
+
+export type BacktestComponentMetrics = {
+  sampleCount: number;
+  meanAbsoluteErrorKwh: number | null;
+  meanBiasKwh: number | null;
+};
+
+export type BacktestExecutionMetrics = {
+  evaluablePlans: number;
+  targetMetPercent: number | null;
+  reserveViolationCount: number;
+  totalGridCostYen: number | null;
+  averageGridCostYen: number | null;
+};
+
+export type BacktestRunSummary = {
+  id: string;
+  engineVersion: number;
+  modelId: string;
+  modelVersion: string;
+  status: "running" | "complete" | "failed";
+  range: BacktestRange;
+  mode: BacktestMode;
+  startedAt: string;
+  completedAt: string | null;
+  periodStart: string;
+  periodEnd: string;
+  planCount: number;
+  evaluablePlanCount: number;
+  excludedPlanCount: number;
+  exactReplayPlanCount: number;
+  notes: string[];
+  components: {
+    solar: BacktestComponentMetrics;
+    demand: BacktestComponentMetrics;
+    fuelCell: BacktestComponentMetrics;
+  };
+  asOperated: BacktestExecutionMetrics | null;
+  modelOnly: BacktestExecutionMetrics | null;
+  seasonal: Array<{
+    season: "winter" | "spring" | "summer" | "autumn";
+    planCount: number;
+    evaluablePlanCount: number;
+    targetMetPercent: number | null;
+    averageGridCostYen: number | null;
+  }>;
+  error: string | null;
+};
+
+export type BacktestRunRequest = {
+  range?: BacktestRange;
+  mode?: BacktestMode;
+  modelId?: string;
+};
+
+export type BacktestRunsResponse = {
+  models: Array<{ id: string; version: string; label: string }>;
+  runs: BacktestRunSummary[];
+  scheduling: "manual";
+};
+
 export type BatteryStatus = {
   configured?: boolean;
   instant_power?: Metric<number>;
@@ -497,6 +560,28 @@ export type AdaptiveChargingPlan = {
   plannedStoredChargeKwh?: number | null;
   timeline?: AdaptiveTimelineItem[];
   slots?: Array<{ start: string; end: string; windowEnd?: string; targetWh?: number; targetSocPercent?: number; label?: string }>;
+  windows?: Array<{
+    start?: string;
+    end?: string;
+    label?: string;
+    targetSocPercent?: number | null;
+    plannedChargeKwh?: number;
+    unmetChargeKwh?: number;
+    schedulingWatts?: number;
+    timingReserveMs?: number;
+    schedulingSource?: string;
+    guardDeliverability?: {
+      learned?: boolean;
+      sampleCount?: number;
+      interruptedSampleCount?: number;
+      distinctDays?: number;
+      deliveryFactor?: number;
+      observedDeliveryRatio?: number;
+      recoveryTimeFactor?: number;
+      interruptionReserveMs?: number;
+      blockers?: string[];
+    };
+  }>;
   demandHistory?: {
     recordedDayCount?: number;
     validDayCount?: number;
@@ -566,6 +651,7 @@ export type AdaptiveChargingStatus = {
     targetSocPercent?: number | null;
     socTargetReached?: boolean;
     interruptionCount?: number;
+    guardInterruptedMs?: number;
     solarHeadroomInterruptionCount?: number;
     startSocPercent?: number | null;
     endSocPercent?: number | null;

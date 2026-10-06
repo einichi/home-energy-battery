@@ -8,6 +8,8 @@ import type { SolarForecast, SolarForecastAccuracy, SolarForecastHour } from "./
 import { discountedBandOccurrence, explicitDiscountedBand, rateForTimestamp } from "./tariffs.js";
 import { halfHourIndex, isAwayAt, localDayKey } from "./time.js";
 import type { AwayPeriod } from "./time.js";
+import { applyGuardDeliverabilityToTiming, guardDeliverabilityForWindow } from "./guard-deliverability.js";
+import type { GuardDeliverabilityModel, GuardWindowOutcome } from "./guard-deliverability.js";
 import type { ApplicationConfig, RateBand } from "../contracts/configuration.js";
 import {
   mergeAdaptiveChargingSlots,
@@ -112,6 +114,7 @@ interface AdaptiveWindowPlan {
   schedulingSource: string;
   unvalidatedTaper: boolean;
   timeConstrainedWh: number;
+  guardDeliverability: GuardDeliverabilityModel;
 }
 
 interface ChronologicalPlan {
@@ -131,6 +134,7 @@ interface AdaptivePlanningState {
   historicalWeather?: SolarForecastHour[];
   solarForecastAccuracy?: SolarForecastAccuracy & { sampleCount?: number; measuredFactor?: unknown };
   standbyHoldUntil?: string | null;
+  windowSummaries?: GuardWindowOutcome[];
   owner?: string | null;
   activeSlot?: { windowEnd?: string } | null;
   batteryLearning?: NonNullable<Parameters<typeof effectiveBatteryLearningModel>[1]>["batteryLearning"];
@@ -453,6 +457,7 @@ export function planChronologicalDiscountedCharging({
   chargeWhPerSocPoint,
   chargeToStoredRatio = 1,
   standbyWindowEnd = null,
+  windowSummaries = [],
 }: {
   timeline?: AdaptiveTimelineSlot[];
   currentStoredKwh: number;
@@ -464,6 +469,7 @@ export function planChronologicalDiscountedCharging({
   chargeWhPerSocPoint?: number;
   chargeToStoredRatio?: number;
   standbyWindowEnd?: string | null;
+  windowSummaries?: readonly GuardWindowOutcome[];
 }): ChronologicalPlan {
   const chargeConversion = Math.min(1.5, Math.max(0.5, Number(chargeToStoredRatio) || 1));
   const windows = discountedTimelineWindows(timeline);
@@ -539,7 +545,12 @@ export function planChronologicalDiscountedCharging({
       );
       const requiredChargeWh = Math.max(0, targetStoredKwh - noGridStoredKwh) * 1000 / chargeConversion;
       const windowDurationMs = Math.max(0, window.endMs - window.startMs);
-      const timing = chargePowerCurve.length && Number.isFinite(Number(chargeWhPerSocPoint))
+      const guardDeliverability = guardDeliverabilityForWindow(windowSummaries, {
+        start: window.configuredStartMs,
+        end: window.configuredEndMs,
+        label: window.label,
+      });
+      const baseTiming = chargePowerCurve.length && Number.isFinite(Number(chargeWhPerSocPoint))
         ? adaptiveChargingTimingProfile({
             requiredWh: requiredChargeWh,
             startSocPercent: capacityKwh ? storedAtStartKwh / capacityKwh * 100 : 0,
@@ -558,6 +569,12 @@ export function planChronologicalDiscountedCharging({
             timeConstrainedWh: 0,
             source: "configured",
           };
+      const timing = applyGuardDeliverabilityToTiming(
+        baseTiming,
+        guardDeliverability,
+        requiredChargeWh,
+        windowDurationMs,
+      );
       windowSchedulingWatts = timing.schedulingWatts;
       const chargeByIndex = new Map<number, number>();
       let projectedEndKwh = noGridStoredKwh;
@@ -654,6 +671,7 @@ export function planChronologicalDiscountedCharging({
         schedulingSource: timing.source,
         unvalidatedTaper: timing.unvalidatedTaper,
         timeConstrainedWh: Math.round(timing.timeConstrainedWh),
+        guardDeliverability,
       });
       cursor = window.endIndex;
     }
@@ -899,6 +917,7 @@ export function buildAdaptiveChargingPlan({
     chargeWhPerSocPoint: batteryModel.charge.whPerSocPoint,
     chargeToStoredRatio: batteryModel.chargeToStoredRatio,
     standbyWindowEnd,
+    windowSummaries: state.windowSummaries,
   });
   const timelineView = buildAdaptiveChargingTimelineView({
     timeline,

@@ -189,7 +189,8 @@ export function createDatabaseAdministrationService(dependencies: DatabaseAdmini
           workingDir: dependencies.dataDir,
           onProgress,
         });
-        if (extracted.schemaVersion !== SCHEMA_VERSION) {
+        if (extracted.schemaVersion !== SCHEMA_VERSION
+          && !(extracted.schemaVersion === 7 && SCHEMA_VERSION === 8)) {
           throw dependencies.createError(409, `Backup contains schema v${extracted.schemaVersion}; application requires schema v${SCHEMA_VERSION}`);
         }
         const backupArchitectureVersion = architectureVersionForDatabase(extracted.snapshotFile);

@@ -546,6 +546,12 @@ tbody td { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .performance-domain-grid strong { font-size: 1.12rem; font-variant-numeric: tabular-nums; }
 .performance-domain-grid small { color: var(--text-faint); font-size: .66rem; line-height: 1.45; }
 .performance-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.backtest-actions { display: flex; align-items: end; gap: 10px; }
+.backtest-actions label { display: grid; gap: 4px; color: var(--text-muted); font-size: .72rem; }
+.backtest-actions select { min-height: 38px; padding: 0 34px 0 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--surface-raised); }
+.backtest-summary { margin-bottom: 14px; }
+.backtest-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--text-muted); font-size: .72rem; font-variant-numeric: tabular-nums; }
+.backtest-detail-table { margin-top: 14px; }
 .performance-evidence { min-width: 0; padding: 24px; }
 .performance-evidence table { min-width: 0; margin-top: 18px; }
 .performance-evidence th, .performance-evidence td { padding-inline: 8px; }

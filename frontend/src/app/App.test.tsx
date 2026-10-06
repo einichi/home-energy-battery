@@ -386,6 +386,17 @@ const adaptiveCharging = {
     predictedFuelCellKwh: 1.1,
     predictedSurplusKwh: 0.4,
     plannedChargeKwh: 1.2,
+    windows: [{
+      start: automationStart.toISOString(),
+      end: automationMiddle.toISOString(),
+      label: "Night",
+      guardDeliverability: {
+        learned: true,
+        sampleCount: 6,
+        deliveryFactor: 0.75,
+        interruptionReserveMs: 15 * 60_000,
+      },
+    }],
     demandHistory: {
       recordedDayCount: 12,
       validDayCount: 9,
@@ -463,6 +474,8 @@ const adaptiveCharging = {
       endSocPercent: 81,
       targetSocPercent: 82,
       unmetWh: 100,
+      interruptionCount: 2,
+      guardInterruptedMs: 15 * 60_000,
     },
   ],
   log: [
@@ -530,6 +543,34 @@ const automationReceipts = [
     events: [],
   },
 ];
+
+const backtestRun = {
+  id: "backtest-1",
+  engineVersion: 1,
+  modelId: "adaptive-planner",
+  modelVersion: "1",
+  status: "complete",
+  range: "90d",
+  mode: "both",
+  startedAt: "2026-09-12T12:00:00.000Z",
+  completedAt: "2026-09-12T12:00:01.000Z",
+  periodStart: "2026-06-14T12:00:00.000Z",
+  periodEnd: "2026-09-12T12:00:00.000Z",
+  planCount: 4,
+  evaluablePlanCount: 3,
+  excludedPlanCount: 1,
+  exactReplayPlanCount: 3,
+  notes: ["Unknown periods are excluded rather than guessed."],
+  components: {
+    solar: { sampleCount: 3, meanAbsoluteErrorKwh: 0.4, meanBiasKwh: -0.1 },
+    demand: { sampleCount: 3, meanAbsoluteErrorKwh: 0.5, meanBiasKwh: 0.2 },
+    fuelCell: { sampleCount: 3, meanAbsoluteErrorKwh: 0.1, meanBiasKwh: 0 },
+  },
+  asOperated: { evaluablePlans: 3, targetMetPercent: 66.7, reserveViolationCount: 1, totalGridCostYen: 900, averageGridCostYen: 300 },
+  modelOnly: { evaluablePlans: 3, targetMetPercent: 100, reserveViolationCount: 0, totalGridCostYen: 750, averageGridCostYen: 250 },
+  seasonal: [],
+  error: null,
+};
 
 function localDateTimeForTest(date: Date) {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
@@ -599,6 +640,10 @@ function mockApi(
                       ? history
                       : url.includes("/api/ene-farm?")
                         ? eneFarm
+                        : url.endsWith("/api/backtests")
+                          ? init?.method === "POST"
+                            ? backtestRun
+                            : { models: [{ id: "adaptive-planner", version: "1", label: "Current Adaptive Charging planner" }], runs: [], scheduling: "manual" }
                         : url.endsWith("/api/adaptive-charging")
                           ? {
                               ...adaptiveCharging,
@@ -1097,6 +1142,7 @@ describe("React application shell", () => {
     expect(screen.getByRole("heading", { name: "Active protections" })).toBeVisible();
     expect(screen.getByLabelText("Today and tonight automation plan")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Away schedule" })).toBeVisible();
+    expect(screen.getByText("Uses 75% delivery reliability from 6 comparable windows with a 15-minute interruption reserve.")).toBeVisible();
     expect(screen.getByText("Selected the discounted charging window.")).toBeVisible();
     expect(screen.getByText("Charging request was acknowledged but readback remained Standby")).toBeVisible();
     expect(screen.getByText("Readback mismatch")).toBeVisible();
@@ -1108,7 +1154,15 @@ describe("React application shell", () => {
     expect(screen.getByText("9", { selector: "dd" })).toBeVisible();
     expect(screen.getByText("1.1 kWh")).toBeVisible();
     expect(screen.getByText("100 Wh short")).toBeVisible();
+    expect(screen.getByText("2 interruptions · 15 min unavailable")).toBeVisible();
     expect(screen.getAllByText("3 days").length).toBeGreaterThan(0);
+    expect(await screen.findByRole("heading", { name: "Forecast backtesting" })).toBeVisible();
+    expect(screen.getByText("No backtest has been run yet.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Run backtest" }));
+    expect(await screen.findByText("3/4")).toBeVisible();
+    expect(screen.getByText("67%")).toBeVisible();
+    expect(screen.getByText("100%")).toBeVisible();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/backtests", expect.objectContaining({ method: "POST" })));
     fireEvent.click(screen.getByRole("button", { name: "Configuration" }));
     expect(screen.getByRole("heading", { name: "Setup checklist" })).toBeVisible();
     expect(screen.getByText("6/6 ready")).toBeVisible();

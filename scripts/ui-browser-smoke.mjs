@@ -386,7 +386,7 @@ try {
   });
   await batteryTimeline.waitFor();
   assert(await batteryTimeline.isVisible(), "Battery timeline did not render");
-  assert(await page.getByText("Direct operation", { exact: true }).isVisible(), "Manual controls are not persistently visible");
+  assert(await page.getByText("Manual operation", { exact: true }).isVisible(), "Manual controls are not persistently visible");
   await page.getByRole("button", { name: "Charge", exact: true }).click();
   assert(await page.getByRole("dialog", { name: "Start manual charging" }).isVisible(), "Physical command review did not open");
   await page.getByRole("button", { name: "Send command" }).click();

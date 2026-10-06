@@ -16,6 +16,7 @@ import {
 } from "../domain/adaptive-planning.js";
 import {
   appendAdaptiveChargingLog,
+  completeAdaptiveChargingWindowInterruption,
   finalizeAdaptiveChargeSession,
   finalizeExpiredAdaptiveChargingWindow,
   recordAdaptiveChargeSample,
@@ -52,6 +53,7 @@ import { backupPreparationBlocksActions } from "../domain/operational-overrides.
 import { discountedBandOccurrence, explicitDiscountedBand } from "../domain/tariffs.js";
 import { numericMetric } from "../domain/telemetry.js";
 import { batteryOperationMode } from "../domain/automation-rules.js";
+import { CURRENT_BACKTEST_MODEL } from "../domain/backtesting.js";
 
 type AdaptiveOperations = ReturnType<typeof createAdaptiveChargingOperations>;
 type AdaptiveHistory = ReturnType<typeof createAdaptiveHistoryService>;
@@ -77,6 +79,14 @@ export interface AdaptiveChargingEvaluatorDependencies {
   readDemandProfileDays: AdaptiveHistory["readDemandProfileDays"];
   solarForecastAccuracy: AdaptiveForecast["accuracy"];
   recordFuelCellPlanForecast(plan: AdaptivePlan | null, now?: Date): number;
+  recordPlanSnapshot?(input: {
+    createdAt: string;
+    modelId: string;
+    modelVersion: string;
+    trigger?: string | null;
+    config: Pick<ApplicationConfig, "rateBands" | "standardRateYenPerKwh" | "batteryCapabilities" | "adaptiveCharging"> & { settingCache?: ApplicationConfig["settingCache"] };
+    plan: AdaptivePlan;
+  }): number;
   breakerWaitLogMs: number;
 }
 
@@ -266,6 +276,18 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
       return writeAdaptiveChargingState(state);
     }
     if (guardActive) {
+      if (activeDiscountedWindow && state.plan?.available) {
+        syncAdaptiveChargingWindowExecution(
+          state,
+          activeDiscountedWindow,
+          state.plan,
+          numericMetric(status.energy?.battery?.remaining_percent),
+          now,
+        );
+        if (adaptiveChargingSlotAt(state.plan, now)) {
+          recordAdaptiveChargingWindowInterruption(state, now);
+        }
+      }
       if (state.owner === "adaptiveCharging") {
         const interruption = preserveInterruptedAdaptiveCharge(state, now);
         finalizeAdaptiveChargeSession(state, "Charging Demand Guard interrupted Adaptive Charging", now);
@@ -276,7 +298,7 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
         state.activeLastCheckedAt = null;
         if (!interruption) state.plan = null;
         if (interruption) {
-          recordAdaptiveChargingWindowInterruption(state);
+          recordAdaptiveChargingWindowInterruption(state, now);
           beginAdaptiveChargingBreakerRecovery(state, adaptiveChargingLiveChargeHeadroom(status, config, state, rules), now);
         }
         appendAdaptiveChargingLog(
@@ -296,6 +318,10 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
       finalizeExpiredAdaptiveChargingWindow(state, numericMetric(status.energy?.battery?.remaining_percent), now);
       state.lastResult = { ok: true, at: now.toISOString(), skipped: "Charging Demand Guard active" };
       return writeAdaptiveChargingState(state);
+    }
+
+    if (state.activeWindowExecution?.guardInterruptionStartedAt && !state.breakerRecovery) {
+      completeAdaptiveChargingWindowInterruption(state, now);
     }
 
     const liveSoc = numericMetric(status.energy?.battery?.remaining_percent);
@@ -365,6 +391,22 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
         );
         state.plan = capped.plan;
         state.interruptedCharge = capped.interruption;
+      }
+      if (state.plan) {
+        dependencies.recordPlanSnapshot?.({
+          createdAt: now.toISOString(),
+          modelId: CURRENT_BACKTEST_MODEL.id,
+          modelVersion: CURRENT_BACKTEST_MODEL.version,
+          trigger: refreshDecision.trigger,
+          config: {
+            rateBands: config.rateBands,
+            standardRateYenPerKwh: config.standardRateYenPerKwh,
+            batteryCapabilities: config.batteryCapabilities,
+            adaptiveCharging: config.adaptiveCharging,
+            settingCache: config.settingCache,
+          },
+          plan: state.plan,
+        });
       }
       appendAdaptiveChargingLog(
         state,
@@ -461,6 +503,20 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
       state.standbyHoldUntil = null;
     }
     const liveImportSafety = adaptiveChargingLiveImportSafety(status, rules);
+    if (state.breakerRecovery && state.owner !== "adaptiveCharging" && !guardActive) {
+      const recoveryHeadroom = adaptiveChargingLiveChargeHeadroom(status, config, state, rules);
+      const recoveryStatus = advanceAdaptiveChargingBreakerRecovery(state, recoveryHeadroom, now);
+      if (recoveryStatus.ready) {
+        const recoveredAfterMs = completeAdaptiveChargingWindowInterruption(state, now);
+        state.breakerRecovery = null;
+        appendAdaptiveChargingLog(
+          state,
+          `Charging Demand Guard headroom recovered after ${Math.round(recoveredAfterMs / 1000)} seconds; the remaining charge can be replanned`,
+          "resume",
+          now,
+        );
+      }
+    }
     if (explicitDiscountedBand(config, now) && liveImportSafety.available && !liveExportNeedsHeadroom) {
       await updateActiveAdaptiveChargingObjective(state, state.plan, now, executeAdaptiveChargingAction, soc);
     }
@@ -499,7 +555,7 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
           ? preserveInterruptedAdaptiveCharge(state, now)
           : null;
         if (interruption) {
-          recordAdaptiveChargingWindowInterruption(state);
+          recordAdaptiveChargingWindowInterruption(state, now);
           beginAdaptiveChargingBreakerRecovery(state, adaptiveChargingLiveChargeHeadroom(status, config, state, rules), now);
         }
         const importText = Number.isFinite(liveImportSafety.gridImportW)
@@ -692,6 +748,7 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
       state.activeLastCheckedAt = now.toISOString();
       startAdaptiveChargeSession(state, slot as Parameters<typeof startAdaptiveChargeSession>[1], soc, now);
       state.interruptedCharge = null;
+      completeAdaptiveChargingWindowInterruption(state, now);
       state.breakerRecovery = null;
       state.standbyHoldUntil = null;
       state.lastHeadroomWaitLogAt = null;

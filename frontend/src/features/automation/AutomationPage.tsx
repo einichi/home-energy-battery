@@ -1,12 +1,14 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import {
   createAwayPeriod,
   deleteAwayPeriod,
   endAwayPeriod,
   extendAwayPeriod,
+  getBacktests,
   recalculateAdaptiveCharging,
   resumeAdaptiveCharging,
+  runBacktest,
   saveAutomationRule,
   updateAwayPeriod,
 } from "../../api/automation";
@@ -17,6 +19,7 @@ import type {
   AutomationRule,
   AwayPeriod,
   AwayPeriodsView,
+  BacktestRunSummary,
   CommandReceipt,
 } from "../../api/contracts";
 import { updateConfig } from "../../api/queries";
@@ -252,6 +255,33 @@ function signedEnergy(value?: number | null) {
 }
 
 function PerformanceView({ adaptive }: { adaptive: AdaptiveChargingStatus | null }) {
+  const { text } = useI18n();
+  const [backtests, setBacktests] = useState<BacktestRunSummary[]>([]);
+  const [backtestRange, setBacktestRange] = useState<"90d" | "all">("90d");
+  const [backtestBusy, setBacktestBusy] = useState(false);
+  const [backtestError, setBacktestError] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    void getBacktests(controller.signal)
+      .then((response) => setBacktests(response.runs))
+      .catch((reason) => {
+        if (!controller.signal.aborted) setBacktestError(reason instanceof Error ? reason.message : "Backtests could not be loaded");
+      });
+    return () => controller.abort();
+  }, []);
+  const startBacktest = async () => {
+    setBacktestBusy(true);
+    setBacktestError(null);
+    try {
+      const run = await runBacktest({ range: backtestRange, mode: "both", modelId: "adaptive-planner" });
+      setBacktests((current) => [run, ...current.filter((item) => item.id !== run.id)]);
+    } catch (reason) {
+      setBacktestError(reason instanceof Error ? reason.message : "Backtest failed");
+    } finally {
+      setBacktestBusy(false);
+    }
+  };
+  const latestBacktest = backtests[0] ?? null;
   const plan = adaptive?.plan;
   const demandDays = plan?.demandHistory?.validDayCount ?? plan?.demandHistory?.recentComparableDayCount ?? 0;
   const solarOutcomes = adaptive?.solarForecastAccuracy?.outcomes ?? [];
@@ -289,8 +319,28 @@ function PerformanceView({ adaptive }: { adaptive: AdaptiveChargingStatus | null
       <section className="performance-detail-grid">
         <article className="panel performance-evidence"><div className="section-heading"><div><p className="eyebrow"><T text={"Solar"} /></p><h2><T text={"Forecast outcomes"} /></h2></div><span className="quality-label">{adaptive?.solarForecastAccuracy?.learned ? "Calibrated estimate" : "Learning estimate"}</span></div><dl className="performance-summary"><div><dt><T text={"Evidence"} /></dt><dd>{adaptive?.solarForecastAccuracy?.sampleCount ?? 0} <T text={" days"} /></dd></div><div><dt><T text={"Mean absolute error"} /></dt><dd>{solarMae.length ? formatEnergy(solarMae.reduce((sum, value) => sum + value, 0) / solarMae.length) : "—"}</dd></div></dl>{solarOutcomes.length ? <div className="table-scroll"><table><thead><tr><th><T text={"Date"} /></th><th><T text={"Issued estimate"} /></th><th><T text={"Planning estimate"} /></th><th><T text={"Recorded generation"} /></th><th><T text={"Error"} /></th></tr></thead><tbody>{[...solarOutcomes].reverse().slice(0, 8).map((outcome, index) => <tr key={`${outcome.targetDate}:${index}`}><td>{outcome.targetDate ? formatDate(`${outcome.targetDate}T00:00:00`) : "—"}</td><td>{formatEnergy(outcome.predictedKwh)}</td><td>{formatEnergy(outcome.planningKwh)}</td><td>{formatEnergy(outcome.actualKwh)}</td><td>{signedEnergy(outcome.errorKwh)}</td></tr>)}</tbody></table></div> : <p className="automation-empty compact"><T text={"No completed solar forecast days yet."} /></p>}</article>
         <article className="panel performance-evidence"><div className="section-heading"><div><p className="eyebrow"><T text={"Demand"} /></p><h2><T text={"Historical model"} /></h2></div><span className="quality-label"><T text={"Estimated"} /></span></div><dl className="performance-summary"><div><dt><T text={"Recorded days"} /></dt><dd>{plan?.demandHistory?.recordedDayCount ?? 0}</dd></div><div><dt><T text={"Valid days"} /></dt><dd>{plan?.demandHistory?.validDayCount ?? 0}</dd></div><div><dt><T text={"Recent comparisons"} /></dt><dd>{plan?.demandHistory?.recentComparableDayCount ?? 0}</dd></div><div><dt><T text={"Seasonal comparisons"} /></dt><dd>{plan?.demandHistory?.seasonalComparableDayCount ?? 0}</dd></div></dl><p className="panel-note"><T text={"Demand error history is not available yet."} /></p></article>
-        <article className="panel performance-evidence"><div className="section-heading"><div><p className="eyebrow"><T text={"Battery"} /></p><h2><T text={"Charging-window outcomes"} /></h2></div><span className="quality-label"><T text={"Recorded + estimated"} /></span></div>{windowOutcomes.length ? <div className="table-scroll"><table><thead><tr><th><T text={"Window"} /></th><th><T text={"Planned"} /></th><th><T text={"Delivered"} /></th><th><T text={"SOC"} /></th><th><T text={"Result"} /></th></tr></thead><tbody>{windowOutcomes.slice(0, 8).map((outcome, index) => <tr key={`${outcome.key}:${index}`}><td>{formatDateTime(outcome.windowStart)}<small>{outcome.label ?? "Discounted"}</small></td><td>{formatWh(outcome.plannedWh)}</td><td>{formatWh(outcome.deliveredWh)}{Number(outcome.estimatedDeliveryWh) > 0 ? <small>{formatWh(outcome.estimatedDeliveryWh)} <T text={" boundary estimate"} /></small> : null}</td><td>{formatPercent(outcome.startSocPercent)} → {formatPercent(outcome.endSocPercent)}</td><td>{outcome.socTargetReached ? "Target reached" : Number(outcome.unmetWh) > 0 ? `${formatWh(outcome.unmetWh)} short` : "Completed"}</td></tr>)}</tbody></table></div> : <p className="automation-empty compact"><T text={"No completed charging windows yet."} /></p>}</article>
+        <article className="panel performance-evidence"><div className="section-heading"><div><p className="eyebrow"><T text={"Battery"} /></p><h2><T text={"Charging-window outcomes"} /></h2></div><span className="quality-label"><T text={"Recorded + estimated"} /></span></div>{windowOutcomes.length ? <div className="table-scroll"><table><thead><tr><th><T text={"Window"} /></th><th><T text={"Planned"} /></th><th><T text={"Delivered"} /></th><th><T text={"Guard impact"} /></th><th><T text={"SOC"} /></th><th><T text={"Result"} /></th></tr></thead><tbody>{windowOutcomes.slice(0, 8).map((outcome, index) => <tr key={`${outcome.key}:${index}`}><td>{formatDateTime(outcome.windowStart)}<small>{outcome.label ?? "Discounted"}</small></td><td>{formatWh(outcome.plannedWh)}</td><td>{formatWh(outcome.deliveredWh)}{Number(outcome.estimatedDeliveryWh) > 0 ? <small>{formatWh(outcome.estimatedDeliveryWh)} <T text={" boundary estimate"} /></small> : null}</td><td>{Number(outcome.interruptionCount) > 0 ? <T text={"{count} interruptions · {minutes} min unavailable"} values={{ count: outcome.interruptionCount, minutes: Math.round(Number(outcome.guardInterruptedMs) / 60_000) }} /> : "—"}</td><td>{formatPercent(outcome.startSocPercent)} → {formatPercent(outcome.endSocPercent)}</td><td>{outcome.socTargetReached ? "Target reached" : Number(outcome.unmetWh) > 0 ? `${formatWh(outcome.unmetWh)} short` : "Completed"}</td></tr>)}</tbody></table></div> : <p className="automation-empty compact"><T text={"No completed charging windows yet."} /></p>}</article>
         <article className="panel performance-evidence"><div className="section-heading"><div><p className="eyebrow"><T text={"Ene-Farm"} /></p><h2><T text={"Forecast outcomes"} /></h2></div><span className="quality-label"><T text={"Estimated vs recorded"} /></span></div><dl className="performance-summary"><div><dt><T text={"Completed intervals"} /></dt><dd>{fuelOutcomes.length}</dd></div><div><dt><T text={"Mean absolute error"} /></dt><dd>{fuelMae.length ? formatEnergy(fuelMae.reduce((sum, value) => sum + value, 0) / fuelMae.length) : "—"}</dd></div></dl>{fuelOutcomes.length ? <div className="table-scroll"><table><thead><tr><th><T text={"Interval"} /></th><th><T text={"Median estimate"} /></th><th><T text={"Recorded output"} /></th><th><T text={"Error"} /></th><th><T text={"Plan influence"} /></th></tr></thead><tbody>{fuelOutcomes.slice(0, 8).map((outcome, index) => <tr key={`${outcome.targetStart}:${index}`}><td>{formatTime(outcome.start.toISOString())}–{formatTime(outcome.end.toISOString())}</td><td>{formatEnergy(outcome.predictedKwh)}</td><td>{formatEnergy(outcome.actualKwh)}</td><td>{signedEnergy(outcome.errorKwh)}</td><td>{outcome.influence ?? "—"}</td></tr>)}</tbody></table></div> : <p className="automation-empty compact"><T text={"No completed Ene-Farm forecast intervals yet."} /></p>}</article>
+      </section>
+      <section className="panel backtest-performance" aria-labelledby="backtest-performance-heading">
+        <div className="section-heading">
+          <div><p className="eyebrow"><T text={"Unified replay"} /></p><h2 id="backtest-performance-heading"><T text={"Forecast backtesting"} /></h2></div>
+          <div className="backtest-actions"><label><span><T text={"Period"} /></span><select value={backtestRange} onChange={(event) => setBacktestRange(event.target.value as "90d" | "all")}><option value="90d">{text("Last 90 days")}</option><option value="all">{text("All history")}</option></select></label><button className="button primary" type="button" disabled={backtestBusy} onClick={() => void startBacktest()}><T text={backtestBusy ? "Running…" : "Run backtest"} /></button></div>
+        </div>
+        <p className="section-copy"><T text={"Replays versioned plans without issuing device commands. Recorded operation and ideal model execution are reported separately; periods that cannot be defended from recorded evidence are excluded."} /></p>
+        {backtestError ? <p className="inline-save-result failure" role="alert">{backtestError}</p> : null}
+        {latestBacktest ? <>
+          <div className="performance-domain-grid backtest-summary">
+            <article><span><T text={"Plans evaluated"} /></span><strong>{latestBacktest.evaluablePlanCount}/{latestBacktest.planCount}</strong><small><T text={"{count} excluded for insufficient evidence"} values={{ count: latestBacktest.excludedPlanCount }} /></small></article>
+            <article><span><T text={"As operated"} /></span><strong>{latestBacktest.asOperated?.targetMetPercent == null ? "—" : `${Math.round(latestBacktest.asOperated.targetMetPercent)}%`}</strong><small>Required SOC achieved · {latestBacktest.asOperated?.averageGridCostYen == null ? "cost unavailable" : `¥${Math.round(latestBacktest.asOperated.averageGridCostYen)} average grid cost`}</small></article>
+            <article><span><T text={"Model only"} /></span><strong>{latestBacktest.modelOnly?.targetMetPercent == null ? "—" : `${Math.round(latestBacktest.modelOnly.targetMetPercent)}%`}</strong><small>Ideal command delivery · {latestBacktest.modelOnly?.averageGridCostYen == null ? "cost unavailable" : `¥${Math.round(latestBacktest.modelOnly.averageGridCostYen)} average grid cost`}</small></article>
+            <article><span><T text={"Solar error"} /></span><strong>{latestBacktest.components.solar.meanAbsoluteErrorKwh == null ? "—" : formatEnergy(latestBacktest.components.solar.meanAbsoluteErrorKwh)}</strong><small>{latestBacktest.components.solar.sampleCount} completed forecast outcomes</small></article>
+          </div>
+          <div className="backtest-meta"><span>Model {latestBacktest.modelId} v{latestBacktest.modelVersion}</span><span>Engine v{latestBacktest.engineVersion}</span><span>{formatDate(latestBacktest.periodStart)}–{formatDate(latestBacktest.periodEnd)}</span><span>{latestBacktest.status}</span></div>
+          <div className="table-scroll backtest-detail-table"><table><thead><tr><th><T text={"Forecast component"} /></th><th><T text={"Evidence"} /></th><th><T text={"Mean absolute error"} /></th><th><T text={"Bias"} /></th></tr></thead><tbody>{(["solar", "demand", "fuelCell"] as const).map((component) => { const metric = latestBacktest.components[component]; return <tr key={component}><td><T text={component === "solar" ? "Solar" : component === "demand" ? "Demand" : "Ene-Farm"} /></td><td>{metric.sampleCount}</td><td>{metric.meanAbsoluteErrorKwh == null ? "—" : formatEnergy(metric.meanAbsoluteErrorKwh)}</td><td>{metric.meanBiasKwh == null ? "—" : signedEnergy(metric.meanBiasKwh)}</td></tr>; })}</tbody></table></div>
+          {latestBacktest.seasonal.length ? <div className="table-scroll backtest-detail-table"><table><thead><tr><th><T text={"Season"} /></th><th><T text={"Plans evaluated"} /></th><th><T text={"Required SOC achieved"} /></th><th><T text={"Average grid cost"} /></th></tr></thead><tbody>{latestBacktest.seasonal.map((season) => <tr key={season.season}><td><T text={season.season[0].toUpperCase() + season.season.slice(1)} /></td><td>{season.evaluablePlanCount}/{season.planCount}</td><td>{season.targetMetPercent == null ? "—" : `${Math.round(season.targetMetPercent)}%`}</td><td>{season.averageGridCostYen == null ? "—" : `¥${Math.round(season.averageGridCostYen)}`}</td></tr>)}</tbody></table></div> : null}
+          {latestBacktest.notes.map((note) => <p className="panel-note" key={note}>{note}</p>)}
+        </> : <p className="automation-empty compact"><T text={"No backtest has been run yet."} /></p>}
       </section>
       <section className="panel model-progress"><div className="section-heading"><div><p className="eyebrow"><T text={"Battery learning"} /></p><h2><T text={"Model evidence"} /></h2></div><span className="quality-label">{adaptive?.batteryModel?.status ?? "Unavailable"} <T text={" · v"} />{adaptive?.batteryModel?.version ?? "—"}</span></div><dl><div><dt><T text={"Charge observations"} /></dt><dd>{adaptive?.batteryModel?.charge?.acceptedObservationCount ?? 0}</dd></div><div><dt><T text={"Discharge observations"} /></dt><dd>{adaptive?.batteryModel?.discharge?.acceptedObservationCount ?? 0}</dd></div><div><dt><T text={"Charge-power samples"} /></dt><dd>{adaptive?.batteryModel?.power?.sampleCount ?? 0}</dd></div><div><dt><T text={"Charging sessions"} /></dt><dd>{adaptive?.batteryModel?.power?.sessionCount ?? 0}</dd></div></dl></section>
     </section>
@@ -321,6 +371,10 @@ export function AutomationPage() {
   const gridImport = metricValue(status?.meter?.grid_import_power);
   const headroom = Number.isFinite(thresholdWatts) && gridImport !== null ? thresholdWatts - gridImport : null;
   const configurationReady = checks.every((item) => item.ready);
+  const guardPlanningBasis = adaptive?.plan?.windows
+    ?.map((window) => window.guardDeliverability)
+    .filter((model) => model?.learned === true)
+    .sort((left, right) => Number(left?.deliveryFactor) - Number(right?.deliveryFactor))[0];
 
   const runPlanAction = async (name: "recalculate" | "resume") => {
     setBusy(name);
@@ -496,7 +550,7 @@ export function AutomationPage() {
 
         <section className="panel automation-plan" aria-labelledby="automation-plan-heading"><div className="section-heading"><div><p className="eyebrow"><T text={"Today and tonight"} /></p><h2 id="automation-plan-heading"><T text={"Shared automation timeline"} /></h2></div><div className="automation-plan-actions"><span className="sample-count">{adaptive?.plan?.timeline?.length ?? 0} <T text={" intervals"} /></span><button className="quiet-button" type="button" disabled={busy !== null || !adaptive?.enabled || !configurationReady} onClick={() => void runPlanAction("recalculate")}>{busy === "recalculate" ? "Recalculating…" : "Recalculate plan"}</button>{adaptive?.paused ? <button className="button primary" type="button" disabled={busy !== null || !configurationReady} onClick={() => setConfirmation({ title: "Resume Adaptive Charging", impact: "Adaptive Charging will clear the current pause and recalculate its plan. It may resume control of battery charging when the next eligible discounted window begins. Active Disaster Prep still takes priority.", confirmLabel: "Resume automation", run: () => runPlanAction("resume") })}><T text={"Resume"} /></button> : null}</div></div><Timeline items={adaptive?.plan?.timeline} /><div className="selected-windows"><h3><T text={"Selected discounted windows"} /></h3>{adaptive?.plan?.slots?.length ? <div>{adaptive.plan.slots.map((slot, index) => <article key={`${slot.start}:${index}`}><span>{slot.label ?? "Discounted rate"}</span><strong>{formatTime(slot.start)}–{formatTime(slot.end)}</strong><small>{formatWh(slot.targetWh)} <T text={" planned"} />{slot.targetSocPercent == null ? "" : ` · target ${formatPercent(slot.targetSocPercent)}`}</small></article>)}</div> : <p><T text={"No discounted charging window is selected for this plan."} /></p>}</div>{planResult ? <p className={`inline-save-result ${planResult.ok ? "success" : "failure"}`} role={planResult.ok ? "status" : "alert"}>{planResult.message}</p> : null}</section>
 
-        <div className="automation-context-grid"><AwayWorkspace away={away} busy={busy} result={awayResult} onSubmit={mutateAway} onDelete={removeAway} onBackHome={backHome} /><section className="panel automation-assumptions" aria-labelledby="assumptions-heading"><div className="section-heading"><div><p className="eyebrow"><T text={"Planning basis"} /></p><h2 id="assumptions-heading"><T text={"Forecast assumptions"} /></h2></div></div><dl><div><dt><T text={"Current SOC"} /></dt><dd>{formatPercent(adaptive?.plan?.currentSocPercent)}</dd></div><div><dt><T text={"Target SOC"} /></dt><dd>{formatPercent(adaptive?.plan?.targetSocPercent)}</dd></div><div><dt><T text={"Expected sunset SOC"} /></dt><dd>{formatPercent(adaptive?.plan?.expectedSunsetSocPercent)}</dd></div><div><dt><T text={"Forecast confidence"} /></dt><dd>{adaptive?.solarForecastAccuracy?.learned ? `Calibrated · ${adaptive.solarForecastAccuracy.sampleCount ?? 0} days` : `Initial model · ${adaptive?.solarForecastAccuracy?.sampleCount ?? 0} days`}</dd></div><div><dt><T text={"Forecast solar"} /></dt><dd>{formatEnergy(adaptive?.plan?.predictedSolarKwh)}</dd></div><div><dt><T text={"Forecast demand"} /></dt><dd>{formatEnergy(adaptive?.plan?.predictedDemandKwh)}</dd></div><div><dt><T text={"Forecast Ene-Farm"} /></dt><dd>{formatEnergy(adaptive?.plan?.predictedFuelCellKwh)}</dd></div><div><dt><T text={"Forecast surplus"} /></dt><dd>{formatEnergy(adaptive?.plan?.predictedSurplusKwh)}</dd></div></dl></section></div>
+        <div className="automation-context-grid"><AwayWorkspace away={away} busy={busy} result={awayResult} onSubmit={mutateAway} onDelete={removeAway} onBackHome={backHome} /><section className="panel automation-assumptions" aria-labelledby="assumptions-heading"><div className="section-heading"><div><p className="eyebrow"><T text={"Planning basis"} /></p><h2 id="assumptions-heading"><T text={"Forecast assumptions"} /></h2></div></div><dl><div><dt><T text={"Current SOC"} /></dt><dd>{formatPercent(adaptive?.plan?.currentSocPercent)}</dd></div><div><dt><T text={"Target SOC"} /></dt><dd>{formatPercent(adaptive?.plan?.targetSocPercent)}</dd></div><div><dt><T text={"Expected sunset SOC"} /></dt><dd>{formatPercent(adaptive?.plan?.expectedSunsetSocPercent)}</dd></div><div><dt><T text={"Forecast confidence"} /></dt><dd>{adaptive?.solarForecastAccuracy?.learned ? `Calibrated · ${adaptive.solarForecastAccuracy.sampleCount ?? 0} days` : `Initial model · ${adaptive?.solarForecastAccuracy?.sampleCount ?? 0} days`}</dd></div><div><dt><T text={"Forecast solar"} /></dt><dd>{formatEnergy(adaptive?.plan?.predictedSolarKwh)}</dd></div><div><dt><T text={"Forecast demand"} /></dt><dd>{formatEnergy(adaptive?.plan?.predictedDemandKwh)}</dd></div><div><dt><T text={"Forecast Ene-Farm"} /></dt><dd>{formatEnergy(adaptive?.plan?.predictedFuelCellKwh)}</dd></div><div><dt><T text={"Forecast surplus"} /></dt><dd>{formatEnergy(adaptive?.plan?.predictedSurplusKwh)}</dd></div><div><dt><T text={"Demand Guard history"} /></dt><dd>{guardPlanningBasis ? <T text={"Uses {factor}% delivery reliability from {count} comparable windows with a {minutes}-minute interruption reserve."} values={{ factor: Math.round(Number(guardPlanningBasis.deliveryFactor) * 100), count: guardPlanningBasis.sampleCount, minutes: Math.round(Number(guardPlanningBasis.interruptionReserveMs) / 60_000) }} /> : <T text={"Collecting comparable interrupted charging windows."} />}</dd></div></dl></section></div>
         <Activity adaptive={adaptive} guard={guard} receipts={receipts} />
       </> : null}
 

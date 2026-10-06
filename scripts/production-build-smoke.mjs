@@ -54,6 +54,18 @@ try {
   const status = await fetch(`${baseUrl}/api/status`);
   assert.equal(status.status, 200);
   assert.match(status.headers.get("content-type") ?? "", /application\/json/);
+  const backtests = await fetch(`${baseUrl}/api/backtests`);
+  assert.equal(backtests.status, 200);
+  assert.equal((await backtests.json()).scheduling, "manual");
+  const backtest = await fetch(`${baseUrl}/api/backtests`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ range: "90d", mode: "both", modelId: "adaptive-planner" }),
+  });
+  assert.equal(backtest.status, 201);
+  const backtestResult = await backtest.json();
+  assert.equal(backtestResult.status, "complete");
+  assert.equal(backtestResult.planCount, 0);
   console.log("production build smoke test passed");
 } finally {
   child.kill("SIGTERM");
