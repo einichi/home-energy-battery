@@ -21,6 +21,15 @@ type HistoryRouteDependencies = Pick<ApiDependencies,
   | "summarizeEneFarmSamples"
 >;
 
+function rangeParamError(url: URL): string | null {
+  const start = url.searchParams.get("start");
+  const end = url.searchParams.get("end");
+  if (start && !Number.isFinite(new Date(start).getTime())) return "valid start date/time is required";
+  if (end && !Number.isFinite(new Date(end).getTime())) return "valid end date/time is required";
+  if (start && end && new Date(start).getTime() >= new Date(end).getTime()) return "start must be before end";
+  return null;
+}
+
 export function createHistoryRouteHandler(dependencies: HistoryRouteDependencies) {
   const {
     eneFarmReport,
@@ -65,10 +74,14 @@ export function createHistoryRouteHandler(dependencies: HistoryRouteDependencies
       return receipt ? json(res, 200, receipt) : json(res, 404, { error: "command receipt not found" });
     }
     if (req.method === "GET" && url.pathname === "/api/history") {
+      const rangeError = rangeParamError(url);
+      if (rangeError) return json(res, 400, { error: rangeError });
       const config = await readConfig();
       return json(res, 200, await readHistoryRange(url.searchParams.get("start"), url.searchParams.get("end"), config));
     }
     if (req.method === "GET" && url.pathname === "/api/history/summary") {
+      const rangeError = rangeParamError(url);
+      if (rangeError) return json(res, 400, { error: rangeError });
       const config = await readConfig();
       return json(res, 200, await readHistorySummaryRange(url.searchParams.get("start"), url.searchParams.get("end"), config));
     }
@@ -76,6 +89,12 @@ export function createHistoryRouteHandler(dependencies: HistoryRouteDependencies
       return json(res, 200, await readHistoryStats());
     }
     if (req.method === "GET" && url.pathname === "/api/reports/energy") {
+      const bucket = url.searchParams.get("bucket");
+      if (bucket !== null && bucket !== "" && bucket !== "day" && bucket !== "week" && bucket !== "month") {
+        return json(res, 400, { error: "bucket must be day, week, or month" });
+      }
+      const rangeError = rangeParamError(url);
+      if (rangeError) return json(res, 400, { error: rangeError });
       const config = await readConfig();
       return json(
         res,

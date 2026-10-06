@@ -337,6 +337,12 @@ try {
   assert.equal(patched.payload.executionIntent ?? null, null);
   assert.equal(patched.payload.lastRunDate ?? null, null);
   assert.equal(patched.payload.createdAt, patchTarget.payload.createdAt);
+  const badBucket = await request(baseUrl, "/api/reports/energy?bucket=hour");
+  assert.equal(badBucket.response.status, 400);
+  const badRange = await request(baseUrl, "/api/history?start=not-a-date");
+  assert.equal(badRange.response.status, 400);
+  const missingMode = await request(baseUrl, "/api/device-actions/set-mode", { method: "POST", body: {} });
+  assert.equal(missingMode.response.status, 400);
   await waitFor(async () => {
     const schedules = await request(baseUrl, "/api/schedules");
     return schedules.payload.find((item: any) => item.id === schedule.payload.id)?.lastResult?.ok === true;

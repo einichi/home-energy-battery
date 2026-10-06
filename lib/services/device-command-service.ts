@@ -37,7 +37,7 @@ function errorMessage(error: unknown): string {
 function numberInRange(value: unknown, label: string, min: number, max: number, step = 1): number {
   const number = Number(value);
   if (!Number.isInteger(number) || number < min || number > max || number % step !== 0) {
-    throw new Error(`${label} must be an integer from ${min} to ${max}${step > 1 ? ` in ${step} steps` : ""}`);
+    throw Object.assign(new Error(`${label} must be an integer from ${min} to ${max}${step > 1 ? ` in ${step} steps` : ""}`), { statusCode: 400 });
   }
   return number;
 }
@@ -84,7 +84,7 @@ export function createDeviceCommandService(dependencies: DeviceCommandServiceDep
     const host = hostFrom(payload, config);
     switch (action) {
       case "vendor-profile":
-        if (!payload.mode) throw new Error("mode is required");
+        if (!payload.mode) throw dependencies.createHttpError(400, "mode is required");
         return assertDeviceCommandResult(await dependencies.runDeviceCommand("vendor-profile", { host }, [payload.mode]), `charging profile ${payload.mode}`, dependencies.invalidateStatus);
       case "discharge-limit":
         return assertDeviceCommandResult(await dependencies.runDeviceCommand("discharge-limit", { host }, [numberInRange(payload.percent, "percent", 0, 100, 10)]), "discharge limit", dependencies.invalidateStatus);
@@ -95,7 +95,7 @@ export function createDeviceCommandService(dependencies: DeviceCommandServiceDep
         return assertDeviceCommandResult(await dependencies.runDeviceCommand(action, { host }, [startHour, endHour]), action === "osaifu-charge-window" ? "osaifu charge window" : "osaifu discharge window", dependencies.invalidateStatus);
       }
       case "set-mode":
-        if (!payload.mode) throw new Error("mode is required");
+        if (!payload.mode) throw dependencies.createHttpError(400, "mode is required");
         return assertDeviceCommandResult(await dependencies.runDeviceCommand("set-mode", { host }, [payload.mode]), `operation mode ${payload.mode}`, dependencies.invalidateStatus);
       case "charge":
       case "discharge": {
