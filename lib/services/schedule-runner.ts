@@ -59,6 +59,13 @@ export function createScheduleRunner(dependencies: ScheduleRunnerDependencies) {
         if (guardOwner) {
           schedule.lastResult = { ok: false, skipped: "Charging Demand Guard owns Standby operation mode", at: attemptAt };
           schedule.executionIntent.state = "blocked";
+          // One-time schedules must not stay "enabled" with a permanent blocked
+          // intent: isDue() requires no executionIntent, so they could never run
+          // again. Mirror the Backup Preparation handling and complete them.
+          if (schedule.repeat !== "daily") {
+            schedule.enabled = false;
+            schedule.completed = true;
+          }
           continue;
         }
         runningIds.add(schedule.id);
