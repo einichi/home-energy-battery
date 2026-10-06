@@ -95,11 +95,12 @@ import {
   buildAdaptiveChargingTimelineView,
   discountedPlanStatus,
   forecastIsFresh,
-  latestFiniteSocPercent,
   mergeAdaptiveChargingSlots,
   optimizeDiscountedChargeSlots,
   planChronologicalDiscountedCharging,
 } from "../lib/domain/adaptive-planning.js";
+
+import { latestFiniteSocPercent } from "../lib/domain/adaptive-plan-utils.js";
 
 import {
   cleanAdaptiveChargingPerformance,

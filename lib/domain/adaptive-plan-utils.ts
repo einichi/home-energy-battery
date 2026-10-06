@@ -1,5 +1,14 @@
 import type { AdaptiveChargeSlot } from "./adaptive-planning.js";
 import type { AutomationRule } from "./automation-rules.js";
+import type { DemandSample } from "./demand-forecast.js";
+import { finiteNumberOrNull } from "./numbers.js";
+
+export function latestFiniteSocPercent(samples: readonly DemandSample[]): number | null {
+  // A trailing sample whose SOC is null/undefined/"" must not be coerced to 0 by
+  // Number(); skip those and fall back to the most recent genuinely finite value.
+  const sample = samples.findLast((item) => finiteNumberOrNull(item.stateOfChargePercent) !== null);
+  return finiteNumberOrNull(sample?.stateOfChargePercent);
+}
 
 export function mergeAdaptiveChargingSlots(slots: AdaptiveChargeSlot[] = []): AdaptiveChargeSlot[] {
   const merged: AdaptiveChargeSlot[] = [];

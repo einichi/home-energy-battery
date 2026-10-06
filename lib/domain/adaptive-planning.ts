@@ -12,6 +12,7 @@ import { applyGuardDeliverabilityToTiming, guardDeliverabilityForWindow } from "
 import type { GuardDeliverabilityModel, GuardWindowOutcome } from "./guard-deliverability.js";
 import type { ApplicationConfig, RateBand } from "../contracts/configuration.js";
 import {
+  latestFiniteSocPercent,
   mergeAdaptiveChargingSlots,
 } from "./adaptive-plan-utils.js";
 import {
@@ -749,14 +750,6 @@ export function discountedPlanStatus(plan: Partial<ChronologicalPlan> = {}) {
     reason: null,
     warning: `Plan schedules ${plannedChargeKwh.toFixed(2)} kWh of ${requestedChargeKwh.toFixed(2)} kWh requested; a ${unmetChargeKwh.toFixed(2)} kWh shortfall remains after using feasible discounted capacity`,
   };
-}
-
-
-export function latestFiniteSocPercent(samples: readonly DemandSample[]): number | null {
-  // A trailing sample whose SOC is null/undefined/"" must not be coerced to 0 by
-  // Number(); skip those and fall back to the most recent genuinely finite value.
-  const sample = samples.findLast((item) => finiteNumberOrNull(item.stateOfChargePercent) !== null);
-  return finiteNumberOrNull(sample?.stateOfChargePercent);
 }
 
 
