@@ -271,7 +271,13 @@ function cumulativeUnit(raw: Buffer | null): number | null {
 function decodeCumulativeKwh({ host, eoj, epc, name, raw, unit }: Omit<MetricInput, "unit"> & { unit: number | null }): Record<string, unknown> {
   if (!raw || raw.length !== 4) return metric({ host, eoj, epc, name, raw });
   const count = raw.readUInt32BE(0);
-  const value = unit === null || unit === undefined ? count : count * unit;
+  if (unit === null || unit === undefined) {
+    // Without the cumulative-unit coefficient (EPC 0xC2) the raw counter cannot
+    // be converted to kWh. Leave value undefined so callers do not treat
+    // unscaled counts as energy.
+    return metric({ host, eoj, epc, name, raw, human: `${count} counts (unit unknown)` });
+  }
+  const value = count * unit;
   return metric({
     host,
     eoj,
@@ -280,7 +286,7 @@ function decodeCumulativeKwh({ host, eoj, epc, name, raw, unit }: Omit<MetricInp
     raw,
     value,
     unit: "kWh",
-    human: unit === null || unit === undefined ? `${count} counts` : `${value.toFixed(2)} kWh`,
+    human: `${value.toFixed(2)} kWh`,
   });
 }
 
