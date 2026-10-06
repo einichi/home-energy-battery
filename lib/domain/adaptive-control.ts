@@ -549,6 +549,7 @@ export function adaptiveChargingWindowSolarOpportunity(
   let predictedSolarWh = 0;
   let predictedSurplusWh = 0;
   let peakSurplusW = 0;
+  const fuelCellActive = plan?.fuelCellModel?.influence === "active";
   for (const interval of plan?.timeline ?? []) {
     const intervalStartMs = new Date(String(interval.start ?? "")).getTime();
     const intervalEndMs = new Date(String(interval.end ?? "")).getTime();
@@ -557,7 +558,7 @@ export function adaptiveChargingWindowSolarOpportunity(
     if (!overlapMs) continue;
     const durationHours = overlapMs / 3_600_000;
     const solarW = Math.max(0, Number(interval.solarW) || 0);
-    const fuelCellW = Math.max(0, Number(interval.fuelCellP20W) || 0);
+    const fuelCellW = fuelCellActive ? Math.max(0, Number(interval.fuelCellP20W) || 0) : 0;
     const demandW = Math.max(0, Number(interval.demandW) || 0);
     const surplusW = Math.max(0, solarW + fuelCellW - demandW);
     predictedSolarWh += solarW * durationHours;

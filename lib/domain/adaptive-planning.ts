@@ -868,13 +868,13 @@ export function buildAdaptiveChargingPlan({
     const highSolarKwh = highSolarW * durationHours / 1000;
     const demandKwh = slotDemandW * durationHours / 1000;
     const fuelCellForecast = fuelCellModel.forecastAt(date);
-    const fuelCellPlanningKwh = fuelCellModel.influence === "active"
-      ? fuelCellForecast.p20W * durationHours / 1000
-      : 0;
-    const highFuelCellKwh = fuelCellModel.influence === "active"
-      ? fuelCellForecast.p80W * durationHours / 1000
-      : 0;
-    const medianFuelCellKwh = fuelCellForecast.medianW * durationHours / 1000;
+    const fuelCellActive = fuelCellModel.influence === "active";
+    const fuelCellPlanningKwh = fuelCellActive ? fuelCellForecast.p20W * durationHours / 1000 : 0;
+    const highFuelCellKwh = fuelCellActive ? fuelCellForecast.p80W * durationHours / 1000 : 0;
+    const medianFuelCellForecastKwh = fuelCellForecast.medianW * durationHours / 1000;
+    // Predicted totals must match the plan's physics: when the fuel cell is only
+    // observed, it does not contribute to the planned surplus.
+    const medianFuelCellKwh = fuelCellActive ? medianFuelCellForecastKwh : 0;
     predictedSolarKwh += solarKwh;
     predictedDemandKwh += demandKwh;
     predictedFuelCellKwh += medianFuelCellKwh;
@@ -887,7 +887,7 @@ export function buildAdaptiveChargingPlan({
       demandW: slotDemandW,
       solarKwh,
       fuelCellP20Kwh: fuelCellForecast.p20W * durationHours / 1000,
-      fuelCellMedianKwh: medianFuelCellKwh,
+      fuelCellMedianKwh: medianFuelCellForecastKwh,
       fuelCellP80Kwh: fuelCellForecast.p80W * durationHours / 1000,
       fuelCellSampleCount: fuelCellForecast.sampleCount,
       demandKwh,

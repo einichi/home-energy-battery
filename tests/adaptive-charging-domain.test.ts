@@ -235,6 +235,20 @@ assert.deepEqual(adaptiveChargingWindowSolarOpportunity(solarWindowPlan, overnig
   predictedSurplusWh: 1_400,
   peakSurplusW: 700,
 });
+// A fuel cell that is only observed must not contribute to the solar-opportunity
+// check, but an actively-influencing fuel cell does.
+const observedFuelCellPlan = {
+  ...solarWindowPlan,
+  fuelCellModel: { influence: "observe" },
+  timeline: [{ ...solarWindowPlan.timeline[0], fuelCellP20W: 1_000 }],
+};
+assert.equal(adaptiveChargingWindowSolarOpportunity(observedFuelCellPlan, overnightOccurrence).predictedSurplusWh, 1_400);
+const activeFuelCellPlan = {
+  ...solarWindowPlan,
+  fuelCellModel: { influence: "active" },
+  timeline: [{ ...solarWindowPlan.timeline[0], fuelCellP20W: 1_000 }],
+};
+assert.equal(adaptiveChargingWindowSolarOpportunity(activeFuelCellPlan, overnightOccurrence).predictedSurplusWh, 3_400);
 const solarWindowRefresh = adaptiveChargingPlanRefreshDecision({
   ...waitingAdaptiveChargingState,
   plan: solarWindowPlan,
