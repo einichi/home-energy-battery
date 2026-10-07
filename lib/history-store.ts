@@ -651,6 +651,9 @@ export function createHistoryStore({
   let previousSample: HistorySample | null = null;
   let metricBaselines: Record<string, HistorySample> = {};
   const rollupStates = new Map<string, RollupState>();
+  // Bound the in-memory rollup cache; older buckets are re-read from SQLite if
+  // ever touched again, so an unbounded map is unnecessary.
+  const ROLLUP_STATE_CACHE_LIMIT = 512;
 
   const ready = () => database !== null;
   const requireDatabase = () => {
@@ -730,6 +733,10 @@ export function createHistoryStore({
     ).get(resolution, startMs) as { state_json?: unknown } | undefined;
     const state = row ? parseJson(row.state_json, emptyRollupState(startMs, resolution)) : emptyRollupState(startMs, resolution);
     rollupStates.set(key, state);
+    if (rollupStates.size > ROLLUP_STATE_CACHE_LIMIT) {
+      const oldest = rollupStates.keys().next().value;
+      if (oldest !== undefined && oldest !== key) rollupStates.delete(oldest);
+    }
     return state;
   }
 

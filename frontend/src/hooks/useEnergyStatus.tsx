@@ -19,7 +19,8 @@ export function EnergyStatusProvider({ children }: { children: ReactNode }) {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [status, setStatus] = useState<StatusSnapshot | null>(null);
   const [loadingState, setLoadingState] = useState<LoadingState>("loading");
-  const [error, setError] = useState<string | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
   const [refreshSequence, setRefreshSequence] = useState(0);
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const latestRequest = useRef(0);
@@ -33,12 +34,27 @@ export function EnergyStatusProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const controller = new AbortController();
-    getConfig(controller.signal)
-      .then(setConfig)
-      .catch((reason: unknown) => {
-        if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Configuration request failed");
-      });
-    return () => controller.abort();
+    let timer: number | undefined;
+    let stopped = false;
+    const load = () => {
+      getConfig(controller.signal)
+        .then((next) => {
+          if (stopped) return;
+          setConfig(next);
+          setConfigError(null);
+        })
+        .catch((reason: unknown) => {
+          if (stopped || controller.signal.aborted) return;
+          setConfigError(reason instanceof Error ? reason.message : "Configuration request failed");
+          timer = window.setTimeout(load, 5000);
+        });
+    };
+    load();
+    return () => {
+      stopped = true;
+      if (timer) window.clearTimeout(timer);
+      controller.abort();
+    };
   }, []);
 
   useEffect(() => {
@@ -57,11 +73,11 @@ export function EnergyStatusProvider({ children }: { children: ReactNode }) {
         const next = await getStatus(controller.signal);
         if (stopped || request !== latestRequest.current) return;
         setStatus(next);
-        setError(null);
+        setStatusError(null);
         setLoadingState("ready");
       } catch (reason) {
         if (stopped || controller.signal.aborted || request !== latestRequest.current) return;
-        setError(reason instanceof Error ? reason.message : "Status request failed");
+        setStatusError(reason instanceof Error ? reason.message : "Status request failed");
         setLoadingState("error");
       } finally {
         if (isManualRefresh) setManualRefreshing(false);
@@ -93,10 +109,10 @@ export function EnergyStatusProvider({ children }: { children: ReactNode }) {
     status,
     loadingState,
     manualRefreshing,
-    error,
+    error: statusError ?? configError,
     refresh,
     replaceConfig: setConfig,
-  }), [config, status, loadingState, manualRefreshing, error, refresh]);
+  }), [config, status, loadingState, manualRefreshing, statusError, configError, refresh]);
 
   return <EnergyStatusContext.Provider value={value}>{children}</EnergyStatusContext.Provider>;
 }

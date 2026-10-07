@@ -2,6 +2,7 @@ import type { ApplicationConfig } from "../contracts/configuration.js";
 import type { BatterySchedule } from "../contracts/schedules.js";
 import type { AdaptiveChargingState } from "../domain/adaptive-state.js";
 import type { AutomationRule } from "../domain/automation-rules.js";
+import { adaptiveChargingConfiguredActive } from "../domain/adaptive-control.js";
 
 interface StatusErrorEntry { error?: unknown }
 export interface SystemStatusSnapshot extends Record<string, unknown> {
@@ -111,7 +112,7 @@ export function createSystemAlertService(dependencies: SystemAlertDependencies) 
       startedAt: adaptiveState.updatedAt ?? now.toISOString(), impact: String(adaptive.reason ?? "The active plan cannot currently control battery charging."),
       suggestedAction: "Review the active override and resume automation when appropriate.", href: "/automation",
     });
-    else if (config.adaptiveCharging?.enabled && !adaptive.available) add({
+    else if (adaptiveChargingConfiguredActive(config) && !adaptive.available) add({
       id: "automation-degraded", source: /weather|forecast/i.test(String(adaptive.reason ?? "")) ? "Weather service" : "Automation",
       severity: "critical", title: "Adaptive Charging degraded", startedAt: adaptiveState.updatedAt ?? now.toISOString(),
       impact: String(adaptive.reason ?? "A safe charging plan cannot currently be produced."),
@@ -127,7 +128,7 @@ export function createSystemAlertService(dependencies: SystemAlertDependencies) 
       impact: String(failedReceipt.error ?? failedReceipt.message ?? `${failedReceipt.action} did not complete successfully.`),
       suggestedAction: "Review the command receipt and current battery state before retrying.", href: "/battery",
     });
-    const failedSchedule = schedules.filter((schedule) => schedule.lastResult?.ok === false)
+    const failedSchedule = schedules.filter((schedule) => schedule.lastResult?.ok === false && !schedule.lastResult?.skipped)
       .sort((left, right) => new Date(right.lastResult?.at ?? 0).getTime() - new Date(left.lastResult?.at ?? 0).getTime())[0];
     if (failedSchedule) add({
       id: `schedule:${failedSchedule.id}`, source: "Schedule", severity: "warning", title: `Schedule failed: ${failedSchedule.name}`,

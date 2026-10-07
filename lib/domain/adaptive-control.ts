@@ -703,10 +703,11 @@ export function adaptiveChargingExportEvidence(status: ControlStatus): ExportEvi
   const gridImportW = numericMetric(status.meter?.grid_import_power);
   const houseDemandW = numericMetric(status.meter?.house_demand_power);
   const batteryChargingW = batteryChargingWatts(status);
+  const batteryNetW = numericMetric(status.energy?.battery?.instant_power);
   const solarW = numericMetric(status.energy?.solar?.instant_power);
   const fuelCellW = numericMetric(selectedFuelCellReading(status.energy?.fuel_cells ?? [])?.instant_power);
   const aboveThreshold = gridExportW !== null && Number.isFinite(gridExportW) && gridExportW > ADAPTIVE_CHARGING_EXPORT_THRESHOLD_W;
-  const balanceAvailable = [gridImportW, houseDemandW, batteryChargingW, solarW]
+  const balanceAvailable = [gridImportW, houseDemandW, batteryNetW, solarW]
     .every(Number.isFinite);
   if (!aboveThreshold) {
     return { aboveThreshold: false, balanceAvailable, coherent: false, gridExportW, residualW: null };
@@ -714,11 +715,12 @@ export function adaptiveChargingExportEvidence(status: ControlStatus): ExportEvi
   if (!balanceAvailable) {
     return { aboveThreshold: true, balanceAvailable: false, coherent: false, gridExportW, residualW: null };
   }
-  if (gridImportW === null || gridExportW === null || houseDemandW === null || batteryChargingW === null || solarW === null) {
+  if (gridImportW === null || gridExportW === null || houseDemandW === null || batteryNetW === null || solarW === null) {
     return { aboveThreshold: true, balanceAvailable: false, coherent: false, gridExportW, residualW: null };
   }
   const fuelCellContributionW = fuelCellW !== null && Number.isFinite(fuelCellW) ? fuelCellW : 0;
-  const expectedGridW = houseDemandW + batteryChargingW - solarW - fuelCellContributionW;
+  // Use the signed battery power so discharge is included in the balance.
+  const expectedGridW = houseDemandW + batteryNetW - solarW - fuelCellContributionW;
   const measuredGridW = gridImportW - gridExportW;
   const residualW = Math.abs(expectedGridW - measuredGridW);
   const toleranceW = Math.max(300, Math.max(Math.abs(expectedGridW), Math.abs(measuredGridW)) * 0.25);

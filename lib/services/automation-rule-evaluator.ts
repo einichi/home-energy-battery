@@ -53,11 +53,14 @@ export function createAutomationRuleEvaluator({
 
     if (!rule.state?.awaitingRestore && shouldTriggerDemandGuard({ operationMode, batteryChargingW, guardDemandW, breakerLimitW })) {
       onPhase("executing Standby guard action");
+      // Record the guard intent before the side effect so a crash or a throw from
+      // execute/recordGuardTrigger cannot leave the battery in Standby with no
+      // persisted restore path.
+      rule.state = { ...rule.state, awaitingRestore: true, restoreSince: null, previousMode: operationMode };
       const result = await execute(rule.action, rule.payload);
       appendAutomationLog(rule, `${demandLabel} (${formatWatts(guardDemandW)}) exceeds Charge Demand Guard limit (${formatWatts(breakerLimitW)}), setting operation mode from ${operationMode} to Standby`, now, "guard");
       await recordGuardTrigger(now);
       notify({ type: "guardActivated", severity: "warning", title: "Charging Demand Guard activated", message: `${demandLabel} (${formatWatts(guardDemandW)}) exceeded the guard limit (${formatWatts(breakerLimitW)}). Operation mode was changed from ${operationMode} to Standby.`, occurredAt: now.toISOString(), dedupeKey: "charging-demand-guard:active" });
-      rule.state = { ...rule.state, awaitingRestore: true, restoreSince: null, previousMode: operationMode };
       rule.lastResult = { ok: true, at: now.toISOString(), kind: "guard", operationMode, demandW, batteryChargingW, actualDemandWithChargingW, guardDemandW, breakerLimitW, result };
       return { changed: true, result: rule.lastResult };
     }

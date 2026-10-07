@@ -206,8 +206,11 @@ export function createAdaptiveHistoryService(
         ?? 0),
     ));
     if (coverageSeconds <= 0) return;
-    day.weightedSums[bucket] = Number(day.weightedSums[bucket] ?? 0) + demand * coverageSeconds;
-    day.coverageSeconds[bucket] = Math.min(1800, Number(day.coverageSeconds[bucket] ?? 0) + coverageSeconds);
+    const availableSeconds = Math.max(0, 1800 - Number(day.coverageSeconds[bucket] ?? 0));
+    const appliedSeconds = Math.min(coverageSeconds, availableSeconds);
+    if (appliedSeconds <= 0) return;
+    day.weightedSums[bucket] = Number(day.weightedSums[bucket] ?? 0) + demand * appliedSeconds;
+    day.coverageSeconds[bucket] = Number(day.coverageSeconds[bucket] ?? 0) + appliedSeconds;
     index.days[key] = day;
   }
 

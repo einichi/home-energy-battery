@@ -24,14 +24,15 @@ export function nextScheduleAt(schedule: BatterySchedule, now: Date = new Date()
 
 
 export function parseRunAt(schedule: BatterySchedule): string | null {
+  const invalid = (message: string) => Object.assign(new Error(message), { statusCode: 400 });
   if (schedule.repeat === "daily") {
-    if (!/^\d{2}:\d{2}$/.test(schedule.time ?? "")) throw new Error("daily schedules require time as HH:MM");
+    if (!/^\d{2}:\d{2}$/.test(schedule.time ?? "")) throw invalid("daily schedules require time as HH:MM");
     const [hh, mm] = (schedule.time ?? "").split(":").map(Number);
-    if (hh > 23 || mm > 59) throw new Error("daily schedule time must be HH:MM");
+    if (hh > 23 || mm > 59) throw invalid("daily schedule time must be HH:MM");
     return null;
   }
   const runAt = new Date(schedule.runAt ?? "");
-  if (Number.isNaN(runAt.getTime())) throw new Error("one-time schedules require runAt as an ISO date/time");
+  if (Number.isNaN(runAt.getTime())) throw invalid("one-time schedules require runAt as an ISO date/time");
   return runAt.toISOString();
 }
 
@@ -76,6 +77,12 @@ export function clearStaleScheduleRuns(schedules: BatterySchedule[], activeIds: 
     schedule.running = false;
     schedule.runningSince = null;
     changed = true;
+    // A stale run can leave an unresolved "pending" intent from a crash between
+    // the pre-execution write and the outcome write. Clear it so one-time
+    // schedules (which require no executionIntent to be due) are not latched.
+    if (schedule.executionIntent?.state === "pending") {
+      schedule.executionIntent = undefined;
+    }
   }
   return changed;
 }

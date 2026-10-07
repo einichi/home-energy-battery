@@ -24,6 +24,7 @@ export interface AdaptiveChargingOperationDependencies {
   readState(): Promise<AdaptiveChargingState>;
   writeState(state: AdaptiveChargingState): Promise<AdaptiveChargingState>;
   retryDelayMs: number;
+  guardOwnsStandby?: () => Promise<boolean>;
 }
 
 export function createAdaptiveChargingOperations({
@@ -31,6 +32,7 @@ export function createAdaptiveChargingOperations({
   readState,
   writeState,
   retryDelayMs,
+  guardOwnsStandby,
 }: AdaptiveChargingOperationDependencies) {
   async function release(
     state: AdaptiveChargingState,
@@ -120,6 +122,10 @@ export function createAdaptiveChargingOperations({
     }
     const remainingMs = adaptiveChargingSlotEndDelayMs(state, now);
     if (remainingMs !== null && remainingMs > 0) return { stopped: false, remainingMs };
+    // The Demand Guard owns Standby; do not release to Auto until it restores.
+    if (guardOwnsStandby && await guardOwnsStandby()) {
+      return { stopped: false, reason: "Charging Demand Guard owns Standby operation mode" };
+    }
     const windowEndMs = new Date(state.activeSlot?.windowEnd ?? "").getTime();
     const slotEndMs = new Date(state.activeSlot?.end ?? "").getTime();
     const windowEnded = Number.isFinite(windowEndMs)

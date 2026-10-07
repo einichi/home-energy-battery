@@ -1226,6 +1226,26 @@ assert.equal(censoredTailObservations[0].whPerSocPoint, 50);
 
 assert.equal(censoredTailObservations[1].eligible, false);
 
+// A telemetry gap between merged intervals must lower the coverage ratio.
+const gapObservations = extractBatteryLearningObservations([
+  batteryLearningRollup(6, "charge", { startSoc: 10, endSoc: 20, energyWh: 1000 }),
+  {
+    ...batteryLearningRollup(6, "charge", { startSoc: 20, endSoc: 30, energyWh: 1000 }),
+    rollupStart: "2026-07-06T01:00:00.000Z",
+    rollupEnd: "2026-07-06T01:30:00.000Z",
+  },
+]);
+assert.equal(gapObservations.length, 1);
+assert.equal(gapObservations[0].eligible, false);
+assert.match(gapObservations[0].rejectionReason!, /coverage/);
+
+// Duplicate coverage in one half-hour bucket must not double-count demand.
+const duplicateCoverageDays = aggregateDemandDays([
+  { timestamp: "2026-07-01T00:05:00.000Z", houseDemandW: 1000, powerCoverageSeconds: { houseDemandW: 1800 } },
+  { timestamp: "2026-07-01T00:25:00.000Z", houseDemandW: 1000, powerCoverageSeconds: { houseDemandW: 1800 } },
+], { occupancy: "home" });
+assert.deepEqual([...(duplicateCoverageDays[0]?.values.values() ?? [])], [1000]);
+
 
 const completedChargeState: Record<string, any> = {
   activeChargedKwh: 1,
@@ -2151,6 +2171,29 @@ assert.equal(deadlineWriteCount, 1);
 assert.equal(deadlineState.owner, null);
 
 assert.equal(deadlineState.activeSlot, null);
+
+// The deadline must not release to Auto while the Demand Guard owns Standby.
+const guardDeadlineState = {
+  owner: "adaptiveCharging",
+  activeSlot: { start: "2026-07-11T13:00:00.000Z", end: "2026-07-11T13:30:00.000Z", windowEnd: "2026-07-11T13:30:00.000Z", targetWh: 1000 },
+};
+const guardDeadlineKey = adaptiveChargingSlotEndKey(guardDeadlineState as any);
+let guardDeadlineReleaseCount = 0;
+const guardBlockedOperations = createAdaptiveChargingOperations({
+  execute: unavailableOperation,
+  readState: async () => guardDeadlineState as any,
+  writeState: async () => undefined as any,
+  retryDelayMs: 5_000,
+  guardOwnsStandby: async () => true,
+});
+const guardBlockedDeadline = await guardBlockedOperations.enforceDeadline(guardDeadlineKey, {
+  readState: async () => guardDeadlineState as any,
+  release: async () => { guardDeadlineReleaseCount += 1; return true; },
+  now: new Date("2026-07-11T13:30:00.000Z"),
+});
+assert.equal(guardBlockedDeadline.stopped, false);
+assert.match(String(guardBlockedDeadline.reason), /Guard owns Standby/);
+assert.equal(guardDeadlineReleaseCount, 0);
 
 
 const staleDeadline = await enforceAdaptiveChargingSlotEndDeadline(deadlineKey, {

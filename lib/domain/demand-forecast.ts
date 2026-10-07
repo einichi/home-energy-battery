@@ -151,8 +151,13 @@ export function aggregateDemandDays(
     ));
     if (seconds <= 0) continue;
     const bucket = day.buckets.get(index) ?? { weightedSum: 0, coverageSeconds: 0 };
-    bucket.weightedSum += demand * seconds;
-    bucket.coverageSeconds = Math.min(1800, bucket.coverageSeconds + seconds);
+    // Only apply the coverage seconds still available in this bucket so the
+    // weighted sum and the denominator stay consistent (no double-counting when
+    // duplicate/DST samples push past 1800s).
+    const appliedSeconds = Math.min(seconds, Math.max(0, 1800 - bucket.coverageSeconds));
+    if (appliedSeconds <= 0) continue;
+    bucket.weightedSum += demand * appliedSeconds;
+    bucket.coverageSeconds += appliedSeconds;
     day.buckets.set(index, bucket);
   }
   return [...days.values()].map((day) => {
@@ -230,7 +235,7 @@ export function buildFuelCellGenerationModel(
   const currentTemperature = finiteNumberOrNull(temperatureByDay.get(localDayKey(now)));
   const comparableDays = validDays.filter((day) => {
     const weekend = day.date.getDay() === 0 || day.date.getDay() === 6;
-    const temperatureMatches = currentTemperature === null || day.temperatureC === null || Math.abs(day.temperatureC - currentTemperature) <= 6;
+    const temperatureMatches = currentTemperature === null ? true : day.temperatureC === null ? false : Math.abs(day.temperatureC - currentTemperature) <= 6;
     return weekend === currentDayType && day.away === currentAway && monthDistance(day.date, now) <= 2 && temperatureMatches;
   });
   const blockers: string[] = [];
@@ -248,7 +253,7 @@ export function buildFuelCellGenerationModel(
     let candidates = dailyBuckets.filter((day) => day.values.has(bucket));
     const comparable = candidates.filter((day) => {
       const weekend = day.date.getDay() === 0 || day.date.getDay() === 6;
-      const temperatureMatches = targetTemperature === null || day.temperatureC === null || Math.abs(day.temperatureC - targetTemperature) <= 6;
+      const temperatureMatches = targetTemperature === null ? true : day.temperatureC === null ? false : Math.abs(day.temperatureC - targetTemperature) <= 6;
       return weekend === targetWeekend && day.away === targetAway && monthDistance(day.date, date) <= 2 && temperatureMatches;
     });
     if (comparable.length >= 4) candidates = comparable;
@@ -303,7 +308,9 @@ export function selectSeasonalDemandDays(
     const sameDayType = [0, 6].includes(day.date.getDay()) === targetIsWeekend;
     const temperature = Number(temperatureByDay.get(day.key));
     const hasTemperatureMatch = Number.isFinite(targetTemperature) && Number.isFinite(temperature);
-    const temperatureDistance = hasTemperatureMatch ? Math.abs(targetTemperature - temperature) : 0;
+    const temperatureDistance = hasTemperatureMatch
+      ? Math.abs(targetTemperature - temperature)
+      : Number.isFinite(targetTemperature) ? 5 : 0;
     const candidate: ScoredDemandDay = {
       ...day,
       yearsAgo,
@@ -399,6 +406,16 @@ export function predictHouseDemand(
     );
     if (lowValue !== null && Number.isFinite(lowValue)) lowProfile.set(index, lowValue);
   }
+  // Fill missing buckets with the profile mean instead of letting the planner
+  // read them as zero demand.
+  if (profile.size) {
+    const mean = [...profile.values()].reduce((sum, value) => sum + value, 0) / profile.size;
+    const lowMean = lowProfile.size ? [...lowProfile.values()].reduce((sum, value) => sum + value, 0) / lowProfile.size : mean;
+    for (let index = 0; index < 48; index += 1) {
+      if (!profile.has(index)) profile.set(index, mean);
+      if (!lowProfile.has(index)) lowProfile.set(index, lowMean);
+    }
+  }
   return {
     available: validDays.length >= 7 && recentCandidates.length >= 4 && profile.size >= 39,
     reason: validDays.length < 7
@@ -442,7 +459,8 @@ export function predictAwayDemand(
   );
   const recordedDayMap = new Map<string, DemandDay>(historicalDays.map((day) => [day.key, day]));
   for (const day of aggregateDemandDays(samples, { awayPeriods, occupancy: "away" })) {
-    recordedDayMap.set(day.key, day);
+    const existing = recordedDayMap.get(day.key);
+    if (!existing || day.coverage >= existing.coverage) recordedDayMap.set(day.key, day);
   }
   const candidates = [...recordedDayMap.values()].map((day): ScoredDemandDay => {
     const ageDays = (target.getTime() - day.date.getTime()) / 86_400_000;

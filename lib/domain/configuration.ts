@@ -182,17 +182,18 @@ export function normalizeRateBands(input: unknown = {}): RateBand[] {
   const rateMode = hasRateMode ? sourceInput.rateMode as RateMode : normalizeRateModeRecord(sourceInput);
   const standardRate = configNumber(sourceInput.standardRateYenPerKwh, DEFAULT_CONFIG.standardRateYenPerKwh, 0, 1000);
   const offPeakRate = configNumber(sourceInput.offPeakRateYenPerKwh, DEFAULT_CONFIG.offPeakRateYenPerKwh, 0, 1000);
-  const source: unknown[] = !hasRateMode && Array.isArray(sourceInput.rateBands) && sourceInput.rateBands.length
-    ? sourceInput.rateBands
+  const providedBands = Array.isArray(sourceInput.rateBands) && sourceInput.rateBands.length ? sourceInput.rateBands : null;
+  const source: unknown[] = !hasRateMode && providedBands
+    ? providedBands
     : rateMode === "simple"
       ? [{ start: "00:00", end: "00:00", yenPerKwh: standardRate, label: "Simple" }]
-      : rateMode === "offPeak"
-        ? [
-            { start: "00:00", end: "07:00", yenPerKwh: offPeakRate, label: "Off-peak" },
-            { start: "07:00", end: "00:00", yenPerKwh: standardRate, label: "Standard" },
-          ]
-        : Array.isArray(sourceInput.rateBands) && sourceInput.rateBands.length
-          ? sourceInput.rateBands
+      : providedBands
+        ? providedBands
+        : rateMode === "offPeak"
+          ? [
+              { start: "00:00", end: "07:00", yenPerKwh: offPeakRate, label: "Off-peak" },
+              { start: "07:00", end: "00:00", yenPerKwh: standardRate, label: "Standard" },
+            ]
           : [{ start: "00:00", end: "07:00", yenPerKwh: offPeakRate, label: "Off-peak" }];
   const bands = source.map((value): RateBand => {
     const band = record(value);

@@ -38,6 +38,8 @@ export function createRetentionRepository(dependencies: Dependencies) {
       ["automation", policy.automationEventDays, "automationEvents"],
       ["command", policy.commandReceiptDays, "commandReceiptEvents"],
       ["notification", policy.notificationDeliveryDays, "notificationEvents"],
+      ["fuelCell", policy.rawTelemetryDays, "fuelCellEvents"],
+      ["database", policy.rawTelemetryDays, "databaseEvents"],
     ];
     for (const [category, days, resultKey] of eventRetention) {
       if (days !== null) deleted[resultKey] = await deleteInChunks("DELETE FROM events WHERE id IN (SELECT id FROM events WHERE category = ? AND timestamp_ms < ? ORDER BY timestamp_ms LIMIT 10000)", [category, cutoff(days)]);
@@ -50,6 +52,11 @@ export function createRetentionRepository(dependencies: Dependencies) {
       await deleteInChunks("DELETE FROM fuel_cell_forecasts WHERE rowid IN (SELECT rowid FROM fuel_cell_forecasts WHERE target_start_ms < ? ORDER BY target_start_ms LIMIT 10000)", [cutoffMs]);
       deleted.adaptivePlanSnapshots = await deleteInChunks("DELETE FROM adaptive_plan_snapshots WHERE id IN (SELECT id FROM adaptive_plan_snapshots WHERE created_at_ms < ? ORDER BY created_at_ms LIMIT 10000)", [cutoffMs]);
     }
+    // Bound auxiliary tables that have no dedicated retention field, using the
+    // raw-telemetry window so they cannot grow without limit on defaults.
+    const auxiliaryCutoff = cutoff(policy.rawTelemetryDays);
+    deleted.backtestRuns = await deleteInChunks("DELETE FROM backtest_runs WHERE id IN (SELECT id FROM backtest_runs WHERE started_at_ms < ? LIMIT 10000)", [auxiliaryCutoff]);
+    deleted.gasTariffSnapshots = await deleteInChunks("DELETE FROM gas_tariff_snapshots WHERE id IN (SELECT id FROM gas_tariff_snapshots WHERE fetched_at_ms < ? LIMIT 10000)", [auxiliaryCutoff]);
     dependencies.database().exec("PRAGMA wal_checkpoint(PASSIVE)");
     return { policy, before, after: await dependencies.stats(), deleted };
   }

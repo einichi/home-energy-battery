@@ -301,7 +301,21 @@ export function createDatabaseAdministrationService(dependencies: DatabaseAdmini
         throw error;
       } finally {
         if (extracted?.snapshotFile) await cleanupExtractedDatabaseBackup(extracted.snapshotFile);
-        if (backgroundStopped && databaseReady) dependencies.startBackgroundProcesses();
+        if (backgroundStopped) {
+          // If a failed rollback left the database closed, make one final attempt
+          // to reopen it so background work is not silently left stopped.
+          if (!databaseReady) {
+            try {
+              await dependencies.historyStore.initialize();
+              await dependencies.applicationStore.initialize();
+              databaseReady = true;
+              dependencies.resetAfterRestore();
+            } catch (recoveryError: unknown) {
+              dependencies.logError("database-restore-recovery", recoveryError);
+            }
+          }
+          if (databaseReady) dependencies.startBackgroundProcesses();
+        }
       }
     });
   }

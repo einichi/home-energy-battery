@@ -81,7 +81,10 @@ export function createStatusHistoryService(dependencies: StatusHistoryDependenci
       });
     }
     await dependencies.ensureDataDirectory();
-    previousSample = dependencies.history.appendSample(sample);
+    // On a duplicate/invalid sample appendSample returns null; keep the last
+    // accepted sample so the next poll still has a baseline for counter deltas.
+    const appended = dependencies.history.appendSample(sample);
+    if (appended) previousSample = appended;
     dependencies.noteAdaptiveSample(sample);
     return sample;
   }

@@ -187,6 +187,7 @@ const adaptiveChargingOperations = createAdaptiveChargingOperations({
   readState: readAdaptiveChargingState,
   writeState: writeAdaptiveChargingState,
   retryDelayMs: ADAPTIVE_CHARGING_SLOT_END_RETRY_MS,
+  guardOwnsStandby: async () => (await readAutomationRules()).some((rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore === true),
 });
 const releaseAdaptiveCharge = adaptiveChargingOperations.release;
 const suspendAdaptiveChargeInStandby = adaptiveChargingOperations.suspendInStandby;
@@ -547,7 +548,6 @@ const automationOrchestrator = createAutomationOrchestrator({
   notifications: notificationService,
   warn: (message) => console.warn(message),
 });
-
 const scheduledAutomationService = createScheduledAutomationService({
   discoveryInProgress,
   discoveryLabel: discoveryService.label,

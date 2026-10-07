@@ -491,6 +491,19 @@ assert.equal(simple.circuitSortMode, "number");
 
 assert.equal(rateForTimestamp(simple.rateBands, "2026-05-31T23:30:00+09:00").yenPerKwh, 42);
 
+// Off-peak mode must honour caller-supplied rate bands (e.g. 23:00-07:00).
+const offPeakWithBands = cleanConfig({
+  rateMode: "offPeak",
+  standardRateYenPerKwh: 40,
+  offPeakRateYenPerKwh: 15,
+  rateBands: [
+    { start: "07:00", end: "23:00", yenPerKwh: 40, label: "Standard" },
+    { start: "23:00", end: "07:00", yenPerKwh: 15, label: "Off-peak" },
+  ],
+});
+assert.equal(offPeakWithBands.rateBands.length, 2);
+assert.equal(rateForTimestamp(offPeakWithBands.rateBands, "2026-05-31T23:30:00+09:00").yenPerKwh, 15);
+
 assert.equal(simple.dashboardWidgets.length, 24);
 
 assert.equal(simple.dashboardWidgets[0].id, "solarPower");

@@ -222,6 +222,13 @@ export function migrateHistorySchema(database: DatabaseSync, versions: HistorySc
   database.exec("BEGIN IMMEDIATE");
   try {
     createBacktestSchema(database);
+    // Bring a migrated database in line with fresh schemas: dedupe any legacy
+    // duplicate timestamps, then add the same indexes createHistorySchema uses.
+    database.exec(`
+      DELETE FROM samples WHERE id NOT IN (SELECT MIN(id) FROM samples GROUP BY timestamp_ms);
+      CREATE UNIQUE INDEX IF NOT EXISTS samples_timestamp_unique_idx ON samples(timestamp_ms);
+      CREATE INDEX IF NOT EXISTS rollups_end_idx ON rollups(resolution, bucket_end_ms);
+    `);
     const setMetadata = database.prepare(`
       INSERT INTO metadata(key, value) VALUES (?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value

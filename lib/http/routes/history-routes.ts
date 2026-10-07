@@ -150,8 +150,14 @@ export function createHistoryRouteHandler(dependencies: HistoryRouteDependencies
       const config = await readConfig();
       const start = url.searchParams.get("start");
       const end = url.searchParams.get("end");
-      const bucket = normalizeReportBucket(url.searchParams.get("bucket") ?? "day");
+      const bucketParam = url.searchParams.get("bucket");
       if (!start || !end) return json(res, 400, { error: "start and end are required" });
+      if (bucketParam !== null && bucketParam !== "" && bucketParam !== "day" && bucketParam !== "week" && bucketParam !== "month") {
+        return json(res, 400, { error: "bucket must be day, week, or month" });
+      }
+      const rangeError = rangeParamError(url);
+      if (rangeError) return json(res, 400, { error: rangeError });
+      const bucket = normalizeReportBucket(bucketParam ?? "day");
       return json(res, 200, await eneFarmReport(start, end, bucket, config));
     }
     return false;

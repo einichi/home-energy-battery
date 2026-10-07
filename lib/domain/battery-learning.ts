@@ -133,7 +133,6 @@ interface BatteryLearningObservationAccumulator {
   endSoc: number;
   energyWh: number;
   coverageSeconds: number;
-  durationSeconds: number;
   manualAction: boolean;
   reversed: boolean;
 }
@@ -352,8 +351,11 @@ export function extractBatteryLearningObservations(samples: readonly HistorySamp
     const socDelta = current.direction === "charge"
       ? current.endSoc - current.startSoc
       : current.startSoc - current.endSoc;
-    const coverageRatio = current.durationSeconds > 0
-      ? Math.min(1, current.coverageSeconds / current.durationSeconds)
+    // Use the elapsed wall-clock span (including gaps between merged intervals)
+    // so a telemetry hole lowers the coverage ratio instead of being hidden.
+    const durationSeconds = Math.max(0, (current.endMs - current.startMs) / 1000);
+    const coverageRatio = durationSeconds > 0
+      ? Math.min(1, current.coverageSeconds / durationSeconds)
       : 0;
     const reasons: string[] = [];
     if (current.reversed) reasons.push("SOC direction reversed");
@@ -394,7 +396,6 @@ export function extractBatteryLearningObservations(samples: readonly HistorySamp
         endSoc: interval.endSoc,
         energyWh: interval.energyWh,
         coverageSeconds: interval.coverageSeconds,
-        durationSeconds: interval.durationSeconds,
         manualAction: interval.manualAction,
         reversed: interval.direction === "charge"
           ? interval.endSoc < interval.startSoc
@@ -413,7 +414,6 @@ export function extractBatteryLearningObservations(samples: readonly HistorySamp
     current.endSoc = interval.endSoc;
     current.energyWh += interval.energyWh;
     current.coverageSeconds += interval.coverageSeconds;
-    current.durationSeconds += interval.durationSeconds;
     current.manualAction ||= interval.manualAction;
     if (intervalDelta < 0 || boundaryReversed) current.reversed = true;
   }

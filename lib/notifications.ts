@@ -364,6 +364,18 @@ export function createNotificationService({
           state.observations[key] = observation;
           await writeState(state);
         }
+        // Retry a recovery notification that has not been delivered yet.
+        if (observation.notified === false && recoveryEvent) {
+          const result = await deliver(recoveryEvent);
+          if (result.ok) {
+            const latestState = await readState();
+            latestState.observations[key] = {
+              ...(latestState.observations[key] ?? observation),
+              notified: true,
+            };
+            await writeState(latestState);
+          }
+        }
         return;
       }
       if (active && observation.active) {
@@ -406,11 +418,21 @@ export function createNotificationService({
         observation.activeCount = 0;
         if (observation.active && observation.recoveryCount >= recoverAfter) {
           observation.active = false;
-          observation.notified = false;
+          observation.notified = !recoveryEvent;
           observation.changedAt = new Date().toISOString();
           state.observations[key] = observation;
           await writeState(state);
-          if (recoveryEvent) await deliver(recoveryEvent);
+          if (recoveryEvent) {
+            const result = await deliver(recoveryEvent);
+            if (result.ok) {
+              const latestState = await readState();
+              latestState.observations[key] = {
+                ...(latestState.observations[key] ?? observation),
+                notified: true,
+              };
+              await writeState(latestState);
+            }
+          }
           return;
         }
       }
@@ -432,14 +454,18 @@ export function createNotificationService({
     };
   }
 
-  async function sendTest() {
-    return deliver({
+  function sendTest() {
+    // Serialize with background deliveries so a concurrent send cannot clobber
+    // the notification-state document, but still propagate failures to the caller.
+    const task = queue.then(() => deliver({
       type: "test",
       severity: "info",
       title: "Test notification",
       message: "SMTP notifications are configured correctly.",
       dedupeKey: `test:${Date.now()}`,
-    }, { force: true });
+    }, { force: true }));
+    queue = task.catch(() => undefined);
+    return task;
   }
 
   return { deliver, enqueue, observeCondition, sendTest, updateSecret, view };

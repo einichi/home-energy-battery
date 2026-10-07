@@ -27,7 +27,9 @@ export function createConfigurationService({
     mutator: (config: ApplicationConfig) => ApplicationConfig | Promise<ApplicationConfig>,
   ): Promise<ApplicationConfig> {
     const task = mutationQueue.then(async () => {
-      const previous = await read().catch(() => normalize(defaultConfig));
+      // A read failure must not be treated as "no config": falling back to
+      // defaults here would overwrite the persisted configuration.
+      const previous = await read();
       const proposed = await mutator(structuredClone(previous));
       return commit(previous, proposed);
     });

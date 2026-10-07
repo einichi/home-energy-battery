@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 import type { BatterySchedule } from "../lib/contracts/schedules.js";
-import { isDue } from "../lib/domain/schedules.js";
+import { clearStaleScheduleRuns, isDue } from "../lib/domain/schedules.js";
 
 function daily(overrides: Partial<BatterySchedule> = {}): BatterySchedule {
   return {
@@ -48,3 +48,21 @@ assert.equal(isDue(daily({ enabled: false }), afterMinute), false);
 assert.equal(isDue(daily({ time: "25:00" }), afterMinute), false);
 assert.equal(isDue(daily({ time: "nonsense" }), afterMinute), false);
 assert.equal(isDue(daily({ days: [(afterMinute.getDay() + 1) % 7] }), afterMinute), false);
+
+// A stale run clears the pending intent so a one-time schedule is due again.
+const staleOnce: BatterySchedule = {
+  id: "stale-once",
+  name: "Stale",
+  action: "charge",
+  enabled: true,
+  repeat: "once",
+  runAt: "2020-01-01T00:00:00.000Z",
+  running: true,
+  runningSince: "2020-01-01T00:00:00.000Z",
+  executionIntent: { id: "intent", state: "pending", attemptedAt: "2020-01-01T00:00:00.000Z", action: "charge" },
+};
+assert.equal(isDue(staleOnce, afterMinute), false);
+assert.equal(clearStaleScheduleRuns([staleOnce], new Set()), true);
+assert.equal(staleOnce.running, false);
+assert.equal(staleOnce.executionIntent, undefined);
+assert.equal(isDue(staleOnce, afterMinute), true);
