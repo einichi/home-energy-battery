@@ -67,6 +67,21 @@ await assert.rejects(
   /target verification mismatch: expected 500, observed 0/,
 );
 
+// A device that does not expose the target EPC (null raw) must not fail a write
+// it cannot verify; fall back to the mode readback.
+const unreadableService = makeService(async (command, _args, positional) => {
+  if (command === "charge") return { ok: true, acknowledged: true, esv: "Set_Res" };
+  if (command === "raw-get") {
+    const epc = String(positional?.[0] ?? "");
+    if (isEpc(epc, "0xda")) return { raw: "0x42" };
+    if (isEpc(epc, "0xaa")) return { raw: null };
+  }
+  throw new Error(`unexpected ${command} ${JSON.stringify(positional)}`);
+});
+const unreadableVerified = await unreadableService.execute("charge", { targetWh: 500 });
+assert.equal((unreadableVerified as any).readBack.operationMode, "charging");
+assert.equal((unreadableVerified as any).readBack.targetWh, undefined);
+
 // A charge without a target still verifies the mode only (no target read).
 const modeOnlyReads: string[] = [];
 const modeOnlyService = makeService(async (command, _args, positional) => {

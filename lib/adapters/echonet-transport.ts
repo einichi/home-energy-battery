@@ -32,10 +32,10 @@ export type DiscoveredDevices = Record<string, DiscoveredDevice>;
 export interface EchonetClient {
   init(): Promise<void>;
   close(): Promise<void>;
-  get(host: string, eoj: number[], epc: number): Promise<EchonetResponse>;
-  set(host: string, eoj: number[], epc: number, edt: Buffer): Promise<EchonetResponse>;
-  maps(host: string, eoj: number[]): Promise<EchonetResponse>;
-  discover(): Promise<DiscoveredDevices>;
+  get(host: string, eoj: number[], epc: number, timeoutMs?: number): Promise<EchonetResponse>;
+  set(host: string, eoj: number[], epc: number, edt: Buffer, timeoutMs?: number): Promise<EchonetResponse>;
+  maps(host: string, eoj: number[], timeoutMs?: number): Promise<EchonetResponse>;
+  discover(timeoutMs?: number): Promise<DiscoveredDevices>;
 }
 
 export interface EchonetTransportOptions {
@@ -78,15 +78,15 @@ export class EchonetNode implements EchonetClient {
     return new Promise((resolve) => this.el.close(resolve));
   }
 
-  private withTimeout<T>(work: (callback: NodeCallback<T>) => void, label: string): Promise<T> {
+  private withTimeout<T>(work: (callback: NodeCallback<T>) => void, label: string, timeoutMs: number = this.timeoutMs): Promise<T> {
     return new Promise((resolve, reject) => {
       let done = false;
       const timer = setTimeout(() => {
         if (!done) {
           done = true;
-          reject(new Error(`${label} timed out after ${this.timeoutMs / 1000}s`));
+          reject(new Error(`${label} timed out after ${timeoutMs / 1000}s`));
         }
-      }, this.timeoutMs);
+      }, timeoutMs);
       work((error, response) => {
         if (done) return;
         done = true;
@@ -97,34 +97,37 @@ export class EchonetNode implements EchonetClient {
     });
   }
 
-  get(host: string, eoj: number[], epc: number): Promise<EchonetResponse> {
+  get(host: string, eoj: number[], epc: number, timeoutMs?: number): Promise<EchonetResponse> {
     return this.withTimeout(
       (callback) => this.el.getPropertyValue(host, eoj, epc, (error, response) => callback(error, normalizeResponse(response))),
       `${host} ${eojHex(eoj)} EPC 0x${epc.toString(16)}`,
+      timeoutMs,
     );
   }
 
-  set(host: string, eoj: number[], epc: number, edt: Buffer): Promise<EchonetResponse> {
+  set(host: string, eoj: number[], epc: number, edt: Buffer, timeoutMs?: number): Promise<EchonetResponse> {
     return this.withTimeout(
       (callback) => this.el.setPropertyValue(host, eoj, epc, edt, (error, response) => callback(error, normalizeResponse(response))),
       `${host} ${eojHex(eoj)} EPC 0x${epc.toString(16)} set`,
+      timeoutMs,
     );
   }
 
-  maps(host: string, eoj: number[]): Promise<EchonetResponse> {
+  maps(host: string, eoj: number[], timeoutMs?: number): Promise<EchonetResponse> {
     return this.withTimeout(
       (callback) => this.el.getPropertyMaps(host, eoj, (error, response) => callback(error, normalizeResponse(response))),
       `${host} ${eojHex(eoj)} maps`,
+      timeoutMs,
     );
   }
 
-  discover(): Promise<DiscoveredDevices> {
+  discover(timeoutMs: number = this.timeoutMs): Promise<DiscoveredDevices> {
     return new Promise((resolve, reject) => {
       const devices: DiscoveredDevices = {};
       const timer = setTimeout(() => {
         this.el.stopDiscovery();
         resolve(devices);
-      }, this.timeoutMs);
+      }, timeoutMs);
       this.el.startDiscovery((error, response) => {
         if (error) {
           clearTimeout(timer);

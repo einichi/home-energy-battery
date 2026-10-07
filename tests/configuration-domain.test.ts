@@ -517,6 +517,30 @@ const offPeakWithBands = cleanConfig({
 assert.equal(offPeakWithBands.rateBands.length, 2);
 assert.equal(rateForTimestamp(offPeakWithBands.rateBands, "2026-05-31T23:30:00+09:00").yenPerKwh, 15);
 
+// Multi mode must keep a legitimate all-day discount band (start === end) and
+// not mistake it for the stale simple-mode artifact.
+const multiAllDay = cleanConfig({
+  rateMode: "multi",
+  standardRateYenPerKwh: 30,
+  rateBands: [
+    { start: "00:00", end: "00:00", yenPerKwh: 22, label: "All-day discount" },
+    { start: "06:00", end: "22:00", yenPerKwh: 30, label: "Peak" },
+  ],
+});
+assert.equal(multiAllDay.rateBands.length, 2);
+assert.equal(rateForTimestamp(multiAllDay.rateBands, "2026-05-31T03:00:00+09:00").yenPerKwh, 22);
+
+// A lone flat band carried over from simple mode is still replaced when the
+// mode is explicitly off-peak.
+const staleSimpleBand = cleanConfig({
+  rateMode: "offPeak",
+  standardRateYenPerKwh: 40,
+  offPeakRateYenPerKwh: 15,
+  rateBands: [{ start: "00:00", end: "00:00", yenPerKwh: 40, label: "Simple" }],
+});
+assert.equal(staleSimpleBand.rateBands.length, 2);
+assert.equal(rateForTimestamp(staleSimpleBand.rateBands, "2026-05-31T03:00:00+09:00").yenPerKwh, 15);
+
 assert.equal(simple.dashboardWidgets.length, 24);
 
 assert.equal(simple.dashboardWidgets[0].id, "solarPower");

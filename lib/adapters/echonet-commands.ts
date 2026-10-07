@@ -60,25 +60,28 @@ function makeClient(opts: Record<string, unknown>): EchonetClient {
   });
 }
 
+// A shared persistent client carries one fixed timeout. Wrap it so each request
+// uses the per-command timeout, matching the standalone-client behaviour (the
+// timeout bounds a single request, not the whole multi-step command).
+function withCommandTimeout(client: EchonetClient, timeoutSeconds: number): EchonetClient {
+  const timeoutMs = Math.max(1, Math.round(timeoutSeconds * 1000));
+  return {
+    init: () => client.init(),
+    close: () => client.close(),
+    get: (host, eoj, epc) => client.get(host, eoj, epc, timeoutMs),
+    set: (host, eoj, epc, edt) => client.set(host, eoj, epc, edt, timeoutMs),
+    maps: (host, eoj) => client.maps(host, eoj, timeoutMs),
+    discover: () => client.discover(timeoutMs),
+  };
+}
+
 async function withClient<T>(opts: CommandOptions, fn: (client: EchonetClient) => Promise<T>): Promise<T> {
   if (opts.__client) {
-    // A shared persistent client uses one fixed timeout; honour a per-command
-    // timeout with a race so callers can request a shorter bound.
     const timeoutSeconds = Number(opts.timeout);
-    if (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        return await Promise.race([
-          fn(opts.__client),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(() => reject(new Error(`command timed out after ${timeoutSeconds}s`)), timeoutSeconds * 1000);
-          }),
-        ]);
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
-    }
-    return fn(opts.__client);
+    const client = Number.isFinite(timeoutSeconds) && timeoutSeconds > 0
+      ? withCommandTimeout(opts.__client, timeoutSeconds)
+      : opts.__client;
+    return fn(client);
   }
   const client = makeClient(opts);
   await client.init();

@@ -299,7 +299,27 @@ export function createEneFarmReportingService(dependencies: EneFarmReportingDepe
       if (intervalGas !== null) { interval.gasM3 += Math.max(0, intervalGas); interval.hasGas = true; }
       if (typeof sample.fuelCellDataQuality === "string") interval.qualities.add(sample.fuelCellDataQuality);
     }
-    if (stateIntervals.length) stateIntervals.at(-1)!.end = rangeEnd ?? stateIntervals.at(-1)!.end;
+    const finalSample = samples.at(-1);
+    const finalInterval = stateIntervals.at(-1);
+    if (finalInterval) {
+      const finalState = finalSample?.fuelCellGenerationState ?? "unknown";
+      if (finalSample && finalInterval.state !== finalState) {
+        // The final transition happens after the last sample's interval, so emit
+        // a trailing segment; otherwise the state strip never reaches the end.
+        stateIntervals.push({
+          start: finalSample.timestamp ?? null,
+          end: rangeEnd ?? finalSample.timestamp ?? null,
+          state: finalState,
+          generatedKwh: 0,
+          gasM3: 0,
+          hasGas: false,
+          sourceHost: finalSample.fuelCellSourceHost ?? null,
+          qualities: new Set<string>(),
+        });
+      } else {
+        finalInterval.end = rangeEnd ?? finalInterval.end;
+      }
+    }
     const ratedSample = samples.findLast((sample) => Number.isFinite(Number(sample.fuelCellRatedPowerW)));
     return {
       sampleCount: samples.length,

@@ -183,14 +183,16 @@ export function normalizeRateBands(input: unknown = {}): RateBand[] {
   const standardRate = configNumber(sourceInput.standardRateYenPerKwh, DEFAULT_CONFIG.standardRateYenPerKwh, 0, 1000);
   const offPeakRate = configNumber(sourceInput.offPeakRateYenPerKwh, DEFAULT_CONFIG.offPeakRateYenPerKwh, 0, 1000);
   const providedBands = Array.isArray(sourceInput.rateBands) && sourceInput.rateBands.length ? sourceInput.rateBands : null;
-  // An explicit off-peak/multi mode with provided bands that contain no real
-  // discounted window (e.g. a stale flat band carried over from simple mode) is
-  // inconsistent, so regenerate instead of keeping it.
-  const hasDiscountedWindow = (bands: unknown[]) => bands.some((band) => {
-    const candidate = record(band);
-    return String(candidate.start) !== String(candidate.end) && Number(candidate.yenPerKwh) < standardRate;
-  });
-  const usableProvidedBands = providedBands && (rateMode === "simple" || hasDiscountedWindow(providedBands))
+  // A lone all-day band is the artifact left behind by simple mode. An explicit
+  // off-peak/multi mode still carrying only that band is inconsistent, so
+  // regenerate; every other provided plan (all-day discount bands, multi-band
+  // tariffs, off-peak windows) is honoured.
+  const isSimpleArtifact = (bands: unknown[]) => {
+    if (bands.length !== 1) return false;
+    const band = record(bands[0]);
+    return String(band.start) === String(band.end);
+  };
+  const usableProvidedBands = providedBands && (rateMode === "simple" || !isSimpleArtifact(providedBands))
     ? providedBands
     : null;
   const source: unknown[] = !hasRateMode && providedBands

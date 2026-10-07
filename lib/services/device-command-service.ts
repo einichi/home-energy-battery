@@ -135,6 +135,7 @@ export function createDeviceCommandService(dependencies: DeviceCommandServiceDep
     const attempts = dependencies.operationModeVerifyAttempts ?? 4;
     const delayMs = dependencies.operationModeVerifyDelayMs ?? 750;
     let observed: number | null = null;
+    let sawReadable = false;
     let lastError: unknown = null;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       if (attempt > 1 && delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -142,12 +143,16 @@ export function createDeviceCommandService(dependencies: DeviceCommandServiceDep
         const readback = await dependencies.runDeviceCommand("raw-get", { host, eoj: "0x027D01", timeout: 3 }, [targetEpc], { priority: 0 });
         observed = parseTargetWhFromRaw(readback);
         lastError = null;
-        if (observed === expectedWh) return { verified: true as const, targetWh: observed, attempts: attempt };
+        if (observed !== null) sawReadable = true;
+        if (observed === expectedWh) return { verified: true as const, targetWh: observed, attempts: attempt, unreadable: false };
       } catch (error: unknown) {
         lastError = error;
       }
     }
     if (lastError) throw new Error(`charge target was acknowledged but verification failed: ${errorMessage(lastError)}`, { cause: lastError });
+    // A device that does not expose the target EPC (Get_SNA -> null raw) cannot be
+    // checked; fall back to the mode verification rather than failing a real write.
+    if (!sawReadable) return { verified: true as const, targetWh: null, attempts, unreadable: true };
     throw new Error(`charge target verification mismatch: expected ${expectedWh}, observed ${observed}`);
   }
 
@@ -164,7 +169,9 @@ export function createDeviceCommandService(dependencies: DeviceCommandServiceDep
         const expectedWh = Number(requestedTarget);
         if (!Number.isFinite(expectedWh)) return verifiedMode;
         const target = await verifyChargeTarget(result, host, expectedWh, action === "charge" ? "0xAA" : "0xAB");
-        return { ...verifiedMode, readBack: { ...record(verifiedMode.readBack), targetWh: target.targetWh } };
+        return target.unreadable
+          ? verifiedMode
+          : { ...verifiedMode, readBack: { ...record(verifiedMode.readBack), targetWh: target.targetWh } };
       }
       case "vendor-profile": return verifySetting(result, host, "vendor-profile", String(payload.mode), (readback) => {
         const value = record(readback);

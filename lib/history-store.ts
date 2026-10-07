@@ -514,10 +514,13 @@ function addAverageMetric(target: Record<string, AverageMetric>, key: string, va
   target[key] = metric;
 }
 
-function addRollupSample(state: RollupState, sample: HistorySample): RollupState {
+function addRollupSample(state: RollupState, sample: HistorySample, previousFuelCellState: string | null = null): RollupState {
   state.fuelCell ??= { operatingSeconds: 0, startCount: 0, states: {}, qualities: {}, lastState: null, lastHotWaterLevel: null, sourceHosts: {} };
   state.fuelCell.lastHotWaterLevel ??= null;
   state.energyQualities ??= {};
+  // Rollup state persisted before peak tracking existed has no key; seed it so
+  // the Math.max below cannot produce NaN.
+  state.peakHouseDemandW ??= null;
   state.count += Number(sample.rollupSampleCount ?? 1) || 1;
   state.firstTimestamp ??= sample.timestamp ?? null;
   state.lastTimestamp = sample.timestamp ?? null;
@@ -584,7 +587,12 @@ function addRollupSample(state: RollupState, sample: HistorySample): RollupState
     const seconds = Math.max(0, finite(sample.fuelCellOperatingSeconds) ?? 0);
     // The seconds cover the interval ending at this sample, so they belong to the
     // state that was active during it (the previous sample's state).
-    const operatingState = typeof state.fuelCell.lastState === "string" ? state.fuelCell.lastState : null;
+    // Prefer the state recorded by the previous sample in this bucket; when this
+    // is the bucket's first sample, fall back to the previous sample overall so a
+    // single-sample bucket still attributes its operating seconds.
+    const operatingState = typeof state.fuelCell.lastState === "string"
+      ? state.fuelCell.lastState
+      : previousFuelCellState;
     if (operatingState) state.fuelCell.states[operatingState] = Number(state.fuelCell.states[operatingState] ?? 0) + seconds;
     state.fuelCell.lastState = sample.fuelCellGenerationState;
   }
@@ -778,13 +786,13 @@ export function createHistoryStore({
     `).run(state.resolution, state.startMs, state.endMs, JSON.stringify(payload), JSON.stringify(state));
   }
 
-  function updateRollups(sample: HistorySample): void {
+  function updateRollups(sample: HistorySample, previousFuelCellState: string | null = null): void {
     const timeMs = timestampMs(sample.timestamp);
     if (timeMs === null) return;
     for (const resolution of ["interval", "daily"] as HistoryResolution[]) {
       const startMs = localBucketStart(timeMs, resolution);
       const state = loadRollupState(resolution, startMs);
-      addRollupSample(state, sample);
+      addRollupSample(state, sample, previousFuelCellState);
       persistRollup(state);
     }
   }
@@ -804,7 +812,7 @@ export function createHistoryStore({
       VALUES (?, ?, ?, ?, ?)
     `).run(timeMs, String(compact.timestamp), JSON.stringify(compact), sourceFile, sourceLine);
     if (Number(result.changes) > 0) {
-      updateRollups(interpreted);
+      updateRollups(interpreted, typeof previousSample?.fuelCellGenerationState === "string" ? previousSample.fuelCellGenerationState : null);
       previousSample = compact;
       updateMetricBaselines(metricBaselines, compact);
       return { inserted: true, sample: interpreted };
