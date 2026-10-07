@@ -124,13 +124,48 @@ export function createDeviceCommandService(dependencies: DeviceCommandServiceDep
     });
   }
 
+  function parseTargetWhFromRaw(readback: unknown): number | null {
+    const raw = record(readback).raw;
+    if (typeof raw !== "string" || !/^0x[0-9a-f]+$/i.test(raw)) return null;
+    const value = Number.parseInt(raw.slice(2), 16);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  async function verifyChargeTarget(result: unknown, host: string, expectedWh: number, targetEpc: string) {
+    const attempts = dependencies.operationModeVerifyAttempts ?? 4;
+    const delayMs = dependencies.operationModeVerifyDelayMs ?? 750;
+    let observed: number | null = null;
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      if (attempt > 1 && delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      try {
+        const readback = await dependencies.runDeviceCommand("raw-get", { host, eoj: "0x027D01", timeout: 3 }, [targetEpc], { priority: 0 });
+        observed = parseTargetWhFromRaw(readback);
+        lastError = null;
+        if (observed === expectedWh) return { verified: true as const, targetWh: observed, attempts: attempt };
+      } catch (error: unknown) {
+        lastError = error;
+      }
+    }
+    if (lastError) throw new Error(`charge target was acknowledged but verification failed: ${errorMessage(lastError)}`, { cause: lastError });
+    throw new Error(`charge target verification mismatch: expected ${expectedWh}, observed ${observed}`);
+  }
+
   async function verifyAction(action: string, payload: UnknownRecord, result: unknown, host: string) {
     const acknowledged = record(result);
     const decoded = record(acknowledged.decoded);
     switch (action) {
       case "set-mode": return verifyMode(result, host, payload.mode);
-      case "charge": return verifyMode(result, host, "charging");
-      case "discharge": return verifyMode(result, host, "discharging");
+      case "charge":
+      case "discharge": {
+        const verifiedMode = await verifyMode(result, host, action === "charge" ? "charging" : "discharging");
+        const requestedTarget = payload.targetWh;
+        if (requestedTarget === undefined || requestedTarget === null || requestedTarget === "") return verifiedMode;
+        const expectedWh = Number(requestedTarget);
+        if (!Number.isFinite(expectedWh)) return verifiedMode;
+        const target = await verifyChargeTarget(result, host, expectedWh, action === "charge" ? "0xAA" : "0xAB");
+        return { ...verifiedMode, readBack: { ...record(verifiedMode.readBack), targetWh: target.targetWh } };
+      }
       case "vendor-profile": return verifySetting(result, host, "vendor-profile", String(payload.mode), (readback) => {
         const value = record(readback);
         return record(value.decoded).mode ?? value.mode ?? null;

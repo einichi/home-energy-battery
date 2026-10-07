@@ -395,6 +395,8 @@ export function createDeviceSimulator(options: any = {}): any {
       "0XF5": windowRaw(state.battery.dischargeWindow),
       "0XF6": `0x${hexByte(state.battery.dischargeLimitPercent / 10)}`,
       "0XDA": modeRaw(state.battery.operationMode),
+      "0XAA": rawUnsigned(state.battery.targetWh) ?? "0x00000000",
+      "0XAB": rawUnsigned(state.battery.targetWh) ?? "0x00000000",
     };
     if (!properties[epc]) throw new Error(`unsupported simulated raw-get EPC ${positional[0]}`);
     return { host: args.host, eoj: args.eoj ?? BATTERY_EOJ, epc: epc.replace("X", "x"), raw: properties[epc], parsed: null };
