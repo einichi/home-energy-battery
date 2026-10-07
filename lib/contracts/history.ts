@@ -38,6 +38,8 @@ export interface HistorySample {
   batteryPowerW?: number | null;
   stateOfChargePercent?: number | null;
   rateYenPerKwh?: number | null;
+  maximumRateYenPerKwh?: number | null;
+  standardRateYenPerKwh?: number | null;
   solarSavingYen?: number | null;
   offPeakSavingYen?: number | null;
   peakHouseDemandW?: number | null;

@@ -44,6 +44,27 @@ assert.equal(exactEnergyWithPower.gridImportKwh, 0.7);
 assert.equal(exactEnergyWithPower.intervalAveragePowerW!.gridImportW, 1500);
 assert.equal(exactEnergyWithPower.powerCoverageSeconds!.gridImportW, 1800);
 
+// Off-peak saving is measured against the configured standard rate.
+const standardRateSaving = enrichHistorySample(
+  sample("2026-01-01T00:30:00.000Z", {
+    batteryChargeKwh: 1,
+    gridImportKwh: 1,
+    rateYenPerKwh: 20,
+    standardRateYenPerKwh: 30,
+    maximumRateYenPerKwh: 40,
+  }),
+);
+assert.equal(standardRateSaving.offPeakSavingYen, 10);
+const fallbackRateSaving = enrichHistorySample(
+  sample("2026-01-01T00:30:00.000Z", {
+    batteryChargeKwh: 1,
+    gridImportKwh: 1,
+    rateYenPerKwh: 20,
+    maximumRateYenPerKwh: 40,
+  }),
+);
+assert.equal(fallbackRateSaving.offPeakSavingYen, 20);
+
 const compact = compactHistorySample({
   timestamp: "2026-07-22T00:00:00.000Z",
   gridExportW: 0,
@@ -99,6 +120,11 @@ try {
   assert.equal(stats.rollups.daily, 1);
   assert.equal(stats.forecasts, 1);
   assert.equal(stats.weatherRecords, 1);
+
+  // A duplicate timestamp must not be stored or integrated twice.
+  const duplicate = store.appendSample(sample("2024-01-01T00:30:00.000Z", { houseDemandW: 9999 }));
+  assert.equal(duplicate, null);
+  assert.equal((await store.stats()).sampleCount, 3);
 
   const interval = store.querySamples(
     new Date("2024-01-01T00:00:00.000Z").getTime(),

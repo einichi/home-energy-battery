@@ -107,6 +107,7 @@ export function createHistorySchema(database: DatabaseSync, versions: HistorySch
       UNIQUE(source_file, source_line)
     );
     CREATE INDEX IF NOT EXISTS samples_timestamp_idx ON samples(timestamp_ms, id);
+    CREATE UNIQUE INDEX IF NOT EXISTS samples_timestamp_unique_idx ON samples(timestamp_ms);
     CREATE TABLE IF NOT EXISTS rollups (
       resolution TEXT NOT NULL,
       bucket_start_ms INTEGER NOT NULL,

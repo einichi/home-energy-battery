@@ -1,6 +1,7 @@
 import { COUNTER_POLICIES, cumulativeCounterDeltaResult } from "../counter-utils.js";
 import { circuitChannelMap, circuitCumulativeMap } from "./circuits.js";
 import { maxDailyRate, rateForTimestamp } from "./tariffs.js";
+import { finiteNumberOrNull } from "./numbers.js";
 import type { RateBand } from "../contracts/configuration.js";
 import type { HistorySample } from "../contracts/history.js";
 
@@ -328,6 +329,7 @@ export function sampleFromStatus(
     expectedIntervalSeconds: Number(config.updateIntervalSeconds ?? 5),
     rateYenPerKwh: activeRate,
     maximumRateYenPerKwh: highestRate,
+    standardRateYenPerKwh: finiteNumberOrNull(config.standardRateYenPerKwh),
     rateLabel: rateBand.label || null,
   };
 }

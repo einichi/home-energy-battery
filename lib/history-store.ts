@@ -290,10 +290,10 @@ export function enrichHistorySample(sample: HistorySample, previousSample: Histo
   }
   const batteryChargeKwh = finite(enriched.batteryChargeKwh);
   const gridImportKwh = finite(enriched.gridImportKwh);
-  const maximumRate = finite(enriched.maximumRateYenPerKwh);
-  if (batteryChargeKwh !== null && maximumRate !== null && rate !== null) {
+  const referenceRate = finite(enriched.standardRateYenPerKwh) ?? finite(enriched.maximumRateYenPerKwh);
+  if (batteryChargeKwh !== null && referenceRate !== null && rate !== null) {
     const boughtChargeKwh = gridImportKwh === null ? batteryChargeKwh : Math.min(batteryChargeKwh, gridImportKwh);
-    enriched.offPeakSavingYen = boughtChargeKwh * Math.max(0, maximumRate - rate);
+    enriched.offPeakSavingYen = boughtChargeKwh * Math.max(0, referenceRate - rate);
   }
   return enriched;
 }
@@ -760,6 +760,11 @@ export function createHistoryStore({
     const timeMs = timestampMs(sample?.timestamp);
     if (timeMs === null) return { inserted: false, sample: null };
     const compact = compactHistorySample(sample);
+    // Runtime samples carry no source info, so the (source_file, source_line)
+    // unique constraint never fires. Dedupe explicitly by timestamp so a
+    // restart-adjacent duplicate cannot be integrated into rollups twice.
+    const duplicate = requireDatabase().prepare("SELECT 1 AS present FROM samples WHERE timestamp_ms = ? LIMIT 1").get(timeMs);
+    if (duplicate) return { inserted: false, sample: null };
     const interpreted = interpretHistorySample(compact, previousSample, { metricBaselines });
     const result = requireDatabase().prepare(`
       INSERT OR IGNORE INTO samples(timestamp_ms, timestamp, payload_json, source_file, source_line)
