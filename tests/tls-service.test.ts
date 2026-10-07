@@ -90,8 +90,10 @@ try {
     },
   } as never;
   let loaded: string | null = null;
+  const requestOrigins: string[] = [];
   const fetchImpl = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
     const url = String(input);
+    requestOrigins.push(new Headers(init?.headers).get("origin") ?? "");
     if (url.endsWith("/config/")) return new Response("{}", { status: 200 });
     if (url.endsWith("/load")) {
       loaded = String(init?.body ?? "");
@@ -126,6 +128,9 @@ try {
   assert.match(String(loaded), /dns cloudflare/);
   assert.match(String(loaded), /reverse_proxy 127\.0\.0\.1:45000/);
   assert.deepEqual([...service.trustedHosts()], ["hems.example.com"]);
+  // Every Admin API request carries the Origin Caddy requires.
+  assert.ok(requestOrigins.length >= 1);
+  assert.ok(requestOrigins.every((origin) => origin === "http://127.0.0.1:2019"), `origins: ${requestOrigins.join(", ")}`);
 
   const secrets = JSON.parse(await readFile(path.join(dataDir, "tls-secrets.json"), "utf8"));
   assert.equal(secrets.cloudflareApiToken, "secret-value");

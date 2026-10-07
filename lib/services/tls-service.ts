@@ -267,6 +267,9 @@ export function createTlsService(options: TlsServiceOptions) {
   const probe = options.probeCertificate ?? probeTrustedCertificate;
   const secretsFile = path.join(dataDir, "tls-secrets.json");
   const storageRoot = path.join(dataDir, "caddy");
+  // Caddy's admin endpoint rejects requests that carry a Sec-Fetch-Mode header
+  // (Node's fetch sends `cors`) unless an allowed Origin header is present.
+  const adminOrigin = `http://${adminAddress}`;
 
   let internalPort: number | null = null;
   let cachedSettings: TlsSettings | null = null;
@@ -333,6 +336,7 @@ export function createTlsService(options: TlsServiceOptions) {
     try {
       const response = await request(`http://${adminAddress}/config/`, {
         method: "GET",
+        headers: { origin: adminOrigin },
         signal: AbortSignal.timeout(2000),
       });
       return response.ok;
@@ -374,7 +378,7 @@ export function createTlsService(options: TlsServiceOptions) {
     try {
       const response = await request(`http://${adminAddress}/load`, {
         method: "POST",
-        headers: { "content-type": "text/caddyfile" },
+        headers: { "content-type": "text/caddyfile", origin: adminOrigin },
         body: caddyfile,
         signal: AbortSignal.timeout(10_000),
       });
