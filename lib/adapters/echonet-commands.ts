@@ -61,7 +61,25 @@ function makeClient(opts: Record<string, unknown>): EchonetClient {
 }
 
 async function withClient<T>(opts: CommandOptions, fn: (client: EchonetClient) => Promise<T>): Promise<T> {
-  if (opts.__client) return fn(opts.__client);
+  if (opts.__client) {
+    // A shared persistent client uses one fixed timeout; honour a per-command
+    // timeout with a race so callers can request a shorter bound.
+    const timeoutSeconds = Number(opts.timeout);
+    if (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          fn(opts.__client),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`command timed out after ${timeoutSeconds}s`)), timeoutSeconds * 1000);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+    return fn(opts.__client);
+  }
   const client = makeClient(opts);
   await client.init();
   try {

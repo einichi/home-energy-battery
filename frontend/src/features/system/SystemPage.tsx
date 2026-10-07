@@ -222,7 +222,18 @@ function EquipmentSettings({
       </section>
       <form
         className="panel system-form"
-        key={JSON.stringify(config)}
+        key={JSON.stringify({
+          batteryHost: config.batteryHost,
+          meterHost: config.meterHost,
+          meterEoj: config.meterEoj,
+          solarHost: config.solarHost,
+          fuelCellPrimaryHost: config.fuelCellPrimaryHost,
+          fuelCellProxyHosts: config.fuelCellProxyHosts,
+          solarEnabled: config.solarEnabled,
+          smartCosmoEnabled: config.smartCosmoEnabled,
+          fuelCellEnabled: config.fuelCellEnabled,
+          discoverySubnets: config.discoverySubnets,
+        })}
         onSubmit={submit}
       >
         <div className="section-heading">
@@ -930,6 +941,7 @@ function NotificationSettings({
 }) {
   const [result, setResult] = useState<Result>(null);
   const [busy, setBusy] = useState(false);
+  const { config: appConfig, replaceConfig } = useEnergyStatus();
   const channel = initial.config.channels[0];
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -973,6 +985,9 @@ function NotificationSettings({
         clearPassword: data.has("clearPassword"),
       });
       setView(view);
+      // Keep the shared config in sync so a later full-config save does not
+      // overwrite the notification settings we just persisted.
+      if (appConfig) replaceConfig({ ...appConfig, notifications: view.config });
       const warning = (view as unknown as { warning?: unknown }).warning;
       setResult({ ok: true, message: typeof warning === "string" ? `Notification settings saved. ${warning}` : "Notification settings saved." });
     } catch (error) {
@@ -1755,10 +1770,14 @@ export function SystemPage() {
   const { config, status, replaceConfig } = useEnergyStatus();
   const admin = useSystemAdmin();
   const [busy, setBusy] = useState(false);
+  const savingRef = useRef(false);
   if (!selected) return <Navigate to="/system/equipment" replace />;
   const save: SaveSettings = async (patch, message) => {
     if (!config)
       return { ok: false, message: "Configuration is not available." };
+    // Prevent overlapping full-config saves from clobbering each other.
+    if (savingRef.current) return { ok: false, message: "A save is already in progress." };
+    savingRef.current = true;
     setBusy(true);
     try {
       const next = await updateConfig({ ...config, ...patch });
@@ -1770,6 +1789,7 @@ export function SystemPage() {
         message: error instanceof Error ? error.message : "Save failed",
       };
     } finally {
+      savingRef.current = false;
       setBusy(false);
     }
   };

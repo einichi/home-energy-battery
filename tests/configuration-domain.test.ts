@@ -259,6 +259,19 @@ await assert.rejects(
   /still read back as auto after 2 attempts/,
 );
 
+// An alias like "charge" verifies against the canonical readback "charging".
+const verifiedModeAlias = await verifyBatteryOperationMode(
+  { ok: true },
+  "192.0.2.10",
+  "charge",
+  {
+    attempts: 2,
+    delayMs: 0,
+    readStatus: async () => ({ battery: { operation_mode: { value: "charging" } } }),
+  },
+);
+assert.equal(verifiedModeAlias.verified, true);
+
 
 const staleSchedules: any[] = [
   { id: "stale", running: true, runningSince: "2026-06-15T02:59:01.000Z" },

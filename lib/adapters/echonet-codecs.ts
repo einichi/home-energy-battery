@@ -117,7 +117,8 @@ const EOJ_CLASS_NAMES: Record<string, string> = {
 };
 
 function parseByte(value: unknown): number {
-  const n = Number.parseInt(String(value), String(value).startsWith("0x") ? 16 : 10);
+  const text = String(value);
+  const n = Number.parseInt(text, /^0x/i.test(text) ? 16 : 10);
   if (!Number.isFinite(n) || n < 0 || n > 0xff) {
     throw new Error(`invalid byte: ${value}`);
   }

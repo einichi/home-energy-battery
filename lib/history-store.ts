@@ -234,6 +234,22 @@ export function enrichHistorySample(sample: HistorySample, previousSample: Histo
       if (details.startMs !== null) energyIntervalStart[directKey] = new Date(details.startMs).toISOString();
     }
   }
+  // The charge/discharge mappings both target batteryPowerW and lose the sign
+  // (discharge overwrites charge), so store the signed instantaneous average
+  // directly when the raw battery power is available.
+  {
+    const baseline = baselineForMetric(previousSample, metricBaselines, "batteryPowerW");
+    const currentWatts = finite(sample?.batteryPowerW);
+    const previousWatts = finite(baseline?.batteryPowerW);
+    const currentMs = timestampMs(sample?.timestamp);
+    const previousMs = timestampMs(baseline?.timestamp);
+    const elapsedMs = currentMs === null || previousMs === null ? Number.NaN : currentMs - previousMs;
+    if (currentWatts !== null && previousWatts !== null
+      && Number.isFinite(elapsedMs) && elapsedMs > 0 && elapsedMs <= maximumIntegrationGapMs(sample)) {
+      intervalAveragePowerW.batteryPowerW = (currentWatts + previousWatts) / 2;
+      powerCoverageSeconds.batteryPowerW = elapsedMs / 1000;
+    }
+  }
   const circuitEnergyKwh: Record<string, number | null> = { ...(sample.circuitEnergyKwh ?? {}) };
   for (const [channel, watts] of Object.entries(sample?.circuitPowerW ?? {})) {
     const circuitKey = `circuit:${channel}`;
@@ -456,6 +472,7 @@ interface RollupState {
     sourceHosts: Record<string, number>;
   };
   guardTriggerCount: number;
+  peakHouseDemandW: number | null;
   rateYenPerKwh: number | null;
   rateLabel: string | null;
 }
@@ -477,6 +494,7 @@ function emptyRollupState(startMs: number, resolution: HistoryResolution): Rollu
     circuits: { power: {}, energy: {}, cumulative: {} },
     fuelCell: { operatingSeconds: 0, startCount: 0, states: {}, qualities: {}, lastState: null, lastHotWaterLevel: null, sourceHosts: {} },
     guardTriggerCount: 0,
+    peakHouseDemandW: null,
     rateYenPerKwh: null,
     rateLabel: null,
   };
@@ -507,6 +525,11 @@ function addRollupSample(state: RollupState, sample: HistorySample): RollupState
     const weight = finite(sample.powerCoverageSeconds?.[key]) ?? 0;
     const value = finite(sample.intervalAveragePowerW?.[key]) ?? sample[key];
     addAverageMetric(state.powers, key, value, weight);
+  }
+  // Peak house demand must use the instantaneous value, not the interval average.
+  const peakDemand = finite(sample.peakHouseDemandW) ?? finite(sample.houseDemandW);
+  if (peakDemand !== null) {
+    state.peakHouseDemandW = state.peakHouseDemandW === null ? peakDemand : Math.max(state.peakHouseDemandW, peakDemand);
   }
   const soc = finite(sample.stateOfChargePercent);
   if (soc !== null) {
@@ -559,7 +582,10 @@ function addRollupSample(state: RollupState, sample: HistorySample): RollupState
   state.fuelCell.startCount += Math.max(0, finite(sample.fuelCellStartCount) ?? 0);
   if (sample.fuelCellGenerationState) {
     const seconds = Math.max(0, finite(sample.fuelCellOperatingSeconds) ?? 0);
-    state.fuelCell.states[sample.fuelCellGenerationState] = Number(state.fuelCell.states[sample.fuelCellGenerationState] ?? 0) + seconds;
+    // The seconds cover the interval ending at this sample, so they belong to the
+    // state that was active during it (the previous sample's state).
+    const operatingState = typeof state.fuelCell.lastState === "string" ? state.fuelCell.lastState : null;
+    if (operatingState) state.fuelCell.states[operatingState] = Number(state.fuelCell.states[operatingState] ?? 0) + seconds;
     state.fuelCell.lastState = sample.fuelCellGenerationState;
   }
   const hotWaterLevel = finite(sample.fuelCellHotWaterLevel);
@@ -609,7 +635,7 @@ function rollupPayload(state: RollupState): HistorySample {
   }
   if (Object.keys(powerCoverageSeconds).length) payload.powerCoverageSeconds = powerCoverageSeconds;
   if (Object.keys(intervalAveragePowerW).length) payload.intervalAveragePowerW = intervalAveragePowerW;
-  if (state.powers.houseDemandW?.max != null) payload.peakHouseDemandW = state.powers.houseDemandW.max;
+  if (state.peakHouseDemandW != null) payload.peakHouseDemandW = state.peakHouseDemandW;
   if (state.soc.count > 0) {
     payload.stateOfChargePercent = state.soc.sum / state.soc.count;
     payload.startStateOfChargePercent = state.soc.first;

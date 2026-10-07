@@ -183,12 +183,22 @@ export function normalizeRateBands(input: unknown = {}): RateBand[] {
   const standardRate = configNumber(sourceInput.standardRateYenPerKwh, DEFAULT_CONFIG.standardRateYenPerKwh, 0, 1000);
   const offPeakRate = configNumber(sourceInput.offPeakRateYenPerKwh, DEFAULT_CONFIG.offPeakRateYenPerKwh, 0, 1000);
   const providedBands = Array.isArray(sourceInput.rateBands) && sourceInput.rateBands.length ? sourceInput.rateBands : null;
+  // An explicit off-peak/multi mode with provided bands that contain no real
+  // discounted window (e.g. a stale flat band carried over from simple mode) is
+  // inconsistent, so regenerate instead of keeping it.
+  const hasDiscountedWindow = (bands: unknown[]) => bands.some((band) => {
+    const candidate = record(band);
+    return String(candidate.start) !== String(candidate.end) && Number(candidate.yenPerKwh) < standardRate;
+  });
+  const usableProvidedBands = providedBands && (rateMode === "simple" || hasDiscountedWindow(providedBands))
+    ? providedBands
+    : null;
   const source: unknown[] = !hasRateMode && providedBands
     ? providedBands
     : rateMode === "simple"
       ? [{ start: "00:00", end: "00:00", yenPerKwh: standardRate, label: "Simple" }]
-      : providedBands
-        ? providedBands
+      : usableProvidedBands
+        ? usableProvidedBands
         : rateMode === "offPeak"
           ? [
               { start: "00:00", end: "07:00", yenPerKwh: offPeakRate, label: "Off-peak" },

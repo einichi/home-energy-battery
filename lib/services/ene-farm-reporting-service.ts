@@ -253,8 +253,9 @@ export function createEneFarmReportingService(dependencies: EneFarmReportingDepe
       const seconds = Math.max(0, finiteNumberOrNull(sample.fuelCellOperatingSeconds) ?? 0);
       operatingSeconds += seconds;
       startCount += Math.max(0, finiteNumberOrNull(sample.fuelCellStartCount) ?? 0);
+      const operatingState = previous && typeof previous.fuelCellGenerationState === "string" ? previous.fuelCellGenerationState : null;
+      if (operatingState) states[operatingState] = Number(states[operatingState] ?? 0) + seconds;
       if (typeof sample.fuelCellGenerationState === "string" && sample.fuelCellGenerationState) {
-        states[sample.fuelCellGenerationState] = Number(states[sample.fuelCellGenerationState] ?? 0) + seconds;
         if (sample.fuelCellGenerationState !== previousState) {
           stateSince = typeof sample.timestamp === "string" ? sample.timestamp : null;
           if (sample.fuelCellGenerationState === "stopped") lastStopAt = stateSince;
@@ -274,11 +275,14 @@ export function createEneFarmReportingService(dependencies: EneFarmReportingDepe
     const stateIntervals: StateInterval[] = [];
     for (let index = 0; index < samples.length; index += 1) {
       const sample = samples[index]!;
-      const sampleState = sample.fuelCellGenerationState ?? "unknown";
+      const previous = samples[index - 1];
+      // Each sample's energy covers [previous, sample], so label the interval
+      // with the state active during it (the previous sample's state).
+      const sampleState = (previous?.fuelCellGenerationState ?? sample.fuelCellGenerationState) ?? "unknown";
       let interval = stateIntervals.at(-1);
       if (!interval || interval.state !== sampleState || interval.sourceHost !== (sample.fuelCellSourceHost ?? null)) {
         interval = {
-          start: index === 0 ? rangeStart ?? sample.timestamp ?? null : sample.timestamp ?? null,
+          start: previous?.timestamp ?? rangeStart ?? sample.timestamp ?? null,
           end: sample.timestamp ?? null,
           state: sampleState,
           generatedKwh: 0,
@@ -289,12 +293,13 @@ export function createEneFarmReportingService(dependencies: EneFarmReportingDepe
         };
         stateIntervals.push(interval);
       }
-      interval.end = samples[index + 1]?.timestamp ?? rangeEnd ?? sample.timestamp ?? null;
-      interval.generatedKwh += samplePowerKwh(sample, "fuelCellKwh", "fuelCellPowerW", samples[index - 1]);
+      interval.end = sample.timestamp ?? interval.end;
+      interval.generatedKwh += samplePowerKwh(sample, "fuelCellKwh", "fuelCellPowerW", previous);
       const intervalGas = finiteNumberOrNull(sample.fuelCellGasM3);
       if (intervalGas !== null) { interval.gasM3 += Math.max(0, intervalGas); interval.hasGas = true; }
       if (typeof sample.fuelCellDataQuality === "string") interval.qualities.add(sample.fuelCellDataQuality);
     }
+    if (stateIntervals.length) stateIntervals.at(-1)!.end = rangeEnd ?? stateIntervals.at(-1)!.end;
     const ratedSample = samples.findLast((sample) => Number.isFinite(Number(sample.fuelCellRatedPowerW)));
     return {
       sampleCount: samples.length,

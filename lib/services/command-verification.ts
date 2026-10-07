@@ -72,6 +72,14 @@ const BATTERY_OPERATION_MODE_BY_EDT = new Map<number, string>([
   [0x48, "capacity_recalculation"],
 ]);
 
+const OPERATION_MODE_ALIASES: Record<string, string> = {
+  charge: "charging",
+  discharge: "discharging",
+  rapid: "rapid_charging",
+  automatic: "auto",
+  backup: "charging",
+};
+
 export function batteryOperationModeFromReadback(value: unknown): string | null {
   const status = record(value);
   const battery = record(status.battery);
@@ -94,7 +102,8 @@ export async function verifyBatteryOperationMode(
   }: { attempts?: number; delayMs?: number; readStatus: ReadStatus; wait?: Wait },
 ): Promise<UnknownRecord & { verified: true; readBack: { operationMode: string; attempts: number } }> {
   const result = record(value);
-  const normalizedExpected = String(expectedMode).toLowerCase().replaceAll("-", "_");
+  const requestedMode = String(expectedMode).toLowerCase().replaceAll("-", "_");
+  const normalizedExpected = OPERATION_MODE_ALIASES[requestedMode] ?? requestedMode;
   let actualMode: string | null = null;
   let lastReadError: unknown = null;
   const maximumAttempts = Math.max(1, Math.floor(Number(attempts) || 1));

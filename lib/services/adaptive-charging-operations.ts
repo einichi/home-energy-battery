@@ -124,7 +124,7 @@ export function createAdaptiveChargingOperations({
     if (remainingMs !== null && remainingMs > 0) return { stopped: false, remainingMs };
     // The Demand Guard owns Standby; do not release to Auto until it restores.
     if (guardOwnsStandby && await guardOwnsStandby()) {
-      return { stopped: false, reason: "Charging Demand Guard owns Standby operation mode" };
+      return { stopped: false, reason: "Charging Demand Guard owns Standby operation mode", retryMs: retryDelayMs };
     }
     const windowEndMs = new Date(state.activeSlot?.windowEnd ?? "").getTime();
     const slotEndMs = new Date(state.activeSlot?.end ?? "").getTime();

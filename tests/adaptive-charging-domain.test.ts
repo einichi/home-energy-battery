@@ -1246,6 +1246,19 @@ const duplicateCoverageDays = aggregateDemandDays([
 ], { occupancy: "home" });
 assert.deepEqual([...(duplicateCoverageDays[0]?.values.values() ?? [])], [1000]);
 
+// A daytime-only profile must not pass the coverage gate (missing buckets are
+// filled for planning, but real coverage is still required).
+const daytimeOnlySamples: any[] = [];
+for (let d = 1; d <= 10; d += 1) {
+  for (let h = 6; h <= 17; h += 1) {
+    for (const m of ["00", "30"]) {
+      daytimeOnlySamples.push({ timestamp: `2026-06-${String(d).padStart(2, "0")}T${String(h).padStart(2, "0")}:${m}:00+09:00`, houseDemandW: 1000, powerCoverageSeconds: { houseDemandW: 1800 } });
+    }
+  }
+}
+const daytimeOnlyDemand = predictHouseDemand(daytimeOnlySamples, new Date("2026-07-01T12:00:00+09:00"), new Map(), { occupancy: "home" });
+assert.equal(daytimeOnlyDemand.available, false);
+
 
 const completedChargeState: Record<string, any> = {
   activeChargedKwh: 1,

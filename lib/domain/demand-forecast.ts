@@ -408,6 +408,9 @@ export function predictHouseDemand(
   }
   // Fill missing buckets with the profile mean instead of letting the planner
   // read them as zero demand.
+  // Capture the observed bucket count before filling, so the availability gate
+  // still reflects real coverage.
+  const coveredBucketCount = profile.size;
   if (profile.size) {
     const mean = [...profile.values()].reduce((sum, value) => sum + value, 0) / profile.size;
     const lowMean = lowProfile.size ? [...lowProfile.values()].reduce((sum, value) => sum + value, 0) / lowProfile.size : mean;
@@ -417,12 +420,12 @@ export function predictHouseDemand(
     }
   }
   return {
-    available: validDays.length >= 7 && recentCandidates.length >= 4 && profile.size >= 39,
+    available: validDays.length >= 7 && recentCandidates.length >= 4 && coveredBucketCount >= 39,
     reason: validDays.length < 7
       ? `house-demand history has ${validDays.length} of ${recordedDays.length} days with at least 80% daytime coverage; 7 are required`
       : recentCandidates.length < 4
       ? `only ${recentCandidates.length} usable demand days were found in the previous six weeks; 4 are required`
-      : profile.size < 39
+      : coveredBucketCount < 39
         ? "house-demand history coverage is below 80%"
         : null,
     comparableDays: [...recentCandidates, ...seasonalCandidates].map((day) => day.key),

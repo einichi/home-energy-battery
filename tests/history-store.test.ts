@@ -65,6 +65,18 @@ const fallbackRateSaving = enrichHistorySample(
 );
 assert.equal(fallbackRateSaving.offPeakSavingYen, 20);
 
+// Rollup battery power keeps its sign: charging must not roll up as 0.
+const rollupBatteryCharge = enrichHistorySample(
+  sample("2026-01-01T00:30:00.000Z", { batteryPowerW: 1700, batteryChargeKwh: 0.85, batteryDischargeKwh: 0 }),
+  sample("2026-01-01T00:00:00.000Z", { batteryPowerW: 1700 }),
+);
+assert.equal(rollupBatteryCharge.intervalAveragePowerW?.batteryPowerW, 1700);
+const rollupBatteryDischarge = enrichHistorySample(
+  sample("2026-01-01T00:30:00.000Z", { batteryPowerW: -1700, batteryChargeKwh: 0, batteryDischargeKwh: 0.85 }),
+  sample("2026-01-01T00:00:00.000Z", { batteryPowerW: -1700 }),
+);
+assert.equal(rollupBatteryDischarge.intervalAveragePowerW?.batteryPowerW, -1700);
+
 const compact = compactHistorySample({
   timestamp: "2026-07-22T00:00:00.000Z",
   gridExportW: 0,

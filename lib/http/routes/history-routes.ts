@@ -157,7 +157,7 @@ export function createHistoryRouteHandler(dependencies: HistoryRouteDependencies
       }
       const rangeError = rangeParamError(url);
       if (rangeError) return json(res, 400, { error: rangeError });
-      const bucket = normalizeReportBucket(bucketParam ?? "day");
+      const bucket = normalizeReportBucket(bucketParam || "day");
       return json(res, 200, await eneFarmReport(start, end, bucket, config));
     }
     return false;

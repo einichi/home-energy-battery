@@ -24,8 +24,8 @@ export function adaptiveChargingBaseAvailability(config: ApplicationConfig): Ada
     [config.batteryCapabilities?.maximumChargeWatts, "maximum battery charge watts"],
   ];
   const missing = [
-    ...coordinates.filter(([value]) => !Number.isFinite(Number(value))),
-    ...positive.filter(([value]) => !Number.isFinite(Number(value)) || Number(value) <= 0),
+    ...coordinates.filter(([value]) => value === null || value === undefined || value === "" || !Number.isFinite(Number(value))),
+    ...positive.filter(([value]) => value === null || value === undefined || value === "" || !Number.isFinite(Number(value)) || Number(value) <= 0),
   ].map(([, label]) => label);
   if (missing.length) return { available: false, reason: `missing ${missing.join(", ")}` };
   if (config.smartCosmoEnabled === false) return { available: false, reason: "overall house demand is unavailable" };
