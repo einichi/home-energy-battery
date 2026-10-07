@@ -103,7 +103,7 @@ import {
   planChronologicalDiscountedCharging,
 } from "../lib/domain/adaptive-planning.js";
 
-import { latestFiniteSocPercent } from "../lib/domain/adaptive-plan-utils.js";
+import { latestFiniteSocPercent, planningHorizon } from "../lib/domain/adaptive-plan-utils.js";
 
 import {
   cleanAdaptiveChargingPerformance,
@@ -2408,6 +2408,44 @@ const solarHeadroomPlan = planChronologicalDiscountedCharging({
 assert.ok(Math.abs(solarHeadroomPlan.windows[1].solarHeadroomKwh - 1) < 0.0001);
 
 assert.equal(solarHeadroomPlan.windows[1].targetSocPercent, 80);
+
+// #5: solar surplus captured during a charging window reduces planned grid charge.
+const solarCaptureTimeline = [0, 0.5, 1, 1.5].map((hour: any) => chronologicalSlot(
+  hour,
+  { start: "00:00", end: "02:00", yenPerKwh: 15, label: "Discounted" },
+  1,
+));
+const gridOnlyTimeline = [0, 0.5, 1, 1.5].map((hour: any) => chronologicalSlot(
+  hour,
+  { start: "00:00", end: "02:00", yenPerKwh: 15, label: "Discounted" },
+  0,
+));
+const baseChargingPlan = {
+  currentStoredKwh: 1,
+  capacityKwh: 5,
+  dischargeFloorKwh: 1,
+  maximumTargetPercent: 40,
+  maximumChargeWatts: 2000,
+};
+const solarCapturePlan = planChronologicalDiscountedCharging({ timeline: solarCaptureTimeline, ...baseChargingPlan });
+const gridOnlyPlan = planChronologicalDiscountedCharging({ timeline: gridOnlyTimeline, ...baseChargingPlan });
+assert.ok(solarCapturePlan.plannedChargeKwh < gridOnlyPlan.plannedChargeKwh);
+
+// #4: a discounted band that is not economic after round-trip efficiency is skipped.
+const nearStandardTimeline = [0, 0.5, 1, 1.5].map((hour: any) => chronologicalSlot(
+  hour,
+  { start: "00:00", end: "02:00", yenPerKwh: 24, label: "Near standard" },
+  0,
+));
+const gatePlan = { ...baseChargingPlan, maximumTargetPercent: 80, roundTripEfficiency: 0.9, displacedRateYenPerKwh: 25 };
+assert.equal(planChronologicalDiscountedCharging({ timeline: nearStandardTimeline, ...gatePlan }).plannedChargeKwh, 0);
+assert.ok(planChronologicalDiscountedCharging({ timeline: gridOnlyTimeline, ...gatePlan }).plannedChargeKwh > 0);
+
+// #3: look-ahead horizon clamps to the last forecast hour and reports truncation.
+const hour = 3_600_000;
+assert.deepEqual(planningHorizon(0, 100 * hour, 5 * hour, 30 * hour), { endMs: 30 * hour, truncated: false });
+assert.deepEqual(planningHorizon(0, 20 * hour, 5 * hour, 30 * hour), { endMs: 20 * hour, truncated: true });
+assert.deepEqual(planningHorizon(0, 100 * hour, 40 * hour, 30 * hour), { endMs: 40 * hour, truncated: false });
 
 
 const floorClippedWindowPlan = planChronologicalDiscountedCharging({

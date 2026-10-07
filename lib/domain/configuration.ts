@@ -98,7 +98,7 @@ export const DEFAULT_CONFIG: ApplicationConfig = {
   updateIntervalSeconds: 15,
   co2TonnesPerKwh: 0.000423,
   rateBands: [{ start: "00:00", end: "00:00", yenPerKwh: 35, label: "Simple" }],
-  batteryCapabilities: { usableCapacityKwh: null, maximumChargeWatts: null },
+  batteryCapabilities: { usableCapacityKwh: null, maximumChargeWatts: null, roundTripEfficiency: 0.9 },
   adaptiveCharging: {
     enabled: false,
     latitude: null,
@@ -211,6 +211,7 @@ function normalizeBatteryCapabilities(value: unknown): BatteryCapabilities {
   return {
     usableCapacityKwh: optionalConfigNumber(input.usableCapacityKwh, 0.1, 1000),
     maximumChargeWatts: optionalSteppedConfigNumber(input.maximumChargeWatts, 50, 100000, 1),
+    roundTripEfficiency: configNumber(input.roundTripEfficiency, DEFAULT_CONFIG.batteryCapabilities.roundTripEfficiency, 0.5, 1),
   };
 }
 

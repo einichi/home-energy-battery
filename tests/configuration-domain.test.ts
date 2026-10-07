@@ -501,7 +501,9 @@ assert.equal(simple.dashboardWidgets.find((widget: any) => widget.id === "backup
 
 assert.equal(simple.dashboardWidgets.find((widget: any) => widget.id === "awayStatus")?.priority, 7);
 
-assert.deepEqual(simple.batteryCapabilities, { usableCapacityKwh: null, maximumChargeWatts: null });
+assert.deepEqual(simple.batteryCapabilities, { usableCapacityKwh: null, maximumChargeWatts: null, roundTripEfficiency: 0.9 });
+assert.equal(cleanConfig({ batteryCapabilities: { roundTripEfficiency: 0.85 } }).batteryCapabilities.roundTripEfficiency, 0.85);
+assert.equal(cleanConfig({ batteryCapabilities: { roundTripEfficiency: 0.1 } }).batteryCapabilities.roundTripEfficiency, 0.5);
 
 assert.equal(simple.adaptiveCharging.enabled, false);
 

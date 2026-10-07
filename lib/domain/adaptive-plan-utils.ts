@@ -1,13 +1,68 @@
-import type { AdaptiveChargeSlot } from "./adaptive-planning.js";
+import type { AdaptiveChargeSlot, AdaptiveTimelineSlot } from "./adaptive-planning.js";
 import type { AutomationRule } from "./automation-rules.js";
 import type { DemandSample } from "./demand-forecast.js";
 import { finiteNumberOrNull } from "./numbers.js";
+
+export interface DiscountedTimelineWindow {
+  key: string;
+  startIndex: number;
+  endIndex: number;
+  startMs: number;
+  endMs: number;
+  configuredStartMs: number;
+  configuredEndMs: number;
+  yenPerKwh: number;
+  label: string;
+  slots: AdaptiveTimelineSlot[];
+}
+
+export function discountedTimelineWindows(timeline: AdaptiveTimelineSlot[] = []): DiscountedTimelineWindow[] {
+  const windows: DiscountedTimelineWindow[] = [];
+  for (let index = 0; index < timeline.length; index += 1) {
+    const slot = timeline[index];
+    if (!slot.band) continue;
+    const previous = windows.at(-1);
+    const hasConfiguredOccurrence = Number.isFinite(Number(slot.rateWindowStartMs))
+      && Number.isFinite(Number(slot.rateWindowEndMs));
+    const configuredStartMs = hasConfiguredOccurrence ? Number(slot.rateWindowStartMs) : slot.startMs;
+    const configuredEndMs = hasConfiguredOccurrence ? Number(slot.rateWindowEndMs) : slot.endMs;
+    const key = hasConfiguredOccurrence
+      ? `${configuredStartMs}-${configuredEndMs}-${slot.band.yenPerKwh}-${slot.band.label ?? ""}`
+      : `${slot.band.start}-${slot.band.end}-${slot.band.yenPerKwh}-${slot.band.label ?? ""}`;
+    if (previous && previous.key === key && previous.endMs === slot.startMs) {
+      previous.endIndex = index + 1;
+      previous.endMs = slot.endMs;
+      if (!hasConfiguredOccurrence) previous.configuredEndMs = slot.endMs;
+      previous.slots.push(slot);
+    } else {
+      windows.push({
+        key,
+        startIndex: index,
+        endIndex: index + 1,
+        startMs: slot.startMs,
+        endMs: slot.endMs,
+        configuredStartMs,
+        configuredEndMs,
+        yenPerKwh: Number(slot.band.yenPerKwh),
+        label: slot.band.label || "Discounted",
+        slots: [slot],
+      });
+    }
+  }
+  return windows;
+}
 
 export function latestFiniteSocPercent(samples: readonly DemandSample[]): number | null {
   // A trailing sample whose SOC is null/undefined/"" must not be coerced to 0 by
   // Number(); skip those and fall back to the most recent genuinely finite value.
   const sample = samples.findLast((item) => finiteNumberOrNull(item.stateOfChargePercent) !== null);
   return finiteNumberOrNull(sample?.stateOfChargePercent);
+}
+
+export function planningHorizon(nowMs: number, lastForecastHourMs: number, sunsetHorizonEndMs: number, lookAheadMs: number): { endMs: number; truncated: boolean } {
+  const desiredMs = Math.max(nowMs + lookAheadMs, sunsetHorizonEndMs);
+  const endMs = Number.isFinite(lastForecastHourMs) ? Math.min(desiredMs, lastForecastHourMs) : desiredMs;
+  return { endMs, truncated: Number.isFinite(lastForecastHourMs) && desiredMs > lastForecastHourMs };
 }
 
 export function firstLocalSlotBoundary(startMs: number, slotMinutes: number): number {

@@ -382,7 +382,7 @@ export type AppConfig = {
   retention?: { rawTelemetryDays?: number | null; intervalAggregatesDays?: number | null; dailyAggregatesDays?: number | null; adaptiveChargingHistoryDays?: number | null; automationEventDays?: number | null; commandReceiptDays?: number | null; notificationDeliveryDays?: number | null; automaticMaintenance?: boolean };
   dashboardWidgets?: Array<{ id: string; group?: string; visible: boolean; priority?: number }>;
   notifications?: NotificationConfig;
-  batteryCapabilities?: { usableCapacityKwh?: number | null; maximumChargeWatts?: number | null };
+  batteryCapabilities?: { usableCapacityKwh?: number | null; maximumChargeWatts?: number | null; roundTripEfficiency?: number | null };
   adaptiveCharging?: {
     enabled?: boolean;
     latitude?: number | null;
@@ -552,6 +552,9 @@ export type AdaptiveChargingPlan = {
   currentSocPercent?: number | null;
   targetSocPercent?: number | null;
   expectedSunsetSocPercent?: number | null;
+  horizonEnd?: string | null;
+  forecastLastHour?: string | null;
+  horizonTruncated?: boolean;
   predictedSolarKwh?: number | null;
   predictedDemandKwh?: number | null;
   predictedFuelCellKwh?: number | null;

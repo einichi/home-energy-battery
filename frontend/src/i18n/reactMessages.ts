@@ -37,6 +37,8 @@ export const reactJapanese: Record<string, string> = {
   "Resume Adaptive Charging": "適応充電を再開",
   "No grid charging is currently planned": "現在、系統からの充電は予定されていません",
   "A manual or safety override currently owns battery operation.": "現在、手動または安全上の上書きが蓄電池運用を所有しています。",
+  "Solar forecast ends before the planning look-ahead; the plan ends at ": "太陽光予測が計画の先読み範囲より早く終了します。計画の終了: ",
+  "Round-trip efficiency": "往復効率",
   Automation: "自動制御",
   "Unified replay": "統合リプレイ",
   "Forecast backtesting": "予測バックテスト",

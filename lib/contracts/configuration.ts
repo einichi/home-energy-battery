@@ -17,6 +17,7 @@ export interface DashboardWidget {
 export interface BatteryCapabilities {
   usableCapacityKwh: number | null;
   maximumChargeWatts: number | null;
+  roundTripEfficiency: number;
 }
 
 export interface AdaptiveChargingConfig {

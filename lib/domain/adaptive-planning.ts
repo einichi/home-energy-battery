@@ -12,9 +12,11 @@ import { applyGuardDeliverabilityToTiming, guardDeliverabilityForWindow } from "
 import type { GuardDeliverabilityModel, GuardWindowOutcome } from "./guard-deliverability.js";
 import type { ApplicationConfig, RateBand } from "../contracts/configuration.js";
 import {
+  discountedTimelineWindows,
   firstLocalSlotBoundary,
   latestFiniteSocPercent,
   mergeAdaptiveChargingSlots,
+  planningHorizon,
 } from "./adaptive-plan-utils.js";
 import {
   adaptiveChargingBaseAvailability,
@@ -32,6 +34,7 @@ export {
 } from "./adaptive-availability.js";
 
 const AWAY_RETURN_BUFFER_MS = 30 * 60_000;
+const LOOK_AHEAD_MS = 30 * 60 * 60_000;
 
 export interface AdaptiveTimelineSlot {
   startMs: number;
@@ -73,19 +76,6 @@ export interface AdaptiveChargeSlot {
   continuousWindowCharge?: boolean;
 }
 
-interface DiscountedTimelineWindow {
-  key: string;
-  startIndex: number;
-  endIndex: number;
-  startMs: number;
-  endMs: number;
-  configuredStartMs: number;
-  configuredEndMs: number;
-  yenPerKwh: number;
-  label: string;
-  slots: AdaptiveTimelineSlot[];
-}
-
 interface AdaptiveWindowPlan {
   start: string;
   end: string;
@@ -103,6 +93,7 @@ interface AdaptiveWindowPlan {
   targetSocPercent: number | null;
   solarHeadroomKwh: number;
   bridgeToCheaperWindow: boolean;
+  economic: boolean;
   backfillForLaterKwh: number;
   requestedChargeKwh: number;
   availableChargeKwh: number;
@@ -238,47 +229,6 @@ export function optimizeDiscountedChargeSlots({
 }
 
 
-export function discountedTimelineWindows(timeline: AdaptiveTimelineSlot[] = []): DiscountedTimelineWindow[] {
-  const windows: DiscountedTimelineWindow[] = [];
-  for (let index = 0; index < timeline.length; index += 1) {
-    const slot = timeline[index];
-    if (!slot.band) continue;
-    const previous = windows.at(-1);
-    const hasConfiguredOccurrence = Number.isFinite(Number(slot.rateWindowStartMs))
-      && Number.isFinite(Number(slot.rateWindowEndMs));
-    const configuredStartMs = hasConfiguredOccurrence
-      ? Number(slot.rateWindowStartMs)
-      : slot.startMs;
-    const configuredEndMs = hasConfiguredOccurrence
-      ? Number(slot.rateWindowEndMs)
-      : slot.endMs;
-    const key = hasConfiguredOccurrence
-      ? `${configuredStartMs}-${configuredEndMs}-${slot.band.yenPerKwh}-${slot.band.label ?? ""}`
-      : `${slot.band.start}-${slot.band.end}-${slot.band.yenPerKwh}-${slot.band.label ?? ""}`;
-    if (previous && previous.key === key && previous.endMs === slot.startMs) {
-      previous.endIndex = index + 1;
-      previous.endMs = slot.endMs;
-      if (!hasConfiguredOccurrence) previous.configuredEndMs = slot.endMs;
-      previous.slots.push(slot);
-    } else {
-      windows.push({
-        key,
-        startIndex: index,
-        endIndex: index + 1,
-        startMs: slot.startMs,
-        endMs: slot.endMs,
-        configuredStartMs,
-        configuredEndMs,
-        yenPerKwh: Number(slot.band.yenPerKwh),
-        label: slot.band.label || "Discounted",
-        slots: [slot],
-      });
-    }
-  }
-  return windows;
-}
-
-
 export function cumulativeRangeNeeds(
   timeline: readonly AdaptiveTimelineSlot[],
   startIndex: number,
@@ -403,10 +353,11 @@ export function buildAdaptiveChargingTimelineView({
         netKwh: Number(interval.netKwh || 0) * intervalFraction,
         chargeCapacityKwh: Number(interval.chargeCapacityKwh || 0) * intervalFraction,
       };
-      const controlled = segmentStartMs < new Date(standbyWindowEnd ?? "").getTime()
-        || normalizedSlots.some((slot) => slot.continuousWindowCharge
-          && segmentStartMs >= slot.startMs && segmentStartMs < new Date(slot.windowEnd ?? slot.end).getTime());
-      if (controlled) segment.netKwh = 0;
+      const standbyHold = segmentStartMs < new Date(standbyWindowEnd ?? "").getTime();
+      const chargingSegment = normalizedSlots.some((slot) => slot.continuousWindowCharge
+        && segmentStartMs >= slot.startMs && segmentStartMs < new Date(slot.windowEnd ?? slot.end).getTime());
+      if (standbyHold) segment.netKwh = 0;
+      else if (chargingSegment) segment.netKwh = Math.max(0, Number(segment.netKwh || 0));
       const startingStoredKwh = storedKwh;
       storedKwh = applyAdaptiveChargingTimelineSlot(
         storedKwh,
@@ -458,6 +409,8 @@ export function planChronologicalDiscountedCharging({
   chargePowerCurve = [],
   chargeWhPerSocPoint,
   chargeToStoredRatio = 1,
+  roundTripEfficiency = 1,
+  displacedRateYenPerKwh = Number.POSITIVE_INFINITY,
   standbyWindowEnd = null,
   windowSummaries = [],
 }: {
@@ -470,6 +423,8 @@ export function planChronologicalDiscountedCharging({
   chargePowerCurve?: BatteryChargePowerBand[];
   chargeWhPerSocPoint?: number;
   chargeToStoredRatio?: number;
+  roundTripEfficiency?: number;
+  displacedRateYenPerKwh?: number;
   standbyWindowEnd?: string | null;
   windowSummaries?: readonly GuardWindowOutcome[];
 }): ChronologicalPlan {
@@ -507,14 +462,16 @@ export function planChronologicalDiscountedCharging({
         let chargingStarted = window.startMs < new Date(standbyWindowEnd ?? "").getTime();
         for (let index = window.startIndex; index < window.endIndex; index += 1) {
           const allocated = chargeByIndex.get(index) ?? 0;
-          // After charging starts, execution charges continuously then holds
-          // Standby. Only the time before its start can discharge in Auto.
+          // While charging, the controller interrupts grid charging to capture
+          // solar surplus, so keep surplus (clamped >= 0) instead of dropping it;
+          // demand deficits are served by the grid while in charging mode.
           const slot = timeline[index];
+          const netKwh = chargingStarted ? Math.max(0, Number(slot.netKwh || 0)) : slot.netKwh;
           projectedStoredKwh = applyAdaptiveChargingTimelineSlot(
             projectedStoredKwh,
             {
               ...slot,
-              netKwh: chargingStarted ? 0 : slot.netKwh,
+              netKwh,
               chargeCapacityKwh: windowSchedulingWatts * (slot.endMs - slot.startMs) / 3_600_000 / 1000,
             },
             allocated,
@@ -541,10 +498,16 @@ export function planChronologicalDiscountedCharging({
         dischargeFloorKwh + rangeNeeds.maximumDeficitKwh,
       );
       const baseTargetStoredKwh = cheaperWindowAhead ? bridgeTargetKwh : headroomTargetKwh;
-      const targetStoredKwh = Math.min(
-        headroomTargetKwh,
-        baseTargetStoredKwh + Math.max(0, Number(targetBoosts[windowIndex]) || 0),
-      );
+      // Only grid-charge when the discounted price, adjusted for round-trip
+      // efficiency, beats the price the stored energy displaces.
+      const economic = !Number.isFinite(displacedRateYenPerKwh)
+        || window.yenPerKwh / roundTripEfficiency < displacedRateYenPerKwh;
+      const targetStoredKwh = economic
+        ? Math.min(
+            headroomTargetKwh,
+            baseTargetStoredKwh + Math.max(0, Number(targetBoosts[windowIndex]) || 0),
+          )
+        : noGridStoredKwh;
       const requiredChargeWh = Math.max(0, targetStoredKwh - noGridStoredKwh) * 1000 / chargeConversion;
       const windowDurationMs = Math.max(0, window.endMs - window.startMs);
       const guardDeliverability = guardDeliverabilityForWindow(windowSummaries, {
@@ -660,6 +623,7 @@ export function planChronologicalDiscountedCharging({
         targetSocPercent: capacityKwh ? targetStoredKwh / capacityKwh * 100 : null,
         solarHeadroomKwh,
         bridgeToCheaperWindow: cheaperWindowAhead,
+        economic,
         backfillForLaterKwh: Math.max(0, Number(targetBoosts[windowIndex]) || 0),
         requestedChargeKwh: requestedKwh,
         availableChargeKwh,
@@ -709,6 +673,7 @@ export function planChronologicalDiscountedCharging({
     const candidates = plan.windows
       .map((window, index) => ({ window, index }))
       .filter(({ window, index }) => index < constrainedIndex
+        && window.economic !== false
         && window.maximumTargetStoredKwh - window.targetStoredKwh > 0.0001)
       .sort((left, right) => left.window.yenPerKwh - right.window.yenPerKwh || right.index - left.index);
     let improved = false;
@@ -777,7 +742,16 @@ export function buildAdaptiveChargingPlan({
   if (!forecast) return unavailable("solar forecast is stale or unavailable");
   const sunset = planningSunsetWithDiscountedWindow(config, forecast, now);
   if (!sunset) return unavailable("no discounted window is available before the forecast horizon ends");
-  const horizonEndMs = discountedHorizonEndMs(config, sunset.timestamp);
+  // Plan ahead of the sunset so the optimizer can defer to a cheaper window on
+  // the next day, but never past the last forecast hour and never shorter than
+  // the sunset's spanning discounted window.
+  const lastForecastHourMs = new Date(forecast.hours.at(-1)?.timestamp ?? "").getTime();
+  const { endMs: horizonEndMs, truncated: horizonTruncated } = planningHorizon(
+    now.getTime(),
+    lastForecastHourMs,
+    discountedHorizonEndMs(config, sunset.timestamp),
+    LOOK_AHEAD_MS,
+  );
   const historicalWeather = state.historicalWeather ?? [];
   const temperatures = temperatureByDayFromWeather([...historicalWeather, ...forecast.hours]);
   const soc = latestFiniteSocPercent(samples);
@@ -916,6 +890,8 @@ export function buildAdaptiveChargingPlan({
     chargePowerCurve: chargePerformance.curve,
     chargeWhPerSocPoint: batteryModel.charge.whPerSocPoint,
     chargeToStoredRatio: batteryModel.chargeToStoredRatio,
+    roundTripEfficiency: Number(config.batteryCapabilities?.roundTripEfficiency) || 1,
+    displacedRateYenPerKwh: Number(config.standardRateYenPerKwh),
     standbyWindowEnd,
     windowSummaries: state.windowSummaries,
   });
@@ -930,6 +906,12 @@ export function buildAdaptiveChargingPlan({
     config,
   });
   const planStatus = discountedPlanStatus(optimized);
+  // Keep "expected sunset SOC" meaning the SOC at the sunset, not the (now
+  // longer) plan horizon end.
+  const sunsetSegment = timelineView.find((segment) =>
+    new Date(segment.start).getTime() <= sunset.timestamp && sunset.timestamp < new Date(segment.end).getTime());
+  const expectedSunsetSocPercent = sunsetSegment?.predictedEndSocPercent
+    ?? (capacityKwh ? Math.min(100, optimized.expectedEndStoredKwh / capacityKwh * 100) : null);
   return {
     ...planStatus,
     createdAt: now.toISOString(),
@@ -940,7 +922,10 @@ export function buildAdaptiveChargingPlan({
     dischargeLimitPercent: dischargeLimit,
     dischargeLimitReadAt: new Date(dischargeLimitReadAt).toISOString(),
     targetSocPercent: Number(config.adaptiveCharging.targetSocPercent),
-    expectedSunsetSocPercent: capacityKwh ? Math.min(100, optimized.expectedEndStoredKwh / capacityKwh * 100) : null,
+    expectedSunsetSocPercent,
+    horizonEnd: new Date(horizonEndMs).toISOString(),
+    forecastLastHour: Number.isFinite(lastForecastHourMs) ? new Date(lastForecastHourMs).toISOString() : null,
+    horizonTruncated,
     predictedSolarKwh,
     forecastSolarKwh,
     predictedDemandKwh,

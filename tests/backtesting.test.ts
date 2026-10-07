@@ -13,7 +13,7 @@ import type { AdaptivePlanSnapshot } from "../lib/contracts/backtesting.js";
 const config: AdaptivePlanSnapshot["config"] = {
   rateBands: [{ start: "00:00", end: "00:00", yenPerKwh: 20, label: "Test" }],
   standardRateYenPerKwh: 20,
-  batteryCapabilities: { usableCapacityKwh: 10, maximumChargeWatts: 3000 },
+  batteryCapabilities: { usableCapacityKwh: 10, maximumChargeWatts: 3000, roundTripEfficiency: 0.9 },
   adaptiveCharging: {
     enabled: true, latitude: 35, longitude: 139, arrayPeakKw: 5,
     panelTiltDegrees: 30, panelAzimuthDegrees: 0, systemLossPercent: 14,
@@ -71,7 +71,7 @@ assert.ok(evaluated.modelOnly && evaluated.modelOnly.gridCostYen >= 0);
 const simConfig = {
   rateBands: [{ start: "00:00", end: "00:00", yenPerKwh: 20, label: "Test" }],
   standardRateYenPerKwh: 20,
-  batteryCapabilities: { usableCapacityKwh: 10, maximumChargeWatts: 3000 },
+  batteryCapabilities: { usableCapacityKwh: 10, maximumChargeWatts: 3000, roundTripEfficiency: 0.9 },
 };
 const simSample = {
   rollupStart: "2026-01-01T00:00:00.000Z",
