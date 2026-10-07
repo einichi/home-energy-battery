@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 
 import { validateHttpHost } from "../lib/http/host-validation.js";
-import { requestHasValidOrigin, requestHostValidation } from "../lib/http/server.js";
+import { requestHasValidOrigin, requestHostValidation, requestHasPrivateClient } from "../lib/http/server.js";
+import { normalizePublicHost } from "../lib/domain/hostname.js";
+import { isLoopbackAddress, isPrivateAddress } from "../lib/net/address-classification.js";
 import {
   invalidDiscoverySubnets,
   isPrivateDiscoverySubnet,
@@ -56,6 +58,58 @@ assert.equal(requestHostValidation(matchingPublicOriginRequest as any).valid, fa
 assert.equal(validateHttpHost("attacker.example.com:8787").valid, false);
 assert.equal(validateHttpHost("xn--bcher-kva.example:8787").valid, false);
 assert.equal(validateHttpHost(["home-energy", "attacker.example.com"]).valid, false);
+
+// A publicly-delegated name is accepted only when it is explicitly trusted.
+const trustedHosts = new Set(["hems.example.com"]);
+assert.equal(validateHttpHost("hems.example.com:8787", { trustedHosts }).valid, true);
+assert.equal(validateHttpHost("hems.example.com:8787").valid, false);
+assert.equal(validateHttpHost("other.example.com:8787", { trustedHosts }).valid, false);
+assert.equal(validateHttpHost("sub.hems.example.com:8787", { trustedHosts }).valid, false);
+const trustedResult = validateHttpHost("hems.example.com:8787", { trustedHosts });
+assert.equal(trustedResult.valid && trustedResult.trust, "trusted");
+const localResult = validateHttpHost("192.168.1.10:8787");
+assert.equal(localResult.valid && localResult.trust, "local");
+assert.equal(requestHostValidation(Object.assign(new EventEmitter(), {
+  method: "GET",
+  headers: { host: "hems.example.com:8787" },
+  headersDistinct: { host: ["hems.example.com:8787"] },
+}) as any, { trustedHosts }).valid, true);
+
+// normalizePublicHost accepts public FQDNs and rejects literals / local names.
+assert.equal(normalizePublicHost("HEMS.Example.com."), "hems.example.com");
+assert.equal(normalizePublicHost("hems.example.com:443"), null);
+assert.equal(normalizePublicHost("hems.local"), null);
+assert.equal(normalizePublicHost("192.168.1.10"), null);
+assert.equal(normalizePublicHost("singlelabel"), null);
+assert.equal(normalizePublicHost(""), null);
+assert.equal(normalizePublicHost("evil .example.com"), null);
+
+// Address classification.
+for (const address of ["127.0.0.1", "::1", "10.1.2.3", "172.16.5.4", "172.31.255.1", "192.168.0.1", "169.254.1.1", "100.64.0.1", "fd00::1", "fe80::1", "::ffff:192.168.1.1"]) {
+  assert.equal(isPrivateAddress(address), true, `${address} should be private`);
+}
+for (const address of ["8.8.8.8", "172.15.0.1", "172.32.0.1", "193.168.0.1", "100.128.0.1", "2001:4860:4860::8888", "not-an-ip", ""]) {
+  assert.equal(isPrivateAddress(address), false, `${address} should not be private`);
+}
+assert.equal(isLoopbackAddress("127.0.0.1"), true);
+assert.equal(isLoopbackAddress("::1"), true);
+assert.equal(isLoopbackAddress("::ffff:127.0.0.1"), true);
+assert.equal(isLoopbackAddress("192.168.1.1"), false);
+assert.equal(isLoopbackAddress("10.0.0.1"), false);
+
+// X-Forwarded-For is consulted only when the socket peer is loopback.
+assert.equal(requestHasPrivateClient(Object.assign(new EventEmitter(), {
+  socket: { remoteAddress: "::ffff:127.0.0.1" },
+  headers: { "x-forwarded-for": "203.0.113.9" },
+}) as any), false);
+assert.equal(requestHasPrivateClient(Object.assign(new EventEmitter(), {
+  socket: { remoteAddress: "127.0.0.1" },
+  headers: { "x-forwarded-for": "192.168.1.5" },
+}) as any), true);
+assert.equal(requestHasPrivateClient(Object.assign(new EventEmitter(), {
+  socket: { remoteAddress: "203.0.113.9" },
+  headers: {},
+}) as any), false);
 
 const acceptedSubnets = [
   "10.0.0.0/24",

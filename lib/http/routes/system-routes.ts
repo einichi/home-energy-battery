@@ -21,6 +21,7 @@ function explicitSmtpSettings(value: unknown): Record<string, unknown> | null {
 type SystemRouteDependencies = Pick<ApiDependencies,
   | "DEFAULT_CONFIG"
   | "EXTERNAL_IO_DISABLED"
+  | "HTTPS_PORT"
   | "PORT"
   | "UI_DEVELOPMENT_MODE"
   | "applicationArchitectureStatus"
@@ -45,6 +46,7 @@ type SystemRouteDependencies = Pick<ApiDependencies,
   | "requestError"
   | "restoreDatabaseBackup"
   | "systemAlertsView"
+  | "tlsService"
   | "trimHistory"
   | "validBillingMonth"
   | "writeConfig"
@@ -54,6 +56,7 @@ export function createSystemRouteHandler(dependencies: SystemRouteDependencies) 
   const {
     DEFAULT_CONFIG,
     EXTERNAL_IO_DISABLED,
+    HTTPS_PORT,
     PORT,
     UI_DEVELOPMENT_MODE,
     applicationArchitectureStatus,
@@ -78,6 +81,7 @@ export function createSystemRouteHandler(dependencies: SystemRouteDependencies) 
     requestError,
     restoreDatabaseBackup,
     systemAlertsView,
+    tlsService,
     trimHistory,
     validBillingMonth,
     writeConfig,
@@ -136,10 +140,27 @@ export function createSystemRouteHandler(dependencies: SystemRouteDependencies) 
       if (EXTERNAL_IO_DISABLED) throw requestError(403, "External notification delivery is disabled in simulated UI development");
       return json(res, 200, await notificationService.sendTest());
     }
+    if (req.method === "GET" && url.pathname === "/api/tls") {
+      return json(res, 200, await tlsService.view());
+    }
+    if (req.method === "PUT" && url.pathname === "/api/tls") {
+      const body = await readBody(req);
+      try {
+        return json(res, 200, await tlsService.update(body));
+      } catch (error) {
+        throw requestError(400, error instanceof Error ? error.message : "Invalid HTTPS settings");
+      }
+    }
+    if (req.method === "POST" && url.pathname === "/api/tls/apply") {
+      await readBody(req);
+      return json(res, 200, await tlsService.refresh());
+    }
     if (req.method === "GET" && url.pathname === "/api/config") {
       const response = {
         ...(await readConfig()),
         port: PORT,
+        httpPort: PORT,
+        httpsPort: HTTPS_PORT,
         runtime: {
           uiDevelopment: UI_DEVELOPMENT_MODE,
           simulatedDevices: UI_DEVELOPMENT_MODE,
@@ -159,7 +180,7 @@ export function createSystemRouteHandler(dependencies: SystemRouteDependencies) 
       if (smtpSettings && !isSupportedSmtpPort(smtpSettings.port)) {
         throw requestError(400, "SMTP port must be 25, 465, or 587");
       }
-      const response = { ...(await writeConfig(body)), port: PORT } satisfies AppConfig;
+      const response = { ...(await writeConfig(body)), port: PORT, httpPort: PORT, httpsPort: HTTPS_PORT } satisfies AppConfig;
       return json(res, 200, response);
     }
     if (req.method === "POST" && url.pathname === "/api/history/trim") {

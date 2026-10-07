@@ -1,13 +1,22 @@
 import { isIP } from "node:net";
 import { domainToASCII } from "node:url";
 import { parse } from "tldts";
+import { DNS_LABEL, LOCAL_SUFFIXES } from "../domain/hostname.js";
+
+export type HostTrust = "local" | "trusted";
 
 export type HostValidationResult =
-  | { valid: true; hostname: string; port: number | null }
+  | { valid: true; hostname: string; port: number | null; trust: HostTrust }
   | { valid: false; reason: string };
 
-const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-const LOCAL_SUFFIXES = [".local", ".home.arpa", ".internal"];
+export interface HostValidationOptions {
+  /**
+   * Exact, normalized hostnames that are explicitly trusted via Settings (for
+   * example a publicly-delegated domain that resolves to a LAN address). Only
+   * these publicly-delegated names are accepted; every other one is rejected.
+   */
+  trustedHosts?: ReadonlySet<string>;
+}
 
 function parsePort(value: string | undefined): number | null | false {
   if (value === undefined) return null;
@@ -17,7 +26,10 @@ function parsePort(value: string | undefined): number | null | false {
 }
 
 /** Parse an HTTP Host value without DNS resolution and classify its namespace. */
-export function validateHttpHost(value: string | readonly string[] | undefined): HostValidationResult {
+export function validateHttpHost(
+  value: string | readonly string[] | undefined,
+  options: HostValidationOptions = {},
+): HostValidationResult {
   if (typeof value !== "string" || !value || value !== value.trim()) {
     return { valid: false, reason: "Host header is missing or malformed" };
   }
@@ -35,7 +47,7 @@ export function validateHttpHost(value: string | readonly string[] | undefined):
     }
     const port = parsePort(bracketed[2]);
     if (port === false) return { valid: false, reason: "Host header contains an invalid port" };
-    return { valid: true, hostname: bracketed[1]!.toLowerCase(), port };
+    return { valid: true, hostname: bracketed[1]!.toLowerCase(), port, trust: "local" };
   }
 
   const colonCount = (value.match(/:/g) ?? []).length;
@@ -52,7 +64,7 @@ export function validateHttpHost(value: string | readonly string[] | undefined):
   if (!hostnameText || hostnameText.endsWith(".")) {
     return { valid: false, reason: "Host header contains an invalid DNS root suffix" };
   }
-  if (isIP(hostnameText) === 4) return { valid: true, hostname: hostnameText, port };
+  if (isIP(hostnameText) === 4) return { valid: true, hostname: hostnameText, port, trust: "local" };
   if (/^[\d.]+$/.test(hostnameText)) {
     return { valid: false, reason: "Host header contains an invalid IPv4 literal" };
   }
@@ -62,10 +74,13 @@ export function validateHttpHost(value: string | readonly string[] | undefined):
     return { valid: false, reason: "Host header contains an invalid DNS name" };
   }
   if (hostname === "localhost" || !hostname.includes(".")) {
-    return { valid: true, hostname, port };
+    return { valid: true, hostname, port, trust: "local" };
   }
   if (LOCAL_SUFFIXES.some((suffix) => hostname.endsWith(suffix))) {
-    return { valid: true, hostname, port };
+    return { valid: true, hostname, port, trust: "local" };
+  }
+  if (options.trustedHosts?.has(hostname)) {
+    return { valid: true, hostname, port, trust: "trusted" };
   }
 
   const classification = parse(hostname, { allowPrivateDomains: true });

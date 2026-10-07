@@ -74,10 +74,44 @@ The integrated status service reads:
 The HTTP service is intentionally unauthenticated and intended only for a trusted
 local network. Access it with an IPv4 or bracketed IPv6 literal, `localhost`, a
 single-label LAN hostname, or a name below `.local`, `.home.arpa`, or `.internal`.
-Publicly delegated FQDNs are intentionally unsupported for direct unauthenticated
-HTTP access, even if they currently resolve to a private address. Supporting such
-names in the future requires an authenticated HTTPS trust mechanism; do not weaken
-the Host validation to expose this service through public DNS.
+Publicly delegated FQDNs are rejected by an exact-name Host allowlist as a
+DNS-rebinding defense, even if they currently resolve to a private address.
+
+### HTTPS and a trusted hostname
+
+You can opt in to a normal domain (for example `hems.example.com`) that resolves
+to a LAN address and obtain a publicly trusted certificate from Let's Encrypt.
+This does **not** expose the app to the internet: the domain is simply accepted
+as the exact Host for the bundled Caddy TLS terminator, while every other public
+name stays rejected.
+
+The Docker image bundles Caddy with DNS-01 providers for **Cloudflare** and
+**Route53**, so the certificate is issued without any inbound access. Configure
+it under **System → HTTPS**:
+
+1. Open System → HTTPS over the existing LAN access (an IP address is fine).
+2. Enter the trusted hostname, the DNS provider, its API credentials, and an
+   ACME email address, then save. Credentials are stored `0600` in
+   `tls-secrets.json` and are never returned by the API.
+3. Caddy obtains the certificate and serves HTTPS on `HTTPS_PORT` (default 443).
+   The name is added to the app's Host allowlist at the same time.
+
+Requests from non-private client addresses are rejected at both Caddy and the
+app, as a guard against accidentally exposing the port. Because this guard is
+address-based, clients that reach the app from a globally routable address
+(including public IPv6) are rejected; use a LAN IPv4 or ULA address. The
+plain-HTTP site is kept up until a trusted certificate exists; the **Keep
+non-TLS HTTP access** option retains it as a lockout fallback and shows a warning
+while both are active. No `PUBLIC_*` env var is required.
+
+Relevant environment variables:
+
+- `HTTP_PORT` (default `PORT`, 8787): Caddy's plain-HTTP port
+- `HTTPS_PORT` (default 443): Caddy's TLS port
+- `HOST` (default `0.0.0.0`; the image sets `127.0.0.1`): app bind address. When
+  loopback, the app listens on an internal ephemeral port behind Caddy.
+
+Do not weaken the Host allowlist or bind the app directly to a public interface.
 
 Use the docker-compose.yml to get started easily.
 
@@ -88,6 +122,7 @@ docker build -t home-energy-battery:local .
 docker volume create home-energy-battery-data
 docker run -d --name home-energy-battery \
   -p 8787:8787/tcp \
+  -p 443:443/tcp \
   -p 3610:3610/udp \
   -v home-energy-battery-data:/data \
   --env-file .env \
@@ -99,6 +134,8 @@ Example `.env`:
 ```bash
 TZ=Asia/Tokyo
 PORT=8787
+# HTTPS port served by the bundled Caddy for the trusted hostname
+HTTPS_PORT=443
 # Optional request timeout for the in-process ECHONET client
 ECHONET_TIMEOUT_MS=15000
 # Optional LAN interface address when automatic selection is unsuitable

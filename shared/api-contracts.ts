@@ -352,6 +352,8 @@ export type RuntimeInformation = {
 
 export type AppConfig = {
   port?: number;
+  httpPort?: number;
+  httpsPort?: number;
   updateIntervalSeconds: number;
   language: "en" | "ja";
   solarEnabled: boolean;
@@ -667,3 +669,30 @@ export type AdaptiveChargingStatus = {
 };
 
 export type LoadingState = "loading" | "ready" | "refreshing" | "error";
+
+export type TlsProvider = "cloudflare" | "route53";
+
+export type TlsCertificateStatus = {
+  trusted: boolean;
+  hostname?: string | null;
+  issuer?: string | null;
+  notAfter?: string | null;
+  error?: string | null;
+};
+
+export type TlsView = {
+  hostname: string | null;
+  provider: TlsProvider | null;
+  acmeEmail: string | null;
+  keepNonTls: boolean;
+  configured: boolean;
+  secrets: { cloudflare: boolean; route53: boolean };
+  caddyReachable: boolean;
+  httpPort: number;
+  httpsPort: number;
+  certificate: TlsCertificateStatus;
+  httpFallbackActive: boolean;
+  warning: string | null;
+  applyError: string | null;
+  lastAppliedAt: string | null;
+};

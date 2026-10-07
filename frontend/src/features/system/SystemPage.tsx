@@ -25,6 +25,7 @@ import { useEnergyStatus } from "../../hooks/useEnergyStatus";
 import { useSystemAdmin } from "../../hooks/useSystemAdmin";
 import { formatDateTime, formatDateTimesInText } from "../../core/format";
 import { T, useI18n } from "../../i18n";
+import { PublicHttpsSettings } from "./PublicHttpsSettings";
 const sections = [
   {
     id: "equipment",
@@ -40,6 +41,11 @@ const sections = [
     id: "notifications",
     label: "Notifications",
     description: "Email delivery and event triggers",
+  },
+  {
+    id: "https",
+    label: "HTTPS",
+    description: "Trusted domain and certificate",
   },
   {
     id: "data",
@@ -1838,6 +1844,8 @@ export function SystemPage() {
           setView={(view) => admin.setNotifications(view)}
           simulator={config.runtime?.externalIoDisabled === true}
         />
+      ) : selected === "https" ? (
+        <PublicHttpsSettings />
       ) : selected === "data" ? (
         <DataSettings config={config} admin={admin} save={save} />
       ) : selected === "preferences" ? (

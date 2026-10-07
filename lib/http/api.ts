@@ -11,6 +11,7 @@ import { createHistoryRouteHandler } from "./routes/history-routes.js";
 import { createOperationsRouteHandler } from "./routes/operations-routes.js";
 import { createAutomationRouteHandler } from "./routes/automation-routes.js";
 import type { BatteryStrategy, RuntimeInformation } from "../../shared/api-contracts.js";
+import type { TlsService } from "../services/tls-service.js";
 
 type JsonObject = Record<string, unknown>;
 type ConfigurationService = ReturnType<typeof import("../services/configuration-service.js").createConfigurationService>;
@@ -33,6 +34,7 @@ export interface ApiDependencies {
   ALL_DAYS: number[];
   DEFAULT_CONFIG: ApplicationConfig;
   EXTERNAL_IO_DISABLED: boolean;
+  HTTPS_PORT: number;
   PORT: number;
   UI_DEVELOPMENT_MODE: boolean;
   adaptiveChargingAvailability: typeof import("../domain/adaptive-planning.js").adaptiveChargingAvailability;
@@ -111,6 +113,7 @@ export interface ApiDependencies {
   startDeviceCommand: DeviceCommandService["start"];
   summarizeEneFarmSamples(samples: HistorySample[], config: ApplicationConfig, options?: { start?: string; end?: string; billingPeriodGasM3?: number | null }): EneFarmSummary;
   systemAlertsView: SystemAlertService;
+  tlsService: TlsService;
   trimHistory(retention: Partial<RetentionConfig>): Promise<unknown>;
   validBillingMonth: typeof import("../gas-tariffs.js").validBillingMonth;
   listAwayPeriods: AwayPeriodService["periods"];

@@ -8,11 +8,16 @@ services:
     image: ghcr.io/einichi/home-energy-battery:latest
     container_name: home-energy-battery
     ports:
+      # HTTPS is served by the bundled Caddy for the trusted hostname. Bind to
+      # the LAN interface so the app is not reachable on a public interface.
+      - "443:443/tcp"
       - "8787:8787/tcp"
       - "3610:3610/udp"
     environment:
       - NODE_ENV=production
+      - HOST=127.0.0.1
       - PORT=8787
+      - HTTPS_PORT=443
       - DATA_DIR=/data
       - TZ=UTC
     volumes:

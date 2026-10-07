@@ -1,5 +1,5 @@
 import { getJson, sendJson } from "./client";
-import type { DatabaseBackupsView, DiscoveryJob, HistoryStats, NotificationView } from "./contracts";
+import type { DatabaseBackupsView, DiscoveryJob, HistoryStats, NotificationView, TlsView } from "./contracts";
 
 export const getNotifications = (signal?: AbortSignal) => getJson<NotificationView>("/api/notifications", signal);
 export const saveNotifications = (body: unknown) => sendJson<NotificationView>("/api/notifications", "PUT", body);
@@ -17,3 +17,7 @@ export const restoreDatabaseBackup = (filename: string) => sendJson<DatabaseBack
 export const startDiscovery = (mode: "broadcast" | "active") => sendJson<DiscoveryJob>("/api/discovery/jobs", "POST", { mode });
 export const getDiscoveryJob = (id: string, signal?: AbortSignal) => getJson<DiscoveryJob>(`/api/discovery/jobs/${encodeURIComponent(id)}`, signal);
 export const importGasTariff = (billingMonth: string) => sendJson<{ billingMonth: string; version?: number }>("/api/gas-tariffs/import", "POST", { provider: "tokyo-gas", billingMonth });
+
+export const getTls = (signal?: AbortSignal) => getJson<TlsView>("/api/tls", signal);
+export const saveTls = (body: unknown) => sendJson<TlsView>("/api/tls", "PUT", body);
+export const applyTls = () => sendJson<TlsView>("/api/tls/apply", "POST", {});

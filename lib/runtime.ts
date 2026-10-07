@@ -38,7 +38,9 @@ export async function startRuntime(options: RuntimeStartOptions): Promise<void> 
     options.server.once("listening", onListening);
     options.server.listen(options.port, options.host);
   });
-  (options.logger ?? console).log(`HOME ENERGY & BATTERY listening on http://${options.host}:${options.port}`);
+  const address = options.server.address();
+  const port = address && typeof address === "object" ? address.port : options.port;
+  (options.logger ?? console).log(`HOME ENERGY & BATTERY listening on http://${options.host}:${port}`);
 }
 
 export async function stopRuntime(options: RuntimeStopOptions): Promise<void> {

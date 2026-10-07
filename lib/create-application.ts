@@ -25,17 +25,16 @@ import {
   uiDevelopmentMode,
 } from "./development-safety.js";
 import { createEchonetCommandAdapter } from "./echonet-service.js";
-import {
-  createApplicationStore,
-} from "./application-store.js";
+import { createApplicationStore } from "./application-store.js";
+import { createTlsService } from "./services/tls-service.js";
+import { isLoopbackAddress } from "./net/address-classification.js";
 import {
   createStaticHandler,
   json,
   readBody as readJsonBody,
   requestError,
-  requestHostValidation,
-  requestHasValidOrigin,
 } from "./http/server.js";
+import { createRequestListener } from "./http/request-listener.js";
 import { NativeRouter } from "./http/router.js";
 import { createApiHandler } from "./http/api.js";
 import { startRuntime, stopRuntime } from "./runtime.js";
@@ -149,6 +148,13 @@ let adaptiveControlService: ReturnType<typeof createAdaptiveControlService> | nu
 let commitConfigService: ReturnType<typeof createConfigurationCommitService> | null = null;
 const historyStore = (dependencies.createHistoryStore ?? createHistoryStore)({ dataDir: DATA_DIR });
 const applicationStore = (dependencies.createApplicationStore ?? createApplicationStore)({ dataDir: DATA_DIR });
+const tlsService = createTlsService({
+  dataDir: DATA_DIR,
+  applicationStore,
+  httpPort: SERVER_ENVIRONMENT.httpPort,
+  httpsPort: SERVER_ENVIRONMENT.httpsPort,
+  logError: logDetailedError,
+});
 const scheduleService = createScheduleService(applicationStore);
 const readSchedules = scheduleService.read;
 const writeSchedules = scheduleService.write;
@@ -618,6 +624,7 @@ const api = createApiHandler({
   ALL_DAYS,
   DEFAULT_CONFIG,
   EXTERNAL_IO_DISABLED,
+  HTTPS_PORT: SERVER_ENVIRONMENT.httpsPort,
   PORT,
   UI_DEVELOPMENT_MODE,
   adaptiveChargingAvailability,
@@ -699,6 +706,7 @@ const api = createApiHandler({
   startDeviceCommand,
   summarizeEneFarmSamples,
   systemAlertsView: systemAlertServiceView,
+  tlsService,
   trimHistory,
   listAwayPeriods,
   updateAwayPeriod,
@@ -739,39 +747,20 @@ const applicationInitializer = createApplicationInitializer({
   startBackgroundProcesses: runtimeCoordinator.start,
 });
 
-const server = http.createServer(async (req, res) => {
-  try {
-    const hostValidation = requestHostValidation(req);
-    if (!hostValidation.valid) {
-      return json(res, 400, { error: hostValidation.reason });
-    }
-    const url = new URL(req.url ?? "/", "http://localhost");
-    if (!requestHasValidOrigin(req)) {
-      return json(res, 403, { error: "cross-origin state-changing requests are not allowed" });
-    }
-    if (url.pathname.startsWith("/api/")) {
-      if (await apiRouter.dispatch(req, res, url)) return;
-      await api(req, res, url);
-      return;
-    }
-    await serveStatic(res, url.pathname);
-  } catch (error: unknown) {
-    const detail = error instanceof Error ? error : new Error(String(error));
-    const metadata = detail as Error & { statusCode?: number; commandId?: string; commandState?: string };
-    const status = Number.isInteger(metadata.statusCode) ? metadata.statusCode! : 500;
-    if (status >= 500) logDetailedError("api", detail);
-    json(res, status, {
-      error: detail.message,
-      ...(metadata.commandId ? { commandId: metadata.commandId } : {}),
-      ...(metadata.commandState ? { commandState: metadata.commandState } : {}),
-    });
-  }
-});
+const server = http.createServer(createRequestListener({
+  api,
+  apiRouter,
+  serveStatic,
+  trustedHosts: () => tlsService.trustedHosts(),
+}));
 async function start(): Promise<void> {
+  // Behind the bundled Caddy the app listens on an ephemeral loopback port and
+  // Caddy owns the public HTTP/HTTPS ports. A direct `npm start` binds HOST:P.
+  const behindProxy = isLoopbackAddress(SERVER_ENVIRONMENT.host);
   await startRuntime({
     server,
-    host: "0.0.0.0",
-    port: PORT,
+    host: SERVER_ENVIRONMENT.host,
+    port: behindProxy ? 0 : SERVER_ENVIRONMENT.httpPort,
     validateEnvironment: () => assertSafeUiDevelopmentEnvironment(environment, { projectDir: COMPILED_ROOT }),
     validateStorage: async () => {
       await ensureDataDir();
@@ -782,8 +771,16 @@ async function start(): Promise<void> {
     },
     initializeApplication: applicationInitializer.initialize,
   });
+  if (behindProxy) {
+    const address = server.address();
+    if (address && typeof address === "object") {
+      tlsService.setInternalPort(address.port);
+      await tlsService.start();
+    }
+  }
 }
 async function stop(): Promise<void> {
+  tlsService.stop();
   await stopRuntime({
     server,
     stopBackgroundProcesses: runtimeCoordinator.stop,

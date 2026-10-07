@@ -12,6 +12,7 @@ export const APPLICATION_DOCUMENTS = Object.freeze({
   adaptiveChargingState: "object",
   operationalOverrides: "object",
   notificationState: "object",
+  serverSettings: "object",
 });
 
 export type ApplicationDocumentKey = keyof typeof APPLICATION_DOCUMENTS;
@@ -24,6 +25,7 @@ export interface ApplicationDocumentMap {
   adaptiveChargingState: Record<string, unknown>;
   operationalOverrides: Record<string, unknown>;
   notificationState: Record<string, unknown>;
+  serverSettings: Record<string, unknown>;
 }
 export type ArchitectureStatus = {
   architectureVersion: number | null;

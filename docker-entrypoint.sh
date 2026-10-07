@@ -12,4 +12,46 @@ if [ -n "${TZ:-}" ]; then
   fi
 fi
 
-exec "$@"
+# Caddy starts with an admin-only base config and is reconfigured by the app
+# through its Admin API. Persistence is disabled in the app-provided config so
+# DNS credentials are never written to disk by Caddy.
+mkdir -p /data/caddy
+cat > /data/caddy/base.Caddyfile <<'EOF'
+{
+	admin 127.0.0.1:2019
+	storage file_system /data/caddy
+	persist_config off
+	auto_https disable_redirects
+}
+EOF
+
+CADDY_PID=
+if command -v caddy >/dev/null 2>&1; then
+  (
+    while :; do
+      caddy run --config /data/caddy/base.Caddyfile --adapter caddyfile || true
+      echo "caddy exited; restarting in 2s" >&2
+      sleep 2
+    done
+  ) &
+  CADDY_PID=$!
+fi
+
+"$@" &
+APP_PID=$!
+
+shutdown() {
+  kill -TERM "$APP_PID" 2>/dev/null || true
+  caddy stop 2>/dev/null || true
+  [ -n "$CADDY_PID" ] && kill -TERM "$CADDY_PID" 2>/dev/null || true
+}
+trap shutdown INT TERM
+
+set +e
+wait "$APP_PID"
+STATUS=$?
+set -e
+
+caddy stop 2>/dev/null || true
+[ -n "$CADDY_PID" ] && kill -TERM "$CADDY_PID" 2>/dev/null || true
+exit "$STATUS"

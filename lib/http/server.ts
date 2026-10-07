@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { validateHttpHost } from "./host-validation.js";
+import { isLoopbackAddress, isPrivateAddress } from "../net/address-classification.js";
+import { validateHttpHost, type HostValidationOptions } from "./host-validation.js";
 
 export type JsonObject = Record<string, unknown>;
 export type JsonParser = (text: string, source: string) => unknown;
@@ -81,11 +82,14 @@ export async function readBody(request: IncomingMessage, parse: JsonParser): Pro
   return parsed as JsonObject;
 }
 
-export function requestHasValidOrigin(request: IncomingMessage): boolean {
+export function requestHasValidOrigin(
+  request: IncomingMessage,
+  options: { requireOrigin?: boolean } = {},
+): boolean {
   if (!["POST", "PUT", "PATCH", "DELETE"].includes(request.method ?? "")) return true;
   if (String(request.headers["sec-fetch-site"] ?? "").toLowerCase() === "cross-site") return false;
   const origin = request.headers.origin;
-  if (!origin) return true;
+  if (!origin) return options.requireOrigin !== true;
   try {
     return new URL(origin).host === String(request.headers.host ?? "");
   } catch {
@@ -93,12 +97,39 @@ export function requestHasValidOrigin(request: IncomingMessage): boolean {
   }
 }
 
-export function requestHostValidation(request: IncomingMessage): ReturnType<typeof validateHttpHost> {
+export function requestHostValidation(
+  request: IncomingMessage,
+  options: HostValidationOptions = {},
+): ReturnType<typeof validateHttpHost> {
   const distinctHosts = request.headersDistinct?.host;
   if (distinctHosts && distinctHosts.length !== 1) {
     return { valid: false, reason: "Request must contain exactly one Host header" };
   }
-  return validateHttpHost(distinctHosts?.[0] ?? request.headers.host);
+  return validateHttpHost(distinctHosts?.[0] ?? request.headers.host, options);
+}
+
+function firstForwardedAddress(value: string | string[] | undefined): string | null {
+  const raw = Array.isArray(value) ? value.join(",") : value;
+  if (!raw) return null;
+  const first = raw.split(",")[0]?.trim();
+  return first || null;
+}
+
+/**
+ * Resolve the request's client address and decide whether it is private.
+ *
+ * `X-Forwarded-For` is only consulted when the socket peer is a trusted proxy
+ * (loopback by default), so a direct client cannot spoof it. When the app runs
+ * behind the bundled Caddy on loopback, the real client address is carried in
+ * the forwarded header.
+ */
+export function requestHasPrivateClient(request: IncomingMessage): boolean {
+  const peer = request.socket?.remoteAddress ?? null;
+  if (peer && isLoopbackAddress(peer)) {
+    const forwarded = firstForwardedAddress(request.headers["x-forwarded-for"] ?? request.headers["x-real-ip"]);
+    if (forwarded) return isPrivateAddress(forwarded);
+  }
+  return isPrivateAddress(peer ?? undefined);
 }
 
 export function createStaticHandler(publicDirectory: string) {
