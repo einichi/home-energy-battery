@@ -74,8 +74,9 @@ jobs:
           platforms: ${{ matrix.platform }}
           labels: ${{ needs.prepare.outputs.labels }}
           outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          # No type=gha cache here: mode=max would upload the ~1.5GB Caddy
+          # builder stage every run (minutes) to save a ~90s build. The native
+          # cross-compiled build is faster than the cache round-trip.
 
       - name: Record image digest
         run: |
