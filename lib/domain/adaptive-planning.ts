@@ -5,7 +5,7 @@ import type { DemandDay, DemandSample } from "./demand-forecast.js";
 import { finiteNumberOrNull } from "./numbers.js";
 import { applySolarForecastBias, forecastHourForInterval, learnedSolarFactor, nextPlanningBoundary, planningSunsetWithDiscountedWindow, solarCalibrationGroup, solarPowerFromIrradiance, temperatureByDayFromWeather } from "./solar-forecast.js";
 import type { SolarForecast, SolarForecastAccuracy, SolarForecastHour } from "./solar-forecast.js";
-import { discountedBandOccurrence, explicitDiscountedBand, rateForTimestamp } from "./tariffs.js";
+import { discountedBandOccurrence, discountedHorizonEndMs, explicitDiscountedBand, rateForTimestamp } from "./tariffs.js";
 import { halfHourIndex, isAwayAt, localDayKey } from "./time.js";
 import type { AwayPeriod } from "./time.js";
 import { applyGuardDeliverabilityToTiming, guardDeliverabilityForWindow } from "./guard-deliverability.js";
@@ -777,6 +777,7 @@ export function buildAdaptiveChargingPlan({
   if (!forecast) return unavailable("solar forecast is stale or unavailable");
   const sunset = planningSunsetWithDiscountedWindow(config, forecast, now);
   if (!sunset) return unavailable("no discounted window is available before the forecast horizon ends");
+  const horizonEndMs = discountedHorizonEndMs(config, sunset.timestamp);
   const historicalWeather = state.historicalWeather ?? [];
   const temperatures = temperatureByDayFromWeather([...historicalWeather, ...forecast.hours]);
   const soc = latestFiniteSocPercent(samples);
@@ -822,7 +823,7 @@ export function buildAdaptiveChargingPlan({
   let awayLearnedSlotCount = 0;
   let awayFallbackSlotCount = 0;
   const awayComparableDays = new Set<string>();
-  for (let time = startMs; time < sunset.timestamp;) {
+  for (let time = startMs; time < horizonEndMs;) {
     const date = new Date(time);
     const dayKey = localDayKey(date);
     if (!demandByDay.has(dayKey)) {
@@ -840,7 +841,7 @@ export function buildAdaptiveChargingPlan({
       demandByDay.set(dayKey, { home, away });
     }
     const demand = demandByDay.get(dayKey)!;
-    const slotEndMs = nextPlanningBoundary(time, sunset.timestamp);
+    const slotEndMs = nextPlanningBoundary(time, horizonEndMs);
     const hour = forecastHourForInterval(forecast, time, slotEndMs);
     const factor = calibration.groupFactors?.[solarCalibrationGroup(date)] ?? calibration.factor;
     const uncorrectedSolarW = solarPowerFromIrradiance(hour?.tiltedIrradianceWm2, config, factor);
@@ -872,8 +873,6 @@ export function buildAdaptiveChargingPlan({
     const fuelCellPlanningKwh = fuelCellActive ? fuelCellForecast.p20W * durationHours / 1000 : 0;
     const highFuelCellKwh = fuelCellActive ? fuelCellForecast.p80W * durationHours / 1000 : 0;
     const medianFuelCellForecastKwh = fuelCellForecast.medianW * durationHours / 1000;
-    // Predicted totals must match the plan's physics: when the fuel cell is only
-    // observed, it does not contribute to the planned surplus.
     const medianFuelCellKwh = fuelCellActive ? medianFuelCellForecastKwh : 0;
     predictedSolarKwh += solarKwh;
     predictedDemandKwh += demandKwh;

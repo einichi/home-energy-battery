@@ -49,6 +49,7 @@ import {
 import {
   discountedBandOccurrence,
   discountedBandOccurrences,
+  discountedHorizonEndMs,
   rateForTimestamp,
 } from "../lib/domain/tariffs.js";
 
@@ -197,6 +198,22 @@ assert.equal(new Date(overnightOccurrence.start).getHours(), 23);
 assert.equal(new Date(overnightOccurrence.end).getDate(), new Date(2026, 6, 12).getDate());
 
 assert.equal(new Date(overnightOccurrence.end).getHours(), 1);
+
+// A discounted window spanning sunset extends the planning horizon to its end;
+// a window that ends before sunset leaves the horizon at sunset.
+const eveningBandConfig = cleanConfig({
+  rateMode: "multi",
+  standardRateYenPerKwh: 40,
+  rateBands: [{ start: "17:00", end: "20:00", yenPerKwh: 15, label: "Evening" }],
+});
+assert.equal(
+  discountedHorizonEndMs(eveningBandConfig, new Date(2026, 6, 11, 18, 0).getTime()),
+  new Date(2026, 6, 11, 20, 0).getTime(),
+);
+assert.equal(
+  discountedHorizonEndMs(eveningBandConfig, new Date(2026, 6, 11, 21, 0).getTime()),
+  new Date(2026, 6, 11, 21, 0).getTime(),
+);
 
 const rebaseNow = new Date(2026, 6, 11, 23, 30);
 

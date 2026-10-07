@@ -103,3 +103,14 @@ export function discountedBandOccurrence(config: TariffConfig, now: Date = new D
   return discountedBandOccurrences(config, now)
     .find((occurrence) => new Date(occurrence.start).getTime() <= time && time < new Date(occurrence.end).getTime()) ?? null;
 }
+
+/**
+ * The planning horizon for a sunset: normally the sunset itself, but extended to
+ * the end of the discounted window that spans sunset so a cheap window running
+ * past sunset is not truncated.
+ */
+export function discountedHorizonEndMs(config: TariffConfig, sunsetTimestamp: number): number {
+  const occurrence = discountedBandOccurrence(config, new Date(sunsetTimestamp - 1));
+  const endMs = occurrence ? new Date(occurrence.end).getTime() : Number.NaN;
+  return Number.isFinite(endMs) && endMs > sunsetTimestamp ? endMs : sunsetTimestamp;
+}
