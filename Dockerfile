@@ -69,10 +69,9 @@ ENV NODE_ENV=production
 ENV HOST=127.0.0.1
 ENV PORT=8787
 ENV HTTPS_PORT=443
-ENV XDG_DATA_HOME=/data/caddy
-ENV XDG_CONFIG_HOME=/data/caddy
 # Mutable config, schedules, and history are mounted here so image rebuilds do
-# not erase a user's local device addresses or recorded readings.
+# not erase a user's local device addresses or recorded readings. Caddy state
+# lives under DATA_DIR/caddy and is derived by the entrypoint.
 ENV DATA_DIR=/data
 ENV TZ=UTC
 

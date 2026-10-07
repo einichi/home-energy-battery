@@ -14,12 +14,16 @@ fi
 
 # Caddy starts with an admin-only base config and is reconfigured by the app
 # through its Admin API. Persistence is disabled in the app-provided config so
-# DNS credentials are never written to disk by Caddy.
-mkdir -p /data/caddy
-cat > /data/caddy/base.Caddyfile <<'EOF'
+# DNS credentials are never written to disk by Caddy. All Caddy state lives in
+# DATA_DIR/caddy so it persists alongside the rest of the application data.
+CADDY_DIR="${DATA_DIR:-/data}/caddy"
+mkdir -p "$CADDY_DIR"
+export XDG_DATA_HOME="$CADDY_DIR"
+export XDG_CONFIG_HOME="$CADDY_DIR"
+cat > "$CADDY_DIR/base.Caddyfile" <<EOF
 {
 	admin 127.0.0.1:2019
-	storage file_system /data/caddy
+	storage file_system ${CADDY_DIR}
 	persist_config off
 	auto_https disable_redirects
 }
@@ -29,7 +33,7 @@ CADDY_PID=
 if command -v caddy >/dev/null 2>&1; then
   (
     while :; do
-      caddy run --config /data/caddy/base.Caddyfile --adapter caddyfile || true
+      caddy run --config "$CADDY_DIR/base.Caddyfile" --adapter caddyfile || true
       echo "caddy exited; restarting in 2s" >&2
       sleep 2
     done
