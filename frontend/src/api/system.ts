@@ -3,7 +3,11 @@ import type { DatabaseBackupsView, DiscoveryJob, HistoryStats, NotificationView 
 
 export const getNotifications = (signal?: AbortSignal) => getJson<NotificationView>("/api/notifications", signal);
 export const saveNotifications = (body: unknown) => sendJson<NotificationView>("/api/notifications", "PUT", body);
-export const testNotifications = () => sendJson<NotificationView>("/api/notifications/test", "POST", {});
+export type NotificationTestResult = {
+  ok: boolean;
+  attempts: Array<{ channelId: string; ok: boolean; at: string; result?: unknown; error?: string }>;
+};
+export const testNotifications = () => sendJson<NotificationTestResult>("/api/notifications/test", "POST", {});
 export const getHistoryStats = (signal?: AbortSignal) => getJson<HistoryStats>("/api/history/stats", signal);
 export const trimHistory = (retention: unknown) => sendJson<HistoryStats>("/api/history/trim", "POST", { retention });
 export const getDatabaseBackups = (signal?: AbortSignal) => getJson<DatabaseBackupsView>("/api/database-backups", signal);

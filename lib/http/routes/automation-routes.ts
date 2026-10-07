@@ -11,7 +11,13 @@ type AutomationRouteDependencies = Pick<ApiDependencies,
   | "writeAutomationRuleStates" | "writeAutomationRules"
 >;
 
-function applySchedulePatch(existing: BatterySchedule, body: Record<string, unknown>): void {
+function normalizeScheduleDays(value: unknown, allDays: number[]): number[] {
+  if (!Array.isArray(value)) return allDays;
+  const days = value.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6);
+  return days.length ? days : allDays;
+}
+
+function applySchedulePatch(existing: BatterySchedule, body: Record<string, unknown>, allDays: number[]): void {
   // Only user-editable fields may be patched; never allow id, running state,
   // executionIntent, completion, or run-history fields to be overwritten.
   if (typeof body.name === "string") existing.name = body.name;
@@ -19,7 +25,7 @@ function applySchedulePatch(existing: BatterySchedule, body: Record<string, unkn
   if ("payload" in body) existing.payload = body.payload;
   if (body.repeat === "daily" || body.repeat === "once") existing.repeat = body.repeat;
   if (Array.isArray(body.days)) {
-    existing.days = body.days.map(Number).filter((day: number) => day >= 0 && day <= 6);
+    existing.days = normalizeScheduleDays(body.days, allDays);
   }
   if (typeof body.time === "string") existing.time = body.time;
   if (typeof body.runAt === "string") existing.runAt = body.runAt;
@@ -99,7 +105,7 @@ export function createAutomationRouteHandler(dependencies: AutomationRouteDepend
         action: String(body.action || ""),
         payload: body.payload || {},
         repeat: body.repeat === "daily" ? "daily" : "once",
-        days: Array.isArray(body.days) && body.days.length ? body.days.map(Number).filter((day: number) => day >= 0 && day <= 6) : ALL_DAYS,
+        days: normalizeScheduleDays(body.days, ALL_DAYS),
         time: typeof body.time === "string" ? body.time : undefined,
         runAt: typeof body.runAt === "string" ? body.runAt : undefined,
         enabled: body.enabled !== false,
@@ -121,7 +127,7 @@ export function createAutomationRouteHandler(dependencies: AutomationRouteDepend
       const schedule = await mutateSchedules((schedules: BatterySchedule[]) => {
         const existing = schedules.find((item) => item.id === id);
         if (!existing) return null;
-        applySchedulePatch(existing, body);
+        applySchedulePatch(existing, body, ALL_DAYS);
         existing.runAt = parseRunAt(existing);
         return existing;
       });

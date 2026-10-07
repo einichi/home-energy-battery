@@ -100,7 +100,7 @@ export function createDeviceCommandService(dependencies: DeviceCommandServiceDep
       case "charge":
       case "discharge": {
         const args: DeviceCommandArguments = { host };
-        if (payload.targetWh !== undefined && payload.targetWh !== "") args["target-wh"] = numberInRange(payload.targetWh, "targetWh", 0, 999999999);
+        if (payload.targetWh !== undefined && payload.targetWh !== null && payload.targetWh !== "") args["target-wh"] = numberInRange(payload.targetWh, "targetWh", 0, 999999999);
         return assertDeviceCommandResult(await dependencies.runDeviceCommand(action, args), `${action} request`, dependencies.invalidateStatus);
       }
       default:

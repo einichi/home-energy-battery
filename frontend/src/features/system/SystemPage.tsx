@@ -70,6 +70,11 @@ function entries(value: FormDataEntryValue | null) {
 function optionalNumber(value: FormDataEntryValue | null) {
   return String(value ?? "") === "" ? null : Number(value);
 }
+function positiveNumberOr(value: FormDataEntryValue | null, fallback: number | null | undefined) {
+  const number = Number(value);
+  // Keep the current value (including an explicit null = unlimited) on blank input.
+  return Number.isFinite(number) && number >= 1 ? Math.round(number) : fallback;
+}
 function bytes(value?: number) {
   if (!Number.isFinite(value)) return "Unavailable";
   const units = ["B", "KB", "MB", "GB"];
@@ -1278,13 +1283,13 @@ function DataSettings({
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     const next = {
-      rawTelemetryDays: Number(data.get("raw")),
+      rawTelemetryDays: positiveNumberOr(data.get("raw"), retention.rawTelemetryDays),
       intervalAggregatesDays: optionalNumber(data.get("interval")),
       dailyAggregatesDays: optionalNumber(data.get("daily")),
       adaptiveChargingHistoryDays: optionalNumber(data.get("adaptive")),
       automationEventDays: optionalNumber(data.get("automation")),
       commandReceiptDays: optionalNumber(data.get("commands")),
-      notificationDeliveryDays: Number(data.get("notifications")),
+      notificationDeliveryDays: positiveNumberOr(data.get("notifications"), retention.notificationDeliveryDays),
       automaticMaintenance: data.has("automatic"),
     };
     const intent = (event.nativeEvent as SubmitEvent).submitter?.getAttribute(

@@ -236,6 +236,9 @@ export function migrateHistorySchema(database: DatabaseSync, versions: HistorySc
     setMetadata.run("schemaVersion", JSON.stringify(versions.schemaVersion));
     setMetadata.run("energyCalculationVersion", JSON.stringify(versions.energyCalculationVersion));
     setMetadata.run("architectureVersion", JSON.stringify(versions.architectureVersion));
+    // Record when the v7 sample dedupe/compaction ran so the statistics view can
+    // report it; fresh and already-v8 databases legitimately have no value.
+    setMetadata.run("compaction:schema-v7", JSON.stringify({ completedAt: new Date().toISOString() }));
     database.exec("COMMIT");
   } catch (error: unknown) {
     database.exec("ROLLBACK");

@@ -152,6 +152,13 @@ try {
   assert.equal(invalidDiscoveryRequest.response.status, 400);
   assert.match(invalidDiscoveryRequest.payload.error, /RFC1918/);
 
+  const invalidDiscoveryMode = await request(baseUrl, "/api/discovery/jobs", {
+    method: "POST",
+    body: { mode: "banana" },
+  });
+  assert.equal(invalidDiscoveryMode.response.status, 400);
+  assert.match(invalidDiscoveryMode.payload.error, /broadcast or active/);
+
   const invalidSmtpRequest = await request(baseUrl, "/api/notifications", {
     method: "PUT",
     body: {

@@ -198,6 +198,9 @@ export function createSystemRouteHandler(dependencies: SystemRouteDependencies) 
     }
     if (req.method === "POST" && url.pathname === "/api/discovery/jobs") {
       const body = await readBody(req);
+      if (body.mode !== undefined && body.mode !== "broadcast" && body.mode !== "active") {
+        throw requestError(400, "discovery mode must be broadcast or active");
+      }
       const mode = typeof body.mode === "string" ? body.mode : undefined;
       return json(res, 202, discoveryService.startJob(body.timeout, mode, body.subnets));
     }

@@ -316,8 +316,14 @@ export function createHistoryQueryRepository({
     const result: SolarForecastHour[] = [];
     for (const row of rows) {
       const record = objectValue(parseJson(row.payload_json));
-      if (!record || typeof record.timestamp !== "string" || !Number.isFinite(Number(record.tiltedIrradianceWm2))) continue;
-      result.push(record as unknown as SolarForecastHour);
+      if (!record || !Number.isFinite(Number(record.tiltedIrradianceWm2))) continue;
+      // Match insertWeather's canonical-time precedence (non-empty `time`, then
+      // non-empty `timestamp`) and normalise it to `timestamp` for consumers.
+      const timestamp = (typeof record.time === "string" && record.time)
+        || (typeof record.timestamp === "string" && record.timestamp)
+        || null;
+      if (!timestamp) continue;
+      result.push({ ...record, timestamp } as unknown as SolarForecastHour);
     }
     return result;
   }

@@ -1,5 +1,5 @@
 import { getJson, sendJson } from "./client";
-import type { AppConfig, EneFarmReport, EneFarmSummary, EnergyReport, HistoryResponse, HistorySummary, StatusSnapshot } from "./contracts";
+import type { AppConfig, EneFarmReport, EneFarmSummary, EnergyReport, HistoryResponse, StatusSnapshot } from "./contracts";
 
 export function getConfig(signal?: AbortSignal) {
   return getJson<AppConfig>("/api/config", signal);
@@ -16,11 +16,6 @@ export function getStatus(signal?: AbortSignal) {
 export function getHistory(start: Date, end: Date, signal?: AbortSignal) {
   const search = new URLSearchParams({ start: start.toISOString(), end: end.toISOString() });
   return getJson<HistoryResponse>(`/api/history?${search}`, signal);
-}
-
-export function getHistorySummary(start: Date, end: Date, signal?: AbortSignal) {
-  const search = new URLSearchParams({ start: start.toISOString(), end: end.toISOString() });
-  return getJson<HistorySummary>(`/api/history/summary?${search}`, signal);
 }
 
 export function getEneFarm(start: Date, end: Date, signal?: AbortSignal) {

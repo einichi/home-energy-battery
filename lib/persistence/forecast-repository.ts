@@ -245,7 +245,7 @@ export function createForecastRepository(dependencies: ForecastRepositoryDepende
     `);
     let inserted = 0;
     for (const record of records) {
-      const time = record.time ?? record.timestamp;
+      const time = record.time || record.timestamp;
       const timeMs = timestampMs(time);
       if (timeMs === null) continue;
       statement.run(timeMs, String(time ?? ""), JSON.stringify(record));

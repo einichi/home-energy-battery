@@ -32,11 +32,6 @@ interface Dependencies {
   metadataGet<T>(key: string, fallback: T): T;
 }
 
-function timestampMs(value: unknown): number | null {
-  const time = new Date(String(value ?? "")).getTime();
-  return Number.isFinite(time) ? time : null;
-}
-
 function countRows(database: DatabaseSync, sql: string): number {
   const row = database.prepare(sql).get() as { count?: unknown } | undefined;
   return Number(row?.count ?? 0);
@@ -68,9 +63,12 @@ export function createHistoryStatisticsRepository(dependencies: Dependencies) {
       const value = row as Record<string, unknown>;
       return [String(value.category ?? ""), Number(value.count)] as const;
     }));
-    const earliestMs = timestampMs(raw.earliest);
-    const latestMs = timestampMs(raw.latest);
-    const daysRecorded = earliestMs !== null && latestMs !== null ? Math.max(0, (latestMs - earliestMs) / 86_400_000) : 0;
+    // Count the distinct local calendar days that actually hold samples rather
+    // than the earliest..latest span, so gaps do not distort the growth estimate.
+    const daysRow = database.prepare(
+      "SELECT COUNT(DISTINCT strftime('%Y-%m-%d', timestamp_ms / 1000, 'unixepoch', 'localtime')) AS days FROM samples",
+    ).get() as { days?: unknown };
+    const daysRecorded = Number(daysRow?.days ?? 0);
     const payload = database.prepare("SELECT COALESCE(AVG(LENGTH(payload_json)), 0) AS average_bytes FROM (SELECT payload_json FROM samples ORDER BY id DESC LIMIT 1000)").get() as Record<string, unknown>;
     const fileSizes = await databaseFileSizes();
     const averageSampleBytes = Number(payload.average_bytes ?? 0);
