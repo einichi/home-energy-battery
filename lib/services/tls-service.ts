@@ -321,9 +321,9 @@ export function createTlsService(options: TlsServiceOptions) {
     const incoming = record(input.secrets);
     const next: TlsSecrets = { ...secrets };
     const assign = (key: keyof TlsSecrets, value: unknown) => {
-      if (value === undefined) return;
-      if (value === null || String(value) === "") delete next[key];
-      else next[key] = String(value).trim();
+      // A blank field means "keep the saved value"; use clearSecrets to remove.
+      if (value === undefined || value === null || String(value) === "") return;
+      next[key] = String(value).trim();
     };
     assign("cloudflareApiToken", incoming.cloudflareApiToken);
     assign("route53AccessKeyId", incoming.route53AccessKeyId);

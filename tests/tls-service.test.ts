@@ -135,6 +135,13 @@ try {
   const secrets = JSON.parse(await readFile(path.join(dataDir, "tls-secrets.json"), "utf8"));
   assert.equal(secrets.cloudflareApiToken, "secret-value");
 
+  // A blank secret field keeps the saved credential (the UI's "leave blank to
+  // keep" contract); only clearSecrets removes it.
+  const kept = await service.update({ secrets: { cloudflareApiToken: "" } });
+  assert.equal(kept.secrets.cloudflare, true);
+  const secretsAfterKeep = JSON.parse(await readFile(path.join(dataDir, "tls-secrets.json"), "utf8"));
+  assert.equal(secretsAfterKeep.cloudflareApiToken, "secret-value");
+
   // Clearing the hostname removes the trusted host and the HTTPS site.
   const cleared = await service.update({ hostname: null, clearSecrets: true });
   assert.equal(cleared.hostname, null);
