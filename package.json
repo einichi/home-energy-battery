@@ -31,7 +31,8 @@
   "dependencies": {
     "node-echonet-lite": "^0.6.0",
     "nodemailer": "^10.0.12",
-    "tldts": "^7.4.16"
+    "tldts": "^7.4.16",
+    "valibot": "^1.5.0"
   },
   "devDependencies": {
     "react": "^19.3.0",

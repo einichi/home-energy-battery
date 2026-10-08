@@ -7,13 +7,20 @@ describe("API runtime validation", () => {
   });
 
   it("rejects malformed history before it reaches a view", () => {
-    expect(() => validateApiPayload("/api/history", { samples: {}, summary: {} })).toThrow(/samples must be an array/);
+    expect(() => validateApiPayload("/api/history", { samples: {}, summary: {} })).toThrow(/invalid payload at samples/);
   });
 
   it("rejects malformed report and status collections", () => {
     expect(() => validateApiPayload("/api/reports/energy", { buckets: {}, totals: {} })).toThrow(/buckets must be an array/);
-    expect(() => validateApiPayload("/api/status", { read_at: "2026-09-19T00:00:00Z", alerts: {} })).toThrow(/alerts must be an array/);
-    expect(() => validateApiPayload("/api/status", { read_at: "2026-09-19T00:00:00Z", alerts: [{ source: 7 }] })).toThrow(/source must be a string/);
+    expect(() => validateApiPayload("/api/status", { read_at: "2026-09-19T00:00:00Z", alerts: {} })).toThrow(/invalid payload at alerts/);
+    expect(() => validateApiPayload("/api/status", { read_at: "2026-09-19T00:00:00Z", alerts: [{ id: "one", severity: "warning", title: "t", startedAt: "now", impact: "i", suggestedAction: "a", resolution: "active", source: 7 }] })).toThrow(/invalid payload at alerts.0.source/);
+  });
+
+  it("validates config and accepted status/history payloads with shared schemas", () => {
+    expect(() => validateApiPayload("/api/config", { updateIntervalSeconds: 15, language: "en", solarEnabled: true, smartCosmoEnabled: true, fuelCellEnabled: false })).not.toThrow();
+    expect(() => validateApiPayload("/api/status", { alerts: [] })).not.toThrow();
+    expect(() => validateApiPayload("/api/history", { samples: [], summary: {} })).not.toThrow();
+    expect(() => validateApiPayload("/api/config", { updateIntervalSeconds: "15", language: "en", solarEnabled: true, smartCosmoEnabled: true, fuelCellEnabled: false })).toThrow(/updateIntervalSeconds/);
   });
 
   it("accepts object responses from collection mutations", () => {

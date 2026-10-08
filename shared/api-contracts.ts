@@ -1,3 +1,6 @@
+import type { AppConfig } from "./api-schemas.js";
+export type { AppConfig, HistoryResponse, StatusSnapshot } from "./api-schemas.js";
+
 export type Metric<T = number> = {
   value?: T | null;
   human?: string | null;
@@ -200,11 +203,6 @@ export type HistorySummary = {
   solarCoveragePercent?: number | null;
 };
 
-export type HistoryResponse = {
-  samples: EnergySample[];
-  summary: HistorySummary;
-};
-
 export type EnergyReportBucket = HistorySummary & {
   key: string;
   label: string;
@@ -246,54 +244,6 @@ export type EneFarmReport = {
   buckets: EneFarmReportBucket[];
   totals: EneFarmReportBucket;
   estimateNotice?: string;
-};
-
-export type StatusSnapshot = {
-  read_at?: string;
-  live_power?: {
-    started_at?: string | null;
-    completed_at?: string | null;
-    duration_ms?: number | null;
-    errors?: Array<{ error?: string | null }>;
-    error?: string | null;
-  };
-  statusRefreshPaused?: boolean;
-  statusRefreshPausedReason?: string | null;
-  alerts?: SystemAlert[];
-  hosts?: { battery?: string | null };
-  energy?: {
-    battery?: BatteryStatus;
-    solar?: { configured?: boolean; instant_power?: Metric<number>; error?: string | null };
-    fuel_cells?: FuelCellStatus[];
-    error?: string | null;
-    errors?: Array<{ error?: string | null }>;
-  };
-  meter?: {
-    configured?: boolean;
-    branch_demand_power?: Metric<number>;
-    home_load_power?: Metric<number>;
-    home_load_source?: "derived" | "branch_fallback" | "unavailable" | "inconsistent";
-    home_load_missing?: string[];
-    grid_import_power?: Metric<number>;
-    grid_export_power?: Metric<number>;
-    channel_power?: { decoded?: { channels?: Array<{ channel: number; value?: number | null }> } };
-    error?: string | null;
-    errors?: Array<{ error?: string | null }>;
-  };
-  settings?: {
-    mode?: { decoded?: { mode?: string | null }; mode?: string | null; error?: string | null };
-    discharge_limit?: { decoded?: { percent?: number | null }; available?: boolean; error?: string | null };
-    osaifu_charge_window?: { decoded?: BatteryWindow; available?: boolean; error?: string | null };
-    osaifu_discharge_window?: { decoded?: BatteryWindow; available?: boolean; error?: string | null };
-  };
-  batteryStrategy?: BatteryStrategy;
-  savings?: SavingsSummary;
-  savingsPeriods?: {
-    today?: SavingsSummary;
-    lastMonth?: SavingsSummary;
-    month?: SavingsSummary;
-    year?: SavingsSummary;
-  };
 };
 
 export type SystemAlert = {
@@ -350,52 +300,6 @@ export type RuntimeInformation = {
       itemCounts?: Record<string, number>;
       secretsBackedUp?: boolean;
     };
-  };
-};
-
-export type AppConfig = {
-  port?: number;
-  updateIntervalSeconds: number;
-  language: "en" | "ja";
-  solarEnabled: boolean;
-  smartCosmoEnabled: boolean;
-  fuelCellEnabled: boolean;
-  rateMode?: "simple" | "offPeak" | "multi";
-  runtime?: RuntimeInformation;
-  batteryHost?: string;
-  meterHost?: string;
-  meterEoj?: string;
-  solarHost?: string;
-  fuelCellPrimaryHost?: string;
-  fuelCellProxyHosts?: string[];
-  discoverySubnets?: string[];
-  circuitLabels?: Record<string, string>;
-  circuitDashboardVisibility?: Record<string, boolean>;
-  circuitSortMode?: "number" | "current" | "accumulated";
-  standardRateYenPerKwh?: number;
-  offPeakRateYenPerKwh?: number;
-  offPeakSavingsEnabled?: boolean;
-  co2TonnesPerKwh?: number;
-  rateBands?: Array<{ start: string; end: string; yenPerKwh: number; label?: string }>;
-  fuelCell?: {
-    includeInAdaptiveCharging?: boolean;
-    gasCo2KgPerM3?: number;
-    tariff?: { provider?: string; region?: string; plan?: string; equipmentDiscount?: string; meterReadingDay?: number; automaticUpdates?: boolean; marginalRateOverrideYenPerM3?: number | null };
-  };
-  retention?: { rawTelemetryDays?: number | null; intervalAggregatesDays?: number | null; dailyAggregatesDays?: number | null; adaptiveChargingHistoryDays?: number | null; automationEventDays?: number | null; commandReceiptDays?: number | null; notificationDeliveryDays?: number | null; automaticMaintenance?: boolean };
-  dashboardWidgets?: Array<{ id: string; group?: string; visible: boolean; priority?: number }>;
-  notifications?: NotificationConfig;
-  batteryCapabilities?: { usableCapacityKwh?: number | null; maximumChargeWatts?: number | null; roundTripEfficiency?: number | null };
-  adaptiveCharging?: {
-    enabled?: boolean;
-    latitude?: number | null;
-    longitude?: number | null;
-    arrayPeakKw?: number | null;
-    panelTiltDegrees?: number | null;
-    panelAzimuthDegrees?: number | null;
-    systemLossPercent?: number | null;
-    targetSocPercent?: number | null;
-    forecastMarginPercent?: number | null;
   };
 };
 

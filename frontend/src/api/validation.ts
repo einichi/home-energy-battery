@@ -1,12 +1,11 @@
+import * as v from "valibot";
+import { AppConfigSchema, HistoryResponseSchema, StatusSnapshotSchema } from "../../../shared/api-schemas";
+
 type JsonObject = Record<string, unknown>;
 
 function object(value: unknown, label: string): JsonObject {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} returned an invalid object`);
   return value as JsonObject;
-}
-
-function optionalString(value: unknown, label: string) {
-  if (value !== undefined && value !== null && typeof value !== "string") throw new Error(`${label} must be a string`);
 }
 
 function optionalNumber(value: unknown, label: string) {
@@ -24,37 +23,29 @@ function validateHistorySummary(value: unknown) {
 
 export function validateApiPayload(url: string, payload: unknown, method = "GET") {
   const pathname = new URL(url, window.location.origin).pathname;
+  const schema = pathname === "/api/config"
+    ? AppConfigSchema
+    : pathname === "/api/status"
+      ? StatusSnapshotSchema
+      : pathname === "/api/history"
+        ? HistoryResponseSchema
+        : null;
+  if (schema) {
+    // Validate without replacing the original payload: unknown response fields are intentionally preserved for consumers.
+    const result = v.safeParse(schema, payload);
+    if (!result.success) {
+      const issue = result.issues[0];
+      const path = issue?.path?.map((item) => String(item.key)).join(".");
+      throw new Error(`${pathname} returned an invalid payload${path ? ` at ${path}` : ""}: ${issue?.message ?? "schema mismatch"}`);
+    }
+    return;
+  }
   if (method === "GET" && (pathname === "/api/automation-rules" || pathname === "/api/schedules")) {
     if (!Array.isArray(payload)) throw new Error(`${pathname} returned an invalid list`);
     return;
   }
   const value = object(payload, pathname);
-  if (pathname === "/api/config") {
-    optionalNumber(value.updateIntervalSeconds, "Refresh interval");
-    optionalString(value.language, "Language");
-    if (value.dashboardWidgets !== undefined && !Array.isArray(value.dashboardWidgets)) throw new Error("Dashboard widgets must be an array");
-  } else if (pathname === "/api/status") {
-    optionalString(value.read_at, "Status timestamp");
-    if (value.energy !== undefined) object(value.energy, "Energy status");
-    if (value.meter !== undefined) object(value.meter, "Meter status");
-    if (value.alerts !== undefined) {
-      if (!Array.isArray(value.alerts)) throw new Error("System alerts must be an array");
-      value.alerts.forEach((entry, index) => {
-        const alert = object(entry, `System alert ${index + 1}`);
-        optionalString(alert.id, `System alert ${index + 1} id`);
-        optionalString(alert.source, `System alert ${index + 1} source`);
-        optionalString(alert.severity, `System alert ${index + 1} severity`);
-        optionalString(alert.title, `System alert ${index + 1} title`);
-        optionalString(alert.startedAt, `System alert ${index + 1} start time`);
-        optionalString(alert.impact, `System alert ${index + 1} impact`);
-        optionalString(alert.suggestedAction, `System alert ${index + 1} suggested action`);
-        optionalString(alert.resolution, `System alert ${index + 1} resolution`);
-      });
-    }
-  } else if (pathname === "/api/history") {
-    if (!Array.isArray(value.samples)) throw new Error("History samples must be an array");
-    validateHistorySummary(value.summary);
-  } else if (pathname === "/api/history/summary") {
+  if (pathname === "/api/history/summary") {
     validateHistorySummary(value);
   } else if (pathname.startsWith("/api/reports/")) {
     if (!Array.isArray(value.buckets)) throw new Error("Report buckets must be an array");
