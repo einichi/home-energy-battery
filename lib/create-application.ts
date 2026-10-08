@@ -58,7 +58,6 @@ import type { AutomationRule } from "./domain/automation-rules.js";
 import { backupPreparationBlocksActions, backupPreparationView } from "./domain/operational-overrides.js";
 import {
   adaptiveChargingAvailability,
-  buildAdaptiveChargingPlan,
   forecastIsFresh,
 } from "./domain/adaptive-planning.js";
 import {
@@ -66,9 +65,7 @@ import {
 } from "./domain/adaptive-state.js";
 import {
   adaptiveChargingConfiguredActive,
-  adaptiveChargingPlanLogMessage,
   adaptiveChargingScheduledEvent,
-  applyInterruptedChargeCap,
   queueAdaptiveChargingPlanRefresh,
 } from "./domain/adaptive-control.js";
 import {
@@ -667,17 +664,14 @@ const api = createApiHandler({
   },
   operations: {
     adaptiveChargingAvailability,
-    adaptiveChargingPlanLogMessage,
     adaptiveChargingScheduledEvent,
     adaptiveChargingSolarForecastAccuracy,
     adaptiveChargingView,
     appendAdaptiveChargingLog,
-    applyInterruptedChargeCap,
     assertActionAllowedByOperationalOverride,
     awayPeriodsView,
     awayTimestamp,
     backupPreparationView,
-    buildAdaptiveChargingPlan,
     cleanNewAwayPeriod,
     createAwayPeriod,
     endBackupPreparation: backupPreparationService.end,
@@ -695,6 +689,7 @@ const api = createApiHandler({
     readConfig,
     readOperationalOverridesState,
     recordFuelCellPlanForecast,
+    recordPlanSnapshot: historyStore.recordAdaptivePlanSnapshot,
     refreshAdaptiveChargingForecast,
     refreshBatteryLearning,
     resumeAdaptiveCharging: (now) => {

@@ -4,7 +4,7 @@ import type { AdaptiveChargingState, AdaptivePlan } from "../domain/adaptive-sta
 import type { DemandDay } from "../domain/demand-forecast.js";
 import type { SolarForecastHour } from "../domain/solar-forecast.js";
 import { buildAdaptiveChargingPlan } from "../domain/adaptive-planning.js";
-import { adaptiveChargingPlanLogMessage, applyInterruptedChargeCap, adaptiveChargingPlanRefreshDecision } from "../domain/adaptive-control.js";
+import { adaptiveChargingPlanLogMessage, applyInterruptedChargeCap } from "../domain/adaptive-control.js";
 import { CURRENT_BACKTEST_MODEL } from "../domain/backtesting.js";
 import { numericMetric } from "../domain/telemetry.js";
 import type { AdaptiveEvaluationStatus } from "./automation-orchestrator.js";
@@ -13,7 +13,10 @@ import type { createAdaptiveForecastService } from "./adaptive-forecast-service.
 
 type AdaptiveHistory = ReturnType<typeof createAdaptiveHistoryService>;
 type AdaptiveForecast = ReturnType<typeof createAdaptiveForecastService>;
-type RefreshDecision = ReturnType<typeof adaptiveChargingPlanRefreshDecision>;
+export interface AdaptivePlanRefreshDecision {
+  eventKey?: string | null;
+  trigger?: string;
+}
 
 export interface PlanSnapshotRecorderInput {
   createdAt: string;
@@ -38,21 +41,23 @@ export interface AdaptivePlanRefreshDependencies {
 export async function refreshAdaptivePlan(
   state: AdaptiveChargingState,
   config: ApplicationConfig,
-  status: AdaptiveEvaluationStatus,
+  status: AdaptiveEvaluationStatus | null,
   awayPeriods: AwayPeriod[],
-  decision: RefreshDecision,
+  decision: AdaptivePlanRefreshDecision,
   now: Date,
   dependencies: AdaptivePlanRefreshDependencies,
 ): Promise<AdaptiveChargingState> {
   const samples = await dependencies.readHistory(now);
-  const liveSoc = numericMetric(status.energy?.battery?.remaining_percent);
-  samples.push({
-    timestamp: now.toISOString(),
-    stateOfChargePercent: liveSoc,
-    batteryPowerW: numericMetric(status.energy?.battery?.instant_power),
-    solarPowerW: numericMetric(status.energy?.solar?.instant_power),
-    branchDemandW: numericMetric(status.meter?.branch_demand_power),
-  });
+  const liveSoc = status ? numericMetric(status.energy?.battery?.remaining_percent) : null;
+  if (status) {
+    samples.push({
+      timestamp: now.toISOString(),
+      stateOfChargePercent: liveSoc,
+      batteryPowerW: numericMetric(status.energy?.battery?.instant_power),
+      solarPowerW: numericMetric(status.energy?.solar?.instant_power),
+      branchDemandW: numericMetric(status.meter?.branch_demand_power),
+    });
+  }
   state = {
     ...state,
     historicalWeather: dependencies.historicalWeather(),
@@ -94,7 +99,7 @@ export async function refreshAdaptivePlan(
   }
   dependencies.appendLog(
     state,
-    adaptiveChargingPlanLogMessage(state.plan, decision.trigger, liveSoc),
+    adaptiveChargingPlanLogMessage(state.plan, decision.trigger ?? "scheduled", liveSoc ?? state.plan?.currentSocPercent ?? null),
     state.plan?.warning ? "warning" : "plan",
     now,
   );

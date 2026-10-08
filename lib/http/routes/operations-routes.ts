@@ -4,17 +4,18 @@ import type { ApiRouteServices } from "../api.js";
 import type { AwayPeriodsView } from "../../../shared/api-contracts.js";
 import { AwayPeriodRequestSchema, AwayUntilRequestSchema, BackupPreparationRequestSchema, EmptyRequestSchema } from "../../../shared/api-schemas.js";
 import { validateRequestBody } from "../request-validation.js";
+import { refreshAdaptivePlan } from "../../services/adaptive-plan-refresh.js";
 
 export type OperationsRouteDependencies = Pick<ApiRouteServices,
-  | "adaptiveChargingAvailability" | "adaptiveChargingPlanLogMessage" | "adaptiveChargingScheduledEvent"
+  | "adaptiveChargingAvailability" | "adaptiveChargingScheduledEvent"
   | "adaptiveChargingSolarForecastAccuracy" | "adaptiveChargingView" | "appendAdaptiveChargingLog"
-  | "applyInterruptedChargeCap" | "assertActionAllowedByOperationalOverride" | "awayPeriodsView"
-  | "awayTimestamp" | "backupPreparationView" | "buildAdaptiveChargingPlan" | "cleanNewAwayPeriod"
+  | "assertActionAllowedByOperationalOverride" | "awayPeriodsView"
+  | "awayTimestamp" | "backupPreparationView" | "cleanNewAwayPeriod"
   | "createAwayPeriod" | "endBackupPreparation" | "ensureAwayPeriodDoesNotOverlap" | "findAwayPeriod"
   | "forecastIsFresh" | "historicalWeather" | "listAwayPeriods" | "removeAwayPeriod"
   | "http" | "queueAdaptiveChargingForAwayChange" | "readAdaptiveChargingDemandProfileDays"
   | "readAdaptiveChargingHistory" | "readAdaptiveChargingState" | "readAutomationRules"
-  | "readConfig" | "readOperationalOverridesState" | "recordFuelCellPlanForecast"
+  | "readConfig" | "readOperationalOverridesState" | "recordFuelCellPlanForecast" | "recordPlanSnapshot"
   | "refreshAdaptiveChargingForecast" | "refreshBatteryLearning"
   | "resumeAdaptiveCharging" | "startBackupPreparation" | "updateAwayPeriod" | "writeAdaptiveChargingState"
 >;
@@ -22,15 +23,15 @@ export type OperationsRouteDependencies = Pick<ApiRouteServices,
 export function createOperationsRouteHandler(dependencies: OperationsRouteDependencies) {
   const { json, readBody, requestError } = dependencies.http;
   const {
-    adaptiveChargingAvailability, adaptiveChargingPlanLogMessage, adaptiveChargingScheduledEvent,
+    adaptiveChargingAvailability, adaptiveChargingScheduledEvent,
     adaptiveChargingSolarForecastAccuracy, adaptiveChargingView, appendAdaptiveChargingLog,
-    applyInterruptedChargeCap, assertActionAllowedByOperationalOverride, awayPeriodsView,
-    awayTimestamp, backupPreparationView, buildAdaptiveChargingPlan, cleanNewAwayPeriod, createAwayPeriod,
+    assertActionAllowedByOperationalOverride, awayPeriodsView,
+    awayTimestamp, backupPreparationView, cleanNewAwayPeriod, createAwayPeriod,
     endBackupPreparation, ensureAwayPeriodDoesNotOverlap, findAwayPeriod, forecastIsFresh, historicalWeather,
     listAwayPeriods, removeAwayPeriod,
     queueAdaptiveChargingForAwayChange, readAdaptiveChargingDemandProfileDays, readAdaptiveChargingHistory,
     readAdaptiveChargingState, readAutomationRules, readConfig, readOperationalOverridesState,
-    recordFuelCellPlanForecast, refreshAdaptiveChargingForecast, refreshBatteryLearning,
+    recordFuelCellPlanForecast, recordPlanSnapshot, refreshAdaptiveChargingForecast, refreshBatteryLearning,
     resumeAdaptiveCharging, startBackupPreparation, updateAwayPeriod, writeAdaptiveChargingState,
   } = dependencies;
 
@@ -116,37 +117,20 @@ export function createOperationsRouteHandler(dependencies: OperationsRouteDepend
       if (!state.forecast || !forecastIsFresh(state.forecast, now) || state.lastForecastError) {
         return json(res, 503, adaptiveChargingView(config, state, rules));
       }
-      const samples = await readAdaptiveChargingHistory(now);
-      state = {
-        ...state,
-        historicalWeather: historicalWeather(),
-        solarForecastAccuracy: adaptiveChargingSolarForecastAccuracy(now),
-      };
-      await refreshBatteryLearning(config, state, now);
-      const historicalDemandDays = await readAdaptiveChargingDemandProfileDays();
       const awayPeriods = listAwayPeriods(true, now.getTime());
-      state.plan = buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDays, awayPeriods, now });
-      recordFuelCellPlanForecast(state.plan, now);
-      state.lastPlanEventKey = adaptiveChargingScheduledEvent(config, now).eventKey ?? `manual:${now.toISOString()}`;
-      state.pendingPlanReason = null;
-      state.pendingPlanRequestId = null;
-      state.pendingPlanRequestedAt = null;
-      if (state.interruptedCharge) {
-        const capped = applyInterruptedChargeCap(
-          state.plan,
-          state.interruptedCharge,
-          config.batteryCapabilities.maximumChargeWatts,
-          now,
-        );
-        state.plan = capped.plan;
-        state.interruptedCharge = capped.interruption;
-      }
-      appendAdaptiveChargingLog(
-        state,
-        adaptiveChargingPlanLogMessage(state.plan, "manual request", state.plan.currentSocPercent),
-        state.plan.warning ? "warning" : "plan",
-        now,
-      );
+      state = await refreshAdaptivePlan(state, config, null, awayPeriods, {
+        eventKey: adaptiveChargingScheduledEvent(config, now).eventKey ?? `manual:${now.toISOString()}`,
+        trigger: "manual request",
+      }, now, {
+        readHistory: readAdaptiveChargingHistory,
+        historicalWeather,
+        solarForecastAccuracy: adaptiveChargingSolarForecastAccuracy,
+        refreshBatteryLearning,
+        readDemandProfileDays: readAdaptiveChargingDemandProfileDays,
+        recordFuelCellPlanForecast,
+        recordPlanSnapshot,
+        appendLog: appendAdaptiveChargingLog,
+      });
       state = await writeAdaptiveChargingState(state);
       return json(res, 200, adaptiveChargingView(config, state, rules));
     }

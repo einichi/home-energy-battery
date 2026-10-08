@@ -47,20 +47,17 @@ export interface ApiRouteServices {
   UI_DEVELOPMENT_MODE: boolean;
   adaptiveChargingAvailability: typeof import("../domain/adaptive-planning.js").adaptiveChargingAvailability;
   adaptiveChargingConfiguredActive: typeof import("../domain/adaptive-control.js").adaptiveChargingConfiguredActive;
-  adaptiveChargingPlanLogMessage: typeof import("../domain/adaptive-control.js").adaptiveChargingPlanLogMessage;
   adaptiveChargingScheduledEvent: typeof import("../domain/adaptive-control.js").adaptiveChargingScheduledEvent;
   adaptiveChargingSolarForecastAccuracy: AdaptiveForecastService["accuracy"];
   adaptiveChargingView(config: ApplicationConfig, state: AdaptiveChargingState, rules?: AutomationRule[], now?: Date): unknown;
   appendAdaptiveChargingLog: typeof import("../domain/adaptive-state.js").appendAdaptiveChargingLog;
   applicationArchitectureStatus(): NonNullable<RuntimeInformation["architecture"]>;
-  applyInterruptedChargeCap: typeof import("../domain/adaptive-control.js").applyInterruptedChargeCap;
   assertActionAllowedByOperationalOverride(source: string, action: string): Promise<void>;
   awayPeriodsView: AwayPeriodService["view"];
   awayTimestamp: AwayPeriodService["timestamp"];
   backupPreparationView: typeof import("../domain/operational-overrides.js").backupPreparationView;
   batteryStrategyView(now?: Date): Promise<BatteryStrategy>;
   backtestService: BacktestService;
-  buildAdaptiveChargingPlan: typeof import("../domain/adaptive-planning.js").buildAdaptiveChargingPlan;
   cleanAutomationRule: typeof import("../domain/automation-rules.js").cleanAutomationRule;
   cleanNewAwayPeriod: AwayPeriodService["cleanNew"];
   createAwayPeriod: AwayPeriodService["create"];
@@ -106,6 +103,7 @@ export interface ApiRouteServices {
   readOperationalOverridesState(): Promise<OperationalOverridesState>;
   readSchedules: ScheduleService["read"];
   recordFuelCellPlanForecast(plan: AdaptivePlan | null, now?: Date): number;
+  recordPlanSnapshot(input: import("../services/adaptive-plan-refresh.js").PlanSnapshotRecorderInput): number;
   recordGasTariffSnapshot: EneFarmReportingService["recordGasTariffSnapshot"];
   readFuelCellTransitions: EneFarmReportingService["transitionsThrough"];
   refreshAdaptiveChargingForecast: AdaptiveForecastService["refresh"];
