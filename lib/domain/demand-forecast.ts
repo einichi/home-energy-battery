@@ -12,12 +12,12 @@ type Occupancy = "all" | "home" | "away";
 
 export interface DemandSample {
   timestamp: string;
-  houseDemandW?: unknown;
+  branchDemandW?: unknown;
   fuelCellPowerW?: unknown;
   fuelCellGenerationState?: unknown;
-  intervalAveragePowerW?: { houseDemandW?: unknown };
-  powerCoverageSeconds?: { houseDemandW?: unknown };
-  coverageSeconds?: { houseDemandKwh?: unknown };
+  intervalAveragePowerW?: { branchDemandW?: unknown };
+  powerCoverageSeconds?: { branchDemandW?: unknown };
+  coverageSeconds?: { branchDemandKwh?: unknown };
   expectedIntervalSeconds?: unknown;
   stateOfChargePercent?: unknown;
   solarPowerW?: unknown;
@@ -134,7 +134,7 @@ export function aggregateDemandDays(
 ): DemandDay[] {
   const days = new Map<string, RawDemandDay>();
   for (const sample of samples) {
-    const demand = Number(sample.intervalAveragePowerW?.houseDemandW ?? sample.houseDemandW);
+    const demand = Number(sample.intervalAveragePowerW?.branchDemandW ?? sample.branchDemandW);
     const time = new Date(sample.timestamp);
     if (!Number.isFinite(demand) || Number.isNaN(time.getTime())) continue;
     const away = isAwayAt(time.getTime(), awayPeriods);
@@ -144,8 +144,8 @@ export function aggregateDemandDays(
     const day = days.get(key)!;
     const index = halfHourIndex(time);
     const seconds = Math.min(1800, Math.max(0,
-      Number(sample.powerCoverageSeconds?.houseDemandW
-        ?? sample.coverageSeconds?.houseDemandKwh
+      Number(sample.powerCoverageSeconds?.branchDemandW
+        ?? sample.coverageSeconds?.branchDemandKwh
         ?? sample.expectedIntervalSeconds
         ?? 0),
     ));
@@ -331,7 +331,7 @@ export function selectSeasonalDemandDays(
 }
 
 
-export function predictHouseDemand(
+export function predictBranchDemand(
   samples: readonly DemandSample[],
   targetDate: Date | string | number = new Date(),
   temperatureByDay: ReadonlyMap<string, number> = new Map(),

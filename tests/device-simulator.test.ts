@@ -30,7 +30,7 @@ assert.equal("hot_water_level" in energy.fuel_cells[1], false);
 const meter = await simulator.execute("meter-status", { host: "10.250.0.20" });
 assert.equal(meter.grid_import_power.value, 920);
 assert.equal(meter.grid_export_power.value, 0);
-assert.equal(meter.house_demand_power.value, 1410);
+assert.equal(meter.branch_demand_power.value, 1410);
 assert.deepEqual(meter.channel_power.decoded.channels.map((item: any) => item.value), [320, 480, 610]);
 assert.deepEqual(meter.channel_energy.decoded.channels.map((item: any) => item.value), [125.4, 234.5, 345.6]);
 
@@ -91,7 +91,7 @@ assert.equal(exportMeter.grid_import_power.value, 0);
 assert.equal(exportMeter.grid_export_power.value, 650);
 
 const demandSimulator = createDeviceSimulator({ scenario: "high-demand" });
-assert.equal((await demandSimulator.execute("meter-status", { host: "10.250.0.20" })).house_demand_power.value, 4700);
+assert.equal((await demandSimulator.execute("meter-status", { host: "10.250.0.20" })).branch_demand_power.value, 4700);
 
 const delayedSimulator = createDeviceSimulator({ scenario: "command-delay" });
 const delayStarted = Date.now();

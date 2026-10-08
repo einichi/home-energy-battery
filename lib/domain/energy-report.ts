@@ -7,7 +7,7 @@ import type { HistorySample, TimeRange } from "../contracts/history.js";
 
 export type ReportBucketMode = "day" | "week" | "month";
 type ReportEnergyKey =
-  | "houseDemandKwh"
+  | "branchDemandKwh"
   | "solarGenerationKwh"
   | "gridImportKwh"
   | "gridExportKwh"
@@ -16,7 +16,7 @@ type ReportEnergyKey =
   | "batteryDischargedKwh";
 
 const REPORT_ENERGY_KEYS: ReportEnergyKey[] = [
-  "houseDemandKwh",
+  "branchDemandKwh",
   "solarGenerationKwh",
   "gridImportKwh",
   "gridExportKwh",
@@ -46,10 +46,10 @@ interface InternalReportBucket extends Record<ReportEnergyKey, number> {
 }
 
 export interface FinalReportBucket extends Omit<InternalReportBucket, "_valid" | "_coverageSeconds" | "_qualities"> {
-  houseDemandKwh: number;
-  previousHouseDemandKwh: number | null;
-  houseDemandDeltaKwh: number | null;
-  houseDemandDeltaPercent: number | null;
+  branchDemandKwh: number;
+  previousBranchDemandKwh: number | null;
+  branchDemandDeltaKwh: number | null;
+  branchDemandDeltaPercent: number | null;
   dataQuality: Record<string, { quality: string; coverageSeconds: number; coveragePercent: number | null }>;
   [key: string]: unknown;
 }
@@ -132,7 +132,7 @@ export function emptyReportBucket(start: Date, bucket: ReportBucketMode): Intern
     start: start.toISOString(),
     end: end.toISOString(),
     sampleCount: 0,
-    houseDemandKwh: 0,
+    branchDemandKwh: 0,
     solarGenerationKwh: 0,
     gridImportKwh: 0,
     gridExportKwh: 0,
@@ -147,7 +147,7 @@ export function emptyReportBucket(start: Date, bucket: ReportBucketMode): Intern
     co2SavingKg: 0,
     peakDemandW: null,
     _valid: {
-      houseDemandKwh: 0,
+      branchDemandKwh: 0,
       solarGenerationKwh: 0,
       gridImportKwh: 0,
       gridExportKwh: 0,
@@ -198,17 +198,17 @@ export function finalizeReportBucket(
   for (const key of REPORT_ENERGY_KEYS) {
     if (!bucket._valid[key]) out[key] = null;
   }
-  const houseDemandKwh = finiteNumberOrNull(out.houseDemandKwh);
-  const previousHouseDemandKwh = previousBucket?.houseDemandKwh ?? null;
-  out.previousHouseDemandKwh = previousHouseDemandKwh;
-  out.houseDemandDeltaKwh =
-    houseDemandKwh !== null && previousHouseDemandKwh !== null
-      ? houseDemandKwh - previousHouseDemandKwh
+  const branchDemandKwh = finiteNumberOrNull(out.branchDemandKwh);
+  const previousBranchDemandKwh = previousBucket?.branchDemandKwh ?? null;
+  out.previousBranchDemandKwh = previousBranchDemandKwh;
+  out.branchDemandDeltaKwh =
+    branchDemandKwh !== null && previousBranchDemandKwh !== null
+      ? branchDemandKwh - previousBranchDemandKwh
       : null;
-  const houseDemandDeltaKwh = finiteNumberOrNull(out.houseDemandDeltaKwh);
-  out.houseDemandDeltaPercent =
-    houseDemandDeltaKwh !== null && previousHouseDemandKwh !== null && previousHouseDemandKwh !== 0
-      ? (houseDemandDeltaKwh / previousHouseDemandKwh) * 100
+  const branchDemandDeltaKwh = finiteNumberOrNull(out.branchDemandDeltaKwh);
+  out.branchDemandDeltaPercent =
+    branchDemandDeltaKwh !== null && previousBranchDemandKwh !== null && previousBranchDemandKwh !== 0
+      ? (branchDemandDeltaKwh / previousBranchDemandKwh) * 100
       : null;
   const bucketStartMs = new Date(bucket.start).getTime();
   const bucketEndMs = new Date(bucket.end).getTime();
@@ -244,10 +244,10 @@ export function summarizeReportBuckets(buckets: readonly FinalReportBucket[]) {
   const peaks = buckets
     .map((bucket) => finiteNumberOrNull(bucket.peakDemandW))
     .filter((value): value is number => value !== null && Number.isFinite(value));
-  const houseDemandKwh = sum("houseDemandKwh");
+  const branchDemandKwh = sum("branchDemandKwh");
   const solarGenerationKwh = sum("solarGenerationKwh");
   return {
-    houseDemandKwh,
+    branchDemandKwh,
     solarGenerationKwh,
     gridImportKwh: sum("gridImportKwh"),
     gridExportKwh: sum("gridExportKwh"),
@@ -262,8 +262,8 @@ export function summarizeReportBuckets(buckets: readonly FinalReportBucket[]) {
     co2SavingKg: buckets.reduce((total, bucket) => total + Number(bucket.co2SavingKg ?? 0), 0),
     peakDemandW: peaks.length ? Math.max(...peaks) : null,
     solarCoveragePercent:
-      houseDemandKwh !== null && houseDemandKwh > 0 && solarGenerationKwh !== null
-        ? (solarGenerationKwh / houseDemandKwh) * 100
+      branchDemandKwh !== null && branchDemandKwh > 0 && solarGenerationKwh !== null
+        ? (solarGenerationKwh / branchDemandKwh) * 100
         : null,
     sampleCount: buckets.reduce((total, bucket) => total + Number(bucket.sampleCount ?? 0), 0),
   };
@@ -315,11 +315,11 @@ export function createEnergyReportAccumulator({
       };
       addReportEnergy(
         row,
-        "houseDemandKwh",
-        samplePowerKwh(sample, "houseDemandKwh", "houseDemandW", prev, reportRange),
-        hasPowerSample(sample, "houseDemandKwh", "houseDemandW", prev),
+        "branchDemandKwh",
+        samplePowerKwh(sample, "branchDemandKwh", "branchDemandW", prev, reportRange),
+        hasPowerSample(sample, "branchDemandKwh", "branchDemandW", prev),
       );
-      addReportQuality(row, "houseDemandKwh", sample, prev, reportRange);
+      addReportQuality(row, "branchDemandKwh", sample, prev, reportRange);
       addReportEnergy(
         row,
         "gridImportKwh",
@@ -379,7 +379,7 @@ export function createEnergyReportAccumulator({
       row.batteryOffPeakSavingYen += discountedSavings.batteryYen;
       row.gridOffPeakSavingYen += discountedSavings.gridYen;
       row.co2SavingKg += solarGenerationKwh * co2TonnesPerKwh * 1000;
-      const demand = Number(sample.peakHouseDemandW ?? sample.houseDemandW);
+      const demand = Number(sample.peakBranchDemandW ?? sample.branchDemandW);
       if (Number.isFinite(demand)) row.peakDemandW = Math.max(row.peakDemandW ?? demand, demand);
       prev = sample;
       return "included";

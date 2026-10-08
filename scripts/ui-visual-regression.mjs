@@ -73,7 +73,7 @@ try {
           body.energy.fuel_cells[0].instant_power.value = 0;
           body.energy.battery.instant_power.value = 0;
           body.energy.battery.remaining_percent.value = 32;
-          body.meter.house_demand_power.value = 3900;
+          body.meter.branch_demand_power.value = 3900;
           body.meter.grid_import_power.value = 3300;
           body.meter.grid_export_power.value = 0;
         }
@@ -81,7 +81,7 @@ try {
           body.energy.solar.instant_power.value = 4500;
           body.energy.fuel_cells[0].instant_power.value = 0;
           body.energy.battery.instant_power.value = 0;
-          body.meter.house_demand_power.value = 1500;
+          body.meter.branch_demand_power.value = 1500;
           body.meter.grid_import_power.value = 0;
           body.meter.grid_export_power.value = 3000;
         }
@@ -89,7 +89,7 @@ try {
           body.energy.solar.instant_power.value = 2500;
           body.energy.fuel_cells[0].instant_power.value = 500;
           body.energy.battery.instant_power.value = 1200;
-          body.meter.house_demand_power.value = 1800;
+          body.meter.branch_demand_power.value = 1800;
           body.meter.grid_import_power.value = 0;
           body.meter.grid_export_power.value = 0;
         }
@@ -97,7 +97,7 @@ try {
           body.energy.solar.instant_power.value = 300;
           body.energy.fuel_cells[0].instant_power.value = 0;
           body.energy.battery.instant_power.value = -1500;
-          body.meter.house_demand_power.value = 2000;
+          body.meter.branch_demand_power.value = 2000;
           body.meter.grid_import_power.value = 200;
           body.meter.grid_export_power.value = 0;
         }

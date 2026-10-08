@@ -337,7 +337,7 @@ export function createDeviceSimulator(options: any = {}): any {
     const host = String(args.host ?? state.meter.host);
     if (!hostAvailable(host)) throw new Error(`${host} simulated timeout`);
     const circuits = state.meter.circuits;
-    const houseDemandW = circuits
+    const branchDemandW = circuits
       .map((circuit: any) => circuit.instantPowerW)
       .filter(Number.isFinite)
       .reduce((sum: any, value: any) => sum + Math.max(0, value), 0);
@@ -348,7 +348,7 @@ export function createDeviceSimulator(options: any = {}): any {
       grid_net_power: metric({ host, eoj: METER_EOJ, epc: "0xC6", name: "grid_net_power", value: net, unit: "W", raw: rawUnsigned(Math.abs(net)) }),
       grid_import_power: metric({ host, eoj: METER_EOJ, epc: "0xC6", name: "grid_import_power", value: Math.max(net, 0), unit: "W", raw: rawUnsigned(Math.abs(net)) }),
       grid_export_power: metric({ host, eoj: METER_EOJ, epc: "0xC6", name: "grid_export_power", value: Math.max(-net, 0), unit: "W", raw: rawUnsigned(Math.abs(net)) }),
-      house_demand_power: metric({ host, eoj: METER_EOJ, epc: "0xB7", name: "house_demand_power", value: houseDemandW, unit: "W", raw: "0x00" }),
+      branch_demand_power: metric({ host, eoj: METER_EOJ, epc: "0xB7", name: "branch_demand_power", value: branchDemandW, unit: "W", raw: "0x00" }),
       cumulative_bought: metric({ host, eoj: METER_EOJ, epc: "0xC0", name: "electricity_bought", value: state.meter.cumulativeBoughtKwh, unit: "kWh", raw: rawUnsigned(state.meter.cumulativeBoughtKwh / state.meter.cumulativeUnitKwh) }),
       cumulative_sold: metric({ host, eoj: METER_EOJ, epc: "0xC1", name: "electricity_sold", value: state.meter.cumulativeSoldKwh, unit: "kWh", raw: rawUnsigned(state.meter.cumulativeSoldKwh / state.meter.cumulativeUnitKwh) }),
       cumulative_unit: metric({ host, eoj: METER_EOJ, epc: "0xC2", name: "cumulative_energy_unit", value: state.meter.cumulativeUnitKwh, unit: "kWh", raw: "0x01" }),
@@ -381,7 +381,7 @@ export function createDeviceSimulator(options: any = {}): any {
         grid_net_power: stamp(meter.grid_net_power),
         grid_import_power: stamp(meter.grid_import_power),
         grid_export_power: stamp(meter.grid_export_power),
-        house_demand_power: stamp(meter.house_demand_power),
+        branch_demand_power: stamp(meter.branch_demand_power),
         channel_power: { ...meter.channel_power, acquired_at: acquiredAt },
       },
     };

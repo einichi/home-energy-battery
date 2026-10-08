@@ -84,7 +84,7 @@ import {
   buildFuelCellGenerationModel,
   filterDemandDaysByOccupancy,
   predictAwayDemand,
-  predictHouseDemand,
+  predictBranchDemand,
 } from "../lib/domain/demand-forecast.js";
 
 import {
@@ -176,7 +176,7 @@ assert.equal(cleanConfig({ circuitSortMode: "bad" }).circuitSortMode, "number");
 
 const normalizedWidgets = normalizeDashboardWidgets([
   { id: "solarPower", visible: false, priority: 90 },
-  { id: "houseDemandPower", visible: true, priority: "bad" },
+  { id: "branchDemandPower", visible: true, priority: "bad" },
   { id: "unknownWidget", visible: true, priority: 1 },
 ]);
 
@@ -189,8 +189,8 @@ assert.deepEqual(normalizedWidgets.find((widget: any) => widget.id === "solarPow
   priority: 90,
 });
 
-assert.deepEqual(normalizedWidgets.find((widget: any) => widget.id === "houseDemandPower"), {
-  id: "houseDemandPower",
+assert.deepEqual(normalizedWidgets.find((widget: any) => widget.id === "branchDemandPower"), {
+  id: "branchDemandPower",
   group: "trends",
   visible: true,
   priority: 30,
@@ -412,7 +412,7 @@ assert.ok(Math.abs(energySourceSummary.energySources.fuelCellContributionPercent
 const reportSamples: any[] = [
   {
     timestamp: "2026-07-01T00:15:00",
-    houseDemandKwh: 1,
+    branchDemandKwh: 1,
     solarGenerationKwh: 0.4,
     gridImportKwh: 0.5,
     gridExportKwh: 0.1,
@@ -421,11 +421,11 @@ const reportSamples: any[] = [
     batteryDischargeKwh: 0,
     solarSavingYen: 12,
     offPeakSavingYen: 1,
-    houseDemandW: 1200,
+    branchDemandW: 1200,
   },
   {
     timestamp: "2026-07-01T12:15:00",
-    houseDemandKwh: 2,
+    branchDemandKwh: 2,
     solarGenerationKwh: 0.8,
     gridImportKwh: 0.3,
     gridExportKwh: 0.2,
@@ -434,11 +434,11 @@ const reportSamples: any[] = [
     batteryDischargeKwh: 0.4,
     solarSavingYen: 24,
     offPeakSavingYen: 2,
-    houseDemandW: 2400,
+    branchDemandW: 2400,
   },
   {
     timestamp: "2026-07-02T00:15:00",
-    houseDemandKwh: 6,
+    branchDemandKwh: 6,
     solarGenerationKwh: 1.5,
     gridImportKwh: 1,
     gridExportKwh: 0.4,
@@ -447,7 +447,7 @@ const reportSamples: any[] = [
     batteryDischargeKwh: 0.2,
     solarSavingYen: 45,
     offPeakSavingYen: 3,
-    houseDemandW: 1800,
+    branchDemandW: 1800,
   },
 ];
 
@@ -462,19 +462,19 @@ assert.equal(dailyReport.buckets.length, 2);
 
 assert.equal(dailyReport.buckets[0].key, "2026-07-01");
 
-assert.equal(dailyReport.buckets[0].houseDemandKwh, 3);
+assert.equal(dailyReport.buckets[0].branchDemandKwh, 3);
 
 assert.equal(dailyReport.buckets[0].gridImportKwh, 0.8);
 
 assert.equal(dailyReport.buckets[0].peakDemandW, 2400);
 
-assert.equal(dailyReport.buckets[1].previousHouseDemandKwh, 3);
+assert.equal(dailyReport.buckets[1].previousBranchDemandKwh, 3);
 
-assert.equal(dailyReport.buckets[1].houseDemandDeltaKwh, 3);
+assert.equal(dailyReport.buckets[1].branchDemandDeltaKwh, 3);
 
-assert.equal(dailyReport.buckets[1].houseDemandDeltaPercent, 100);
+assert.equal(dailyReport.buckets[1].branchDemandDeltaPercent, 100);
 
-assert.equal(dailyReport.totals.houseDemandKwh, 9);
+assert.equal(dailyReport.totals.branchDemandKwh, 9);
 
 assert.equal(dailyReport.totals.solarGenerationKwh, 2.7);
 
@@ -491,7 +491,7 @@ assert.equal(dailyReportWithGap.buckets.length, 2);
 
 assert.equal(dailyReportWithGap.buckets[1].key, "2026-07-02");
 
-assert.equal(dailyReportWithGap.buckets[1].houseDemandKwh, null);
+assert.equal(dailyReportWithGap.buckets[1].branchDemandKwh, null);
 
 assert.equal(dailyReportWithGap.buckets[1].sampleCount, 0);
 
@@ -504,9 +504,9 @@ const missingUsageReport = aggregateEnergyReportSamples([
   bucket: "day",
 });
 
-assert.equal(missingUsageReport.buckets[0].houseDemandKwh, null);
+assert.equal(missingUsageReport.buckets[0].branchDemandKwh, null);
 
-assert.equal(missingUsageReport.totals.houseDemandKwh, null);
+assert.equal(missingUsageReport.totals.branchDemandKwh, null);
 
 
 const weeklyReport = aggregateEnergyReportSamples(reportSamples, {
@@ -517,7 +517,7 @@ const weeklyReport = aggregateEnergyReportSamples(reportSamples, {
 
 assert.equal(weeklyReport.buckets[0].key, "2026-06-29");
 
-assert.equal(weeklyReport.buckets[0].houseDemandKwh, 9);
+assert.equal(weeklyReport.buckets[0].branchDemandKwh, 9);
 
 
 const monthlyReport = aggregateEnergyReportSamples(reportSamples, {
@@ -528,7 +528,7 @@ const monthlyReport = aggregateEnergyReportSamples(reportSamples, {
 
 assert.equal(monthlyReport.buckets[0].key, "2026-07");
 
-assert.equal(monthlyReport.buckets[0].houseDemandKwh, 9);
+assert.equal(monthlyReport.buckets[0].branchDemandKwh, 9);
 
 
 const disabledFeatureReport = aggregateEnergyReportSamples(reportSamples, {

@@ -2,7 +2,7 @@ import type { EnergySample } from "../api/contracts";
 import { formatPower } from "./format";
 
 export type EnergySeriesKey =
-  | "houseDemandW"
+  | "branchDemandW"
   | "solarPowerW"
   | "fuelCellPowerW"
   | "gridImportW"
@@ -25,7 +25,7 @@ function finite(value: unknown): number | null {
 }
 
 export const energySeries: Record<EnergySeriesKey, SeriesDefinition> = {
-  houseDemandW: { label: "Demand", color: "var(--chart-demand)", axis: "power", value: (sample) => finite(sample.houseDemandW), display: formatPower },
+  branchDemandW: { label: "Circuits total", color: "var(--chart-demand)", axis: "power", value: (sample) => finite(sample.branchDemandW), display: formatPower },
   solarPowerW: { label: "Solar", color: "var(--solar)", axis: "power", value: (sample) => finite(sample.solarPowerW), display: formatPower },
   fuelCellPowerW: { label: "Ene-Farm", color: "var(--fuel-cell)", axis: "power", value: (sample) => finite(sample.fuelCellPowerW), display: formatPower },
   gridImportW: { label: "Grid import", color: "var(--grid)", axis: "power", value: (sample) => finite(sample.gridImportW), display: formatPower },

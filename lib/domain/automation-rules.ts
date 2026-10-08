@@ -7,7 +7,7 @@ const DEFAULT_GUARD_CONDITIONS = {
   reserveAmps: 5,
 };
 
-type DemandSource = "houseDemandW" | "gridImportW";
+type DemandSource = "branchDemandW" | "gridImportW";
 type UnknownRecord = Record<string, unknown>;
 
 export interface AutomationRuleConfig {
@@ -43,7 +43,7 @@ export type AutomationRule = AutomationRuleConfig & AutomationRuleState;
 
 export interface AutomationStatus {
   [key: string]: unknown;
-  meter?: { grid_import_power?: { value?: unknown }; house_demand_power?: { value?: unknown } };
+  meter?: { grid_import_power?: { value?: unknown }; branch_demand_power?: { value?: unknown } };
   energy?: { battery?: { operation_mode?: { value?: unknown; human?: unknown }; instant_power?: { value?: unknown } } };
 }
 
@@ -63,7 +63,7 @@ export function cleanAutomationRuleConfig(value: unknown = {}): AutomationRuleCo
     enabled: input.enabled === true,
     dashboardWarningEnabled: input.dashboardWarningEnabled !== false,
     conditions: {
-      source: source === "houseDemandW" || source === "gridImportW" ? source : "gridImportW",
+      source: source === "branchDemandW" || source === "gridImportW" ? source : "gridImportW",
       breakerAmps: configNumber(conditions.breakerAmps, DEFAULT_GUARD_CONDITIONS.breakerAmps, 1, 400),
       breakerVoltage: configNumber(conditions.breakerVoltage, DEFAULT_GUARD_CONDITIONS.breakerVoltage, 1, 1000),
       reserveAmps: configNumber(conditions.reserveAmps, DEFAULT_GUARD_CONDITIONS.reserveAmps, 0, 200),
@@ -110,7 +110,7 @@ export function cleanAutomationRule(input: unknown = {}): AutomationRule {
 export function automationDemandWatts(status: AutomationStatus, source: DemandSource): number {
   const raw = source === "gridImportW"
     ? status.meter?.grid_import_power?.value
-    : status.meter?.house_demand_power?.value;
+    : status.meter?.branch_demand_power?.value;
   if (raw === null || raw === undefined || raw === "") return Number.NaN;
   return Number(raw);
 }
@@ -160,7 +160,7 @@ export function appendAutomationLog(rule: AutomationRule, message: string, at: D
 
 
 export function automationDemandLabel(source: DemandSource): string {
-  return source === "gridImportW" ? "Grid Import" : "House demand";
+  return source === "gridImportW" ? "Grid Import" : "Total circuit load";
 }
 
 

@@ -1631,7 +1631,7 @@ function DataSettings({
 const widgetLabels: Record<string, string> = {
   solarPower: "Solar power",
   fuelCellPower: "Ene-Farm power",
-  houseDemandPower: "House demand",
+  branchDemandPower: "Circuits total",
   batteryPower: "Battery power",
   batterySoc: "Battery state of charge",
   gridImportPower: "Grid import",

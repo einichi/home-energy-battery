@@ -14,8 +14,8 @@ describe("energy view model", () => {
   });
 
   it("adds the latest live snapshot when history is initially empty", () => {
-    const samples = withLatestStatus([], { read_at: "2026-09-12T12:00:00.000Z", meter: { house_demand_power: { value: 1400 } } });
+    const samples = withLatestStatus([], { read_at: "2026-09-12T12:00:00.000Z", meter: { branch_demand_power: { value: 1400 } } });
     expect(samples).toHaveLength(1);
-    expect(samples[0].houseDemandW).toBe(1400);
+    expect(samples[0].branchDemandW).toBe(1400);
   });
 });

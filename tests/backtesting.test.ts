@@ -51,15 +51,15 @@ const evaluated = evaluateBacktestCase({
   samples: [
     {
       rollupStart: "2026-01-01T00:00:00.000Z", rollupEnd: "2026-01-01T00:30:00.000Z",
-      houseDemandKwh: 1, solarGenerationKwh: 0.25, fuelCellKwh: 0, gridImportKwh: 0.75,
+      branchDemandKwh: 1, solarGenerationKwh: 0.25, fuelCellKwh: 0, gridImportKwh: 0.75,
       rateYenPerKwh: 20, startStateOfChargePercent: 50, endStateOfChargePercent: 50,
-      minimumStateOfChargePercent: 49, coverageSeconds: { houseDemandKwh: 1800 },
+      minimumStateOfChargePercent: 49, coverageSeconds: { branchDemandKwh: 1800 },
     },
     {
       rollupStart: "2026-01-01T00:30:00.000Z", rollupEnd: "2026-01-01T01:00:00.000Z",
-      houseDemandKwh: 1, solarGenerationKwh: 0.25, fuelCellKwh: 0, gridImportKwh: 0.75,
+      branchDemandKwh: 1, solarGenerationKwh: 0.25, fuelCellKwh: 0, gridImportKwh: 0.75,
       rateYenPerKwh: 20, startStateOfChargePercent: 50, endStateOfChargePercent: 50,
-      minimumStateOfChargePercent: 49, coverageSeconds: { houseDemandKwh: 1800 },
+      minimumStateOfChargePercent: 49, coverageSeconds: { branchDemandKwh: 1800 },
     },
   ],
 });
@@ -77,10 +77,10 @@ const simSample = {
   rollupStart: "2026-01-01T00:00:00.000Z",
   rollupEnd: "2026-01-01T00:30:00.000Z",
   startStateOfChargePercent: 50,
-  houseDemandKwh: 0,
+  branchDemandKwh: 0,
   solarGenerationKwh: 0,
   fuelCellKwh: 0,
-  coverageSeconds: { houseDemandKwh: 1800 },
+  coverageSeconds: { branchDemandKwh: 1800 },
 };
 
 // A charge-to-stored ratio above 1 must be honoured, matching the planner's
@@ -98,13 +98,13 @@ assert.ok(Math.abs((clamped.endingSocPercent ?? -1) - 64) < 1e-6);
 const reserveConfig = { ...simConfig, settingCache: { discharge_limit: { lastKnown: { decoded: { percent: 20 } } } } };
 const breach = simulateModelOnlyExecution(
   { slots: [], expectedSunsetSocPercent: 55 } as any,
-  [{ ...simSample, houseDemandKwh: 4 }] as any,
+  [{ ...simSample, branchDemandKwh: 4 }] as any,
   reserveConfig as any,
 );
 assert.equal(breach?.reserveViolation, true);
 const noBreach = simulateModelOnlyExecution(
   { slots: [], expectedSunsetSocPercent: 55 } as any,
-  [{ ...simSample, houseDemandKwh: 2 }] as any,
+  [{ ...simSample, branchDemandKwh: 2 }] as any,
   reserveConfig as any,
 );
 assert.equal(noBreach?.reserveViolation, false);
@@ -130,9 +130,9 @@ try {
   const store = createHistoryStore({ dataDir: serviceDir });
   await store.initialize();
   store.recordAdaptivePlanSnapshot({ ...snapshot, plan: snapshot.plan });
-  store.appendSample({ timestamp: "2026-01-01T00:00:00.000Z", houseDemandW: 1000, solarPowerW: 0, fuelCellPowerW: 0, gridImportW: 1000, stateOfChargePercent: 50, rateYenPerKwh: 20 });
-  store.appendSample({ timestamp: "2026-01-01T00:30:00.000Z", houseDemandW: 1000, solarPowerW: 0, fuelCellPowerW: 0, gridImportW: 1000, stateOfChargePercent: 50, rateYenPerKwh: 20 });
-  store.appendSample({ timestamp: "2026-01-01T01:00:00.000Z", houseDemandW: 1000, solarPowerW: 0, fuelCellPowerW: 0, gridImportW: 1000, stateOfChargePercent: 50, rateYenPerKwh: 20 });
+  store.appendSample({ timestamp: "2026-01-01T00:00:00.000Z", branchDemandW: 1000, solarPowerW: 0, fuelCellPowerW: 0, gridImportW: 1000, stateOfChargePercent: 50, rateYenPerKwh: 20 });
+  store.appendSample({ timestamp: "2026-01-01T00:30:00.000Z", branchDemandW: 1000, solarPowerW: 0, fuelCellPowerW: 0, gridImportW: 1000, stateOfChargePercent: 50, rateYenPerKwh: 20 });
+  store.appendSample({ timestamp: "2026-01-01T01:00:00.000Z", branchDemandW: 1000, solarPowerW: 0, fuelCellPowerW: 0, gridImportW: 1000, stateOfChargePercent: 50, rateYenPerKwh: 20 });
   const service = createBacktestService({ history: store, randomUUID: () => "run-1", now: () => new Date("2026-01-02T00:00:00.000Z") });
   const result = await service.run({ range: "all", mode: "both" });
   assert.equal(result.status, "complete");

@@ -1,6 +1,6 @@
 import { adaptiveChargingTimingProfile, effectiveBatteryLearningModel } from "./battery-learning.js";
 import type { BatteryChargePowerBand } from "./battery-learning.js";
-import { buildFuelCellGenerationModel, predictAwayDemand, predictHouseDemand } from "./demand-forecast.js";
+import { buildFuelCellGenerationModel, predictAwayDemand, predictBranchDemand } from "./demand-forecast.js";
 import type { DemandDay, DemandSample } from "./demand-forecast.js";
 import { finiteNumberOrNull } from "./numbers.js";
 import { applySolarForecastBias, forecastHourForInterval, learnedSolarFactor, nextPlanningBoundary, planningSunsetWithDiscountedWindow, solarCalibrationGroup, solarPowerFromIrradiance, temperatureByDayFromWeather } from "./solar-forecast.js";
@@ -780,7 +780,7 @@ export function buildAdaptiveChargingPlan({
   const chargePerformance = batteryModel.power;
   const maximumChargeWatts = chargePerformance.effectiveWatts;
   const startMs = now.getTime();
-  type HousePrediction = ReturnType<typeof predictHouseDemand>;
+  type HousePrediction = ReturnType<typeof predictBranchDemand>;
   type AwayPrediction = ReturnType<typeof predictAwayDemand>;
   const demandByDay = new Map<string, { home: HousePrediction; away: AwayPrediction }>();
   const fuelCellModel = buildFuelCellGenerationModel(config, samples, now, {
@@ -801,7 +801,7 @@ export function buildAdaptiveChargingPlan({
     const date = new Date(time);
     const dayKey = localDayKey(date);
     if (!demandByDay.has(dayKey)) {
-      const home = predictHouseDemand(samples, date, temperatures, {
+      const home = predictBranchDemand(samples, date, temperatures, {
         historicalDays: historicalDemandDays,
         awayPeriods,
         occupancy: "home",

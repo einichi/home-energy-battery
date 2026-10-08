@@ -15,7 +15,7 @@ import { T, useI18n } from "../i18n";
 export type EnergyPeriodSection = "history" | "balance" | "outcomes" | "battery" | "ene-farm" | "circuits";
 
 const selectableSeries = Object.keys(energySeries) as EnergySeriesKey[];
-const defaultSeries: EnergySeriesKey[] = ["houseDemandW", "solarPowerW", "fuelCellPowerW", "gridImportW", "batteryPowerW"];
+const defaultSeries: EnergySeriesKey[] = ["branchDemandW", "solarPowerW", "fuelCellPowerW", "gridImportW", "batteryPowerW"];
 type CircuitSortKey = "id" | "label" | "watts" | "energy" | "share" | "trend";
 type SortDirection = "ascending" | "descending";
 
@@ -59,7 +59,7 @@ export function EnergyPeriodSections({
   const availableSeries = selectableSeries.filter((key) => {
     if (key === "solarPowerW") return config?.solarEnabled !== false;
     if (key === "fuelCellPowerW" || key === "fuelCellHotWaterLevel") return config?.fuelCellEnabled !== false;
-    if (["houseDemandW", "gridImportW", "gridExportW"].includes(key)) return config?.smartCosmoEnabled !== false;
+    if (["branchDemandW", "gridImportW", "gridExportW"].includes(key)) return config?.smartCosmoEnabled !== false;
     return true;
   });
   const visibleSelected = selected.filter((key) => availableSeries.includes(key));

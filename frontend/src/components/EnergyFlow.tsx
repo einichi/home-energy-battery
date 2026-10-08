@@ -184,17 +184,18 @@ function FlowIcon({ type }: { type: FlowTone }) {
   return <svg {...common}><path d="m3.5 11 8.5-7 8.5 7" /><path d="M5.5 9.5V21h13V9.5M9.5 21v-6h5v6" /></svg>;
 }
 
-function FlowNode({ node, className, tone, label, value, children }: {
+function FlowNode({ node, className, tone, label, value, title, children }: {
   node: NodeId;
   className: string;
   tone: FlowTone;
   label?: ReactNode;
   value: number | null;
+  title?: string;
   children?: ReactNode;
 }) {
   const formatted = formatPower(value === null ? null : Math.abs(value));
   return (
-    <div className={`flow-node ${className}`} data-tone={tone} data-flow-node={node}>
+    <div className={`flow-node ${className}`} data-tone={tone} data-flow-node={node} title={title}>
       <div className="flow-node-heading"><FlowIcon type={tone} /><span>{label ?? children}</span></div>
       <strong key={formatted}>{formatted}</strong>
     </div>
@@ -205,7 +206,7 @@ function Marker({ id, color, size }: { id: string; color: string; size: number }
   return <marker id={id} viewBox="0 0 10 10" refX="10" refY="5" markerUnits="userSpaceOnUse" markerWidth={size} markerHeight={size} orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill={color} /></marker>;
 }
 
-export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridExport, showSolar = true, showFuelCell = true, showBattery = true, showDemand = true, showGrid = true }: {
+export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridExport, showSolar = true, showFuelCell = true, showBattery = true, showDemand = true, showGrid = true, demandLabel, demandTitle }: {
   solar: number | null;
   fuelCell: number | null;
   battery: number | null;
@@ -217,6 +218,8 @@ export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridE
   showBattery?: boolean;
   showDemand?: boolean;
   showGrid?: boolean;
+  demandLabel?: string;
+  demandTitle?: string;
 }) {
   const { text } = useI18n();
   const exporting = gridExport !== null && gridExport > 0;
@@ -319,7 +322,7 @@ export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridE
       {showSolar ? <FlowNode node="solar" className="flow-solar" tone="solar" value={solar}><T text={"Solar"} /></FlowNode> : null}
       {showFuelCell ? <FlowNode node="fuel" className="flow-fuel" tone="fuel" value={fuelCell}><T text={"Ene-Farm"} /></FlowNode> : null}
       {showBattery ? <FlowNode node="battery" className="flow-battery" tone="battery" label={text(batteryState(battery))} value={battery} /> : null}
-      {showDemand ? <FlowNode node="home" className="flow-home" tone="home" value={demand}><T text={"Home"} /></FlowNode> : null}
+      {showDemand ? <FlowNode node="home" className="flow-home" tone="home" value={demand} label={<T text={demandLabel ?? "Home"} />} title={demandTitle} /> : null}
       {showGrid ? <FlowNode node="grid" className="flow-grid" tone="grid" label={text(exporting ? "Grid export" : "Grid import")} value={exporting ? gridExport : gridImport} /> : null}
     </div>
   );

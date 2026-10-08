@@ -63,7 +63,7 @@ export function createAdaptiveHistoryService(
     const compact: Record<string, unknown> = { timestamp: sample.timestamp };
     let hasMetric = false;
     for (const key of [
-      "stateOfChargePercent", "batteryPowerW", "solarPowerW", "houseDemandW",
+      "stateOfChargePercent", "batteryPowerW", "solarPowerW", "branchDemandW",
       "fuelCellPowerW", "fuelCellGenerationState", "fuelCellDataQuality",
     ] as const) {
       if (sample[key] === undefined) continue;
@@ -193,15 +193,15 @@ export function createAdaptiveHistoryService(
   }
 
   function addDemandSample(index: DemandProfileIndex, sample: HistorySample): void {
-    const demand = Number(sample.intervalAveragePowerW?.houseDemandW ?? sample.houseDemandW);
+    const demand = Number(sample.intervalAveragePowerW?.branchDemandW ?? sample.branchDemandW);
     const time = new Date(sample.timestamp ?? "");
     if (!Number.isFinite(demand) || Number.isNaN(time.getTime())) return;
     const key = localDayKey(time);
     const bucket = halfHourIndex(time);
     const day = index.days[key] ?? { weightedSums: Array(48).fill(0), coverageSeconds: Array(48).fill(0) };
     const coverageSeconds = Math.min(1800, Math.max(0,
-      Number(sample.powerCoverageSeconds?.houseDemandW
-        ?? sample.coverageSeconds?.houseDemandKwh
+      Number(sample.powerCoverageSeconds?.branchDemandW
+        ?? sample.coverageSeconds?.branchDemandKwh
         ?? sample.expectedIntervalSeconds
         ?? 0),
     ));

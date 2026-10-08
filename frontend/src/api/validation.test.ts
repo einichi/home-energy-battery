@@ -3,7 +3,7 @@ import { validateApiPayload } from "./validation";
 
 describe("API runtime validation", () => {
   it("accepts the stable history summary shape", () => {
-    expect(() => validateApiPayload("/api/history/summary", { sampleCount: 2, houseDemandKwh: 1.2, energySources: {} })).not.toThrow();
+    expect(() => validateApiPayload("/api/history/summary", { sampleCount: 2, branchDemandKwh: 1.2, energySources: {} })).not.toThrow();
   });
 
   it("rejects malformed history before it reaches a view", () => {

@@ -19,7 +19,7 @@ export interface AdaptiveEvaluationStatus extends AutomationStatus, Record<strin
     solar?: { instant_power?: { value?: unknown } };
   };
   meter?: AutomationStatus["meter"] & {
-    house_demand_power?: { value?: unknown };
+    branch_demand_power?: { value?: unknown };
     grid_import_power?: { value?: unknown };
     grid_export_power?: { value?: unknown };
   };

@@ -26,7 +26,7 @@ function record(value: unknown): UnknownRecord {
 export const DEFAULT_DASHBOARD_WIDGETS: readonly DashboardWidget[] = [
   { id: "solarPower", group: "trends", visible: true, priority: 10 },
   { id: "fuelCellPower", group: "trends", visible: true, priority: 20 },
-  { id: "houseDemandPower", group: "trends", visible: true, priority: 30 },
+  { id: "branchDemandPower", group: "trends", visible: true, priority: 30 },
   { id: "batteryPower", group: "trends", visible: true, priority: 40 },
   { id: "batterySoc", group: "trends", visible: true, priority: 50 },
   { id: "gridImportPower", group: "trends", visible: true, priority: 60 },

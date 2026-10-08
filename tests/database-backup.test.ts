@@ -21,7 +21,7 @@ const dataDir = await mkdtemp(path.join(os.tmpdir(), "database-backup-"));
 try {
   const historyStore = createHistoryStore({ dataDir });
   await historyStore.initialize();
-  historyStore.appendSample({ timestamp: "2026-09-22T00:00:00.000Z", houseDemandW: 1234 });
+  historyStore.appendSample({ timestamp: "2026-09-22T00:00:00.000Z", branchDemandW: 1234 });
   historyStore.close();
 
   const applicationStore = createApplicationStore({ dataDir });

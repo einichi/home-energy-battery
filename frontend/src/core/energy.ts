@@ -13,7 +13,7 @@ export function statusToEnergySample(status: StatusSnapshot | null): EnergySampl
     batteryPowerW: metricValue(status.energy?.battery?.instant_power),
     stateOfChargePercent: metricValue(status.energy?.battery?.remaining_percent),
     solarPowerW: metricValue(status.energy?.solar?.instant_power),
-    houseDemandW: metricValue(status.meter?.house_demand_power),
+    branchDemandW: metricValue(status.meter?.branch_demand_power),
     fuelCellPowerW: metricValue(fuelCell?.instant_power),
     fuelCellHotWaterLevel: metricValue(fuelCell?.hot_water_level),
     gridImportW: metricValue(status.meter?.grid_import_power),

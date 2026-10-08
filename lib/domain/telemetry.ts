@@ -41,7 +41,7 @@ interface LiveStatus {
     fuel_cells?: FuelCellStatus[];
   };
   meter?: {
-    house_demand_power?: Metric;
+    branch_demand_power?: Metric;
     grid_import_power?: Metric;
     grid_export_power?: Metric;
     cumulative_bought?: Metric;
@@ -99,7 +99,7 @@ function liveStatus(value: unknown): LiveStatus {
       fuel_cells: Array.isArray(energy.fuel_cells) ? energy.fuel_cells.map(fuelCellStatus) : [],
     },
     meter: {
-      house_demand_power: metric(meter.house_demand_power),
+      branch_demand_power: metric(meter.branch_demand_power),
       grid_import_power: metric(meter.grid_import_power),
       grid_export_power: metric(meter.grid_export_power),
       cumulative_bought: metric(meter.cumulative_bought),
@@ -187,7 +187,7 @@ export function sampleFromStatus(
   const fuelCellGasM3 = gasCounter.delta;
   const fuelCellInterconnectionValue = fuelCellPrimary?.interconnection_status?.value;
   const fuelCellInterconnection = typeof fuelCellInterconnectionValue === "string" ? fuelCellInterconnectionValue : null;
-  const houseDemandW = config.smartCosmoEnabled === false ? null : numericMetric(status.meter?.house_demand_power);
+  const branchDemandW = config.smartCosmoEnabled === false ? null : numericMetric(status.meter?.branch_demand_power);
   const gridImportW = config.smartCosmoEnabled === false ? null : numericMetric(status.meter?.grid_import_power);
   const gridExportW = config.smartCosmoEnabled === false ? null : numericMetric(status.meter?.grid_export_power);
   const gridImportCumulativeKwh = config.smartCosmoEnabled === false ? null : numericMetric(status.meter?.cumulative_bought);
@@ -243,7 +243,7 @@ export function sampleFromStatus(
     : 0;
   const fuelCellStartCount = fuelCellGenerationState === "generating" && previousSample?.fuelCellGenerationState !== "generating" ? 1 : 0;
   const exactCircuitValues = Object.values(circuitEnergyKwh).filter(Number.isFinite);
-  const exactHouseDemandKwh = exactCircuitValues.length > 0
+  const exactBranchDemandKwh = exactCircuitValues.length > 0
     && exactCircuitValues.length === Object.values(circuitCumulativeKwh).filter(Number.isFinite).length
     ? exactCircuitValues.reduce((sum, value) => sum + value, 0)
     : null;
@@ -260,10 +260,10 @@ export function sampleFromStatus(
     energyQuality.gridExportKwh = "counter";
     if (previousTimestamp) energyIntervalStart.gridExportKwh = previousTimestamp;
   }
-  if (exactHouseDemandKwh !== null) {
-    coverageSeconds.houseDemandKwh = intervalSeconds;
-    energyQuality.houseDemandKwh = "counter";
-    if (previousTimestamp) energyIntervalStart.houseDemandKwh = previousTimestamp;
+  if (exactBranchDemandKwh !== null) {
+    coverageSeconds.branchDemandKwh = intervalSeconds;
+    energyQuality.branchDemandKwh = "counter";
+    if (previousTimestamp) energyIntervalStart.branchDemandKwh = previousTimestamp;
   }
   if (fuelCellKwh !== null) {
     coverageSeconds.fuelCellKwh = intervalSeconds;
@@ -281,7 +281,7 @@ export function sampleFromStatus(
     batteryPowerW,
     stateOfChargePercent,
     solarPowerW,
-    houseDemandW,
+    branchDemandW,
     fuelCellPowerW,
     fuelCellRatedPowerW,
     ...(fuelCellKwh !== null ? { fuelCellKwh } : {}),
@@ -322,7 +322,7 @@ export function sampleFromStatus(
     circuitCounterIssues,
     ...(gridImportCounter.delta !== null ? { gridImportKwh: gridImportCounter.delta } : {}),
     ...(gridExportCounter.delta !== null ? { gridExportKwh: gridExportCounter.delta } : {}),
-    ...(exactHouseDemandKwh !== null ? { houseDemandKwh: exactHouseDemandKwh } : {}),
+    ...(exactBranchDemandKwh !== null ? { branchDemandKwh: exactBranchDemandKwh } : {}),
     coverageSeconds,
     energyQuality,
     energyIntervalStart,

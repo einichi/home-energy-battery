@@ -100,7 +100,7 @@ export function simulateModelOnlyExecution(
   let reserveViolation = false;
   let gridCostYen = 0;
   for (const sample of samples) {
-    const demand = Math.max(0, finite(sample.houseDemandKwh) ?? 0);
+    const demand = Math.max(0, finite(sample.branchDemandKwh) ?? 0);
     const solar = Math.max(0, finite(sample.solarGenerationKwh) ?? 0);
     const fuelCell = Math.max(0, finite(sample.fuelCellKwh) ?? 0);
     const forcedCharge = plannedChargeForSample(sample, plan);
@@ -139,10 +139,10 @@ export function evaluateBacktestCase({ snapshot, samples }: BacktestCaseInput): 
   const plan = snapshot.plan;
   const horizonEnd = String(plan.targetSunset ?? plan.timeline?.at(-1)?.end ?? snapshot.createdAt);
   const expectedSeconds = Math.max(0, new Date(horizonEnd).getTime() - new Date(snapshot.createdAt).getTime()) / 1000;
-  const demandCoverage = samples.reduce((sum, sample) => sum + (finite(sample.coverageSeconds?.houseDemandKwh) ?? 0), 0);
+  const demandCoverage = samples.reduce((sum, sample) => sum + (finite(sample.coverageSeconds?.branchDemandKwh) ?? 0), 0);
   const evaluable = samples.length > 0 && expectedSeconds > 0 && demandCoverage >= expectedSeconds * 0.8;
   const actualSolar = energy(samples, "solarGenerationKwh");
-  const actualDemand = energy(samples, "houseDemandKwh");
+  const actualDemand = energy(samples, "branchDemandKwh");
   const actualFuelCell = energy(samples, "fuelCellKwh");
   const endingSoc = lastFinite(samples, ["endStateOfChargePercent", "stateOfChargePercent"]);
   const minimumSoc = Math.min(...samples.map((sample) => finite(sample.minimumStateOfChargePercent ?? sample.stateOfChargePercent)).filter((value): value is number => value !== null));

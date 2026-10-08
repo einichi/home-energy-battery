@@ -246,7 +246,7 @@ export function createEneFarmReportingService(dependencies: EneFarmReportingDepe
       generatedKwh += energy;
       const gas = finiteNumberOrNull(sample.fuelCellGasM3);
       if (gas !== null) { gasM3 += Math.max(0, gas); hasGas = true; }
-      const demand = samplePowerKwh(sample, "houseDemandKwh", "houseDemandW", previous);
+      const demand = samplePowerKwh(sample, "branchDemandKwh", "branchDemandW", previous);
       if (sample.fuelCellInterconnection === "grid_connected_reverse_flow_prohibited") onSiteKwh += energy;
       else if (Number.isFinite(demand)) onSiteKwh += Math.min(energy, Math.max(0, demand));
       else if (energy > 0) onSiteKnown = false;
@@ -389,10 +389,10 @@ export function createEneFarmReportingService(dependencies: EneFarmReportingDepe
         end: row.end,
         billingPeriodGasM3: billingPeriodUsage.get(billingPeriodKey(row.start, readingDay)) ?? null,
       });
-      summary.generationCoveragePercent = Number.isFinite(row.houseDemandKwh)
-        && Number(row.houseDemandKwh) > 0
+      summary.generationCoveragePercent = Number.isFinite(row.branchDemandKwh)
+        && Number(row.branchDemandKwh) > 0
         && Number.isFinite(summary.onSiteKwh)
-        ? Number(summary.onSiteKwh) / Number(row.houseDemandKwh) * 100
+        ? Number(summary.onSiteKwh) / Number(row.branchDemandKwh) * 100
         : null;
       return { key: row.key, label: row.label, ...summary };
     });
@@ -401,11 +401,11 @@ export function createEneFarmReportingService(dependencies: EneFarmReportingDepe
       end,
       billingPeriodGasM3: billingPeriodUsage.get(billingPeriodKey(start, readingDay)) ?? null,
     });
-    const totalHouseDemandKwh = energy.totals.houseDemandKwh;
-    totals.generationCoveragePercent = totalHouseDemandKwh !== null
-      && totalHouseDemandKwh > 0
+    const totalBranchDemandKwh = energy.totals.branchDemandKwh;
+    totals.generationCoveragePercent = totalBranchDemandKwh !== null
+      && totalBranchDemandKwh > 0
       && Number.isFinite(totals.onSiteKwh)
-      ? Number(totals.onSiteKwh) / totalHouseDemandKwh * 100
+      ? Number(totals.onSiteKwh) / totalBranchDemandKwh * 100
       : null;
     return {
       start: new Date(start).toISOString(),

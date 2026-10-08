@@ -94,7 +94,7 @@ const status = {
     solar: { instant_power: { value: 0 } },
   },
   meter: {
-    house_demand_power: { value: 500 },
+    branch_demand_power: { value: 500 },
     grid_import_power: { value: 20 },
     grid_export_power: { value: 0 },
   },

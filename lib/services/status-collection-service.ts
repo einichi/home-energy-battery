@@ -28,6 +28,48 @@ function hasDecodedChannels(value: unknown): boolean {
   return Array.isArray(record(item.decoded).channels);
 }
 
+export type HomeLoadSource = "derived" | "branch_fallback" | "unavailable" | "inconsistent";
+
+// A derivation this negative means the component readings are mutually
+// inconsistent, so we flag it rather than presenting an ordinary zero.
+const HOME_LOAD_NEGATIVE_LIMIT_W = 200;
+
+function metricNumber(value: unknown): number | null {
+  const item = record(value);
+  if (!hasMetricValue(item)) return null;
+  const number = Number(item.value);
+  return Number.isFinite(number) ? number : null;
+}
+
+/**
+ * Total home load from the AC-bus energy balance:
+ *   homeLoad = gridNet + solar + fuelCell − batteryNet   (battery > 0 = charging)
+ * Uses the authoritative grid meter, so it captures loads the branch CTs miss.
+ * Falls back to the independent branch sum when an enabled component reading is
+ * missing; reports unavailable when nothing can be trusted.
+ */
+export function deriveHomeLoad(params: {
+  gridNet: number | null;
+  battery: number | null;
+  solar: { enabled: boolean; value: number | null };
+  fuelCell: { enabled: boolean; value: number | null };
+  branchDemand: number | null;
+}): { value: number | null; source: HomeLoadSource; missing: string[] } {
+  const { gridNet, battery, solar, fuelCell, branchDemand } = params;
+  const missing: string[] = [];
+  if (gridNet === null) missing.push("grid");
+  if (battery === null) missing.push("battery");
+  if (solar.enabled && solar.value === null) missing.push("solar");
+  if (fuelCell.enabled && fuelCell.value === null) missing.push("fuelCell");
+  if (!missing.length) {
+    const raw = gridNet! + (solar.value ?? 0) + (fuelCell.value ?? 0) - battery!;
+    if (raw < -HOME_LOAD_NEGATIVE_LIMIT_W) return { value: 0, source: "inconsistent", missing };
+    return { value: Math.max(0, Math.round(raw)), source: "derived", missing };
+  }
+  if (branchDemand !== null) return { value: Math.max(0, Math.round(branchDemand)), source: "branch_fallback", missing };
+  return { value: null, source: "unavailable", missing };
+}
+
 export interface StatusCollectionDependencies {
   readConfig(): Promise<ApplicationConfig>;
   updateConfig(mutator: (config: ApplicationConfig) => ApplicationConfig | Promise<ApplicationConfig>): Promise<ApplicationConfig>;
@@ -174,7 +216,7 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
       ...(config.solarEnabled ? { solar: { ...detailSolar, ...(hasMetricValue(liveSolar.instant_power) ? { instant_power: liveSolar.instant_power } : {}) } } : {}),
       fuel_cells: mergedFuelCells,
     };
-    const liveMeterKeys = ["grid_net_power", "grid_import_power", "grid_export_power", "house_demand_power"]
+    const liveMeterKeys = ["grid_net_power", "grid_import_power", "grid_export_power", "branch_demand_power"]
       .filter((key) => hasMetricValue(liveMeter[key]));
     if (hasDecodedChannels(liveMeter.channel_power)) liveMeterKeys.push("channel_power");
     const mergedMeter: UnknownRecord = {
@@ -184,6 +226,24 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
       ),
     };
     const readAt = typeof livePower.completed_at === "string" ? livePower.completed_at : new Date().toISOString();
+    if (config.smartCosmoEnabled !== false) {
+      const primaryFuelCellReading = mergedFuelCells.find((cell) => record(cell).source_role === "primary") ?? mergedFuelCells[0];
+      const homeLoad = deriveHomeLoad({
+        gridNet: metricNumber(mergedMeter.grid_net_power),
+        battery: metricNumber(record(mergedEnergy.battery).instant_power),
+        solar: { enabled: config.solarEnabled !== false, value: metricNumber(record(mergedEnergy.solar).instant_power) },
+        fuelCell: { enabled: config.fuelCellEnabled !== false, value: primaryFuelCellReading ? metricNumber(record(primaryFuelCellReading).instant_power) : null },
+        branchDemand: metricNumber(mergedMeter.branch_demand_power),
+      });
+      mergedMeter.home_load_power = {
+        value: homeLoad.value,
+        unit: "W",
+        human: homeLoad.value === null ? undefined : `${homeLoad.value} W`,
+        acquired_at: readAt,
+      };
+      mergedMeter.home_load_source = homeLoad.source;
+      mergedMeter.home_load_missing = homeLoad.missing;
+    }
     const status: UnknownRecord = {
       hosts: {
         battery: config.batteryHost,

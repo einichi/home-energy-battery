@@ -74,7 +74,7 @@ assert.equal(livePower.energy.solar.instant_power.value, 850);
 assert.equal(livePower.energy.battery.instant_power.value, 300);
 assert.equal(livePower.energy.fuel_cells[0].instant_power.value, 650);
 assert.equal(livePower.meter.grid_import_power.value, 920);
-assert.equal(livePower.meter.house_demand_power.value, 800);
+assert.equal(livePower.meter.branch_demand_power.value, 800);
 assert.equal(typeof livePower.energy.battery.instant_power.acquired_at, "string");
 assert.equal(typeof livePower.completed_at, "string");
 

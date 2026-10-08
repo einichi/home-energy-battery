@@ -44,7 +44,15 @@ export function OverviewPage() {
   const batteryPower = metricValue(battery?.instant_power);
   const solarPower = metricValue(status?.energy?.solar?.instant_power);
   const fuelCellPower = metricValue(fuelCell?.instant_power);
-  const demandPower = metricValue(status?.meter?.house_demand_power);
+  const homeLoadMetric = status?.meter?.home_load_power;
+  const homeLoadSource = status?.meter?.home_load_source;
+  const homeLoadIsDerived = homeLoadSource === "derived";
+  const branchDemandPower = metricValue(status?.meter?.branch_demand_power);
+  const demandPower = metricValue(homeLoadMetric) ?? branchDemandPower;
+  const demandLabel = homeLoadIsDerived ? "Home" : "Circuits total";
+  const demandTitle = homeLoadIsDerived
+    ? "Home demand — grid + solar + fuel cell − battery"
+    : "Circuits total — sum of monitored circuits";
   const gridImport = metricValue(status?.meter?.grid_import_power);
   const gridExport = metricValue(status?.meter?.grid_export_power);
   const reserve = status?.settings?.discharge_limit?.decoded?.percent;
@@ -115,7 +123,7 @@ export function OverviewPage() {
               <i aria-hidden="true" /> {text(!status?.read_at ? "Unavailable" : readingsStale ? "Stale · last known values" : "Live")}
             </span>
           </div>
-          <EnergyFlow solar={solarPower} fuelCell={fuelCellPower} battery={batteryPower} demand={demandPower} gridImport={gridImport} gridExport={gridExport} showSolar={config?.solarEnabled !== false && widgetVisible("solarPower")} showFuelCell={config?.fuelCellEnabled !== false && widgetVisible("fuelCellPower")} showBattery={widgetVisible("batteryPower")} showDemand={widgetVisible("houseDemandPower")} showGrid={widgetVisible(gridExport != null && gridExport > 0 ? "gridExportPower" : "gridImportPower")} />
+          <EnergyFlow solar={solarPower} fuelCell={fuelCellPower} battery={batteryPower} demand={demandPower} demandLabel={demandLabel} demandTitle={demandTitle} gridImport={gridImport} gridExport={gridExport} showSolar={config?.solarEnabled !== false && widgetVisible("solarPower")} showFuelCell={config?.fuelCellEnabled !== false && widgetVisible("fuelCellPower")} showBattery={widgetVisible("batteryPower")} showDemand={widgetVisible("branchDemandPower")} showGrid={widgetVisible(gridExport != null && gridExport > 0 ? "gridExportPower" : "gridImportPower")} />
         </article>
 
         <article className="battery-panel panel">

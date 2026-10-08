@@ -9,7 +9,7 @@ import {
   extractAndValidateDatabaseBackup,
   listDatabaseBackups,
 } from "../database-backup.js";
-import { SCHEMA_VERSION, createHistoryStore } from "../history-store.js";
+import { SCHEMA_VERSION, createHistoryStore, isSchemaMigratableFrom } from "../history-store.js";
 
 type ApplicationStore = ReturnType<typeof createApplicationStore>;
 type HistoryStore = ReturnType<typeof createHistoryStore>;
@@ -189,8 +189,8 @@ export function createDatabaseAdministrationService(dependencies: DatabaseAdmini
           workingDir: dependencies.dataDir,
           onProgress,
         });
-        if (extracted.schemaVersion !== SCHEMA_VERSION
-          && !(extracted.schemaVersion === 7 && SCHEMA_VERSION === 8)) {
+        const extractedVersion = Number(extracted.schemaVersion);
+        if (extractedVersion !== SCHEMA_VERSION && !isSchemaMigratableFrom(extractedVersion, SCHEMA_VERSION)) {
           throw dependencies.createError(409, `Backup contains schema v${extracted.schemaVersion}; application requires schema v${SCHEMA_VERSION}`);
         }
         const backupArchitectureVersion = architectureVersionForDatabase(extracted.snapshotFile);

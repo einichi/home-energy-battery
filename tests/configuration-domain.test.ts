@@ -85,7 +85,7 @@ import {
   buildFuelCellGenerationModel,
   filterDemandDaysByOccupancy,
   predictAwayDemand,
-  predictHouseDemand,
+  predictBranchDemand,
 } from "../lib/domain/demand-forecast.js";
 
 import {
@@ -644,8 +644,8 @@ assert.equal(
 );
 
 const occupancySamples: any[] = [
-  { timestamp: "2026-07-12T08:30:00.000Z", houseDemandW: 1200, coverageSeconds: { houseDemandKwh: 1800 } },
-  { timestamp: "2026-07-12T09:30:00.000Z", houseDemandW: 300, coverageSeconds: { houseDemandKwh: 1800 } },
+  { timestamp: "2026-07-12T08:30:00.000Z", branchDemandW: 1200, coverageSeconds: { branchDemandKwh: 1800 } },
+  { timestamp: "2026-07-12T09:30:00.000Z", branchDemandW: 300, coverageSeconds: { branchDemandKwh: 1800 } },
 ];
 
 const homeDemandDays = aggregateDemandDays(occupancySamples, { awayPeriods, occupancy: "home" });
@@ -661,10 +661,10 @@ assert.equal(filterDemandDaysByOccupancy(homeDemandDays, awayPeriods, "home")[0]
 
 const directPowerCoverageDays = aggregateDemandDays([{
   timestamp: "2026-07-12T09:30:00.000Z",
-  houseDemandW: 900,
-  intervalAveragePowerW: { houseDemandW: 1000 },
-  powerCoverageSeconds: { houseDemandW: 1800 },
-  coverageSeconds: { houseDemandKwh: 0 },
+  branchDemandW: 900,
+  intervalAveragePowerW: { branchDemandW: 1000 },
+  powerCoverageSeconds: { branchDemandW: 1800 },
+  coverageSeconds: { branchDemandKwh: 0 },
 }]);
 
 const directCoverageTime = new Date("2026-07-12T09:30:00.000Z");
@@ -687,9 +687,9 @@ const awayBucket = awayBucketDate.getHours() * 2 + (awayBucketDate.getMinutes() 
 
 const learnedAway = predictAwayDemand(
   [
-    { timestamp: "2026-07-12T09:30:00.000Z", houseDemandW: 300, coverageSeconds: { houseDemandKwh: 1800 } },
-    { timestamp: "2026-07-13T09:30:00.000Z", houseDemandW: 400, coverageSeconds: { houseDemandKwh: 1800 } },
-    { timestamp: "2026-07-14T09:30:00.000Z", houseDemandW: 500, coverageSeconds: { houseDemandKwh: 1800 } },
+    { timestamp: "2026-07-12T09:30:00.000Z", branchDemandW: 300, coverageSeconds: { branchDemandKwh: 1800 } },
+    { timestamp: "2026-07-13T09:30:00.000Z", branchDemandW: 400, coverageSeconds: { branchDemandKwh: 1800 } },
+    { timestamp: "2026-07-14T09:30:00.000Z", branchDemandW: 500, coverageSeconds: { branchDemandKwh: 1800 } },
   ],
   new Date("2026-07-15T09:30:00.000Z"),
   new Map(),
@@ -705,8 +705,8 @@ assert.equal(learnedAway.profile.get(awayBucket), 400);
 
 const fallbackAway = predictAwayDemand(
   [
-    { timestamp: "2026-07-12T09:30:00.000Z", houseDemandW: 300 },
-    { timestamp: "2026-07-13T09:30:00.000Z", houseDemandW: 400 },
+    { timestamp: "2026-07-12T09:30:00.000Z", branchDemandW: 300 },
+    { timestamp: "2026-07-13T09:30:00.000Z", branchDemandW: 400 },
   ],
   new Date("2026-07-15T09:30:00.000Z"),
   new Map(),
@@ -835,13 +835,13 @@ for (let daysAgo = 1; daysAgo <= 10; daysAgo += 1) {
   for (let bucket = 0; bucket < 48; bucket += 1) {
     youngDemandHistory.push({
       timestamp: new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(bucket / 2), bucket % 2 ? 30 : 0).toISOString(),
-      houseDemandW: 900 + daysAgo * 20,
-      coverageSeconds: { houseDemandKwh: 1800 },
+      branchDemandW: 900 + daysAgo * 20,
+      coverageSeconds: { branchDemandKwh: 1800 },
     });
   }
 }
 
-const youngWeekendPrediction = predictHouseDemand(youngDemandHistory, new Date(2026, 6, 12));
+const youngWeekendPrediction = predictBranchDemand(youngDemandHistory, new Date(2026, 6, 12));
 
 assert.equal(youngWeekendPrediction.available, true);
 
@@ -856,7 +856,7 @@ const indexedYoungDemandDays = aggregateDemandDays(youngDemandHistory);
 
 const compactYoungDemandHistory = youngDemandHistory.map(({ coverageSeconds, ...sample }: any) => sample);
 
-const indexedYoungPrediction = predictHouseDemand(
+const indexedYoungPrediction = predictBranchDemand(
   compactYoungDemandHistory,
   new Date(2026, 6, 12),
   new Map(),
@@ -870,7 +870,7 @@ assert.equal(indexedYoungPrediction.validDayCount, 10);
 
 const incompleteDemandHistory = youngDemandHistory.filter((sample: any) => new Date(sample.timestamp).getHours() < 8);
 
-const incompletePrediction = predictHouseDemand(incompleteDemandHistory, new Date(2026, 6, 12));
+const incompletePrediction = predictBranchDemand(incompleteDemandHistory, new Date(2026, 6, 12));
 
 assert.equal(incompletePrediction.available, false);
 
@@ -897,7 +897,7 @@ const sample = sampleFromStatus({
     fuel_cells: [{ instant_power: { value: 300 } }],
   },
   meter: {
-    house_demand_power: { value: 1800 },
+    branch_demand_power: { value: 1800 },
     grid_import_power: { value: 200 },
     grid_export_power: { value: 100 },
     channel_power: {
@@ -932,7 +932,7 @@ assert.equal(sample.gridImportKwh, undefined);
 
 assert.equal(sample.gridExportKwh, undefined);
 
-assert.equal(sample.houseDemandKwh, 0.75);
+assert.equal(sample.branchDemandKwh, 0.75);
 
 assert.equal(sample.circuitPowerW["1"], 120);
 
@@ -1147,14 +1147,14 @@ assert.equal(mixedChargeWithoutGridMeter.offPeakSavingYen, undefined);
 const smartCosmoDisabledSample = sampleFromStatus({
   read_at: "2026-05-31T12:15:00+09:00",
   meter: {
-    house_demand_power: { value: 1800 },
+    branch_demand_power: { value: 1800 },
     grid_import_power: { value: 200 },
     grid_export_power: { value: 100 },
     channel_power: { decoded: { channels: [{ channel: 1, value: 120 }] } },
   },
 }, { ...migrated, smartCosmoEnabled: false });
 
-assert.equal(smartCosmoDisabledSample.houseDemandW, null);
+assert.equal(smartCosmoDisabledSample.branchDemandW, null);
 
 assert.equal(smartCosmoDisabledSample.gridImportW, null);
 

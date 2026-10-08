@@ -97,7 +97,7 @@ const status = {
     ],
   },
   meter: {
-    house_demand_power: { value: 3210 },
+    branch_demand_power: { value: 3210 },
     grid_import_power: { value: 250 },
     grid_export_power: { value: 0 },
     channel_power: {
@@ -116,7 +116,7 @@ const history = {
   samples: [
     {
       timestamp: "2026-09-12T11:00:00.000Z",
-      houseDemandW: 2800,
+      branchDemandW: 2800,
       solarPowerW: 2200,
       fuelCellPowerW: 500,
       batteryPowerW: -400,
@@ -127,7 +127,7 @@ const history = {
     },
     {
       timestamp: "2026-09-12T12:00:00.000Z",
-      houseDemandW: 3210,
+      branchDemandW: 3210,
       solarPowerW: 2450,
       fuelCellPowerW: 510,
       batteryPowerW: -720,
@@ -139,7 +139,7 @@ const history = {
   ],
   summary: {
     sampleCount: 2,
-    houseDemandKwh: 3.2,
+    branchDemandKwh: 3.2,
     solarGenerationKwh: 2.4,
     fuelCellKwh: 0.5,
     gridImportKwh: 0.3,
@@ -166,7 +166,7 @@ const history = {
       { channel: 3, label: "Office", totalKwh: 0.2, latestWatts: 120 },
     ],
     dataQuality: {
-      houseDemandKwh: { quality: "counter", coveragePercent: 100 },
+      branchDemandKwh: { quality: "counter", coveragePercent: 100 },
     },
   },
 };
@@ -211,7 +211,7 @@ const energyReport = {
   totals: {
     key: "total",
     label: "Selected period",
-    houseDemandKwh: 84,
+    branchDemandKwh: 84,
     solarGenerationKwh: 42,
     gridImportKwh: 39,
     gridExportKwh: 8,
@@ -230,30 +230,30 @@ const energyReport = {
       label: "2026-09-11",
       start: "2026-09-11T00:00:00.000Z",
       end: "2026-09-12T00:00:00.000Z",
-      houseDemandKwh: 3,
+      branchDemandKwh: 3,
       solarGenerationKwh: 1.2,
       gridImportKwh: 1.5,
       gridExportKwh: 0.1,
       fuelCellKwh: 0.5,
       peakDemandW: 4100,
       sampleCount: 48,
-      dataQuality: { houseDemandKwh: { coveragePercent: 100 } },
+      dataQuality: { branchDemandKwh: { coveragePercent: 100 } },
     },
     {
       key: "2026-09-12",
       label: "2026-09-12",
       start: "2026-09-12T00:00:00.000Z",
       end: "2026-09-13T00:00:00.000Z",
-      houseDemandKwh: 3.3,
-      houseDemandDeltaKwh: 0.3,
-      houseDemandDeltaPercent: 10,
+      branchDemandKwh: 3.3,
+      branchDemandDeltaKwh: 0.3,
+      branchDemandDeltaPercent: 10,
       solarGenerationKwh: 1.6,
       gridImportKwh: 1.4,
       gridExportKwh: 0.2,
       fuelCellKwh: 0.6,
       peakDemandW: 4300,
       sampleCount: 48,
-      dataQuality: { houseDemandKwh: { coveragePercent: 98 } },
+      dataQuality: { branchDemandKwh: { coveragePercent: 98 } },
     },
   ],
   features: {
@@ -1068,7 +1068,7 @@ describe("React application shell", () => {
     const requestedUrl = new URL(historyRequest!, "http://localhost");
     expect(new Date(requestedUrl.searchParams.get("end")!).getTime() - new Date(requestedUrl.searchParams.get("start")!).getTime()).toBe(7 * 24 * 60 * 60_000);
 
-    await act(async () => resolveHistory({ ok: true, status: 200, json: async () => ({ ...history, summary: { ...history.summary, houseDemandKwh: 7.7 } }) } as Response));
+    await act(async () => resolveHistory({ ok: true, status: 200, json: async () => ({ ...history, summary: { ...history.summary, branchDemandKwh: 7.7 } }) } as Response));
     await waitFor(() => expect(document.querySelector(".period-results")).toHaveAttribute("aria-busy", "false"));
     expect(screen.getByRole("heading", { name: "Power flows and storage" })).toBeVisible();
   });

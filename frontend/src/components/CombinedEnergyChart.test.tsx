@@ -6,11 +6,11 @@ describe("combined energy chart", () => {
   it("renders signed power, percentage data, and an accessible table", () => {
     render(<CombinedEnergyChart
       label="Test energy history"
-      selected={["houseDemandW", "batteryPowerW", "stateOfChargePercent"]}
+      selected={["branchDemandW", "batteryPowerW", "stateOfChargePercent"]}
       samples={[
-        { timestamp: "2026-09-12T10:00:00.000Z", houseDemandW: 1200, batteryPowerW: -500, stateOfChargePercent: 72 },
-        { timestamp: "invalid timestamp", houseDemandW: 1300 },
-        { timestamp: "2026-09-12T11:00:00.000Z", houseDemandW: 1600, batteryPowerW: 300, stateOfChargePercent: 68 },
+        { timestamp: "2026-09-12T10:00:00.000Z", branchDemandW: 1200, batteryPowerW: -500, stateOfChargePercent: 72 },
+        { timestamp: "invalid timestamp", branchDemandW: 1300 },
+        { timestamp: "2026-09-12T11:00:00.000Z", branchDemandW: 1600, batteryPowerW: 300, stateOfChargePercent: 68 },
       ]}
     />);
 
@@ -20,12 +20,12 @@ describe("combined energy chart", () => {
     expect(screen.getByText("-500 W")).toBeInTheDocument();
     expect(screen.getByText("72%")).toBeInTheDocument();
     const legend = screen.getByLabelText("Chart series");
-    expect(within(legend).getByText("Demand")).toBeVisible();
+    expect(within(legend).getByText("Circuits total")).toBeVisible();
     expect(within(legend).getByText("Battery")).toBeVisible();
     expect(within(legend).getByText("Battery SOC")).toBeVisible();
 
     fireEvent.pointerMove(screen.getByRole("img", { name: "Test energy history" }), { clientX: 460 });
-    expect(screen.getByRole("status", { name: "Chart reading details" })).toHaveTextContent(/Demand: 1.2 kW/);
+    expect(screen.getByRole("status", { name: "Chart reading details" })).toHaveTextContent(/Circuits total: 1.2 kW/);
     expect(screen.getByRole("status", { name: "Chart reading details" })).toHaveTextContent(/Battery SOC: 72%/);
   });
 
@@ -39,9 +39,9 @@ describe("combined energy chart", () => {
   it("can omit its passive legend when metric controls already identify the series", () => {
     render(<CombinedEnergyChart
       label="Controlled history"
-      selected={["houseDemandW"]}
+      selected={["branchDemandW"]}
       showSeriesLegend={false}
-      samples={[{ timestamp: "2026-09-12T11:00:00.000Z", houseDemandW: 1200 }]}
+      samples={[{ timestamp: "2026-09-12T11:00:00.000Z", branchDemandW: 1200 }]}
     />);
     expect(screen.queryByLabelText("Chart series")).not.toBeInTheDocument();
   });

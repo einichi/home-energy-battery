@@ -325,11 +325,11 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
     }
 
     const liveSoc = numericMetric(status.energy?.battery?.remaining_percent);
-    const liveHouseDemandW = numericMetric(status.meter?.house_demand_power);
+    const liveBranchDemandW = numericMetric(status.meter?.branch_demand_power);
     const liveGridImportW = numericMetric(status.meter?.grid_import_power);
     const telemetryChecks: Array<[number | null, string]> = [
       [liveSoc, "battery state of charge"],
-      [liveHouseDemandW, "house demand"],
+      [liveBranchDemandW, "total circuit load"],
       [liveGridImportW, "grid import"],
     ];
     const missingTelemetry = telemetryChecks.filter(([value]) => !Number.isFinite(value)).map(([, label]) => label);
@@ -367,7 +367,7 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
         stateOfChargePercent: liveSoc,
         batteryPowerW: numericMetric(status.energy?.battery?.instant_power),
         solarPowerW: numericMetric(status.energy?.solar?.instant_power),
-        houseDemandW: liveHouseDemandW,
+        branchDemandW: liveBranchDemandW,
       });
       state = {
         ...state,

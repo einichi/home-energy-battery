@@ -340,7 +340,7 @@ async function cmdLivePower(opts: CommandOptions) {
     const channelPowerRaw = meterEnabled ? await read(meterHost, meterEojText, EPC.METER_INSTANT_POWER_LIST) : null;
     const netGridWatts = gridPower?.raw && gridPower.raw.length === 4 ? gridPower.raw.readInt32BE(0) : null;
     const channelPower = decodeInstantPowerList(channelPowerRaw?.raw ?? null);
-    const houseDemandWatts = sumInstantPowerChannels(channelPower);
+    const branchDemandWatts = sumInstantPowerChannels(channelPower);
     const completedAt = new Date().toISOString();
 
     return {
@@ -409,15 +409,15 @@ async function cmdLivePower(opts: CommandOptions) {
           unit: "W",
           human: netGridWatts === null ? undefined : `${Math.max(-netGridWatts, 0)} W`,
         }), gridPower?.acquiredAt ?? completedAt),
-        house_demand_power: timestamped(metric({
+        branch_demand_power: timestamped(metric({
           host: meterHost,
           eoj: meterEojText,
           epc: EPC.METER_INSTANT_POWER_LIST,
-          name: "house_demand_power",
+          name: "branch_demand_power",
           raw: channelPowerRaw?.raw ?? null,
-          value: houseDemandWatts ?? undefined,
+          value: branchDemandWatts ?? undefined,
           unit: "W",
-          human: houseDemandWatts === null ? undefined : `${houseDemandWatts} W`,
+          human: branchDemandWatts === null ? undefined : `${branchDemandWatts} W`,
         }), channelPowerRaw?.acquiredAt ?? completedAt),
         channel_power: {
           host: meterHost,
@@ -642,7 +642,7 @@ async function cmdMeterStatus(opts: CommandOptions) {
     const finiteNetGridWatts = netGridWatts ?? Number.NaN;
     const channelPower = decodeInstantPowerList(channelsRaw);
     const channelEnergy = decodeCumulativePowerList(cumulativeChannelsRaw, unit);
-    const houseDemandWatts = sumInstantPowerChannels(channelPower);
+    const branchDemandWatts = sumInstantPowerChannels(channelPower);
 
     return {
       errors,
@@ -675,15 +675,15 @@ async function cmdMeterStatus(opts: CommandOptions) {
         unit: "W",
         human: Number.isFinite(finiteNetGridWatts) ? `${Math.max(-finiteNetGridWatts, 0)} W` : undefined,
       }),
-      house_demand_power: metric({
+      branch_demand_power: metric({
         host,
         eoj: eojText,
         epc: EPC.METER_INSTANT_POWER_LIST,
-        name: "house_demand_power",
+        name: "branch_demand_power",
         raw: channelsRaw,
-        value: Number.isFinite(houseDemandWatts) ? houseDemandWatts : undefined,
+        value: Number.isFinite(branchDemandWatts) ? branchDemandWatts : undefined,
         unit: "W",
-        human: Number.isFinite(houseDemandWatts) ? `${houseDemandWatts} W` : undefined,
+        human: Number.isFinite(branchDemandWatts) ? `${branchDemandWatts} W` : undefined,
       }),
       cumulative_bought: decodeCumulativeKwh({
         host,

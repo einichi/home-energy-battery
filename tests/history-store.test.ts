@@ -24,10 +24,10 @@ assert.deepEqual(normalizeRetentionPolicy({}, 730), {
 });
 
 const enriched = enrichHistorySample(
-  sample("2026-01-01T00:30:00.000Z", { houseDemandW: 1000, batteryPowerW: -500 }),
-  sample("2026-01-01T00:00:00.000Z", { houseDemandW: 1000, batteryPowerW: -500 }),
+  sample("2026-01-01T00:30:00.000Z", { branchDemandW: 1000, batteryPowerW: -500 }),
+  sample("2026-01-01T00:00:00.000Z", { branchDemandW: 1000, batteryPowerW: -500 }),
 );
-assert.equal(enriched.houseDemandKwh, 0.5);
+assert.equal(enriched.branchDemandKwh, 0.5);
 assert.equal(enriched.batteryChargeKwh, 0);
 assert.equal(enriched.batteryDischargeKwh, 0.25);
 
@@ -117,9 +117,9 @@ assert.equal(interpretedRecovery.energyQuality!.gridExportKwh, "integrated");
 const dataDir = await mkdtemp(path.join(os.tmpdir(), "history-store-"));
 try {
   const samples: any[] = [
-    sample("2024-01-01T00:00:00.000Z", { houseDemandW: 1000, solarPowerW: null, fuelCellHotWaterLevel: 2 }),
-    sample("2024-01-01T00:30:00.000Z", { houseDemandW: 2000, solarPowerW: 500, fuelCellHotWaterLevel: 4 }),
-    sample("2024-01-01T01:00:00.000Z", { houseDemandW: null, solarPowerW: null }),
+    sample("2024-01-01T00:00:00.000Z", { branchDemandW: 1000, solarPowerW: null, fuelCellHotWaterLevel: 2 }),
+    sample("2024-01-01T00:30:00.000Z", { branchDemandW: 2000, solarPowerW: 500, fuelCellHotWaterLevel: 4 }),
+    sample("2024-01-01T01:00:00.000Z", { branchDemandW: null, solarPowerW: null }),
   ];
   let store = createHistoryStore({ dataDir, logger: { log(): any {}, warn(): any {} } });
   await store.initialize();
@@ -134,7 +134,7 @@ try {
   assert.equal(stats.weatherRecords, 1);
 
   // A duplicate timestamp must not be stored or integrated twice.
-  const duplicate = store.appendSample(sample("2024-01-01T00:30:00.000Z", { houseDemandW: 9999 }));
+  const duplicate = store.appendSample(sample("2024-01-01T00:30:00.000Z", { branchDemandW: 9999 }));
   assert.equal(duplicate, null);
   assert.equal((await store.stats()).sampleCount, 3);
 
@@ -144,14 +144,14 @@ try {
     { resolution: "interval" },
   );
   assert.equal(interval.length, 3);
-  assert.equal(interval[1]!.houseDemandKwh, 0.75);
-  assert.equal(interval[1]!.powerCoverageSeconds?.houseDemandW, 1800);
-  assert.equal(interval[1]!.intervalAveragePowerW?.houseDemandW, 1500);
+  assert.equal(interval[1]!.branchDemandKwh, 0.75);
+  assert.equal(interval[1]!.powerCoverageSeconds?.branchDemandW, 1800);
+  assert.equal(interval[1]!.intervalAveragePowerW?.branchDemandW, 1500);
   assert.equal(interval[1]!.solarGenerationKwh, undefined);
   assert.equal(interval[0]!.fuelCellHotWaterLevel, 2);
   assert.equal(interval[1]!.fuelCellHotWaterLevel, 4);
   assert.equal(interval[2].fuelCellHotWaterLevel, null);
-  assert.equal(interval[2].houseDemandKwh, undefined);
+  assert.equal(interval[2].branchDemandKwh, undefined);
 
   const oversizedRange = store.querySamples(
     new Date("2020-01-01T00:00:00.000Z").getTime(),
@@ -300,7 +300,7 @@ try {
   const firstDay = new Date("2026-01-01T00:00:00.000Z").getTime();
   for (let day = 0; day < 10; day += 1) {
     store.appendSample(sample(new Date(firstDay + day * 86_400_000).toISOString(), {
-      houseDemandW: 1000 + day,
+      branchDemandW: 1000 + day,
     }));
   }
   const complete = store.querySamples(firstDay - 20 * 86_400_000, firstDay + 10 * 86_400_000);
@@ -335,7 +335,7 @@ try {
   const circuits = Object.fromEntries(Array.from({ length: 29 }, (_: any, index: any) => [index + 1, 100 + index]));
   const cumulative = Object.fromEntries(Array.from({ length: 29 }, (_: any, index: any) => [index + 1, 10 + index / 100]));
   store.appendSample(sample("2026-07-22T00:00:00.000Z", {
-    houseDemandW: 1000,
+    branchDemandW: 1000,
     gridImportW: 1000,
     gridImportCumulativeKwh: 100,
     meterCounterSourceHost: "meter",
@@ -344,7 +344,7 @@ try {
     expectedIntervalSeconds: 5,
   }));
   store.appendSample(sample("2026-07-22T00:00:05.000Z", {
-    houseDemandW: 1000,
+    branchDemandW: 1000,
     gridImportW: 1000,
     gridImportCumulativeKwh: 100.01,
     meterCounterSourceHost: "meter",
@@ -398,7 +398,7 @@ try {
   for (let minute = 0; minute < 30; minute += 5) {
     store.appendSample(
       sample(new Date(bucketStart + minute * 60_000).toISOString(), {
-        houseDemandW: 1000 + minute,
+        branchDemandW: 1000 + minute,
       }),
     );
   }
@@ -432,7 +432,7 @@ try {
   const start = Date.parse("2026-07-15T00:00:00.000Z");
   for (let minute = 0; minute <= 60; minute += 5) {
     store.appendSample(sample(new Date(start + minute * 60_000).toISOString(), {
-      houseDemandW: 1000 + minute,
+      branchDemandW: 1000 + minute,
       largeDevicePayload: "x".repeat(400),
     }));
   }
@@ -461,11 +461,11 @@ try {
   await store.initialize();
   const recovered = store.querySamples(start, start + 60 * 60_000, { resolution: "interval" });
   assert.ok(
-    recovered.some((value: any) => Number(value.powerCoverageSeconds?.houseDemandW) > 0),
+    recovered.some((value: any) => Number(value.powerCoverageSeconds?.branchDemandW) > 0),
     "existing rollup state restores direct power coverage without a database rebuild",
   );
   assert.ok(
-    recovered.some((value: any) => Number.isFinite(Number(value.intervalAveragePowerW?.houseDemandW))),
+    recovered.some((value: any) => Number.isFinite(Number(value.intervalAveragePowerW?.branchDemandW))),
     "existing rollup state restores interval power averages without a database rebuild",
   );
   store.close();

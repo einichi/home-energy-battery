@@ -6,6 +6,7 @@ import path from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createZstdCompress, createZstdDecompress } from "node:zlib";
+import { isSchemaMigratableFrom } from "./persistence/history-database.js";
 
 const BACKUP_MARGIN_BYTES = 64 * 1024 * 1024;
 
@@ -25,6 +26,7 @@ type BackupOptions = {
   onProgress?: ProgressCallback;
   now?: Date;
   beforeRestore?: boolean;
+  beforeUpgrade?: boolean;
 };
 
 function errorCode(error: unknown): string | undefined {
@@ -87,6 +89,10 @@ export function preRestoreDatabaseBackupFilename(sourceVersion: number, now = ne
   return `history-v${sourceVersion}-before-restore-${timestampForFilename(now)}.sqlite.zst`;
 }
 
+export function preUpgradeDatabaseBackupFilename(sourceVersion: number, now = new Date()): string {
+  return `history-v${sourceVersion}-before-upgrade-${timestampForFilename(now)}.sqlite.zst`;
+}
+
 function backupTimestamp(value: unknown): string | null {
   const match = String(value).match(/(\d{8}T\d{6}Z)(?:-\d+)?\.sqlite\.zst$/);
   if (!match) return null;
@@ -104,7 +110,9 @@ export function databaseBackupMetadata(filename: string, currentVersion: number 
     ? "manual"
     : /-before-restore-/.test(name)
       ? "pre-restore"
-      : "unknown";
+      : /-before-upgrade-/.test(name)
+        ? "pre-upgrade"
+        : "unknown";
   return {
     filename: name,
     kind,
@@ -113,7 +121,7 @@ export function databaseBackupMetadata(filename: string, currentVersion: number 
     createdAt: backupTimestamp(name),
     compatible: Number.isInteger(schemaVersion) && (
       schemaVersion === currentVersion
-      || (schemaVersion === 7 && currentVersion === 8)
+      || (currentVersion !== null && isSchemaMigratableFrom(schemaVersion as number, currentVersion))
     ),
   };
 }
@@ -236,19 +244,18 @@ export async function backupDatabaseManually({
   onProgress = () => {},
   now = new Date(),
   beforeRestore = false,
+  beforeUpgrade = false,
 }: BackupOptions) {
+  const kind = beforeRestore ? "pre-restore" : beforeUpgrade ? "pre-upgrade" : "manual";
+  const baseFilename = beforeRestore
+    ? preRestoreDatabaseBackupFilename(sourceVersion, now)
+    : beforeUpgrade
+      ? preUpgradeDatabaseBackupFilename(sourceVersion, now)
+      : manualDatabaseBackupFilename(sourceVersion, now);
   return {
-    ...(await createDatabaseBackup({
-      databaseFile,
-      backupDir,
-      sourceVersion,
-      baseFilename: beforeRestore
-        ? preRestoreDatabaseBackupFilename(sourceVersion, now)
-        : manualDatabaseBackupFilename(sourceVersion, now),
-      onProgress,
-    })),
+    ...(await createDatabaseBackup({ databaseFile, backupDir, sourceVersion, baseFilename, onProgress })),
     targetVersion: null,
-    kind: beforeRestore ? "pre-restore" : "manual",
+    kind,
   };
 }
 

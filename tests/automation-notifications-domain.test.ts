@@ -84,7 +84,7 @@ import {
   buildFuelCellGenerationModel,
   filterDemandDaysByOccupancy,
   predictAwayDemand,
-  predictHouseDemand,
+  predictBranchDemand,
 } from "../lib/domain/demand-forecast.js";
 
 import {
@@ -153,7 +153,7 @@ const evaluateAutomationRule = createAutomationRuleEvaluator({
 });
 
 
-const rule = cleanAutomationRule({ enabled: true, conditions: { breakerAmps: 40, reserveAmps: 5, source: "houseDemandW" } });
+const rule = cleanAutomationRule({ enabled: true, conditions: { breakerAmps: 40, reserveAmps: 5, source: "branchDemandW" } });
 
 assert.equal(rule.action, "set-mode");
 
@@ -201,7 +201,7 @@ assert.equal("log" in ruleConfig, false);
 const skipped = await evaluateAutomationRule(rule, {
   settings: { mode: { decoded: { mode: "eco" } } },
   energy: { battery: { operation_mode: { value: "auto" }, instant_power: { value: 0 } } },
-  meter: { house_demand_power: { value: 1000 } },
+  meter: { branch_demand_power: { value: 1000 } },
 }, new Date("2026-05-31T00:00:00.000Z"));
 
 assert.equal(skipped.result.skipped, "conditions not met");
@@ -217,10 +217,10 @@ assert.equal(unavailableDemand.result.skipped, "demand unavailable");
 
 const actualChargingSafe = await evaluateAutomationRule(cleanAutomationRule({
   enabled: true,
-  conditions: { source: "houseDemandW", breakerAmps: 40, reserveAmps: 5 },
+  conditions: { source: "branchDemandW", breakerAmps: 40, reserveAmps: 5 },
 }), {
   energy: { battery: { operation_mode: { value: "auto" }, instant_power: { value: 600 } } },
-  meter: { house_demand_power: { value: 2800 } },
+  meter: { branch_demand_power: { value: 2800 } },
 }, new Date("2026-05-31T00:00:00.000Z"));
 
 assert.equal(actualChargingSafe.result.skipped, "conditions not met");
@@ -274,13 +274,13 @@ const restoreWouldTrip = await evaluateAutomationRule(cleanAutomationRule({
   state: { awaitingRestore: true },
   conditions: {
     breakerAmps: 40,
-    source: "houseDemandW",
+    source: "branchDemandW",
     reserveAmps: 5,
     restoreBelowAmps: 30,
   },
 }), {
   energy: { battery: { operation_mode: { value: "standby" }, instant_power: { value: 0 } } },
-  meter: { house_demand_power: { value: 2600 } },
+  meter: { branch_demand_power: { value: 2600 } },
 }, new Date("2026-05-31T00:00:00.000Z"), () => {}, guardBatteryConfig);
 
 assert.equal(restoreWouldTrip.result.skipped, "restore would exceed breaker reserve");

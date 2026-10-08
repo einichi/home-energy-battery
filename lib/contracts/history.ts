@@ -29,8 +29,8 @@ export interface HistorySample {
   gridImportW?: number | null;
   gridExportKwh?: number | null;
   gridExportW?: number | null;
-  houseDemandKwh?: number | null;
-  houseDemandW?: number | null;
+  branchDemandKwh?: number | null;
+  branchDemandW?: number | null;
   fuelCellKwh?: number | null;
   fuelCellPowerW?: number | null;
   batteryChargeKwh?: number | null;
@@ -42,7 +42,7 @@ export interface HistorySample {
   standardRateYenPerKwh?: number | null;
   solarSavingYen?: number | null;
   offPeakSavingYen?: number | null;
-  peakHouseDemandW?: number | null;
+  peakBranchDemandW?: number | null;
   guardTriggerCount?: number | null;
   fuelCellGasM3?: number | null;
   fuelCellOperatingSeconds?: number | null;
@@ -61,7 +61,7 @@ export interface TimeRange {
 }
 
 export type EnergyMetricKey =
-  | "houseDemandKwh"
+  | "branchDemandKwh"
   | "solarGenerationKwh"
   | "gridImportKwh"
   | "gridExportKwh"

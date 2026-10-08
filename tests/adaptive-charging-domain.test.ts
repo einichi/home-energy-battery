@@ -88,7 +88,7 @@ import {
   buildFuelCellGenerationModel,
   filterDemandDaysByOccupancy,
   predictAwayDemand,
-  predictHouseDemand,
+  predictBranchDemand,
 } from "../lib/domain/demand-forecast.js";
 
 import {
@@ -874,7 +874,7 @@ const exportStatus: Record<string, any> = {
   meter: {
     grid_export_power: { value: 150 },
     grid_import_power: { value: 0 },
-    house_demand_power: { value: 368 },
+    branch_demand_power: { value: 368 },
   },
   energy: {
     battery: { instant_power: { value: 2192 } },
@@ -929,7 +929,7 @@ const learnedChargingPerformance = cleanAdaptiveChargingPerformance({
   samples: Array.from({ length: 10 }, (_: any, index: any) => ({
     at: new Date(2026, 6, 11, 1, index).toISOString(),
     batteryChargingW: 2000 - index * 50,
-    houseDemandW: index * 500,
+    branchDemandW: index * 500,
     gridImportW: 2500 + index * 450,
   })),
   sessions: [{
@@ -1241,8 +1241,8 @@ assert.match(gapObservations[0].rejectionReason!, /coverage/);
 
 // Duplicate coverage in one half-hour bucket must not double-count demand.
 const duplicateCoverageDays = aggregateDemandDays([
-  { timestamp: "2026-07-01T00:05:00.000Z", houseDemandW: 1000, powerCoverageSeconds: { houseDemandW: 1800 } },
-  { timestamp: "2026-07-01T00:25:00.000Z", houseDemandW: 1000, powerCoverageSeconds: { houseDemandW: 1800 } },
+  { timestamp: "2026-07-01T00:05:00.000Z", branchDemandW: 1000, powerCoverageSeconds: { branchDemandW: 1800 } },
+  { timestamp: "2026-07-01T00:25:00.000Z", branchDemandW: 1000, powerCoverageSeconds: { branchDemandW: 1800 } },
 ], { occupancy: "home" });
 assert.deepEqual([...(duplicateCoverageDays[0]?.values.values() ?? [])], [1000]);
 
@@ -1252,11 +1252,11 @@ const daytimeOnlySamples: any[] = [];
 for (let d = 1; d <= 10; d += 1) {
   for (let h = 6; h <= 17; h += 1) {
     for (const m of ["00", "30"]) {
-      daytimeOnlySamples.push({ timestamp: `2026-06-${String(d).padStart(2, "0")}T${String(h).padStart(2, "0")}:${m}:00+09:00`, houseDemandW: 1000, powerCoverageSeconds: { houseDemandW: 1800 } });
+      daytimeOnlySamples.push({ timestamp: `2026-06-${String(d).padStart(2, "0")}T${String(h).padStart(2, "0")}:${m}:00+09:00`, branchDemandW: 1000, powerCoverageSeconds: { branchDemandW: 1800 } });
     }
   }
 }
-const daytimeOnlyDemand = predictHouseDemand(daytimeOnlySamples, new Date("2026-07-01T12:00:00+09:00"), new Map(), { occupancy: "home" });
+const daytimeOnlyDemand = predictBranchDemand(daytimeOnlySamples, new Date("2026-07-01T12:00:00+09:00"), new Map(), { occupancy: "home" });
 assert.equal(daytimeOnlyDemand.available, false);
 
 
@@ -2675,13 +2675,13 @@ for (let week = 1; week <= 8; week += 1) {
   for (let bucket = 0; bucket < 48; bucket += 1) {
     demandSamples.push({
       timestamp: new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(bucket / 2), bucket % 2 ? 30 : 0).toISOString(),
-      houseDemandW: 1000 + week * 10,
-      coverageSeconds: { houseDemandKwh: 1800 },
+      branchDemandW: 1000 + week * 10,
+      coverageSeconds: { branchDemandKwh: 1800 },
     });
   }
 }
 
-const demandPrediction = predictHouseDemand(demandSamples, new Date(2026, 6, 13));
+const demandPrediction = predictBranchDemand(demandSamples, new Date(2026, 6, 13));
 
 assert.equal(demandPrediction.available, true);
 
@@ -2699,13 +2699,13 @@ for (const year of [2023, 2024, 2025]) {
   for (let bucket = 0; bucket < 48; bucket += 1) {
     multiYearDemandSamples.push({
       timestamp: new Date(day.getFullYear(), day.getMonth(), day.getDate(), Math.floor(bucket / 2), bucket % 2 ? 30 : 0).toISOString(),
-      houseDemandW: 3000,
-      coverageSeconds: { houseDemandKwh: 1800 },
+      branchDemandW: 3000,
+      coverageSeconds: { branchDemandKwh: 1800 },
     });
   }
 }
 
-const seasonalDemandPrediction = predictHouseDemand(multiYearDemandSamples, new Date(2026, 6, 13));
+const seasonalDemandPrediction = predictBranchDemand(multiYearDemandSamples, new Date(2026, 6, 13));
 
 assert.equal(seasonalDemandPrediction.available, true);
 
@@ -2726,7 +2726,7 @@ const indexedSeasonalDays = [2023, 2024, 2025].map((year: any) => ({
   values: new Map(Array.from({ length: 48 }, (_: any, bucket: any) => [bucket, 3000])),
 }));
 
-const indexedSeasonalPrediction = predictHouseDemand(
+const indexedSeasonalPrediction = predictBranchDemand(
   demandSamples,
   new Date(2026, 6, 13),
   new Map(),
@@ -2745,12 +2745,12 @@ const outOfSeasonDemandSamples: any[] = [...demandSamples];
 for (let bucket = 0; bucket < 48; bucket += 1) {
   outOfSeasonDemandSamples.push({
     timestamp: new Date(2025, 0, 13, Math.floor(bucket / 2), bucket % 2 ? 30 : 0).toISOString(),
-    houseDemandW: 5000,
-    coverageSeconds: { houseDemandKwh: 1800 },
+    branchDemandW: 5000,
+    coverageSeconds: { branchDemandKwh: 1800 },
   });
 }
 
-const outOfSeasonDemandPrediction = predictHouseDemand(outOfSeasonDemandSamples, new Date(2026, 6, 13));
+const outOfSeasonDemandPrediction = predictBranchDemand(outOfSeasonDemandSamples, new Date(2026, 6, 13));
 
 assert.equal(outOfSeasonDemandPrediction.seasonalComparableDays.length, 0);
 

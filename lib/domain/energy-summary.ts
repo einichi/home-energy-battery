@@ -239,8 +239,8 @@ export function summarizeSamples(
     (sum, sample, index) => sum + samplePowerKwh(sample, "gridExportKwh", "gridExportW", samples[index - 1], range),
     0,
   );
-  const houseDemandKwh = samples.reduce(
-    (sum, sample, index) => sum + samplePowerKwh(sample, "houseDemandKwh", "houseDemandW", samples[index - 1], range),
+  const branchDemandKwh = samples.reduce(
+    (sum, sample, index) => sum + samplePowerKwh(sample, "branchDemandKwh", "branchDemandW", samples[index - 1], range),
     0,
   );
   const fuelCellKwh = samples.reduce(
@@ -289,7 +289,7 @@ export function summarizeSamples(
     range,
   );
   const dataQuality = Object.fromEntries([
-    "houseDemandKwh",
+    "branchDemandKwh",
     "solarGenerationKwh",
     "gridImportKwh",
     "gridExportKwh",
@@ -329,7 +329,7 @@ export function summarizeSamples(
     solarGenerationKwh,
     gridImportKwh,
     gridExportKwh,
-    houseDemandKwh,
+    branchDemandKwh,
     fuelCellKwh,
     circuits,
     circuitTotalKwh: circuits.reduce((sum, circuit) => sum + Number(circuit.totalKwh ?? 0), 0),

@@ -9,7 +9,7 @@ export function OutcomeStrip({ summary, compact = false, visible }: { summary: H
     ? localSources.reduce<number>((total, value) => total + (Number.isFinite(Number(value)) ? Number(value) : 0), 0)
     : null;
   const values = [
-    { id: "houseDemandPower", label: "Used", value: formatEnergy(summary.houseDemandKwh) },
+    { id: "branchDemandPower", label: "Used", value: formatEnergy(summary.branchDemandKwh) },
     { id: "energySources", label: "Self-powered", value: formatEnergy(selfPowered) },
     { id: "powerImported", label: "Imported", value: formatEnergy(summary.gridImportKwh) },
     { id: "powerExported", label: "Exported", value: formatEnergy(summary.gridExportKwh) },

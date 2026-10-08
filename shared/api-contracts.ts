@@ -148,7 +148,7 @@ export type EnergySample = {
   batteryPowerW?: number | null;
   stateOfChargePercent?: number | null;
   solarPowerW?: number | null;
-  houseDemandW?: number | null;
+  branchDemandW?: number | null;
   fuelCellPowerW?: number | null;
   fuelCellHotWaterLevel?: number | null;
   gridImportW?: number | null;
@@ -179,7 +179,7 @@ export type HistorySummary = {
   end?: string | null;
   solarGenerationKwh?: number | null;
   fuelCellKwh?: number | null;
-  houseDemandKwh?: number | null;
+  branchDemandKwh?: number | null;
   gridImportKwh?: number | null;
   gridExportKwh?: number | null;
   batteryChargedKwh?: number | null;
@@ -210,9 +210,9 @@ export type EnergyReportBucket = HistorySummary & {
   label: string;
   start: string;
   end: string;
-  previousHouseDemandKwh?: number | null;
-  houseDemandDeltaKwh?: number | null;
-  houseDemandDeltaPercent?: number | null;
+  previousBranchDemandKwh?: number | null;
+  branchDemandDeltaKwh?: number | null;
+  branchDemandDeltaPercent?: number | null;
   peakDemandW?: number | null;
   sampleCount?: number;
 };
@@ -270,7 +270,10 @@ export type StatusSnapshot = {
   };
   meter?: {
     configured?: boolean;
-    house_demand_power?: Metric<number>;
+    branch_demand_power?: Metric<number>;
+    home_load_power?: Metric<number>;
+    home_load_source?: "derived" | "branch_fallback" | "unavailable" | "inconsistent";
+    home_load_missing?: string[];
     grid_import_power?: Metric<number>;
     grid_export_power?: Metric<number>;
     channel_power?: { decoded?: { channels?: Array<{ channel: number; value?: number | null }> } };

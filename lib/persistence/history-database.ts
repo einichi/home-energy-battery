@@ -78,6 +78,79 @@ function parseJson(text: unknown): unknown {
   }
 }
 
+/**
+ * Which earlier schema versions can be migrated up to the target. Once the
+ * target is 9, both 7 and 8 upgrade in one atomic step.
+ */
+export function isSchemaMigratableFrom(version: number, target: number): boolean {
+  if (target === 8) return version === 7;
+  if (target === 9) return version === 7 || version === 8;
+  return false;
+}
+
+// v8 -> v9 renamed the branch-demand JSON keys and two stored string values
+// (the automation rule source and the dashboard widget id).
+const RENAMED_KEYS = new Map<string, string>([
+  ["houseDemandW", "branchDemandW"],
+  ["houseDemandKwh", "branchDemandKwh"],
+  ["peakHouseDemandW", "peakBranchDemandW"],
+]);
+const RENAMED_VALUES = new Map<string, string>([
+  ["houseDemandW", "branchDemandW"],
+  ["houseDemandPower", "branchDemandPower"],
+]);
+
+/** Recursively rename exact keys and rewrite exact string values. */
+function rewriteRenamedDemandKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(rewriteRenamedDemandKeys);
+  if (value !== null && typeof value === "object") {
+    const source = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(source)) {
+      const renamed = RENAMED_KEYS.get(key);
+      if (renamed && Object.prototype.hasOwnProperty.call(source, renamed)) {
+        throw new Error(`history migration: key ${key} would collide with existing ${renamed}`);
+      }
+      out[renamed ?? key] = rewriteRenamedDemandKeys(child);
+    }
+    return out;
+  }
+  if (typeof value === "string") return RENAMED_VALUES.get(value) ?? value;
+  return value;
+}
+
+function tableExists(database: DatabaseSync, table: string): boolean {
+  return Boolean(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
+}
+
+function rewriteJsonColumn(database: DatabaseSync, table: string, columns: string[]): void {
+  if (!tableExists(database, table)) return;
+  const rows = database.prepare(`SELECT rowid AS rid, ${columns.join(", ")} FROM ${table}`).all() as Array<{ rid: number } & Record<string, unknown>>;
+  if (!rows.length) return;
+  const update = database.prepare(`UPDATE ${table} SET ${columns.map((column) => `${column} = ?`).join(", ")} WHERE rowid = ?`);
+  for (const row of rows) {
+    const values = columns.map((column): string | null => {
+      const raw = row[column];
+      if (typeof raw !== "string") return raw === null || raw === undefined ? null : String(raw);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw) as unknown;
+      } catch (cause: unknown) {
+        throw new Error(`history migration: invalid JSON in ${table}.${column}`, { cause });
+      }
+      return JSON.stringify(rewriteRenamedDemandKeys(parsed));
+    });
+    update.run(...values, row.rid);
+  }
+}
+
+/** Rewrite the branch-demand keys/values across all persisted JSON payloads. */
+function migrateDemandKeys(database: DatabaseSync): void {
+  rewriteJsonColumn(database, "samples", ["payload_json"]);
+  rewriteJsonColumn(database, "rollups", ["payload_json", "state_json"]);
+  rewriteJsonColumn(database, "application_documents", ["payload_json"]);
+}
+
 export function historyDatabaseFile(dataDir: string): string {
   return path.join(dataDir, "history.sqlite");
 }
@@ -216,19 +289,23 @@ export function migrateHistorySchema(database: DatabaseSync, versions: HistorySc
     | undefined;
   const version = Number(row ? parseJson(row.value) : Number.NaN);
   if (version === versions.schemaVersion) return;
-  if (version !== 7 || versions.schemaVersion !== 8) {
+  if (!isSchemaMigratableFrom(version, versions.schemaVersion)) {
     throw new Error(`history database schema ${Number.isInteger(version) ? version : "unknown"} cannot be migrated to ${versions.schemaVersion}`);
   }
   database.exec("BEGIN IMMEDIATE");
   try {
-    createBacktestSchema(database);
-    // Bring a migrated database in line with fresh schemas: dedupe any legacy
-    // duplicate timestamps, then add the same indexes createHistorySchema uses.
-    database.exec(`
-      DELETE FROM samples WHERE id NOT IN (SELECT MIN(id) FROM samples GROUP BY timestamp_ms);
-      CREATE UNIQUE INDEX IF NOT EXISTS samples_timestamp_unique_idx ON samples(timestamp_ms);
-      CREATE INDEX IF NOT EXISTS rollups_end_idx ON rollups(resolution, bucket_end_ms);
-    `);
+    // v7 -> v8: bring older databases in line with the fresh schema (backtest
+    // tables, deduped sample timestamps, the indexes createHistorySchema adds).
+    if (version <= 7) {
+      createBacktestSchema(database);
+      database.exec(`
+        DELETE FROM samples WHERE id NOT IN (SELECT MIN(id) FROM samples GROUP BY timestamp_ms);
+        CREATE UNIQUE INDEX IF NOT EXISTS samples_timestamp_unique_idx ON samples(timestamp_ms);
+        CREATE INDEX IF NOT EXISTS rollups_end_idx ON rollups(resolution, bucket_end_ms);
+      `);
+    }
+    // v8 -> v9: rename the stored branch-demand keys/values.
+    migrateDemandKeys(database);
     const setMetadata = database.prepare(`
       INSERT INTO metadata(key, value) VALUES (?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
@@ -237,8 +314,8 @@ export function migrateHistorySchema(database: DatabaseSync, versions: HistorySc
     setMetadata.run("energyCalculationVersion", JSON.stringify(versions.energyCalculationVersion));
     setMetadata.run("architectureVersion", JSON.stringify(versions.architectureVersion));
     // Record when the v7 sample dedupe/compaction ran so the statistics view can
-    // report it; fresh and already-v8 databases legitimately have no value.
-    setMetadata.run("compaction:schema-v7", JSON.stringify({ completedAt: new Date().toISOString() }));
+    // report it; fresh and already-v9 databases legitimately have no value.
+    if (version <= 7) setMetadata.run("compaction:schema-v7", JSON.stringify({ completedAt: new Date().toISOString() }));
     database.exec("COMMIT");
   } catch (error: unknown) {
     database.exec("ROLLBACK");
@@ -278,7 +355,7 @@ export async function inspectHistoryDatabase(
       if (!Number.isInteger(version) || version < 1) {
         return { state: "invalid", databaseFile, databaseBytes, error: "Schema version is missing or invalid" };
       }
-      if (version === 7 && schemaVersion === 8) {
+      if (isSchemaMigratableFrom(version, schemaVersion)) {
         return {
           state: "migratable",
           databaseFile,

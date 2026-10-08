@@ -8,9 +8,13 @@ import {
 import { ARCHITECTURE_VERSION } from "./application-store.js";
 import {
   createHistorySchema,
+  isSchemaMigratableFrom,
   migrateHistorySchema,
   inspectHistoryDatabase as inspectHistoryDatabaseFile,
 } from "./persistence/history-database.js";
+import { backupDatabaseManually } from "./database-backup.js";
+
+export { isSchemaMigratableFrom } from "./persistence/history-database.js";
 import { createEventRepository } from "./persistence/event-repository.js";
 import { createAwayPeriodRepository } from "./persistence/away-period-repository.js";
 import {
@@ -28,7 +32,7 @@ import type { HistorySample } from "./contracts/history.js";
 
 export { historyDatabaseFile } from "./persistence/history-database.js";
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 export const ENERGY_CALCULATION_VERSION = 4;
 const MAX_RAW_AUTO_SAMPLES = 10_000;
 const MAX_RAW_AUTO_BYTES = 32 * 1024 * 1024;
@@ -36,7 +40,7 @@ const AUTO_RAW_DETAIL_WINDOW_MS = 24 * 60 * 60_000;
 const DEFAULT_MAX_INTEGRATION_GAP_MS = 35 * 60_000;
 const SOLAR_FORECAST_MIN_COVERAGE_RATIO = 0.8;
 const ENERGY_KEYS: string[] = [
-  "houseDemandKwh",
+  "branchDemandKwh",
   "solarGenerationKwh",
   "gridImportKwh",
   "gridExportKwh",
@@ -48,7 +52,7 @@ const ENERGY_KEYS: string[] = [
 const POWER_KEYS: string[] = [
   "batteryPowerW",
   "solarPowerW",
-  "houseDemandW",
+  "branchDemandW",
   "fuelCellPowerW",
   "gridExportW",
   "gridImportW",
@@ -190,7 +194,7 @@ export function compactHistorySample(sample: HistorySample = {}): HistorySample 
 export function enrichHistorySample(sample: HistorySample, previousSample: HistorySample | null = null, { metricBaselines = null }: { metricBaselines?: Record<string, HistorySample> | null } = {}): HistorySample {
   const enriched: HistorySample = { ...sample, calculationVersion: ENERGY_CALCULATION_VERSION };
   const mappings: Array<[string, string, (value: number) => number]> = [
-    ["houseDemandKwh", "houseDemandW", (value) => Math.max(0, value)],
+    ["branchDemandKwh", "branchDemandW", (value) => Math.max(0, value)],
     ["solarGenerationKwh", "solarPowerW", (value) => Math.max(0, value)],
     ["gridImportKwh", "gridImportW", (value) => Math.max(0, value)],
     ["gridExportKwh", "gridExportW", (value) => Math.max(0, value)],
@@ -378,7 +382,7 @@ export function interpretHistorySample(rawSample: HistorySample, previousRawSamp
       if (result.issue) circuitCounterIssues.push({ channel: Number(channel), issue: result.issue });
     }
   }
-  const exactHouseDemandKwh = Object.keys(currentCircuits).length > 0
+  const exactBranchDemandKwh = Object.keys(currentCircuits).length > 0
     && Object.keys(circuitEnergyKwh).length === Object.keys(currentCircuits).length
     ? Object.values(circuitEnergyKwh).reduce((sum, value) => sum + value, 0)
     : null;
@@ -389,7 +393,7 @@ export function interpretHistorySample(rawSample: HistorySample, previousRawSamp
     ["fuelCellGasM3", fuelCellGas.delta],
     ["gridImportKwh", gridImport.delta],
     ["gridExportKwh", gridExport.delta],
-    ["houseDemandKwh", exactHouseDemandKwh],
+    ["branchDemandKwh", exactBranchDemandKwh],
   ];
   const coverageSeconds: Record<string, number> = {};
   const energyQuality: Record<string, string> = {};
@@ -472,7 +476,7 @@ interface RollupState {
     sourceHosts: Record<string, number>;
   };
   guardTriggerCount: number;
-  peakHouseDemandW: number | null;
+  peakBranchDemandW: number | null;
   rateYenPerKwh: number | null;
   rateLabel: string | null;
 }
@@ -494,7 +498,7 @@ function emptyRollupState(startMs: number, resolution: HistoryResolution): Rollu
     circuits: { power: {}, energy: {}, cumulative: {} },
     fuelCell: { operatingSeconds: 0, startCount: 0, states: {}, qualities: {}, lastState: null, lastHotWaterLevel: null, sourceHosts: {} },
     guardTriggerCount: 0,
-    peakHouseDemandW: null,
+    peakBranchDemandW: null,
     rateYenPerKwh: null,
     rateLabel: null,
   };
@@ -520,7 +524,7 @@ function addRollupSample(state: RollupState, sample: HistorySample, previousFuel
   state.energyQualities ??= {};
   // Rollup state persisted before peak tracking existed has no key; seed it so
   // the Math.max below cannot produce NaN.
-  state.peakHouseDemandW ??= null;
+  state.peakBranchDemandW ??= null;
   state.count += Number(sample.rollupSampleCount ?? 1) || 1;
   state.firstTimestamp ??= sample.timestamp ?? null;
   state.lastTimestamp = sample.timestamp ?? null;
@@ -529,10 +533,10 @@ function addRollupSample(state: RollupState, sample: HistorySample, previousFuel
     const value = finite(sample.intervalAveragePowerW?.[key]) ?? sample[key];
     addAverageMetric(state.powers, key, value, weight);
   }
-  // Peak house demand must use the instantaneous value, not the interval average.
-  const peakDemand = finite(sample.peakHouseDemandW) ?? finite(sample.houseDemandW);
+  // Peak branch demand must use the instantaneous value, not the interval average.
+  const peakDemand = finite(sample.peakBranchDemandW) ?? finite(sample.branchDemandW);
   if (peakDemand !== null) {
-    state.peakHouseDemandW = state.peakHouseDemandW === null ? peakDemand : Math.max(state.peakHouseDemandW, peakDemand);
+    state.peakBranchDemandW = state.peakBranchDemandW === null ? peakDemand : Math.max(state.peakBranchDemandW, peakDemand);
   }
   const soc = finite(sample.stateOfChargePercent);
   if (soc !== null) {
@@ -643,7 +647,7 @@ function rollupPayload(state: RollupState): HistorySample {
   }
   if (Object.keys(powerCoverageSeconds).length) payload.powerCoverageSeconds = powerCoverageSeconds;
   if (Object.keys(intervalAveragePowerW).length) payload.intervalAveragePowerW = intervalAveragePowerW;
-  if (state.peakHouseDemandW != null) payload.peakHouseDemandW = state.peakHouseDemandW;
+  if (state.peakBranchDemandW != null) payload.peakBranchDemandW = state.peakBranchDemandW;
   if (state.soc.count > 0) {
     payload.stateOfChargePercent = state.soc.sum / state.soc.count;
     payload.startStateOfChargePercent = state.soc.first;
@@ -859,6 +863,19 @@ export function createHistoryStore({
       if (!(error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
       existing = false;
     }
+    if (existing) {
+      // A schema upgrade is one-way; take and validate a backup before opening
+      // the database writable, and fail startup if it cannot be completed.
+      const inspection = await inspectHistoryDatabaseFile(dataDir, SCHEMA_VERSION);
+      if (inspection.state === "migratable") {
+        await backupDatabaseManually({
+          databaseFile,
+          backupDir: path.join(dataDir, "backups"),
+          sourceVersion: inspection.version ?? SCHEMA_VERSION - 1,
+          beforeUpgrade: true,
+        });
+      }
+    }
     database = new DatabaseSync(databaseFile);
     if (!existing) {
       createHistorySchema(database, {
@@ -870,7 +887,7 @@ export function createHistoryStore({
       const table = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'metadata'").get();
       const row = table ? database.prepare("SELECT value FROM metadata WHERE key = 'schemaVersion'").get() as { value?: unknown } | undefined : null;
       const version = row ? parseJson(row.value, null as number | null) : null;
-      if (version === 7 && SCHEMA_VERSION === 8) {
+      if (isSchemaMigratableFrom(version ?? Number.NaN, SCHEMA_VERSION)) {
         migrateHistorySchema(database, {
           schemaVersion: SCHEMA_VERSION,
           energyCalculationVersion: ENERGY_CALCULATION_VERSION,

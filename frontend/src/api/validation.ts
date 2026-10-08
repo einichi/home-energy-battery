@@ -15,7 +15,7 @@ function optionalNumber(value: unknown, label: string) {
 
 function validateHistorySummary(value: unknown) {
   const summary = object(value, "History summary");
-  for (const key of ["sampleCount", "houseDemandKwh", "solarGenerationKwh", "gridImportKwh", "gridExportKwh", "guardTriggerCount"] as const) {
+  for (const key of ["sampleCount", "branchDemandKwh", "solarGenerationKwh", "gridImportKwh", "gridExportKwh", "guardTriggerCount"] as const) {
     optionalNumber(summary[key], `History summary ${key}`);
   }
   if (summary.energySources !== undefined) object(summary.energySources, "Energy sources");

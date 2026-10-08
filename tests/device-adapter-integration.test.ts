@@ -199,9 +199,9 @@ try {
   );
   assert.equal(initial.payload.energy.battery.remaining_percent.value, 62);
   assert.equal(initial.payload.energy.solar.instant_power.value, 850);
-  assert.equal(initial.payload.meter.house_demand_power.value, 1410);
+  assert.equal(initial.payload.meter.branch_demand_power.value, 1410);
   assert.equal(typeof initial.payload.energy.solar.instant_power.acquired_at, "string");
-  assert.equal(typeof initial.payload.meter.house_demand_power.acquired_at, "string");
+  assert.equal(typeof initial.payload.meter.branch_demand_power.acquired_at, "string");
   assert.equal(initial.payload.read_at, initial.payload.live_power.completed_at);
   assert.equal(typeof initial.payload.live_power.duration_ms, "number");
   assert.equal(initial.payload.meter.channel_power.decoded.channels.length, 3);

@@ -28,7 +28,7 @@ export function adaptiveChargingBaseAvailability(config: ApplicationConfig): Ada
     ...positive.filter(([value]) => value === null || value === undefined || value === "" || !Number.isFinite(Number(value)) || Number(value) <= 0),
   ].map(([, label]) => label);
   if (missing.length) return { available: false, reason: `missing ${missing.join(", ")}` };
-  if (config.smartCosmoEnabled === false) return { available: false, reason: "overall house demand is unavailable" };
+  if (config.smartCosmoEnabled === false) return { available: false, reason: "total circuit load is unavailable" };
   return { available: true, reason: null };
 }
 

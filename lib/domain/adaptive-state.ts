@@ -91,7 +91,7 @@ export interface AdaptiveChargePerformanceSample {
   at: string;
   batteryChargingW: number;
   socPercent: number | null;
-  houseDemandW: number | null;
+  branchDemandW: number | null;
   gridImportW: number | null;
 }
 
@@ -237,7 +237,7 @@ export interface AdaptiveChargingState {
 interface AdaptiveStatus {
   [key: string]: unknown;
   energy?: { battery?: { remaining_percent?: { value?: unknown }; instant_power?: { value?: unknown } } };
-  meter?: { house_demand_power?: { value?: unknown }; grid_import_power?: { value?: unknown } };
+  meter?: { branch_demand_power?: { value?: unknown }; grid_import_power?: { value?: unknown } };
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -419,9 +419,9 @@ export function cleanAdaptiveChargingPerformance(input: unknown = {}): AdaptiveC
       at: stringOrNull(sample.at),
       batteryChargingW: Number(sample.batteryChargingW),
       socPercent: finiteNumberOrNull(sample.socPercent),
-      houseDemandW: sample.houseDemandW === null || sample.houseDemandW === undefined
+      branchDemandW: sample.branchDemandW === null || sample.branchDemandW === undefined
         ? null
-        : Number(sample.houseDemandW),
+        : Number(sample.branchDemandW),
       gridImportW: sample.gridImportW === null || sample.gridImportW === undefined
         ? null
         : Number(sample.gridImportW),
@@ -450,15 +450,15 @@ export function cleanAdaptiveChargingPerformance(input: unknown = {}): AdaptiveC
   const chargingPowers = samples.map((sample) => sample.batteryChargingW).sort((left, right) => left - right);
   const upperQuartile = chargingPowers.slice(Math.floor(chargingPowers.length * 0.75));
   const learnedChargeWatts = chargingPowers.length >= 10 ? median(upperQuartile) : null;
-  const demandPairs = samples.filter((sample) => Number.isFinite(sample.houseDemandW));
+  const demandPairs = samples.filter((sample) => Number.isFinite(sample.branchDemandW));
   let demandImpactWattsPerKw: number | null = null;
   if (demandPairs.length >= 10) {
-    const meanDemand = demandPairs.reduce((sum, sample) => sum + Number(sample.houseDemandW), 0) / demandPairs.length;
+    const meanDemand = demandPairs.reduce((sum, sample) => sum + Number(sample.branchDemandW), 0) / demandPairs.length;
     const meanCharge = demandPairs.reduce((sum, sample) => sum + sample.batteryChargingW, 0) / demandPairs.length;
-    const variance = demandPairs.reduce((sum, sample) => sum + (Number(sample.houseDemandW) - meanDemand) ** 2, 0);
+    const variance = demandPairs.reduce((sum, sample) => sum + (Number(sample.branchDemandW) - meanDemand) ** 2, 0);
     if (variance > 0) {
       const covariance = demandPairs.reduce(
-        (sum, sample) => sum + (Number(sample.houseDemandW) - meanDemand) * (sample.batteryChargingW - meanCharge),
+        (sum, sample) => sum + (Number(sample.branchDemandW) - meanDemand) * (sample.batteryChargingW - meanCharge),
         0,
       );
       demandImpactWattsPerKw = covariance / variance * 1000;
@@ -725,13 +725,13 @@ export function recordAdaptiveChargeSample(
     activeSession.lastSampleAt = now.toISOString();
   }
   if (batteryChargingW > 0) {
-    const houseDemandW = numericMetric(status.meter?.house_demand_power);
+    const branchDemandW = numericMetric(status.meter?.branch_demand_power);
     const gridImportW = numericMetric(status.meter?.grid_import_power);
     state.chargingPerformance = cleanAdaptiveChargingPerformance({
       ...state.chargingPerformance,
       samples: [
         ...(state.chargingPerformance?.samples ?? []),
-        { at: now.toISOString(), batteryChargingW, socPercent: soc, houseDemandW, gridImportW },
+        { at: now.toISOString(), batteryChargingW, socPercent: soc, branchDemandW, gridImportW },
       ],
     });
   }
