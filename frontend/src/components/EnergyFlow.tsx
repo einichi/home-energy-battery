@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { formatPower } from "../core/format";
-import { T, useI18n } from "../i18n";
+import { useTranslation } from "react-i18next";
 
 type FlowTone = "solar" | "fuel" | "battery" | "home" | "grid";
 type NodeId = FlowTone;
@@ -221,7 +221,7 @@ export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridE
   demandLabel?: string;
   demandTitle?: string;
 }) {
-  const { text } = useI18n();
+  const { t } = useTranslation("common");
   const exporting = gridExport !== null && gridExport > 0;
   const rootRef = useRef<HTMLDivElement>(null);
   const lastSignature = useRef("");
@@ -290,7 +290,7 @@ export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridE
   const markerSize = mobile ? 18 : 14;
 
   return (
-    <div ref={rootRef} className="energy-flow" aria-label={text("Current energy sources, storage, home demand, and grid exchange")}>
+    <div ref={rootRef} className="energy-flow" aria-label={t("currentEnergySourcesStorageHomeDemandAndGridExchange")}>
       {geometry.width > 0 && geometry.height > 0 ? (
         <svg
           className="flow-lines"
@@ -319,11 +319,11 @@ export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridE
           ))}
         </svg>
       ) : null}
-      {showSolar ? <FlowNode node="solar" className="flow-solar" tone="solar" value={solar}><T text={"Solar"} /></FlowNode> : null}
-      {showFuelCell ? <FlowNode node="fuel" className="flow-fuel" tone="fuel" value={fuelCell}><T text={"Ene-Farm"} /></FlowNode> : null}
-      {showBattery ? <FlowNode node="battery" className="flow-battery" tone="battery" label={text(batteryState(battery))} value={battery} /> : null}
-      {showDemand ? <FlowNode node="home" className="flow-home" tone="home" value={demand} label={<T text={demandLabel ?? "Home"} />} title={demandTitle} /> : null}
-      {showGrid ? <FlowNode node="grid" className="flow-grid" tone="grid" label={text(exporting ? "Grid export" : "Grid import")} value={exporting ? gridExport : gridImport} /> : null}
+      {showSolar ? <FlowNode node="solar" className="flow-solar" tone="solar" value={solar}>{t("solar")}</FlowNode> : null}
+      {showFuelCell ? <FlowNode node="fuel" className="flow-fuel" tone="fuel" value={fuelCell}>{t("eneFarm")}</FlowNode> : null}
+      {showBattery ? <FlowNode node="battery" className="flow-battery" tone="battery" label={t(batteryState(battery))} value={battery} /> : null}
+      {showDemand ? <FlowNode node="home" className="flow-home" tone="home" value={demand} label={t(demandLabel ?? "Home")} title={demandTitle} /> : null}
+      {showGrid ? <FlowNode node="grid" className="flow-grid" tone="grid" label={t(exporting ? "Grid export" : "Grid import")} value={exporting ? gridExport : gridImport} /> : null}
     </div>
   );
 }

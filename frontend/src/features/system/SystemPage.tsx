@@ -24,7 +24,7 @@ import {
 import { useEnergyStatus } from "../../hooks/useEnergyStatus";
 import { useSystemAdmin } from "../../hooks/useSystemAdmin";
 import { formatDateTime, formatDateTimesInText } from "../../core/format";
-import { T, useI18n } from "../../i18n";
+import { useTranslation } from "react-i18next";
 const sections = [
   {
     id: "equipment",
@@ -90,13 +90,13 @@ function duration(days?: number) {
   return Number.isFinite(days) ? `${days!.toFixed(1)} days` : "Unavailable";
 }
 function ResultMessage({ result }: { result: Result }) {
-  const { text } = useI18n();
+  const { t } = useTranslation("system");
   return result ? (
     <p
       className={`inline-save-result ${result.ok ? "success" : "failure"}`}
       role={result.ok ? "status" : "alert"}
     >
-      {formatDateTimesInText(text(result.message))}
+      {formatDateTimesInText(t(result.message))}
     </p>
   ) : null;
 }
@@ -109,6 +109,7 @@ function EquipmentSettings({
   status: StatusSnapshot | null;
   save: SaveSettings;
 }) {
+  const { t } = useTranslation("system");
   const [discovery, setDiscovery] = useState<DiscoveryView | null>(null);
   const [discoveryJob, setDiscoveryJob] = useState<DiscoveryJob | null>(null);
   const [discoveryMode, setDiscoveryMode] = useState<
@@ -218,13 +219,13 @@ function EquipmentSettings({
         {devices.map((device) => <article className="panel equipment-card" key={device.id} data-health={device.error ? "attention" : "healthy"}>
           <div><span className="health-dot" aria-hidden="true" /><strong>{device.name}</strong></div>
           <dl>
-            <div><dt><T text={"Address"} /></dt><dd>{device.address || <T text={"Not configured"} />}</dd></div>
-            <div><dt>EOJ</dt><dd>{device.eoj || <T text={"Reported during discovery"} />}</dd></div>
-            <div><dt><T text={"Last seen"} /></dt><dd>{device.error ? <T text={"Unavailable"} /> : status?.read_at ? formatDateTime(status.read_at) : <T text={"Waiting for status"} />}</dd></div>
-            <div><dt><T text={"Health"} /></dt><dd>{device.error ? formatDateTimesInText(device.error) : <T text={"Reporting normally"} />}</dd></div>
+            <div><dt>{t("address")}</dt><dd>{device.address || t("notConfigured")}</dd></div>
+            <div><dt>EOJ</dt><dd>{device.eoj || t("reportedDuringDiscovery")}</dd></div>
+            <div><dt>{t("lastSeen")}</dt><dd>{device.error ? t("unavailable") : status?.read_at ? formatDateTime(status.read_at) : t("waitingForStatus")}</dd></div>
+            <div><dt>{t("health")}</dt><dd>{device.error ? formatDateTimesInText(device.error) : t("reportingNormally")}</dd></div>
           </dl>
-          {device.id === "fuel-cell" && config.fuelCellProxyHosts?.length ? <p className="field-help"><T text={"Fallback proxies: "} />{config.fuelCellProxyHosts.join(", ")}</p> : null}
-          <details><summary><T text={"Inspect"} /></summary><p>{device.error ? formatDateTimesInText(device.error) : <T text={"No device-specific errors are present in the latest reading."} />}</p></details>
+          {device.id === "fuel-cell" && config.fuelCellProxyHosts?.length ? <p className="field-help">{"" + t("fallbackProxies") + " "}{config.fuelCellProxyHosts.join(", ")}</p> : null}
+          <details><summary>{t("inspect")}</summary><p>{device.error ? formatDateTimesInText(device.error) : t("noDeviceSpecificErrorsArePresentInTheLatestReading")}</p></details>
         </article>)}
       </section>
       <form
@@ -246,9 +247,9 @@ function EquipmentSettings({
         <div className="section-heading">
           <div>
             <h2>
-              <T text={"Installed equipment"} />
+              {t("installedEquipment")}
             </h2>
-            <p><T text={"Enable installed equipment and confirm its address."} /></p>
+            <p>{t("enableInstalledEquipmentAndConfirmItsAddress")}</p>
           </div>
         </div>
         <div className="system-toggle-grid">
@@ -258,7 +259,7 @@ function EquipmentSettings({
               type="checkbox"
               defaultChecked={config.solarEnabled !== false}
             />{" "}
-            <T text={" Solar generation"} />
+            {" " + t("solarGeneration") + ""}
           </label>
           <label>
             <input
@@ -266,7 +267,7 @@ function EquipmentSettings({
               type="checkbox"
               defaultChecked={config.smartCosmoEnabled !== false}
             />{" "}
-            <T text={" Smart Cosmo meter"} />
+            {" " + t("smartCosmoMeter") + ""}
           </label>
           <label>
             <input
@@ -274,47 +275,47 @@ function EquipmentSettings({
               type="checkbox"
               defaultChecked={config.fuelCellEnabled !== false}
             />{" "}
-            <T text={" Ene-Farm"} />
+            {" " + t("eneFarm") + ""}
           </label>
         </div>
         <div className="automation-form-grid">
           <label className="field">
-            <T text={"Battery address"} />
+            {t("batteryAddress")}
             <input
               name="batteryHost"
               defaultValue={config.batteryHost}
             />
           </label>
           <label className="field">
-            <T text={"Smart Cosmo address"} />
+            {t("smartCosmoAddress")}
             <input
               name="meterHost"
               defaultValue={config.meterHost}
             />
           </label>
           <label className="field">
-            <T text={"Solar address"} />
+            {t("solarAddress")}
             <input
               name="solarHost"
               defaultValue={config.solarHost}
             />
           </label>
           <label className="field">
-            <T text={"Ene-Farm primary address"} />
+            {t("eneFarmPrimaryAddress")}
             <input
               name="fuelCellPrimaryHost"
               defaultValue={config.fuelCellPrimaryHost}
             />
           </label>
           <label className="field">
-            <T text={"Ene-Farm fallback proxies"} />
+            {t("eneFarmFallbackProxies")}
             <input
               name="fuelCellProxyHosts"
               defaultValue={config.fuelCellProxyHosts?.join(", ")}
             />
           </label>
           <label className="field">
-            <T text={"Discovery subnets"} />
+            {t("discoverySubnets")}
             <input
               name="discoverySubnets"
               defaultValue={config.discoverySubnets?.join(", ")}
@@ -324,7 +325,7 @@ function EquipmentSettings({
         </div>
         <div className="form-footer">
           <button className="button primary">
-            <T text={"Save equipment"} />
+            {t("saveEquipment")}
           </button>
           <ResultMessage result={equipmentResult} />
         </div>
@@ -337,28 +338,24 @@ function EquipmentSettings({
         <div className="section-heading">
           <div>
             <h2>
-              <T text={"Smart Cosmo circuits"} />
+              {t("smartCosmoCircuits")}
             </h2>
             <p>
-              <T
-                text={
-                  "Name, show, and order detected circuits."
-                }
-              />
+              {t("nameShowAndOrderDetectedCircuits")}
             </p>
           </div>
         </div>
         <label className="field">
-          <T text={"Circuit ordering"} />
+          {t("circuitOrdering")}
           <select name="sort" defaultValue={config.circuitSortMode ?? "number"}>
             <option value="number">
-              <T text={"Circuit number"} />
+              {t("circuitNumber")}
             </option>
             <option value="current">
-              <T text={"Current demand"} />
+              {t("currentDemand")}
             </option>
             <option value="accumulated">
-              <T text={"Accumulated energy"} />
+              {t("accumulatedEnergy")}
             </option>
           </select>
         </label>
@@ -367,7 +364,7 @@ function EquipmentSettings({
             {circuitIds.map((id) => (
               <div key={id}>
                 <strong>
-                  <T text={"Circuit "} />
+                  {"" + t("circuit") + " "}
                   {id}
                 </strong>
                 <input
@@ -385,23 +382,19 @@ function EquipmentSettings({
                       config.circuitDashboardVisibility?.[id] !== false
                     }
                   />{" "}
-                  <T text={" Show by default"} />
+                  {" " + t("showByDefault") + ""}
                 </label>
               </div>
             ))}
           </div>
         ) : (
           <p className="automation-empty">
-            <T
-              text={
-                "Circuit channels will appear after Smart Cosmo reports them."
-              }
-            />
+            {t("circuitChannelsWillAppearAfterSmartCosmoReportsThem")}
           </p>
         )}
         <div className="form-footer">
           <button className="button primary" disabled={!circuitIds.length}>
-            <T text={"Save circuits"} />
+            {t("saveCircuits")}
           </button>
           <ResultMessage result={circuitResult} />
         </div>
@@ -410,14 +403,10 @@ function EquipmentSettings({
         <div className="section-heading">
           <div>
             <h2>
-              <T text={"Device discovery"} />
+              {t("deviceDiscovery")}
             </h2>
             <p>
-              <T
-                text={
-                  "Search the local network and review results before applying any address."
-                }
-              />
+              {t("searchTheLocalNetworkAndReviewResultsBeforeApplyingAnyAdec2fdc")}
             </p>
           </div>
         </div>
@@ -427,26 +416,18 @@ function EquipmentSettings({
             disabled={discovering}
             onClick={() => void discover("broadcast")}
           >
-            <T
-              text={
-                discovering && discoveryMode === "broadcast"
+            {t(discovering && discoveryMode === "broadcast"
                   ? "Discovery in progress…"
-                  : "Broadcast discovery"
-              }
-            />
+                  : "Broadcast discovery")}
           </button>
           <button
             className="quiet-button"
             disabled={discovering}
             onClick={() => void discover("active")}
           >
-            <T
-              text={
-                discovering && discoveryMode === "active"
+            {t(discovering && discoveryMode === "active"
                   ? "Scanning subnet…"
-                  : "Active subnet scan"
-              }
-            />
+                  : "Active subnet scan")}
           </button>
         </div>
         {discoveryJob ? (
@@ -468,7 +449,7 @@ function EquipmentSettings({
                     ? `${discoveryJob.scanned ?? 0} of ${discoveryJob.total} addresses · ${discoveryJob.found ?? 0} found`
                     : "Listening for equipment responses…")}
               </span>
-              {discovering ? <small><T text={"Live equipment polling is paused while discovery uses the local device network."} /></small> : null}
+              {discovering ? <small>{t("liveEquipmentPollingIsPausedWhileDiscoveryUsesTheLocalDe7bd542")}</small> : null}
             </div>
             {discovering ? (
               <progress max="100" value={discoveryPercent} />
@@ -478,12 +459,12 @@ function EquipmentSettings({
         {discovery ? (
           <div className="discovery-results">
             <strong>
-              {discovery.discovered?.length ?? 0} <T text={" devices found"} />
+              {discovery.discovered?.length ?? 0} {" " + t("devicesFound") + ""}
             </strong>
             {discovery.discovered?.map((item) => (
-              <article key={item.host}><div><strong>{item.host}</strong><span>{item.roles?.join(", ") || "Unknown role"}</span></div><small>{item.instances?.length ?? 0} <T text={" object instances reported"} /></small></article>
+              <article key={item.host}><div><strong>{item.host}</strong><span>{item.roles?.join(", ") || "Unknown role"}</span></div><small>{item.instances?.length ?? 0} {" " + t("objectInstancesReported") + ""}</small></article>
             ))}
-            {suggestedChanges.length ? <div className="discovery-suggestions"><strong><T text={"Suggested configuration changes"} /></strong><dl>{suggestedChanges.map(([key, value]) => <div key={key}><dt>{key.replace(/([A-Z])/g, " $1")}</dt><dd>{Array.isArray(value) ? value.join(", ") : String(value)}</dd></div>)}</dl><button className="button primary" type="button" onClick={() => void applyDiscoverySuggestions()}><T text={"Apply reviewed suggestions"} /></button></div> : <p className="field-help"><T text={"No saved equipment addresses need to change."} /></p>}
+            {suggestedChanges.length ? <div className="discovery-suggestions"><strong>{t("suggestedConfigurationChanges")}</strong><dl>{suggestedChanges.map(([key, value]) => <div key={key}><dt>{key.replace(/([A-Z])/g, " $1")}</dt><dd>{Array.isArray(value) ? value.join(", ") : String(value)}</dd></div>)}</dl><button className="button primary" type="button" onClick={() => void applyDiscoverySuggestions()}>{t("applyReviewedSuggestions")}</button></div> : <p className="field-help">{t("noSavedEquipmentAddressesNeedToChange")}</p>}
           </div>
         ) : null}
       </section>
@@ -497,6 +478,7 @@ function RateSettings({
   config: AppConfig;
   save: SaveSettings;
 }) {
+  const { t } = useTranslation("system");
   const [mode, setMode] = useState(config.rateMode ?? "simple");
   const [bands, setBands] = useState(config.rateBands ?? []);
   const [rateResult, setRateResult] = useState<Result>(null);
@@ -609,20 +591,16 @@ function RateSettings({
         <div className="section-heading">
           <div>
             <h2>
-              <T text={"Electricity rates"} />
+              {t("electricityRates")}
             </h2>
             <p>
-              <T
-                text={
-                  "Rates drive estimated savings and Adaptive Charging window selection."
-                }
-              />
+              {t("ratesDriveEstimatedSavingsAndAdaptiveChargingWindowSelec1cfa1e")}
             </p>
           </div>
         </div>
         <fieldset>
           <legend>
-            <T text={"Rate mode"} />
+            {t("rateMode")}
           </legend>
           <div className="system-toggle-grid">
             {(["simple", "offPeak", "multi"] as const).map((item) => (
@@ -645,7 +623,7 @@ function RateSettings({
         </fieldset>
         <div className="automation-form-grid">
           <label className="field">
-            <T text={"Standard rate"} />
+            {t("standardRate")}
             <div className="input-suffix">
               <input
                 name="standardRate"
@@ -655,12 +633,12 @@ function RateSettings({
                 defaultValue={config.standardRateYenPerKwh}
               />
               <span>
-                <T text={"¥/kWh"} />
+                {t("kwh")}
               </span>
             </div>
           </label>
           <label className="field">
-            <T text={"Discounted rate"} />
+            {t("discountedRate")}
             <div className="input-suffix">
               <input
                 name="offPeakRate"
@@ -670,12 +648,12 @@ function RateSettings({
                 defaultValue={config.offPeakRateYenPerKwh}
               />
               <span>
-                <T text={"¥/kWh"} />
+                {t("kwh")}
               </span>
             </div>
           </label>
           <label className="field">
-            <T text={"Grid emissions factor"} />
+            {t("gridEmissionsFactor")}
             <div className="input-suffix">
               <input
                 name="co2"
@@ -685,7 +663,7 @@ function RateSettings({
                 defaultValue={config.co2TonnesPerKwh}
               />
               <span>
-                <T text={"t/kWh"} />
+                {t("tKWh")}
               </span>
             </div>
           </label>
@@ -693,7 +671,7 @@ function RateSettings({
         {mode === "multi" ? (
           <fieldset>
             <legend>
-              <T text={"Rate bands"} />
+              {t("rateBands")}
             </legend>
             <div className="rate-band-editor">
               {bands.map((band, index) => (
@@ -741,7 +719,7 @@ function RateSettings({
                       )
                     }
                   >
-                    <T text={"Remove"} />
+                    {t("remove")}
                   </button>
                 </div>
               ))}
@@ -761,13 +739,13 @@ function RateSettings({
                 ])
               }
             >
-              <T text={"Add rate band"} />
+              {t("addRateBand")}
             </button>
           </fieldset>
         ) : null}
         <div className="form-footer">
           <button className="button primary">
-            <T text={"Save rates"} />
+            {t("saveRates")}
           </button>
           <ResultMessage result={rateResult} />
         </div>
@@ -780,14 +758,10 @@ function RateSettings({
         <div className="section-heading">
           <div>
             <h2>
-              <T text={"Ene-Farm assumptions"} />
+              {t("eneFarmAssumptions")}
             </h2>
             <p>
-              <T
-                text={
-                  "Used for gas-cost and carbon estimates. The application never controls Ene-Farm."
-                }
-              />
+              {t("usedForGasCostAndCarbonEstimatesTheApplicationNeverContr5d9b66")}
             </p>
           </div>
         </div>
@@ -799,27 +773,27 @@ function RateSettings({
           />
           <span>
             <strong>
-              <T text={"Include observed Ene-Farm generation in planning"} />
+              {t("includeObservedEneFarmGenerationInPlanning")}
             </strong>
           </span>
         </label>
         <div className="automation-form-grid">
           <label className="field">
-            <T text={"Gas region"} />
+            {t("gasRegion")}
             <select
               name="region"
               defaultValue={config.fuelCell?.tariff?.region ?? "tokyo"}
             >
               <option value="tokyo">
-                <T text={"Tokyo district"} />
+                {t("tokyoDistrict")}
               </option>
               <option value="gunma">
-                <T text={"Gunma district"} />
+                {t("gunmaDistrict")}
               </option>
             </select>
           </label>
           <label className="field">
-            <T text={"Meter reading day"} />
+            {t("meterReadingDay")}
             <input
               name="readingDay"
               type="number"
@@ -829,27 +803,27 @@ function RateSettings({
             />
           </label>
           <label className="field">
-            <T text={"Equipment discount"} />
+            {t("equipmentDiscount")}
             <select
               name="discount"
               defaultValue={config.fuelCell?.tariff?.equipmentDiscount ?? ""}
             >
               <option value="">
-                <T text={"None"} />
+                {t("none")}
               </option>
               <option value="bath">
-                <T text={"Bath heating"} />
+                {t("bathHeating")}
               </option>
               <option value="floor">
-                <T text={"Floor heating"} />
+                {t("floorHeating")}
               </option>
               <option value="set">
-                <T text={"Combined bath/floor"} />
+                {t("combinedBathFloor")}
               </option>
             </select>
           </label>
           <label className="field">
-            <T text={"Gas emissions"} />
+            {t("gasEmissions")}
             <div className="input-suffix">
               <input
                 name="gasCo2"
@@ -859,12 +833,12 @@ function RateSettings({
                 defaultValue={config.fuelCell?.gasCo2KgPerM3 ?? 2.21}
               />
               <span>
-                <T text={"kg/m³"} />
+                {t("kgM")}
               </span>
             </div>
           </label>
           <label className="field">
-            <T text={"Marginal rate override"} />
+            {t("marginalRateOverride")}
             <input
               name="marginal"
               type="number"
@@ -884,18 +858,16 @@ function RateSettings({
           />
           <span>
             <strong>
-              <T text={"Automatically import monthly tariffs"} />
+              {t("automaticallyImportMonthlyTariffs")}
             </strong>
             <small>
-              <T
-                text={"Requires external access outside simulator development."}
-              />
+              {t("requiresExternalAccessOutsideSimulatorDevelopment")}
             </small>
           </span>
         </label>
         <div className="form-footer">
           <button className="button primary">
-            <T text={"Save Ene-Farm assumptions"} />
+            {t("saveEneFarmAssumptions")}
           </button>
           <ResultMessage result={fuelResult} />
         </div>
@@ -904,19 +876,15 @@ function RateSettings({
         <div className="section-heading">
           <div>
             <h2>
-              <T text={"Published gas tariff"} />
+              {t("publishedGasTariff")}
             </h2>
             <p>
-              <T
-                text={
-                  "Import the selected billing month from the configured provider."
-                }
-              />
+              {t("importTheSelectedBillingMonthFromTheConfiguredProvider")}
             </p>
           </div>
         </div>
         <label className="field">
-          <T text={"Billing month"} />
+          {t("billingMonth")}
           <input
             name="month"
             type="month"
@@ -929,7 +897,7 @@ function RateSettings({
             className="quiet-button"
             disabled={config.runtime?.externalIoDisabled}
           >
-            <T text={"Import published tariff"} />
+            {t("importPublishedTariff")}
           </button>
           <ResultMessage result={tariffResult} />
         </div>
@@ -946,6 +914,7 @@ function NotificationSettings({
   setView: (value: NotificationView) => void;
   simulator: boolean;
 }) {
+  const { t } = useTranslation("system");
   const [result, setResult] = useState<Result>(null);
   const [busy, setBusy] = useState(false);
   const { config: appConfig, replaceConfig } = useEnergyStatus();
@@ -1030,7 +999,7 @@ function NotificationSettings({
         <div className="section-heading">
           <div>
             <h2>
-              <T text={"Email notifications"} />
+              {t("emailNotifications")}
             </h2>
             <p>
               {simulator
@@ -1039,7 +1008,7 @@ function NotificationSettings({
             </p>
           </div>
           <span className="sample-count">
-            <T text={"Password "} />
+            {"" + t("password") + " "}
             {initial.passwordConfigured ? "stored" : "not stored"}
           </span>
         </div>
@@ -1051,17 +1020,17 @@ function NotificationSettings({
           />
           <span>
             <strong>
-              <T text={"Enable notifications"} />
+              {t("enableNotifications")}
             </strong>
           </span>
         </label>
         <div className="automation-form-grid">
           <label className="field">
-            <T text={"SMTP server"} />
+            {t("smtpServer")}
             <input name="host" defaultValue={channel?.settings.host} />
           </label>
           <label className="field">
-            <T text={"Port"} />
+            {t("port")}
             <select name="port" defaultValue={channel?.settings.port ?? 587}>
               <option value="25">25 — SMTP / STARTTLS</option>
               <option value="465">465 — Implicit TLS</option>
@@ -1070,24 +1039,24 @@ function NotificationSettings({
             <small>Use 465 with TLS; 25 and 587 normally use STARTTLS.</small>
           </label>
           <label className="field">
-            <T text={"Security"} />
+            {t("security")}
             <select
               name="security"
               defaultValue={channel?.settings.security ?? "starttls"}
             >
               <option value="starttls">
-                <T text={"STARTTLS"} />
+                {t("starttls")}
               </option>
               <option value="tls">
-                <T text={"TLS"} />
+                {t("tls")}
               </option>
               <option value="none">
-                <T text={"None"} />
+                {t("none")}
               </option>
             </select>
           </label>
           <label className="field">
-            <T text={"Username"} />
+            {t("username")}
             <input
               name="username"
               autoComplete="username"
@@ -1095,7 +1064,7 @@ function NotificationSettings({
             />
           </label>
           <label className="field">
-            <T text={"Password"} />
+            {t("password")}
             <input
               name="password"
               type="password"
@@ -1104,7 +1073,7 @@ function NotificationSettings({
             />
           </label>
           <label className="field">
-            <T text={"From address"} />
+            {t("fromAddress")}
             <input
               name="from"
               type="email"
@@ -1112,7 +1081,7 @@ function NotificationSettings({
             />
           </label>
           <label className="field span-two">
-            <T text={"Recipients"} />
+            {t("recipients")}
             <input
               name="recipients"
               defaultValue={channel?.settings.recipients?.join(", ")}
@@ -1124,16 +1093,16 @@ function NotificationSettings({
             <input name="clearPassword" type="checkbox" />
             <span>
               <strong>
-                <T text={"Remove saved SMTP password"} />
+                {t("removeSavedSMTPPassword")}
               </strong>
             </span>
           </label>
         ) : null}
         <fieldset>
           <legend>
-            <T text={"Event triggers"} />
+            {t("eventTriggers")}
           </legend>
-          <p className="field-help"><T text={"Cooldown (min)"} /></p>
+          <p className="field-help">{t("cooldownMin")}</p>
           <div className="trigger-grid">
             {Object.entries(initial.config.triggers).map(([key, trigger]) => (
               <div className="trigger-row" key={key}>
@@ -1158,7 +1127,7 @@ function NotificationSettings({
                 {key === "lowBattery" ? (
                   <label>
                     <span>
-                      <T text={"Threshold"} />
+                      {t("threshold")}
                     </span>
                     <div className="input-suffix">
                       <input
@@ -1179,7 +1148,7 @@ function NotificationSettings({
         </fieldset>
         <div className="form-footer">
           <button className="button primary" disabled={busy}>
-            <T text={"Save notifications"} />
+            {t("saveNotifications")}
           </button>
           <button
             className="quiet-button"
@@ -1187,7 +1156,7 @@ function NotificationSettings({
             disabled={busy || simulator}
             onClick={() => void test()}
           >
-            <T text={"Send test email"} />
+            {t("sendTestEmail")}
           </button>
           <ResultMessage result={result} />
         </div>
@@ -1196,17 +1165,13 @@ function NotificationSettings({
         <div className="section-heading">
           <div>
             <h2>
-              <T text={"Recent deliveries"} />
+              {t("recentDeliveries")}
             </h2>
             <p>
-              <T
-                text={
-                  "Delivery outcome, event, destination channel, and failure detail."
-                }
-              />
+              {t("deliveryOutcomeEventDestinationChannelAndFailureDetail")}
             </p>
           </div>
-          {initial.deliveries?.length ? <span className="sample-count">{initial.deliveries.length} <T text={" records"} /></span> : null}
+          {initial.deliveries?.length ? <span className="sample-count">{initial.deliveries.length} {" " + t("records") + ""}</span> : null}
         </div>
         <div className="notification-deliveries">
           {initial.deliveries?.length ? (
@@ -1234,7 +1199,7 @@ function NotificationSettings({
             ))
           ) : (
             <p>
-              <T text={"No notification deliveries are recorded."} />
+              {t("noNotificationDeliveriesAreRecorded")}
             </p>
           )}
         </div>
@@ -1251,6 +1216,7 @@ function DataSettings({
   admin: ReturnType<typeof useSystemAdmin>;
   save: SaveSettings;
 }) {
+  const { t } = useTranslation("system");
   const [result, setResult] = useState<Result>(null);
   const [retentionResult, setRetentionResult] = useState<Result>(null);
   const [confirm, setConfirm] = useState<{
@@ -1336,29 +1302,29 @@ function DataSettings({
         <div className="section-heading">
           <div>
             <h2>
-              <T text={"Storage health"} />
+              {t("storageHealth")}
             </h2>
           </div>
           <button className="quiet-button" onClick={admin.refresh}>
-            <T text={"Refresh"} />
+            {t("refresh")}
           </button>
         </div>
         <dl className="system-stat-grid">
           <div>
             <dt>
-              <T text={"Database size"} />
+              {t("databaseSize")}
             </dt>
             <dd>{bytes(admin.stats?.sizeBytes)}</dd>
           </div>
           <div>
             <dt>
-              <T text={"Recorded history"} />
+              {t("recordedHistory")}
             </dt>
             <dd>{duration(admin.stats?.daysRecorded)}</dd>
           </div>
           <div>
             <dt>
-              <T text={"Raw samples"} />
+              {t("rawSamples")}
             </dt>
             <dd>
               {admin.stats?.sampleCount?.toLocaleString() ?? "Unavailable"}
@@ -1366,7 +1332,7 @@ function DataSettings({
           </div>
           <div>
             <dt>
-              <T text={"30-minute aggregates"} />
+              {t("30MinuteAggregates")}
             </dt>
             <dd>
               {admin.stats?.rollups?.interval?.toLocaleString() ??
@@ -1375,7 +1341,7 @@ function DataSettings({
           </div>
           <div>
             <dt>
-              <T text={"Daily aggregates"} />
+              {t("dailyAggregates")}
             </dt>
             <dd>
               {admin.stats?.rollups?.daily?.toLocaleString() ?? "Unavailable"}
@@ -1383,7 +1349,7 @@ function DataSettings({
           </div>
           <div>
             <dt>
-              <T text={"Schema"} />
+              {t("schema")}
             </dt>
             <dd>
               {admin.stats?.schemaVersion
@@ -1401,16 +1367,16 @@ function DataSettings({
         <div className="section-heading">
           <div>
             <h2>
-              <T text={"Retention"} />
+              {t("retention")}
             </h2>
             <p>
-              <T text={"Blank aggregate fields mean keep indefinitely."} />
+              {t("blankAggregateFieldsMeanKeepIndefinitely")}
             </p>
           </div>
         </div>
         <div className="automation-form-grid">
           <label className="field">
-            <T text={"Raw telemetry days"} />
+            {t("rawTelemetryDays")}
             <input
               name="raw"
               type="number"
@@ -1419,7 +1385,7 @@ function DataSettings({
             />
           </label>
           <label className="field">
-            <T text={"30-minute aggregate days"} />
+            {t("30MinuteAggregateDays")}
             <input
               name="interval"
               type="number"
@@ -1428,7 +1394,7 @@ function DataSettings({
             />
           </label>
           <label className="field">
-            <T text={"Daily aggregate days"} />
+            {t("dailyAggregateDays")}
             <input
               name="daily"
               type="number"
@@ -1437,7 +1403,7 @@ function DataSettings({
             />
           </label>
           <label className="field">
-            <T text={"Adaptive history days"} />
+            {t("adaptiveHistoryDays")}
             <input
               name="adaptive"
               type="number"
@@ -1446,7 +1412,7 @@ function DataSettings({
             />
           </label>
           <label className="field">
-            <T text={"Automation event days"} />
+            {t("automationEventDays")}
             <input
               name="automation"
               type="number"
@@ -1455,7 +1421,7 @@ function DataSettings({
             />
           </label>
           <label className="field">
-            <T text={"Command receipt days"} />
+            {t("commandReceiptDays")}
             <input
               name="commands"
               type="number"
@@ -1464,7 +1430,7 @@ function DataSettings({
             />
           </label>
           <label className="field">
-            <T text={"Notification delivery days"} />
+            {t("notificationDeliveryDays")}
             <input
               name="notifications"
               type="number"
@@ -1481,16 +1447,16 @@ function DataSettings({
           />
           <span>
             <strong>
-              <T text={"Run maintenance automatically"} />
+              {t("runMaintenanceAutomatically")}
             </strong>
           </span>
         </label>
         <div className="form-footer">
           <button className="button primary">
-            <T text={"Save retention"} />
+            {t("saveRetention")}
           </button>
           <button className="quiet-button" data-intent="trim">
-            <T text={"Run maintenance now"} />
+            {t("runMaintenanceNow")}
           </button>
           <ResultMessage result={retentionResult} />
         </div>
@@ -1499,14 +1465,10 @@ function DataSettings({
         <div className="section-heading">
           <div>
             <h2>
-              <T text={"Database backups"} />
+              {t("databaseBackups")}
             </h2>
             <p>
-              <T
-                text={
-                  "Create recoverable snapshots before material configuration or software changes."
-                }
-              />
+              {t("createRecoverableSnapshotsBeforeMaterialConfigurationOrSe1c55b")}
             </p>
           </div>
           <button
@@ -1519,7 +1481,7 @@ function DataSettings({
               )
             }
           >
-            <T text={"Create backup"} />
+            {t("createBackup")}
           </button>
         </div>
         {operation?.busy || operation?.phase === "failed" ? (
@@ -1544,7 +1506,7 @@ function DataSettings({
                 <div>
                   <strong>{backup.filename}</strong>
                   <small>
-                    {bytes(backup.sizeBytes)} <T text={" · schema v"} />
+                    {bytes(backup.sizeBytes)} {" " + t("schemaV") + ""}
                     {backup.schemaVersion ?? "?"} ·{" "}
                     {backup.compatible
                       ? "compatible"
@@ -1568,7 +1530,7 @@ function DataSettings({
                       })
                     }
                   >
-                    <T text={"Restore"} />
+                    {t("restore")}
                   </button>
                   <button
                     className="danger-button"
@@ -1586,14 +1548,14 @@ function DataSettings({
                       })
                     }
                   >
-                    <T text={"Delete"} />
+                    {t("delete")}
                   </button>
                 </div>
               </article>
             ))
           ) : (
             <p>
-              <T text={"No database backups are available."} />
+              {t("noDatabaseBackupsAreAvailable")}
             </p>
           )}
         </div>
@@ -1611,7 +1573,7 @@ function DataSettings({
             <p>{confirm.detail}</p>
             <div className="button-row">
               <button className="quiet-button" onClick={() => setConfirm(null)}>
-                <T text={"Cancel"} />
+                {t("cancel")}
               </button>
               <button
                 className="button primary"
@@ -1621,7 +1583,7 @@ function DataSettings({
                   void action();
                 }}
               >
-                <T text={"Continue"} />
+                {t("continue")}
               </button>
             </div>
           </section>
@@ -1663,7 +1625,7 @@ function Preferences({
   config: AppConfig;
   save: SaveSettings;
 }) {
-  const { text } = useI18n();
+  const { t } = useTranslation("system");
   const [result, setResult] = useState<Result>(null);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1691,31 +1653,27 @@ function Preferences({
       <div className="section-heading">
         <div>
           <h2>
-            <T text={"Application preferences"} />
+            {t("applicationPreferences")}
           </h2>
           <p>
-            <T
-              text={
-                "Language and regional number and date formatting apply after saving. Appearance is available globally in the sidebar."
-              }
-            />
+            {t("languageAndRegionalNumberAndDateFormattingApplyAfterSavi6572af")}
           </p>
         </div>
       </div>
       <div className="automation-form-grid">
         <label className="field">
-          <T text={"Language"} />
+          {t("language")}
           <select name="language" defaultValue={config.language}>
             <option value="en">
-              <T text={"English"} />
+              {t("english")}
             </option>
             <option value="ja">
-              <T text={"日本語"} />
+              {t("message")}
             </option>
           </select>
         </label>
         <label className="field">
-          <T text={"Refresh interval"} />
+          {t("refreshInterval")}
           <div className="input-suffix">
             <input
               name="interval"
@@ -1725,21 +1683,17 @@ function Preferences({
               defaultValue={config.updateIntervalSeconds}
             />
             <span>
-              <T text={"sec"} />
+              {t("sec")}
             </span>
           </div>
         </label>
       </div>
       <fieldset>
         <legend>
-          <T text={"Overview visibility"} />
+          {t("overviewVisibility")}
         </legend>
         <p className="field-help">
-          <T
-            text={
-              "Choose which optional items appear on Overview."
-            }
-          />
+          {t("chooseWhichOptionalItemsAppearOnOverview")}
         </p>
         <div className="widget-visibility-grid">
           {config.dashboardWidgets?.map((widget) => (
@@ -1750,7 +1704,7 @@ function Preferences({
                 defaultChecked={widget.visible}
               />
               <span>
-                {text(
+                {t(
                   widgetLabels[widget.id] ??
                     widget.id.replace(/([A-Z])/g, " $1"),
                 )}
@@ -1761,7 +1715,7 @@ function Preferences({
       </fieldset>
       <div className="form-footer">
         <button className="button primary">
-          <T text={"Save preferences"} />
+          {t("savePreferences")}
         </button>
         <ResultMessage result={result} />
       </div>
@@ -1769,7 +1723,7 @@ function Preferences({
   );
 }
 export function SystemPage() {
-  const { text } = useI18n();
+  const { t } = useTranslation("system");
   const { section } = useParams();
   const selected = sections.some((item) => item.id === section)
     ? (section as SectionId)
@@ -1805,30 +1759,30 @@ export function SystemPage() {
       <header className="page-heading">
         <div>
           <p className="eyebrow">
-            <T text={"Administer"} />
+            {t("administer")}
           </p>
           <h1>
-            <T text={"System"} />
+            {t("system")}
           </h1>
         </div>
       </header>
       {admin.error ? (
         <div className="status-banner" data-severity="critical">
-          <T text={"System data: "} />
+          {"" + t("systemData") + " "}
           {formatDateTimesInText(admin.error)}
         </div>
       ) : null}
-      <nav className="system-navigation" aria-label={text("System sections")}>
+      <nav className="system-navigation" aria-label={t("systemSections")}>
         {sections.map((item) => (
           <NavLink key={item.id} to={`/system/${item.id}`}>
-            <strong>{text(item.label)}</strong>
-            <span>{text(item.description)}</span>
+            <strong>{t(item.label)}</strong>
+            <span>{t(item.description)}</span>
           </NavLink>
         ))}
       </nav>
       {!config ? (
         <div className="panel automation-empty">
-          <T text={"Loading system configuration…"} />
+          {t("loadingSystemConfiguration")}
         </div>
       ) : selected === "equipment" ? (
         <EquipmentSettings config={config} status={status} save={save} />
@@ -1846,7 +1800,7 @@ export function SystemPage() {
         <Preferences config={config} save={save} />
       ) : (
         <div className="panel automation-empty">
-          <T text={"Loading section…"} />
+          {t("loadingSection")}
         </div>
       )}
     </main>

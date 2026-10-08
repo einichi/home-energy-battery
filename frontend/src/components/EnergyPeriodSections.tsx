@@ -10,7 +10,7 @@ import type { EnergySeriesKey } from "../core/energySeries";
 import { useEnergyStatus } from "../hooks/useEnergyStatus";
 import { useHistoryRange } from "../hooks/useHistoryRange";
 import { useEneFarm } from "../hooks/useEneFarm";
-import { T, useI18n } from "../i18n";
+import { useTranslation } from "react-i18next";
 
 export type EnergyPeriodSection = "history" | "balance" | "outcomes" | "battery" | "ene-farm" | "circuits";
 
@@ -47,7 +47,7 @@ export function EnergyPeriodSections({
   refreshKey?: string;
   visible?: (id: string) => boolean;
 }) {
-  const { text } = useI18n();
+  const { t } = useTranslation("common");
   const [selected, setSelected] = useState<EnergySeriesKey[]>(defaultSeries);
   const [selectedCircuit, setSelectedCircuit] = useState("");
   const [circuitSort, setCircuitSort] = useState<{ key: CircuitSortKey; direction: SortDirection } | null>(null);
@@ -82,14 +82,14 @@ export function EnergyPeriodSections({
         const energy = summary?.totalKwh ?? latestSample?.circuitEnergyKwh?.[id] ?? null;
         return {
           id,
-          label: config?.circuitLabels?.[id] ?? summary?.label ?? text("Circuit {value}", { value: id }),
+          label: config?.circuitLabels?.[id] ?? summary?.label ?? t("circuitValue", { value: id }),
           watts: liveValue ?? latestSample?.circuitPowerW?.[id] ?? summary?.latestWatts ?? null,
           energy,
           share: energy != null && totalEnergy > 0 ? energy / totalEnergy * 100 : null,
           trend: points.length > 1 && firstAverage > 0 ? (lastAverage - firstAverage) / firstAverage * 100 : null,
         };
       });
-  }, [config?.circuitDashboardVisibility, config?.circuitLabels, current, history.samples, history.summary.circuitTotalKwh, history.summary.circuits, latestSample, status?.meter?.channel_power?.decoded?.channels, text]);
+  }, [config?.circuitDashboardVisibility, config?.circuitLabels, current, history.samples, history.summary.circuitTotalKwh, history.summary.circuits, latestSample, status?.meter?.channel_power?.decoded?.channels, t]);
   const effectiveCircuitSort = useMemo(() => circuitSort ?? (
     config?.circuitSortMode === "number"
       ? { key: "id" as const, direction: "ascending" as const }
@@ -122,45 +122,45 @@ export function EnergyPeriodSections({
   const includes = (section: EnergyPeriodSection) => sections.includes(section);
 
   return <div className={`period-results${periodLoading ? " is-loading" : ""}`} aria-busy={periodLoading}>
-    {error ? <div className="status-banner" data-severity="critical"><T text={"History: "} />{formatDateTimesInText(error)}</div> : null}
+    {error ? <div className="status-banner" data-severity="critical">{"" + t("history") + " "}{formatDateTimesInText(error)}</div> : null}
 
     {includes("history") ? <section className="panel history-workspace" aria-labelledby={`${current ? "today" : "report"}-energy-history-heading`}>
-      <div className="history-toolbar"><div>{!current ? <p className="eyebrow">{periodLabel}</p> : null}<h2 id={`${current ? "today" : "report"}-energy-history-heading`}><T text={"Power flows and storage"} /></h2></div></div>
+      <div className="history-toolbar"><div>{!current ? <p className="eyebrow">{periodLabel}</p> : null}<h2 id={`${current ? "today" : "report"}-energy-history-heading`}>{t("powerFlowsAndStorage")}</h2></div></div>
       <fieldset className="series-picker">
-        <legend><T text={"Visible metrics "} /><span><T text={"· Select to show or hide"} /></span></legend>
-        {availableSeries.map((key) => <label key={key} style={{ "--series-color": energySeries[key].color } as CSSProperties}><input type="checkbox" checked={selected.includes(key)} onChange={() => toggleSeries(key)} /><i aria-hidden="true" />{text(energySeries[key].label)}</label>)}
+        <legend>{"" + t("visibleMetrics") + " "}<span>{t("selectToShowOrHide")}</span></legend>
+        {availableSeries.map((key) => <label key={key} style={{ "--series-color": energySeries[key].color } as CSSProperties}><input type="checkbox" checked={selected.includes(key)} onChange={() => toggleSeries(key)} /><i aria-hidden="true" />{t(energySeries[key].label)}</label>)}
       </fieldset>
-      <CombinedEnergyChart samples={chartSamples} selected={visibleSelected} label={text("{value} energy history", { value: periodLabel })} showSeriesLegend={false} />
-      <div className="quality-note"><strong><T text={"Data quality"} /></strong><span>{dataQualityDescription(history.summary.dataQuality)}</span></div>
+      <CombinedEnergyChart samples={chartSamples} selected={visibleSelected} label={t("valueEnergyHistory", { value: periodLabel })} showSeriesLegend={false} />
+      <div className="quality-note"><strong>{t("dataQuality")}</strong><span>{dataQualityDescription(history.summary.dataQuality)}</span></div>
     </section> : null}
 
-    {includes("balance") ? <section className="energy-balance-grid" aria-label={text("Energy source and destination balance")} aria-busy={loading}>
-      {loading && !history.summary.sampleCount ? <article className="telemetry-card"><p className="telemetry-empty"><T text={"Loading source composition…"} /></p></article> : <EnergySourcesBar sources={history.summary.energySources} period={periodLabel} showPeriod={!current} />}
-      <article className="telemetry-card destination-balance-card"><div className="section-heading"><div>{!current ? <p className="eyebrow">{periodLabel}</p> : null}<h2><T text={"Local generation destinations"} /></h2></div></div>
-        {loading && !history.summary.sampleCount ? <p className="telemetry-empty"><T text={"Loading destination balance…"} /></p> : <dl>
-          <div><dt><T text={"Used in the home"} /></dt><dd>{formatEnergy([history.summary.solarGenerationKwh, history.summary.fuelCellKwh, history.summary.gridExportKwh].some(Number.isFinite) ? Math.max(0, Number(history.summary.solarGenerationKwh ?? 0) + Number(history.summary.fuelCellKwh ?? 0) - Number(history.summary.gridExportKwh ?? 0)) : null)}</dd></div>
-          <div><dt><T text={"Exported to the grid"} /></dt><dd>{formatEnergy(history.summary.gridExportKwh)}</dd></div>
-          <div><dt><T text={"Local generation total"} /></dt><dd>{formatEnergy([history.summary.solarGenerationKwh, history.summary.fuelCellKwh].some(Number.isFinite) ? Number(history.summary.solarGenerationKwh ?? 0) + Number(history.summary.fuelCellKwh ?? 0) : null)}</dd></div>
+    {includes("balance") ? <section className="energy-balance-grid" aria-label={t("energySourceAndDestinationBalance")} aria-busy={loading}>
+      {loading && !history.summary.sampleCount ? <article className="telemetry-card"><p className="telemetry-empty">{t("loadingSourceComposition")}</p></article> : <EnergySourcesBar sources={history.summary.energySources} period={periodLabel} showPeriod={!current} />}
+      <article className="telemetry-card destination-balance-card"><div className="section-heading"><div>{!current ? <p className="eyebrow">{periodLabel}</p> : null}<h2>{t("localGenerationDestinations")}</h2></div></div>
+        {loading && !history.summary.sampleCount ? <p className="telemetry-empty">{t("loadingDestinationBalance")}</p> : <dl>
+          <div><dt>{t("usedInTheHome")}</dt><dd>{formatEnergy([history.summary.solarGenerationKwh, history.summary.fuelCellKwh, history.summary.gridExportKwh].some(Number.isFinite) ? Math.max(0, Number(history.summary.solarGenerationKwh ?? 0) + Number(history.summary.fuelCellKwh ?? 0) - Number(history.summary.gridExportKwh ?? 0)) : null)}</dd></div>
+          <div><dt>{t("exportedToTheGrid")}</dt><dd>{formatEnergy(history.summary.gridExportKwh)}</dd></div>
+          <div><dt>{t("localGenerationTotal")}</dt><dd>{formatEnergy([history.summary.solarGenerationKwh, history.summary.fuelCellKwh].some(Number.isFinite) ? Number(history.summary.solarGenerationKwh ?? 0) + Number(history.summary.fuelCellKwh ?? 0) : null)}</dd></div>
         </dl>}
       </article>
     </section> : null}
 
-    {includes("outcomes") ? <section className="outcome-section" aria-labelledby={`${current ? "today" : "period"}-outcomes-heading`}><div className="section-heading"><div>{!current ? <p className="eyebrow">{periodLabel}</p> : null}<h2 id={`${current ? "today" : "period"}-outcomes-heading`}><T text={"Energy outcomes"} /></h2></div><span className="sample-count">{history.summary.sampleCount ?? history.samples.length} <T text={" records"} /></span></div>{loading && !history.summary.sampleCount ? <p className="telemetry-empty" aria-busy="true"><T text={"Loading today's energy outcomes…"} /></p> : <OutcomeStrip summary={history.summary} compact={current} visible={visible} />}</section> : null}
+    {includes("outcomes") ? <section className="outcome-section" aria-labelledby={`${current ? "today" : "period"}-outcomes-heading`}><div className="section-heading"><div>{!current ? <p className="eyebrow">{periodLabel}</p> : null}<h2 id={`${current ? "today" : "period"}-outcomes-heading`}>{t("energyOutcomes")}</h2></div><span className="sample-count">{history.summary.sampleCount ?? history.samples.length} {" " + t("records") + ""}</span></div>{loading && !history.summary.sampleCount ? <p className="telemetry-empty" aria-busy="true">{t("loadingTodaySEnergyOutcomes")}</p> : <OutcomeStrip summary={history.summary} compact={current} visible={visible} />}</section> : null}
 
-    {includes("battery") ? <section className="panel battery-balance" aria-labelledby={`${current ? "today" : "period"}-battery-balance-heading`}><div>{!current ? <p className="eyebrow">{periodLabel}</p> : null}<h2 id={`${current ? "today" : "period"}-battery-balance-heading`}><T text={current ? "Battery today" : "Battery over this period"} /></h2></div><dl>
-      <div><dt><T text={"Charged"} /></dt><dd>{formatEnergy(history.summary.batteryChargedKwh)}</dd></div><div><dt><T text={"Discharged"} /></dt><dd>{formatEnergy(history.summary.batteryDischargedKwh)}</dd></div><div><dt><T text={"Net"} /></dt><dd>{formatEnergy(history.summary.batteryNetKwh)}</dd></div><div><dt><T text={"Average SOC"} /></dt><dd>{formatPercent(history.summary.averageStateOfChargePercent)}</dd></div>
+    {includes("battery") ? <section className="panel battery-balance" aria-labelledby={`${current ? "today" : "period"}-battery-balance-heading`}><div>{!current ? <p className="eyebrow">{periodLabel}</p> : null}<h2 id={`${current ? "today" : "period"}-battery-balance-heading`}>{t(current ? "Battery today" : "Battery over this period")}</h2></div><dl>
+      <div><dt>{t("charged")}</dt><dd>{formatEnergy(history.summary.batteryChargedKwh)}</dd></div><div><dt>{t("discharged")}</dt><dd>{formatEnergy(history.summary.batteryDischargedKwh)}</dd></div><div><dt>{t("net")}</dt><dd>{formatEnergy(history.summary.batteryNetKwh)}</dd></div><div><dt>{t("averageSOC")}</dt><dd>{formatPercent(history.summary.averageStateOfChargePercent)}</dd></div>
     </dl></section> : null}
 
-    {includes("ene-farm") && config?.fuelCellEnabled !== false ? <section id={current ? "today-ene-farm" : "report-ene-farm"} className="panel ene-farm-panel" aria-labelledby={`${current ? "today" : "report"}-ene-farm-heading`} aria-busy={eneFarmLoading}><div className="section-heading"><div>{!current ? <p className="eyebrow">{periodLabel}</p> : null}<h2 id={`${current ? "today" : "report"}-ene-farm-heading`}><T text={"Ene-Farm Activity"} /></h2></div><div className="ene-farm-load-state"><span className="sample-count">{displayedEneFarmSummary?.sampleCount ?? 0} <T text={" records"} /></span><small aria-live="polite">{eneFarmRefreshing ? <T text={"Refreshing…"} /> : null}</small></div></div>{eneFarmError ? <p className="status-banner"><T text={"Ene-Farm summary: "} />{eneFarmError}</p> : null}<EneFarmActivity summary={displayedEneFarmSummary} period={periodLabel} loading={eneFarmInitialLoading} showHeading={false} />{current && !eneFarmInitialLoading ? <EneFarmDetails summary={displayedEneFarmSummary} hotWaterLevel={metricValue(fuelCell?.hot_water_level)} /> : null}</section> : null}
+    {includes("ene-farm") && config?.fuelCellEnabled !== false ? <section id={current ? "today-ene-farm" : "report-ene-farm"} className="panel ene-farm-panel" aria-labelledby={`${current ? "today" : "report"}-ene-farm-heading`} aria-busy={eneFarmLoading}><div className="section-heading"><div>{!current ? <p className="eyebrow">{periodLabel}</p> : null}<h2 id={`${current ? "today" : "report"}-ene-farm-heading`}>{t("eneFarmActivity")}</h2></div><div className="ene-farm-load-state"><span className="sample-count">{displayedEneFarmSummary?.sampleCount ?? 0} {" " + t("records") + ""}</span><small aria-live="polite">{eneFarmRefreshing ? t("refreshing") : null}</small></div></div>{eneFarmError ? <p className="status-banner">{"" + t("eneFarmSummary") + " "}{eneFarmError}</p> : null}<EneFarmActivity summary={displayedEneFarmSummary} period={periodLabel} loading={eneFarmInitialLoading} showHeading={false} />{current && !eneFarmInitialLoading ? <EneFarmDetails summary={displayedEneFarmSummary} hotWaterLevel={metricValue(fuelCell?.hot_water_level)} /> : null}</section> : null}
 
-    {includes("circuits") && config?.smartCosmoEnabled !== false ? <section id={current ? "today-circuits" : "report-circuits"} className="panel circuits-panel" aria-labelledby={`${current ? "today" : "report"}-circuits-heading`}><div className="section-heading"><div><p className="eyebrow"><T text={"Smart Cosmo"} /></p><h2 id={`${current ? "today" : "report"}-circuits-heading`}><T text={"Circuit history"} /></h2></div><span className="sample-count">{circuits.length ? <>{circuits.length} <T text={"reporting"} /></> : <T text={"0 reporting"} />}</span></div>
-      {activeCircuit ? <CircuitHistoryChart samples={history.samples} circuitId={activeCircuit} label={circuits.find((circuit) => circuit.id === activeCircuit)?.label ?? text("Circuit {value}", { value: activeCircuit })} /> : null}
+    {includes("circuits") && config?.smartCosmoEnabled !== false ? <section id={current ? "today-circuits" : "report-circuits"} className="panel circuits-panel" aria-labelledby={`${current ? "today" : "report"}-circuits-heading`}><div className="section-heading"><div><p className="eyebrow">{t("smartCosmo")}</p><h2 id={`${current ? "today" : "report"}-circuits-heading`}>{t("circuitHistory")}</h2></div><span className="sample-count">{circuits.length ? <>{circuits.length} {t("reporting")}</> : t("0Reporting")}</span></div>
+      {activeCircuit ? <CircuitHistoryChart samples={history.samples} circuitId={activeCircuit} label={circuits.find((circuit) => circuit.id === activeCircuit)?.label ?? t("circuitValue", { value: activeCircuit })} /> : null}
       {circuits.length ? <div className="table-scroll"><table className="selectable-circuit-table"><thead><tr>
-        <th aria-sort={["id", "label"].includes(effectiveCircuitSort.key) ? effectiveCircuitSort.direction : "none"}><button type="button" onClick={() => sortCircuits("label")}><T text={"Circuit"} /><span aria-hidden="true">↕</span></button></th>
-        <th aria-sort={effectiveCircuitSort.key === "watts" ? effectiveCircuitSort.direction : "none"}><button type="button" onClick={() => sortCircuits("watts")}><T text={current ? "Power now" : "Latest power"} /><span aria-hidden="true">↕</span></button></th>
-        <th aria-sort={effectiveCircuitSort.key === "energy" ? effectiveCircuitSort.direction : "none"}><button type="button" onClick={() => sortCircuits("energy")}><T text={"Period energy"} /><span aria-hidden="true">↕</span></button></th>
-        <th aria-sort={effectiveCircuitSort.key === "share" ? effectiveCircuitSort.direction : "none"}><button type="button" onClick={() => sortCircuits("share")}><T text={"Share"} /><span aria-hidden="true">↕</span></button></th><th aria-sort={effectiveCircuitSort.key === "trend" ? effectiveCircuitSort.direction : "none"}><button type="button" onClick={() => sortCircuits("trend")}><T text={"Trend"} /><span aria-hidden="true">↕</span></button></th>
-      </tr></thead><tbody>{sortedCircuits.map((circuit) => <tr key={circuit.id} data-interactive="true" data-selected={circuit.id === activeCircuit} aria-selected={circuit.id === activeCircuit} tabIndex={0} onClick={() => setSelectedCircuit(circuit.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedCircuit(circuit.id); } }}><th><span className="circuit-row-label">{circuit.label}</span></th><td>{formatPower(circuit.watts)}</td><td>{formatEnergy(circuit.energy)}</td><td>{formatPercent(circuit.share)}</td><td>{circuit.trend == null ? "—" : `${circuit.trend > 0 ? "+" : ""}${formatPercent(circuit.trend)}`}</td></tr>)}</tbody></table></div> : <p className="empty-copy"><T text={"No circuit readings are available for this period."} /></p>}
+        <th aria-sort={["id", "label"].includes(effectiveCircuitSort.key) ? effectiveCircuitSort.direction : "none"}><button type="button" onClick={() => sortCircuits("label")}>{t("circuit")}<span aria-hidden="true">↕</span></button></th>
+        <th aria-sort={effectiveCircuitSort.key === "watts" ? effectiveCircuitSort.direction : "none"}><button type="button" onClick={() => sortCircuits("watts")}>{t(current ? "Power now" : "Latest power")}<span aria-hidden="true">↕</span></button></th>
+        <th aria-sort={effectiveCircuitSort.key === "energy" ? effectiveCircuitSort.direction : "none"}><button type="button" onClick={() => sortCircuits("energy")}>{t("periodEnergy")}<span aria-hidden="true">↕</span></button></th>
+        <th aria-sort={effectiveCircuitSort.key === "share" ? effectiveCircuitSort.direction : "none"}><button type="button" onClick={() => sortCircuits("share")}>{t("share")}<span aria-hidden="true">↕</span></button></th><th aria-sort={effectiveCircuitSort.key === "trend" ? effectiveCircuitSort.direction : "none"}><button type="button" onClick={() => sortCircuits("trend")}>{t("trend")}<span aria-hidden="true">↕</span></button></th>
+      </tr></thead><tbody>{sortedCircuits.map((circuit) => <tr key={circuit.id} data-interactive="true" data-selected={circuit.id === activeCircuit} aria-selected={circuit.id === activeCircuit} tabIndex={0} onClick={() => setSelectedCircuit(circuit.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedCircuit(circuit.id); } }}><th><span className="circuit-row-label">{circuit.label}</span></th><td>{formatPower(circuit.watts)}</td><td>{formatEnergy(circuit.energy)}</td><td>{formatPercent(circuit.share)}</td><td>{circuit.trend == null ? "—" : `${circuit.trend > 0 ? "+" : ""}${formatPercent(circuit.trend)}`}</td></tr>)}</tbody></table></div> : <p className="empty-copy">{t("noCircuitReadingsAreAvailableForThisPeriod")}</p>}
     </section> : null}
   </div>;
 }

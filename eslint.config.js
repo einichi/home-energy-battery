@@ -2,6 +2,7 @@ import eslint from "@eslint/js";
 import { defineConfig } from "eslint/config";
 import globals from "globals";
 import reactHooks from "eslint-plugin-react-hooks";
+import i18next from "eslint-plugin-i18next";
 import tseslint from "typescript-eslint";
 
 export default defineConfig([
@@ -53,10 +54,17 @@ export default defineConfig([
   },
   {
     files: ["frontend/**/*.{ts,tsx}"],
+    ignores: ["frontend/src/**/*.test.{ts,tsx}"],
     languageOptions: { globals: globals.browser },
-    plugins: { "react-hooks": reactHooks },
+    plugins: { "react-hooks": reactHooks, i18next },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      "i18next/no-literal-string": ["warn", {
+        framework: "react",
+        mode: "jsx-text-only",
+        words: { exclude: ["^(?:[a-z][a-z0-9-]*|0|1|true|false)$"] },
+        "jsx-attributes": { exclude: ["^(?:className|id|href|to|type|name|value|role|path|view|node|tone|color|aria-hidden|data-.*)$"] },
+      }],
       "@typescript-eslint/consistent-type-imports": "error",
       "@typescript-eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_" }]
     },

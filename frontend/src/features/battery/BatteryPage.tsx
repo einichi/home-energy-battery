@@ -23,7 +23,7 @@ import { useEnergyStatus } from "../../hooks/useEnergyStatus";
 import { useHistoryRange } from "../../hooks/useHistoryRange";
 import { formatDateTime, formatDateTimesInText, formatMonthDay, formatPower, formatSoc, formatTime, formatWeekdayShort } from "../../core/format";
 import { useDialogFocus } from "../../hooks/useDialogFocus";
-import { T, useI18n } from "../../i18n";
+import { useTranslation } from "react-i18next";
 
 type ReviewCommand = DeviceCommand & {
   action: BatteryAction | "backup-start" | "backup-end";
@@ -91,6 +91,7 @@ function CommandDialog({ command, close, completed }: {
   close: () => void;
   completed: () => Promise<void>;
 }) {
+  const { t } = useTranslation("battery");
   const { state, dispatch } = useCommandLifecycle();
   const [liveReceipt, setLiveReceipt] = useState<CommandReceipt | null>(null);
   const active = state.phase !== "idle" ? state.command.id === command.id : false;
@@ -142,17 +143,17 @@ function CommandDialog({ command, close, completed }: {
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="command-dialog panel" role="dialog" aria-modal="true" aria-labelledby="command-title" ref={dialogRef} tabIndex={-1}>
-        <p className="eyebrow"><T text={"Physical device command"} /></p>
+        <p className="eyebrow">{t("physicalDeviceCommand")}</p>
         <h2 id="command-title">{command.label}</h2>
         <dl className="command-review">
-          <div><dt><T text={"Target"} /></dt><dd><T text={"Storage battery"} /></dd></div>
-          <div><dt><T text={"Requested change"} /></dt><dd>{requestSummary({ request: command.payload } as CommandReceipt)}</dd></div>
+          <div><dt>{t("target")}</dt><dd>{t("storageBattery")}</dd></div>
+          <div><dt>{t("requestedChange")}</dt><dd>{requestSummary({ request: command.payload } as CommandReceipt)}</dd></div>
         </dl>
         <p className="impact-note">{command.impact}</p>
         {phase === "confirming" ? (
           <div className="button-row dialog-actions">
-            <button className="button secondary" type="button" onClick={close}><T text={"Cancel"} /></button>
-            <button className="button primary" type="button" onClick={() => void run()}><T text={"Send command"} /></button>
+            <button className="button secondary" type="button" onClick={close}>{t("cancel")}</button>
+            <button className="button primary" type="button" onClick={() => void run()}>{t("sendCommand")}</button>
           </div>
         ) : (
           <>
@@ -171,10 +172,10 @@ function CommandDialog({ command, close, completed }: {
                 return <li key={step} data-state={complete ? "complete" : terminalPhases.has(phase) ? "muted" : "pending"}>{label}</li>;
               })}
             </ol>
-            {phase === "succeeded" ? <p className="command-result success" role="status"><T text={"Command completed and device state was verified."} /></p> : null}
+            {phase === "succeeded" ? <p className="command-result success" role="status">{t("commandCompletedAndDeviceStateWasVerified")}</p> : null}
             {phase === "failed" || phase === "timed-out" ? <p className="command-result failure" role="alert">{formatDateTimesInText(state.phase === phase ? state.error : "Command failed")}</p> : null}
-            {phase === "mismatched" ? <p className="command-result failure" role="alert"><T text={"The device acknowledged the request, but readback did not match. "} />{state.phase === "mismatched" ? formatDateTimesInText(state.actual) : null}</p> : null}
-            {!pending ? <button className="button" type="button" onClick={close}><T text={"Close receipt"} /></button> : null}
+            {phase === "mismatched" ? <p className="command-result failure" role="alert">{"" + t("theDeviceAcknowledgedTheRequestButReadbackDidNotMatch") + " "}{state.phase === "mismatched" ? formatDateTimesInText(state.actual) : null}</p> : null}
+            {!pending ? <button className="button" type="button" onClick={close}>{t("closeReceipt")}</button> : null}
           </>
         )}
       </section>
@@ -250,6 +251,7 @@ function scheduleOccurrencesForDay(schedule: BatterySchedule, day: Date) {
 }
 
 function ScheduleCalendar({ schedules, conflicts }: { schedules: BatterySchedule[]; conflicts: Set<string> }) {
+  const { t } = useTranslation("battery");
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const days = Array.from({ length: 7 }, (_, offset) => {
@@ -265,8 +267,8 @@ function ScheduleCalendar({ schedules, conflicts }: { schedules: BatterySchedule
   return (
     <section className="schedule-calendar" aria-labelledby="schedule-calendar-heading">
       <div className="section-heading">
-        <div><p className="eyebrow"><T text={"Calendar"} /></p><h3 id="schedule-calendar-heading"><T text={"Seven-day plan"} /></h3></div>
-        {occurrenceCount ? <span className="sample-count">{occurrenceCount} <T text={" planned "} />{occurrenceCount === 1 ? "change" : "changes"}</span> : null}
+        <div><p className="eyebrow">{t("calendar")}</p><h3 id="schedule-calendar-heading">{t("sevenDayPlan")}</h3></div>
+        {occurrenceCount ? <span className="sample-count">{occurrenceCount} {" " + t("planned") + " "}{occurrenceCount === 1 ? "change" : "changes"}</span> : null}
       </div>
       {occurrenceCount ? <><div className="schedule-calendar-scroll">
         <div className="schedule-calendar-grid">
@@ -284,7 +286,7 @@ function ScheduleCalendar({ schedules, conflicts }: { schedules: BatterySchedule
           })}
         </div>
       </div>
-      <p className="calendar-note"><T text={"Conflicting times are highlighted in the schedule list below."} /></p></> : <p className="empty-copy"><T text={"No scheduled changes in the next seven days."} /></p>}
+      <p className="calendar-note">{t("conflictingTimesAreHighlightedInTheScheduleListBelow")}</p></> : <p className="empty-copy">{t("noScheduledChangesInTheNextSevenDays")}</p>}
     </section>
   );
 }
@@ -304,7 +306,7 @@ function recurringWindow(startHour: number, endHour: number, label: string, tone
 }
 
 export function BatteryPage({ view = "status" }: { view?: "status" | "schedules" | "backup" }) {
-  const { text } = useI18n();
+  const { t } = useTranslation("battery");
   const { config, status, loadingState, refresh } = useEnergyStatus();
   const { history: batteryHistory, loading: batteryHistoryLoading, refresh: refreshBatteryHistory } = useHistoryRange(24 * 60 * 60_000);
   const { state, dispatch } = useCommandLifecycle();
@@ -484,57 +486,57 @@ export function BatteryPage({ view = "status" }: { view?: "status" | "schedules"
   return (
     <main className="page battery-page">
       <header className="page-heading">
-        <div><p className="eyebrow"><T text={"Operate"} /></p><h1>{text(view === "status" ? "Battery" : view === "schedules" ? "Battery schedules" : "Disaster Prep")}</h1><p>{text(view === "status" ? "Status, deliberate controls, and verified outcomes." : view === "schedules" ? "Plan recurring or one-time changes and review execution results." : "Temporarily prioritize stored energy so the battery is ready for an outage.")}</p></div>
-        <span className="live-state"><i />{text(status ? "Device {value}" : sentence(loadingState), { value: text(host) })}</span>
+        <div><p className="eyebrow">{t("operate")}</p><h1>{t(view === "status" ? "Battery" : view === "schedules" ? "Battery schedules" : "Disaster Prep")}</h1><p>{t(view === "status" ? "Status, deliberate controls, and verified outcomes." : view === "schedules" ? "Plan recurring or one-time changes and review execution results." : "Temporarily prioritize stored energy so the battery is ready for an outage.")}</p></div>
+        <span className="live-state"><i />{t(status ? "Device {value}" : sentence(loadingState), { value: t(host) })}</span>
       </header>
-      <nav className="battery-navigation" aria-label={text("Battery sections")}><NavLink to="/battery" end><T text={"Status & control"} /></NavLink><NavLink to="/battery/schedules"><T text={"Schedules"} /></NavLink><NavLink to="/battery/backup"><T text={"Disaster Prep"} /></NavLink></nav>
-      {backup?.active ? <div className="backup-banner" role="status"><T text={"Disaster Prep is active · Profile "} />{sentence(backup.currentProfile)}</div> : null}
+      <nav className="battery-navigation" aria-label={t("batterySections")}><NavLink to="/battery" end>{t("statusControl")}</NavLink><NavLink to="/battery/schedules">{t("schedules")}</NavLink><NavLink to="/battery/backup">{t("disasterPrep")}</NavLink></nav>
+      {backup?.active ? <div className="backup-banner" role="status">{"" + t("disasterPrepIsActiveProfile") + " "}{sentence(backup.currentProfile)}</div> : null}
       {loadError ? <div className="status-banner" role="alert">{loadError}</div> : null}
 
       {view === "status" ? <>
       <section className="battery-hero panel">
-        <div><p className="eyebrow"><T text={"Current state"} /></p><strong className="battery-soc">{formatSoc(battery?.remaining_percent?.value ?? null)}</strong><p>{sentence(battery?.working_status?.value)} · {formatPower(battery?.instant_power?.value ?? null)}</p></div>
+        <div><p className="eyebrow">{t("currentState")}</p><strong className="battery-soc">{formatSoc(battery?.remaining_percent?.value ?? null)}</strong><p>{sentence(battery?.working_status?.value)} · {formatPower(battery?.instant_power?.value ?? null)}</p></div>
         {battery?.remaining_percent?.error ? <p className="status-banner" role="alert">{battery.remaining_percent.error}</p> : null}
         <dl className="battery-state-grid">
-          <div><dt><T text={"Verified operation mode"} /></dt><dd>{sentence(battery?.operation_mode?.value)}</dd></div>
-          <div><dt><T text={"Charging profile"} /></dt><dd>{sentence(profile)}</dd></div>
-          <div><dt><T text={"Reserve"} /></dt><dd>{reserve}%</dd></div>
-          <div><dt><T text={"Latest contact"} /></dt><dd>{status?.read_at ? formatTime(status.read_at) : "Unavailable"}</dd></div>
+          <div><dt>{t("verifiedOperationMode")}</dt><dd>{sentence(battery?.operation_mode?.value)}</dd></div>
+          <div><dt>{t("chargingProfile")}</dt><dd>{sentence(profile)}</dd></div>
+          <div><dt>{t("reserve")}</dt><dd>{reserve}%</dd></div>
+          <div><dt>{t("latestContact")}</dt><dd>{status?.read_at ? formatTime(status.read_at) : "Unavailable"}</dd></div>
         </dl>
       </section>
 
       <section className="panel strategy-panel">
-        <div><p className="eyebrow"><T text={"Current strategy"} /></p><h2>{status?.batteryStrategy?.title ?? "Determining ownership"}</h2><p>{formatDateTimesInText(status?.batteryStrategy?.description ?? "Waiting for current automation and override state.")}</p></div>
-        {status?.batteryStrategy?.manualOverride?.active ? <strong>{status.batteryStrategy.manualOverride.until ? `Until ${formatDateTime(status.batteryStrategy.manualOverride.until)}` : "Until changed"}</strong> : <span><T text={"No manual override"} /></span>}
+        <div><p className="eyebrow">{t("currentStrategy")}</p><h2>{status?.batteryStrategy?.title ?? "Determining ownership"}</h2><p>{formatDateTimesInText(status?.batteryStrategy?.description ?? "Waiting for current automation and override state.")}</p></div>
+        {status?.batteryStrategy?.manualOverride?.active ? <strong>{status.batteryStrategy.manualOverride.until ? `Until ${formatDateTime(status.batteryStrategy.manualOverride.until)}` : "Until changed"}</strong> : <span>{t("noManualOverride")}</span>}
       </section>
 
       <section className="panel battery-timeline-panel">
-        <div className="history-toolbar"><div><p className="eyebrow"><T text={"Last 24 hours"} /></p><h2><T text={"Battery power, state of charge, and planned windows"} /></h2></div><button className="quiet-button" type="button" onClick={refreshBatteryHistory}><T text={"Refresh"} /></button></div>
-        {batteryHistoryLoading && !chartSamples.length ? <div className="chart-empty"><T text={"Loading battery history…"} /></div> : <CombinedEnergyChart samples={chartSamples} selected={["batteryPowerW", "stateOfChargePercent"]} reservePercent={reserve} overlays={timelineOverlays} label="Last 24 hours of battery power and state of charge with reserve and command windows" />}
+        <div className="history-toolbar"><div><p className="eyebrow">{t("last24Hours")}</p><h2>{t("batteryPowerStateOfChargeAndPlannedWindows")}</h2></div><button className="quiet-button" type="button" onClick={refreshBatteryHistory}>{t("refresh")}</button></div>
+        {batteryHistoryLoading && !chartSamples.length ? <div className="chart-empty">{t("loadingBatteryHistory")}</div> : <CombinedEnergyChart samples={chartSamples} selected={["batteryPowerW", "stateOfChargePercent"]} reservePercent={reserve} overlays={timelineOverlays} label="Last 24 hours of battery power and state of charge with reserve and command windows" />}
       </section>
 
       <div className="battery-workspace">
         <section className="panel control-panel">
-          <div className="section-heading"><div><p className="eyebrow"><T text={"Everyday controls"} /></p><h2><T text={"Profile and reserve"} /></h2></div></div>
-          <label className="field"><span><T text={"Charging profile"} /></span><select value={profile} onChange={(event) => changeEverydaySetting(() => setProfile(event.target.value))}><option value="eco"><T text={"Eco"} /></option><option value="osaifu"><T text={"Osaifu"} /></option><option value="backup"><T text={"Backup"} /></option></select></label>
-          <label className="field"><span><T text={"Minimum reserve"} /></span><select value={reserve} onChange={(event) => changeEverydaySetting(() => setReserve(Number(event.target.value)))}>{Array.from({ length: 11 }, (_, step) => <option key={step} value={step * 10}>{step * 10}%</option>)}</select></label>
-          <details className="advanced-controls"><summary><T text={"Osaifu time windows"} /></summary>
-            <div className="window-row"><span><T text={"Charge"} /></span><select aria-label="Charge start" value={chargeStart} onChange={(event) => changeEverydaySetting(() => setChargeStart(Number(event.target.value)))}>{hourOptions()}</select><span><T text={"to"} /></span><select aria-label="Charge end" value={chargeEnd} onChange={(event) => changeEverydaySetting(() => setChargeEnd(Number(event.target.value)))}>{hourOptions()}</select></div>
-            <div className="window-row"><span><T text={"Discharge"} /></span><select aria-label="Discharge start" value={dischargeStart} onChange={(event) => changeEverydaySetting(() => setDischargeStart(Number(event.target.value)))}>{hourOptions()}</select><span><T text={"to"} /></span><select aria-label="Discharge end" value={dischargeEnd} onChange={(event) => changeEverydaySetting(() => setDischargeEnd(Number(event.target.value)))}>{hourOptions()}</select></div>
+          <div className="section-heading"><div><p className="eyebrow">{t("everydayControls")}</p><h2>{t("profileAndReserve")}</h2></div></div>
+          <label className="field"><span>{t("chargingProfile")}</span><select value={profile} onChange={(event) => changeEverydaySetting(() => setProfile(event.target.value))}><option value="eco">{t("eco")}</option><option value="osaifu">{t("osaifu")}</option><option value="backup">{t("backup")}</option></select></label>
+          <label className="field"><span>{t("minimumReserve")}</span><select value={reserve} onChange={(event) => changeEverydaySetting(() => setReserve(Number(event.target.value)))}>{Array.from({ length: 11 }, (_, step) => <option key={step} value={step * 10}>{step * 10}%</option>)}</select></label>
+          <details className="advanced-controls"><summary>{t("osaifuTimeWindows")}</summary>
+            <div className="window-row"><span>{t("charge")}</span><select aria-label="Charge start" value={chargeStart} onChange={(event) => changeEverydaySetting(() => setChargeStart(Number(event.target.value)))}>{hourOptions()}</select><span>{t("to")}</span><select aria-label="Charge end" value={chargeEnd} onChange={(event) => changeEverydaySetting(() => setChargeEnd(Number(event.target.value)))}>{hourOptions()}</select></div>
+            <div className="window-row"><span>{t("discharge")}</span><select aria-label="Discharge start" value={dischargeStart} onChange={(event) => changeEverydaySetting(() => setDischargeStart(Number(event.target.value)))}>{hourOptions()}</select><span>{t("to")}</span><select aria-label="Discharge end" value={dischargeEnd} onChange={(event) => changeEverydaySetting(() => setDischargeEnd(Number(event.target.value)))}>{hourOptions()}</select></div>
           </details>
           <button className="button primary" type="button" disabled={!everydayDirty || everydaySaving} onClick={() => void saveEverydayControls()}>{everydaySaving ? "Saving…" : "Save changes"}</button>
           {everydayResult ? <p className={`inline-save-result ${everydayResult.ok ? "success" : "failure"}`} role={everydayResult.ok ? "status" : "alert"}>{formatDateTimesInText(everydayResult.message)}</p> : null}
         </section>
 
         <section className="panel control-panel manual-panel">
-          <div className="section-heading"><div><h2><T text={"Manual operation"} /></h2></div></div>
-          <div className="manual-content"><p className="section-copy"><T text={"Commands temporarily override the current strategy and are verified after execution."} /></p>
-          <label className="field"><span><T text={"Optional energy target"} /></span><div className="input-suffix"><input type="number" min="0" step="100" value={chargeTarget} onChange={(event) => setChargeTarget(Number(event.target.value))} /><span><T text={"Wh"} /></span></div></label>
+          <div className="section-heading"><div><h2>{t("manualOperation")}</h2></div></div>
+          <div className="manual-content"><p className="section-copy">{t("commandsTemporarilyOverrideTheCurrentStrategyAndAreVerifac04d0")}</p>
+          <label className="field"><span>{t("optionalEnergyTarget")}</span><div className="input-suffix"><input type="number" min="0" step="100" value={chargeTarget} onChange={(event) => setChargeTarget(Number(event.target.value))} /><span>{t("wh")}</span></div></label>
           <div className="command-grid">
-            <button className="button primary" type="button" onClick={() => openReview({ action: "charge", label: "Start manual charging", payload: { targetWh: chargeTarget }, impact: "Manual charging may pause Adaptive Charging and increase grid demand." })}><T text={"Charge"} /></button>
-            <button className="button" type="button" onClick={() => openReview({ action: "discharge", label: "Start manual discharging", payload: { targetWh: chargeTarget }, impact: "Manual discharging may pause Adaptive Charging and reduce stored backup energy." })}><T text={"Discharge"} /></button>
-            <button className="button" type="button" onClick={() => openReview({ action: "set-mode", label: "Put battery in Standby", payload: { mode: "standby" }, impact: "Standby stops normal charging and discharging until another strategy changes the mode." })}><T text={"Standby"} /></button>
-            <button className="button secondary" type="button" onClick={() => openReview({ action: "set-mode", label: "Return battery to Auto", payload: { mode: "auto" }, impact: "Auto returns operation-mode control to the battery after any active override permits it." })}><T text={"Return to Auto"} /></button>
+            <button className="button primary" type="button" onClick={() => openReview({ action: "charge", label: "Start manual charging", payload: { targetWh: chargeTarget }, impact: "Manual charging may pause Adaptive Charging and increase grid demand." })}>{t("charge")}</button>
+            <button className="button" type="button" onClick={() => openReview({ action: "discharge", label: "Start manual discharging", payload: { targetWh: chargeTarget }, impact: "Manual discharging may pause Adaptive Charging and reduce stored backup energy." })}>{t("discharge")}</button>
+            <button className="button" type="button" onClick={() => openReview({ action: "set-mode", label: "Put battery in Standby", payload: { mode: "standby" }, impact: "Standby stops normal charging and discharging until another strategy changes the mode." })}>{t("standby")}</button>
+            <button className="button secondary" type="button" onClick={() => openReview({ action: "set-mode", label: "Return battery to Auto", payload: { mode: "auto" }, impact: "Auto returns operation-mode control to the battery after any active override permits it." })}>{t("returnToAuto")}</button>
           </div>
           </div>
         </section>
@@ -543,37 +545,37 @@ export function BatteryPage({ view = "status" }: { view?: "status" | "schedules"
 
       {view === "backup" ?
       <section className="panel backup-panel">
-        <div className="backup-state"><strong>{text(backup?.active ? "Active" : "Inactive")}</strong><span>{backup?.active ? text("Since {value}", { value: backup.startedAt ? formatDateTime(backup.startedAt) : text("recently") }) : text("Normal automation can operate")}</span></div>
-        {!backup?.active ? <label className="guard-choice"><input type="checkbox" checked={backupAllowDemandGuard} onChange={(event) => setBackupAllowDemandGuard(event.target.checked)} /><span><T text={"Allow Demand Guard to retain breaker protection"} /></span></label> : null}
-        <button className={`button${backup?.active ? " secondary" : " primary"}`} type="button" onClick={() => openReview({ action: backup?.active ? "backup-end" : "backup-start", label: backup?.active ? "Stop Disaster Prep" : "Start Disaster Prep", payload: { allowDemandGuard: backupAllowDemandGuard, reserve }, impact: backup?.active ? "Stopping restores the battery profile that was active before Disaster Prep began. Adaptive Charging will then recalculate before normal operation resumes." : `Disaster Prep switches the battery to its backup profile and pauses Adaptive Charging so stored energy is prioritized for an outage. Your ${reserve}% reserve remains unchanged, and Demand Guard will ${backupAllowDemandGuard ? "remain available for breaker protection" : "pause"}. All of these temporary changes are reversed when Disaster Prep is stopped.` })}>{text(backup?.active ? "Stop" : "Start")}</button>
+        <div className="backup-state"><strong>{t(backup?.active ? "Active" : "Inactive")}</strong><span>{backup?.active ? t("sinceValue", { value: backup.startedAt ? formatDateTime(backup.startedAt) : t("recently") }) : t("normalAutomationCanOperate")}</span></div>
+        {!backup?.active ? <label className="guard-choice"><input type="checkbox" checked={backupAllowDemandGuard} onChange={(event) => setBackupAllowDemandGuard(event.target.checked)} /><span>{t("allowDemandGuardToRetainBreakerProtection")}</span></label> : null}
+        <button className={`button${backup?.active ? " secondary" : " primary"}`} type="button" onClick={() => openReview({ action: backup?.active ? "backup-end" : "backup-start", label: backup?.active ? "Stop Disaster Prep" : "Start Disaster Prep", payload: { allowDemandGuard: backupAllowDemandGuard, reserve }, impact: backup?.active ? "Stopping restores the battery profile that was active before Disaster Prep began. Adaptive Charging will then recalculate before normal operation resumes." : `Disaster Prep switches the battery to its backup profile and pauses Adaptive Charging so stored energy is prioritized for an outage. Your ${reserve}% reserve remains unchanged, and Demand Guard will ${backupAllowDemandGuard ? "remain available for breaker protection" : "pause"}. All of these temporary changes are reversed when Disaster Prep is stopped.` })}>{t(backup?.active ? "Stop" : "Start")}</button>
       </section> : null}
 
       {view === "schedules" ?
       <section className="panel schedules-panel">
-        <div className="section-heading"><div><p className="eyebrow"><T text={"Planned changes"} /></p><h2><T text={"Schedules"} /></h2></div><span className="sample-count">{schedules.length} <T text={" configured"} /></span></div>
-        {schedulesDisabled ? <div className="automation-disabled-note" role="status"><strong><T text={"Schedules are disabled while Adaptive Charging is on."} /></strong><span><T text={"Your saved schedules are retained for reference, but they will not run. Turn off Adaptive Charging before creating, enabling, or changing a schedule."} /></span></div> : null}
+        <div className="section-heading"><div><p className="eyebrow">{t("plannedChanges")}</p><h2>{t("schedules")}</h2></div><span className="sample-count">{schedules.length} {" " + t("configured") + ""}</span></div>
+        {schedulesDisabled ? <div className="automation-disabled-note" role="status"><strong>{t("schedulesAreDisabledWhileAdaptiveChargingIsOn")}</strong><span>{t("yourSavedSchedulesAreRetainedForReferenceButTheyWillNotR77591e")}</span></div> : null}
         <ScheduleCalendar schedules={schedulesDisabled ? [] : schedules} conflicts={conflictingScheduleIds} />
         <form className="schedule-form" onSubmit={(event) => void submitSchedule(event)}>
           <fieldset className="schedule-form-fields" disabled={schedulesDisabled}>
-          <label className="field"><span><T text={"Schedule name"} /></span><input value={scheduleName} onChange={(event) => setScheduleName(event.target.value)} required /></label>
-          <label className="field"><span><T text={"1 · When"} /></span><span className="paired-fields"><select aria-label="Schedule repeat" value={scheduleRepeat} onChange={(event) => setScheduleRepeat(event.target.value as "daily" | "once")}><option value="daily"><T text={"Daily"} /></option><option value="once"><T text={"Once"} /></option></select>{scheduleRepeat === "daily" ? <input aria-label="Schedule time" type="time" value={scheduleTime} onChange={(event) => setScheduleTime(event.target.value)} required /> : <input aria-label="Schedule date and time" type="datetime-local" value={scheduleRunAt} onChange={(event) => setScheduleRunAt(event.target.value)} required />}</span></label>
-          <label className="field"><span><T text={"2 · Action"} /></span><select value={scheduleAction} onChange={(event) => { const action = event.target.value as BatteryAction; setScheduleAction(action); setScheduleValue(action === "vendor-profile" ? "eco" : action === "discharge-limit" ? "20" : action === "charge" || action === "discharge" ? "500" : "auto"); }}><option value="set-mode"><T text={"Operation mode"} /></option><option value="vendor-profile"><T text={"Charging profile"} /></option><option value="discharge-limit"><T text={"Reserve limit"} /></option><option value="osaifu-charge-window"><T text={"Charge window"} /></option><option value="osaifu-discharge-window"><T text={"Discharge window"} /></option><option value="charge"><T text={"Charge"} /></option><option value="discharge"><T text={"Discharge"} /></option></select></label>
-          <label className="field"><span><T text={"3 · Value"} /></span>{scheduleAction === "set-mode" ? <select value={scheduleValue} onChange={(event) => setScheduleValue(event.target.value)} aria-label="Schedule value"><option value="auto"><T text={"Auto"} /></option><option value="standby"><T text={"Standby"} /></option><option value="charging"><T text={"Charging"} /></option><option value="discharging"><T text={"Discharging"} /></option></select> : scheduleAction === "vendor-profile" ? <select value={scheduleValue} onChange={(event) => setScheduleValue(event.target.value)} aria-label="Schedule value"><option value="eco"><T text={"Eco"} /></option><option value="osaifu"><T text={"Osaifu"} /></option><option value="backup"><T text={"Backup"} /></option></select> : scheduleAction.includes("window") ? <span className="compact-window">{scheduleAction === "osaifu-charge-window" ? `${chargeStart}:00–${chargeEnd}:00` : `${dischargeStart}:00–${dischargeEnd}:00`}</span> : <input type="number" min="0" step={scheduleAction === "discharge-limit" ? 10 : 100} value={scheduleValue} onChange={(event) => setScheduleValue(event.target.value)} aria-label="Schedule value" />}</label>
+          <label className="field"><span>{t("scheduleName")}</span><input value={scheduleName} onChange={(event) => setScheduleName(event.target.value)} required /></label>
+          <label className="field"><span>{t("1When")}</span><span className="paired-fields"><select aria-label="Schedule repeat" value={scheduleRepeat} onChange={(event) => setScheduleRepeat(event.target.value as "daily" | "once")}><option value="daily">{t("daily")}</option><option value="once">{t("once")}</option></select>{scheduleRepeat === "daily" ? <input aria-label="Schedule time" type="time" value={scheduleTime} onChange={(event) => setScheduleTime(event.target.value)} required /> : <input aria-label="Schedule date and time" type="datetime-local" value={scheduleRunAt} onChange={(event) => setScheduleRunAt(event.target.value)} required />}</span></label>
+          <label className="field"><span>{t("2Action")}</span><select value={scheduleAction} onChange={(event) => { const action = event.target.value as BatteryAction; setScheduleAction(action); setScheduleValue(action === "vendor-profile" ? "eco" : action === "discharge-limit" ? "20" : action === "charge" || action === "discharge" ? "500" : "auto"); }}><option value="set-mode">{t("operationMode")}</option><option value="vendor-profile">{t("chargingProfile")}</option><option value="discharge-limit">{t("reserveLimit")}</option><option value="osaifu-charge-window">{t("chargeWindow")}</option><option value="osaifu-discharge-window">{t("dischargeWindow")}</option><option value="charge">{t("charge")}</option><option value="discharge">{t("discharge")}</option></select></label>
+          <label className="field"><span>{t("3Value")}</span>{scheduleAction === "set-mode" ? <select value={scheduleValue} onChange={(event) => setScheduleValue(event.target.value)} aria-label="Schedule value"><option value="auto">{t("auto")}</option><option value="standby">{t("standby")}</option><option value="charging">{t("charging")}</option><option value="discharging">{t("discharging")}</option></select> : scheduleAction === "vendor-profile" ? <select value={scheduleValue} onChange={(event) => setScheduleValue(event.target.value)} aria-label="Schedule value"><option value="eco">{t("eco")}</option><option value="osaifu">{t("osaifu")}</option><option value="backup">{t("backup")}</option></select> : scheduleAction.includes("window") ? <span className="compact-window">{scheduleAction === "osaifu-charge-window" ? `${chargeStart}:00–${chargeEnd}:00` : `${dischargeStart}:00–${dischargeEnd}:00`}</span> : <input type="number" min="0" step={scheduleAction === "discharge-limit" ? 10 : 100} value={scheduleValue} onChange={(event) => setScheduleValue(event.target.value)} aria-label="Schedule value" />}</label>
           <button className={`button${scheduleReview ? " primary" : ""}`} disabled={scheduleBusy} type="submit">{scheduleBusy ? "Saving…" : scheduleReview ? "Confirm schedule" : "4 · Review schedule"}</button>
-          {scheduleRepeat === "daily" ? <fieldset className="schedule-days"><legend><T text={"Run on"} /></legend>{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((label, day) => <label key={label}><input type="checkbox" checked={scheduleDays.includes(day)} onChange={(event) => setScheduleDays((days) => event.target.checked ? [...days, day].sort() : days.filter((item) => item !== day))} /><span>{label}</span></label>)}</fieldset> : null}
+          {scheduleRepeat === "daily" ? <fieldset className="schedule-days"><legend>{t("runOn")}</legend>{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((label, day) => <label key={label}><input type="checkbox" checked={scheduleDays.includes(day)} onChange={(event) => setScheduleDays((days) => event.target.checked ? [...days, day].sort() : days.filter((item) => item !== day))} /><span>{label}</span></label>)}</fieldset> : null}
           </fieldset>
         </form>
-        {scheduleReview ? <div className="schedule-review-note" role="status"><span><strong><T text={"Review:"} /></strong> {scheduleName} <T text={" will run "} />{actionLabels[scheduleAction] ?? sentence(scheduleAction)} <T text={" with "} />{Object.values(schedulePayload).join(" → ")} {scheduleRepeat === "daily" ? `at ${scheduleTime} on ${scheduleDays.map((day) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ")}` : `once at ${formatDateTime(scheduleRunAt)}`}.</span><button className="quiet-button" type="button" onClick={() => setScheduleReview(false)}><T text={"Edit"} /></button></div> : null}
+        {scheduleReview ? <div className="schedule-review-note" role="status"><span><strong>{t("review")}</strong> {scheduleName} {" " + t("willRun") + " "}{actionLabels[scheduleAction] ?? sentence(scheduleAction)} {" " + t("with") + " "}{Object.values(schedulePayload).join(" → ")} {scheduleRepeat === "daily" ? `at ${scheduleTime} on ${scheduleDays.map((day) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ")}` : `once at ${formatDateTime(scheduleRunAt)}`}.</span><button className="quiet-button" type="button" onClick={() => setScheduleReview(false)}>{t("edit")}</button></div> : null}
         <div className="schedule-list">
-          {schedules.map((schedule) => { const next = schedulesDisabled ? null : scheduleNextAt(schedule); return <article key={schedule.id}><div><strong>{schedule.name}</strong><span>{actionLabels[schedule.action] ?? sentence(schedule.action)} · {scheduleRecurrence(schedule)}</span><small>{schedulesDisabled ? "Paused by Adaptive Charging" : `Next run: ${next ? formatDateTime(next) : schedule.enabled ? "No future occurrence" : "Disabled"}`}</small>{schedule.lastResult ? <small data-ok={schedule.lastResult.ok}>{schedule.lastResult.ok ? `Last run succeeded${schedule.lastResult.at ? ` · ${formatDateTime(schedule.lastResult.at)}` : ""}` : formatDateTimesInText(`Last run failed: ${schedule.lastResult.error}`)}</small> : null}{conflictingScheduleIds.has(schedule.id) ? <p className="schedule-conflict"><T text={"Conflicts with another enabled schedule at this time."} /></p> : null}</div><div className="button-row"><button className="quiet-button" disabled={schedulesDisabled} title={schedulesDisabled ? "Adaptive Charging must be turned off before changing schedule status" : undefined} type="button" onClick={() => { void updateSchedule(schedule.id, { enabled: !schedule.enabled }).then(loadOperations).catch((error) => setLoadError(error instanceof Error ? error.message : "Schedule could not be updated")); }}>{schedule.enabled ? "Disable" : "Enable"}</button><button className="quiet-button danger" type="button" onClick={() => { void deleteSchedule(schedule.id).then(loadOperations).catch((error) => setLoadError(error instanceof Error ? error.message : "Schedule could not be deleted")); }}><T text={"Delete"} /></button></div></article>; })}
+          {schedules.map((schedule) => { const next = schedulesDisabled ? null : scheduleNextAt(schedule); return <article key={schedule.id}><div><strong>{schedule.name}</strong><span>{actionLabels[schedule.action] ?? sentence(schedule.action)} · {scheduleRecurrence(schedule)}</span><small>{schedulesDisabled ? "Paused by Adaptive Charging" : `Next run: ${next ? formatDateTime(next) : schedule.enabled ? "No future occurrence" : "Disabled"}`}</small>{schedule.lastResult ? <small data-ok={schedule.lastResult.ok}>{schedule.lastResult.ok ? `Last run succeeded${schedule.lastResult.at ? ` · ${formatDateTime(schedule.lastResult.at)}` : ""}` : formatDateTimesInText(`Last run failed: ${schedule.lastResult.error}`)}</small> : null}{conflictingScheduleIds.has(schedule.id) ? <p className="schedule-conflict">{t("conflictsWithAnotherEnabledScheduleAtThisTime")}</p> : null}</div><div className="button-row"><button className="quiet-button" disabled={schedulesDisabled} title={schedulesDisabled ? "Adaptive Charging must be turned off before changing schedule status" : undefined} type="button" onClick={() => { void updateSchedule(schedule.id, { enabled: !schedule.enabled }).then(loadOperations).catch((error) => setLoadError(error instanceof Error ? error.message : "Schedule could not be updated")); }}>{schedule.enabled ? "Disable" : "Enable"}</button><button className="quiet-button danger" type="button" onClick={() => { void deleteSchedule(schedule.id).then(loadOperations).catch((error) => setLoadError(error instanceof Error ? error.message : "Schedule could not be deleted")); }}>{t("delete")}</button></div></article>; })}
         </div>
       </section> : null}
 
       <section className="panel receipts-panel">
-        <div className="section-heading"><div><p className="eyebrow"><T text={"Audit trail"} /></p><h2><T text={"Recent command receipts"} /></h2></div><button className="quiet-button" type="button" onClick={() => void loadOperations()}><T text={"Refresh"} /></button></div>
+        <div className="section-heading"><div><p className="eyebrow">{t("auditTrail")}</p><h2>{t("recentCommandReceipts")}</h2></div><button className="quiet-button" type="button" onClick={() => void loadOperations()}>{t("refresh")}</button></div>
         <div className="receipt-list">
           {receipts.map((receipt) => <article key={receipt.commandId}><i data-state={receipt.state} /><div><strong>{actionLabels[receipt.action] ?? sentence(receipt.action)}</strong><span>{requestSummary(receipt)} · {sourceLabels[receipt.source] ?? sentence(receipt.source)}</span><small>{receipt.completedAt || receipt.requestedAt ? formatDateTime(receipt.completedAt ?? receipt.requestedAt) : "Time unavailable"}{receipt.durationMs !== null && receipt.durationMs !== undefined ? ` · ${receipt.durationMs} ms` : ""}</small>{receipt.error ? <p className="receipt-error">{formatDateTimesInText(receipt.error)}</p> : null}</div><b data-state={receipt.state}>{sentence(receipt.state)}</b></article>)}
-          {!receipts.length ? <p className="empty-copy"><T text={"No device commands have been recorded since command receipts were enabled."} /></p> : null}
+          {!receipts.length ? <p className="empty-copy">{t("noDeviceCommandsHaveBeenRecordedSinceCommandReceiptsWere184247")}</p> : null}
         </div>
       </section>
       {review ? <CommandDialog command={review} close={closeReview} completed={completed} /> : null}

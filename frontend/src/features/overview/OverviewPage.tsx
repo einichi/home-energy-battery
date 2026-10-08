@@ -6,7 +6,8 @@ import { OffPeakSavings } from "../../components/TelemetryParity";
 import { formatDateTime, formatDateTimeRange, formatDateTimesInText, formatFreshness, formatPercent, formatPower, formatSoc, formatTime, metricValue } from "../../core/format";
 import { useEnergyStatus } from "../../hooks/useEnergyStatus";
 import { useSnapshotStale } from "../../hooks/useSnapshotStale";
-import { T, useI18n } from "../../i18n";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 
 function preferredFuelCell(status: ReturnType<typeof useEnergyStatus>["status"]) {
   const fuelCells = status?.energy?.fuel_cells ?? [];
@@ -20,18 +21,18 @@ function batteryStateLabel(power: number | null) {
   return "Idle";
 }
 
-function nextActionTitle(nextAction: NonNullable<NonNullable<ReturnType<typeof useEnergyStatus>["status"]>["batteryStrategy"]>["nextAction"], text: (source?: string, values?: Record<string, string | number | null | undefined>) => string) {
+function nextActionTitle(nextAction: NonNullable<NonNullable<ReturnType<typeof useEnergyStatus>["status"]>["batteryStrategy"]>["nextAction"], t: TFunction<"overview">) {
   if (nextAction?.action === "charge" && nextAction.at && nextAction.endAt) {
-    return text("Charge {value}", { value: formatDateTimeRange(nextAction.at, nextAction.endAt) });
+    return t("chargeValue", { value: formatDateTimeRange(nextAction.at, nextAction.endAt) });
   }
   if (nextAction?.action === "continue-charging" && nextAction.endAt) {
-    return text("Continue charging until {value}", { value: formatDateTime(nextAction.endAt) });
+    return t("continueChargingUntilValue", { value: formatDateTime(nextAction.endAt) });
   }
-  return text(nextAction?.title ?? "No application action scheduled");
+  return t(nextAction?.title ?? "No application action scheduled");
 }
 
 export function OverviewPage() {
-  const { text } = useI18n();
+  const { t } = useTranslation("overview");
   const { config, status, loadingState, manualRefreshing, error, refresh: refreshStatus } = useEnergyStatus();
   const todayStart = useMemo(() => {
     const value = new Date();
@@ -57,25 +58,25 @@ export function OverviewPage() {
   const gridExport = metricValue(status?.meter?.grid_export_power);
   const reserve = status?.settings?.discharge_limit?.decoded?.percent;
   const nextAction = status?.batteryStrategy?.nextAction;
-  const formattedNextActionTitle = nextActionTitle(nextAction, text);
+  const formattedNextActionTitle = nextActionTitle(nextAction, t);
   const readingsStale = useSnapshotStale(status?.read_at, config?.updateIntervalSeconds);
   const widgetVisible = (id: string) => config?.dashboardWidgets?.find((widget) => widget.id === id)?.visible !== false;
   const attentionItems = [
     ...(status?.alerts ?? []).slice(0, 3).map((alert) => ({ id: alert.id, title: alert.title, detail: formatDateTimesInText(alert.impact), href: alert.href ?? "/system/equipment" })),
-    ...(status?.batteryStrategy?.manualOverride?.active ? [{ id: "manual-override", title: text("Manual battery override is active"), detail: status.batteryStrategy.manualOverride.label ?? text("Automation will wait until the override ends."), href: "/battery" }] : []),
+    ...(status?.batteryStrategy?.manualOverride?.active ? [{ id: "manual-override", title: t("manualBatteryOverrideIsActive"), detail: status.batteryStrategy.manualOverride.label ?? t("automationWillWaitUntilTheOverrideEnds"), href: "/battery" }] : []),
   ];
   const topCircuits = useMemo(
     () =>
       (status?.meter?.channel_power?.decoded?.channels ?? [])
         .map((circuit) => ({
           id: String(circuit.channel),
-          label: config?.circuitLabels?.[String(circuit.channel)] ?? text("Circuit {value}", { value: circuit.channel }),
+          label: config?.circuitLabels?.[String(circuit.channel)] ?? t("circuitValue", { value: circuit.channel }),
           watts: metricValue({ value: circuit.value }),
         }))
         .filter((circuit): circuit is typeof circuit & { watts: number } => circuit.watts !== null && circuit.watts > 0 && config?.circuitDashboardVisibility?.[circuit.id] !== false)
         .sort((left, right) => config?.circuitSortMode === "number" ? Number(left.id) - Number(right.id) : right.watts - left.watts)
         .slice(0, 5),
-    [config?.circuitDashboardVisibility, config?.circuitLabels, config?.circuitSortMode, status?.meter?.channel_power?.decoded?.channels, text],
+    [config?.circuitDashboardVisibility, config?.circuitLabels, config?.circuitSortMode, status?.meter?.channel_power?.decoded?.channels, t],
   );
 
   return (
@@ -83,7 +84,7 @@ export function OverviewPage() {
       <header className="page-heading">
         <div>
           <h1>
-            <T text={"Home energy overview"} />
+            {t("homeEnergyOverview")}
           </h1>
           <p>{formatFreshness(status?.read_at)}</p>
         </div>
@@ -95,7 +96,7 @@ export function OverviewPage() {
           }}
           disabled={loadingState === "loading" || manualRefreshing}
         >
-          {text(manualRefreshing ? "Refreshing…" : "Refresh")}
+          {t(manualRefreshing ? "Refreshing…" : "Refresh")}
         </button>
       </header>
 
@@ -105,22 +106,22 @@ export function OverviewPage() {
         </div>
       ) : null}
 
-      <section className="mobile-operating-summary" aria-label={text("Current operating summary")}>
-        <div><span>{text(gridExport != null && gridExport > 0 ? "Grid export" : "Grid import")}</span><strong>{formatPower(gridExport != null && gridExport > 0 ? gridExport : gridImport)}</strong></div>
-        <div><span><T text={"Battery"} /></span><strong>{formatSoc(soc)} · {text(batteryStateLabel(batteryPower))}</strong></div>
-        <div><span><T text={"Next action"} /></span><strong>{formattedNextActionTitle}</strong></div>
+      <section className="mobile-operating-summary" aria-label={t("currentOperatingSummary")}>
+        <div><span>{t(gridExport != null && gridExport > 0 ? "Grid export" : "Grid import")}</span><strong>{formatPower(gridExport != null && gridExport > 0 ? gridExport : gridImport)}</strong></div>
+        <div><span>{t("battery")}</span><strong>{formatSoc(soc)} · {t(batteryStateLabel(batteryPower))}</strong></div>
+        <div><span>{t("nextAction")}</span><strong>{formattedNextActionTitle}</strong></div>
       </section>
 
-      <section className="overview-grid" aria-label={text("Live energy status")}>
+      <section className="overview-grid" aria-label={t("liveEnergyStatus")}>
         <article className="flow-panel panel">
           <div className="section-heading">
             <div>
               <h2>
-                <T text={"Energy flow"} />
+                {t("energyFlow")}
               </h2>
             </div>
             <span className="live-state" data-stale={readingsStale || undefined} data-unavailable={!status?.read_at || undefined}>
-              <i aria-hidden="true" /> {text(!status?.read_at ? "Unavailable" : readingsStale ? "Stale · last known values" : "Live")}
+              <i aria-hidden="true" /> {t(!status?.read_at ? "Unavailable" : readingsStale ? "Stale · last known values" : "Live")}
             </span>
           </div>
           <EnergyFlow solar={solarPower} fuelCell={fuelCellPower} battery={batteryPower} demand={demandPower} demandLabel={demandLabel} demandTitle={demandTitle} gridImport={gridImport} gridExport={gridExport} showSolar={config?.solarEnabled !== false && widgetVisible("solarPower")} showFuelCell={config?.fuelCellEnabled !== false && widgetVisible("fuelCellPower")} showBattery={widgetVisible("batteryPower")} showDemand={widgetVisible("branchDemandPower")} showGrid={widgetVisible(gridExport != null && gridExport > 0 ? "gridExportPower" : "gridImportPower")} />
@@ -130,55 +131,55 @@ export function OverviewPage() {
           <div className="section-heading">
             <div>
               <p className="eyebrow">
-                <T text={"Storage"} />
+                {t("storage")}
               </p>
               <h2>
-                <T text={"Battery"} />
+                {t("battery")}
               </h2>
             </div>
             {widgetVisible("batterySoc") ? <span className="battery-soc">{formatSoc(soc)}</span> : null}
           </div>
-          {widgetVisible("batterySoc") ? <div className="soc-track" role="meter" aria-label={text("Battery state of charge")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={soc ?? undefined}>
+          {widgetVisible("batterySoc") ? <div className="soc-track" role="meter" aria-label={t("batteryStateOfCharge")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={soc ?? undefined}>
             <i style={{ width: `${soc ?? 0}%` }} />
           </div> : null}
           <dl className="definition-grid">
             {widgetVisible("batteryPower") ? <div>
               <dt>
-                <T text={"Power"} />
+                {t("power")}
               </dt>
               <dd>{formatPower(batteryPower)}</dd>
             </div> : null}
             {widgetVisible("batteryWorking") ? <div>
               <dt>
-                <T text={"Working state"} />
+                {t("workingState")}
               </dt>
-              <dd>{text(battery?.working_status?.value ?? "Unavailable")}</dd>
+              <dd>{t(battery?.working_status?.value ?? "Unavailable")}</dd>
             </div> : null}
             {widgetVisible("operationMode") ? <div>
               <dt>
-                <T text={"Operation mode"} />
+                {t("operationMode")}
               </dt>
-              <dd>{text(battery?.operation_mode?.value ?? "Unavailable")}</dd>
+              <dd>{t(battery?.operation_mode?.value ?? "Unavailable")}</dd>
             </div> : null}
             {widgetVisible("vendorProfile") ? <div>
               <dt>
-                <T text={"Profile"} />
+                {t("profile")}
               </dt>
-              <dd>{text(battery?.vendor_profile?.value ?? "Unavailable")}</dd>
+              <dd>{t(battery?.vendor_profile?.value ?? "Unavailable")}</dd>
             </div> : null}
             {widgetVisible("dischargeLimit") ? <div>
-              <dt><T text={"Reserve"} /></dt>
+              <dt>{t("reserve")}</dt>
               <dd>{formatPercent(reserve ?? null)}</dd>
             </div> : null}
             <div>
-              <dt><T text={"Latest contact"} /></dt>
-              <dd>{status?.read_at ? formatTime(status.read_at) : text("Unavailable")}</dd>
+              <dt>{t("latestContact")}</dt>
+              <dd>{status?.read_at ? formatTime(status.read_at) : t("unavailable")}</dd>
             </div>
           </dl>
           <p className="panel-note">
-            <strong>{text(status?.batteryStrategy?.title ?? "Current strategy unavailable")}</strong>
+            <strong>{t(status?.batteryStrategy?.title ?? "Current strategy unavailable")}</strong>
             <br />
-            {formatDateTimesInText(text(status?.batteryStrategy?.description ?? "Waiting for operational state."))}
+            {formatDateTimesInText(t(status?.batteryStrategy?.description ?? "Waiting for operational state."))}
           </p>
         </article>
       </section>
@@ -186,15 +187,15 @@ export function OverviewPage() {
       {widgetVisible("adaptiveCharging") || widgetVisible("awayStatus") ? (
         <section className="panel overview-next-action" aria-labelledby="overview-next-action-heading">
           <div>
-            <p className="eyebrow"><T text={"Next automation action"} /></p>
-            <h2 id="overview-next-action-heading">{nextAction ? formattedNextActionTitle : text("Waiting for the next automation decision")}</h2>
-            <p>{formatDateTimesInText(text(nextAction?.reason ?? "Automation status is not available yet."))}</p>
+            <p className="eyebrow">{t("nextAutomationAction")}</p>
+            <h2 id="overview-next-action-heading">{nextAction ? formattedNextActionTitle : t("waitingForTheNextAutomationDecision")}</h2>
+            <p>{formatDateTimesInText(t(nextAction?.reason ?? "Automation status is not available yet."))}</p>
           </div>
           <div className="overview-next-action-meta">
             {nextAction?.at ? <time dateTime={nextAction.at}>{formatDateTime(nextAction.at)}</time> : null}
-            {nextAction?.targetSocPercent != null ? <span>{text("Target {value}", { value: formatPercent(nextAction.targetSocPercent) })}</span> : null}
-            {nextAction?.confidence ? <span>{text("{value} confidence", { value: nextAction.confidence })}</span> : null}
-            <Link className="text-link" to={nextAction?.href ?? "/automation"}><T text={"Open automation →"} /></Link>
+            {nextAction?.targetSocPercent != null ? <span>{t("targetValue", { value: formatPercent(nextAction.targetSocPercent) })}</span> : null}
+            {nextAction?.confidence ? <span>{t("valueConfidence", { value: nextAction.confidence })}</span> : null}
+            <Link className="text-link" to={nextAction?.href ?? "/automation"}>{t("openAutomation")}</Link>
           </div>
         </section>
       ) : null}
@@ -203,14 +204,14 @@ export function OverviewPage() {
         <div className="section-heading">
           <div>
             <p className="eyebrow">
-              <T text={"Live power"} />
+              {t("livePower")}
             </p>
             <h2 id="top-circuits-heading">
-              <T text={"Circuits consuming most power"} />
+              {t("circuitsConsumingMostPower")}
             </h2>
           </div>
           <a className="text-link" href="#today-circuits">
-            <T text={"All circuits →"} />
+            {t("allCircuits")}
           </a>
         </div>
         {topCircuits.length ? (
@@ -224,34 +225,34 @@ export function OverviewPage() {
           </ol>
         ) : (
           <p className="empty-copy">
-            <T text={"No circuits are currently reporting power use."} />
+            {t("noCircuitsAreCurrentlyReportingPowerUse")}
           </p>
         )}
       </section> : null}
 
       {attentionItems.length ? <section className="panel overview-attention" aria-labelledby="overview-attention-heading">
-        <div className="section-heading"><div><p className="eyebrow"><T text={"Attention"} /></p><h2 id="overview-attention-heading"><T text={"Needs attention"} /></h2></div></div>
-        <ul>{attentionItems.map((item) => <li key={item.id}><div><strong>{text(item.title)}</strong><span>{text(item.detail)}</span></div><Link to={item.href}><T text={"Review →"} /></Link></li>)}</ul>
+        <div className="section-heading"><div><p className="eyebrow">{t("attention")}</p><h2 id="overview-attention-heading">{t("needsAttention")}</h2></div></div>
+        <ul>{attentionItems.map((item) => <li key={item.id}><div><strong>{t(item.title)}</strong><span>{t(item.detail)}</span></div><Link to={item.href}>{t("review")}</Link></li>)}</ul>
       </section> : null}
 
       <section className="overview-daily-section" aria-labelledby="today-heading">
         <div className="section-heading">
           <div>
             <p className="eyebrow">
-              <T text={"Daily summary"} />
+              {t("dailySummary")}
             </p>
             <h2 id="today-heading">
-              <T text={"Today at a glance"} />
+              {t("todayAtAGlance")}
             </h2>
           </div>
           <Link className="text-link" to="/reports">
-            <T text={"Open reports →"} />
+            {t("openReports")}
           </Link>
         </div>
         <EnergyPeriodSections
           milliseconds={24 * 60 * 60_000}
           start={todayStart}
-          periodLabel={text("Today")}
+          periodLabel={t("today")}
           sections={["history", "balance", "outcomes", "battery", "ene-farm", "circuits"]}
           current
           refreshKey={status?.read_at}

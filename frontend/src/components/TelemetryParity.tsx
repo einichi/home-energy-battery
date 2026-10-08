@@ -2,7 +2,7 @@ import { useId, useMemo, useState } from "react";
 import type { PointerEvent } from "react";
 import type { EneFarmSummary, EnergySample, EnergySources, SavingsSummary, StatusSnapshot } from "../api/contracts";
 import { formatChartTime, formatCurrency, formatDateTime, formatEnergy, formatPercent, formatPower, localeName } from "../core/format";
-import { T, useI18n } from "../i18n";
+import { useTranslation } from "react-i18next";
 
 const sourceDefinitions = [
   { key: "peak", label: "Peak grid", value: "peakGridKwh", percent: "peakGridPercent" },
@@ -12,7 +12,7 @@ const sourceDefinitions = [
 ] as const;
 
 export function EnergySourcesBar({ sources, period = "Today", showPeriod = true }: { sources?: EnergySources; period?: string; showPeriod?: boolean }) {
-  const { text } = useI18n();
+  const { t } = useTranslation("common");
   const values = sourceDefinitions.map((item) => {
     const raw = sources?.[item.value];
     if (raw === null || raw === undefined) return null;
@@ -30,19 +30,19 @@ export function EnergySourcesBar({ sources, period = "Today", showPeriod = true 
 
   return (
     <section className="telemetry-card energy-sources-card" aria-labelledby="energy-sources-heading">
-      <div className="section-heading"><div>{showPeriod ? <p className="eyebrow">{period}</p> : null}<h2 id="energy-sources-heading"><T text={"Energy Sources"} /></h2></div><strong>{formatEnergy(hasData ? total : null)}</strong></div>
-      {hasData ? <div className="energy-sources-bar" role="img" aria-label={segments.map((item) => `${text(item.label)} ${formatPercent(item.percent)}`).join(", ")}>
-        {segments.map((item) => <i key={item.key} data-source={item.key} style={{ width: `${item.percent ?? 0}%` }} title={`${text(item.label)}: ${formatEnergy(item.value)} (${formatPercent(item.percent)})`} />)}
-      </div> : <p className="telemetry-empty"><T text={"No source-composition data is available for this period."} /></p>}
+      <div className="section-heading"><div>{showPeriod ? <p className="eyebrow">{period}</p> : null}<h2 id="energy-sources-heading">{t("energySources")}</h2></div><strong>{formatEnergy(hasData ? total : null)}</strong></div>
+      {hasData ? <div className="energy-sources-bar" role="img" aria-label={segments.map((item) => `${t(item.label)} ${formatPercent(item.percent)}`).join(", ")}>
+        {segments.map((item) => <i key={item.key} data-source={item.key} style={{ width: `${item.percent ?? 0}%` }} title={`${t(item.label)}: ${formatEnergy(item.value)} (${formatPercent(item.percent)})`} />)}
+      </div> : <p className="telemetry-empty">{t("noSourceCompositionDataIsAvailableForThisPeriod")}</p>}
       <dl className="energy-source-legend">
-        {segments.map((item) => <div key={item.key}><dt><i data-source={item.key} />{text(item.label)}</dt><dd>{formatEnergy(hasData ? item.value : null)} <small>{formatPercent(hasData ? item.percent : null)}</small></dd></div>)}
+        {segments.map((item) => <div key={item.key}><dt><i data-source={item.key} />{t(item.label)}</dt><dd>{formatEnergy(hasData ? item.value : null)} <small>{formatPercent(hasData ? item.percent : null)}</small></dd></div>)}
       </dl>
     </section>
   );
 }
 
 export function EneFarmActivity({ summary, compact = false, period = "Today", loading = false, showPeriod = true, showHeading = true }: { summary: EneFarmSummary | null; compact?: boolean; period?: string; loading?: boolean; showPeriod?: boolean; showHeading?: boolean }) {
-  const { text } = useI18n();
+  const { t } = useTranslation("common");
   const [activeIntervalIndex, setActiveIntervalIndex] = useState<number | null>(null);
   const start = new Date(summary?.start ?? "").getTime();
   const end = new Date(summary?.end ?? "").getTime();
@@ -66,21 +66,21 @@ export function EneFarmActivity({ summary, compact = false, period = "Today", lo
   const activeInterval = activeIntervalIndex === null ? null : intervals[activeIntervalIndex] ?? null;
   const activeCenter = activeInterval ? activeInterval.left + activeInterval.width / 2 : 50;
   return (
-    <section className={`telemetry-card ene-farm-activity${compact ? " compact" : ""}`} aria-labelledby={showHeading ? (compact ? "overview-ene-farm-heading" : "ene-farm-activity-heading") : undefined} aria-label={showHeading ? undefined : text("Ene-Farm activity timeline")} aria-busy={loading}>
-      {showHeading ? <div className="section-heading"><div>{showPeriod ? <p className="eyebrow">{period}</p> : null}<h2 id={compact ? "overview-ene-farm-heading" : "ene-farm-activity-heading"}><T text={"Ene-Farm Activity"} /></h2></div><strong>{text(summary?.currentState ? formatState(summary.currentState) : "Unavailable")}</strong></div> : <div className="ene-farm-current-state"><span><T text={"Current state"} /></span><strong>{text(summary?.currentState ? formatState(summary.currentState) : "Unavailable")}</strong></div>}
-      {loading && !summary ? <p className="telemetry-empty"><T text={"Loading Ene-Farm activity…"} /></p> : intervals.length ? <><div className="ene-farm-state-visual"><div className="ene-farm-state-strip" role="group" aria-label={`Ene-Farm operating states for ${period.toLowerCase()}`}>{intervals.map((interval, index) => {
-        const state = text(formatState(interval.state));
-        const detail = text("{state}. Start {start}. Finish {end}. Duration {duration}.", { state, start: formatExactDateTime(interval.start), end: formatExactDateTime(interval.end), duration: formatPreciseDuration(interval.durationSeconds) });
+    <section className={`telemetry-card ene-farm-activity${compact ? " compact" : ""}`} aria-labelledby={showHeading ? (compact ? "overview-ene-farm-heading" : "ene-farm-activity-heading") : undefined} aria-label={showHeading ? undefined : t("eneFarmActivityTimeline")} aria-busy={loading}>
+      {showHeading ? <div className="section-heading"><div>{showPeriod ? <p className="eyebrow">{period}</p> : null}<h2 id={compact ? "overview-ene-farm-heading" : "ene-farm-activity-heading"}>{t("eneFarmActivity")}</h2></div><strong>{t(summary?.currentState ? formatState(summary.currentState) : "Unavailable")}</strong></div> : <div className="ene-farm-current-state"><span>{t("currentState")}</span><strong>{t(summary?.currentState ? formatState(summary.currentState) : "Unavailable")}</strong></div>}
+      {loading && !summary ? <p className="telemetry-empty">{t("loadingEneFarmActivity")}</p> : intervals.length ? <><div className="ene-farm-state-visual"><div className="ene-farm-state-strip" role="group" aria-label={`Ene-Farm operating states for ${period.toLowerCase()}`}>{intervals.map((interval, index) => {
+        const state = t(formatState(interval.state));
+        const detail = t("stateIntervalDescription", { state, start: formatExactDateTime(interval.start), end: formatExactDateTime(interval.end), duration: formatPreciseDuration(interval.durationSeconds) });
         return <i key={`${interval.start}:${index}`} data-state={interval.state ?? "unknown"} style={{ width: `${interval.width}%` }} tabIndex={0} role="img" aria-label={detail} onPointerEnter={() => setActiveIntervalIndex(index)} onPointerLeave={() => setActiveIntervalIndex(null)} onFocus={() => setActiveIntervalIndex(index)} onBlur={() => setActiveIntervalIndex(null)} />;
-      })}</div>{activeInterval ? <div className="ene-farm-segment-tooltip" role="tooltip" data-align={activeCenter < 18 ? "start" : activeCenter > 82 ? "end" : "center"} style={{ left: `${activeCenter}%` }}><strong>{text(formatState(activeInterval.state))}</strong><span>{formatExactDateTime(activeInterval.start)} → {formatExactDateTime(activeInterval.end)}</span><span>{formatPreciseDuration(activeInterval.durationSeconds)}</span></div> : null}</div>
+      })}</div>{activeInterval ? <div className="ene-farm-segment-tooltip" role="tooltip" data-align={activeCenter < 18 ? "start" : activeCenter > 82 ? "end" : "center"} style={{ left: `${activeCenter}%` }}><strong>{t(formatState(activeInterval.state))}</strong><span>{formatExactDateTime(activeInterval.start)} → {formatExactDateTime(activeInterval.end)}</span><span>{formatPreciseDuration(activeInterval.durationSeconds)}</span></div> : null}</div>
       <div className="state-axis"><time>{formatChartTime(summary?.start ?? "")}</time><time>{formatChartTime(summary?.end ?? "")}</time></div>
-      <div className="state-legend">{["generating", "starting", "stopping", "idling", "stopped"].map((state) => <span key={state}><i data-state={state} />{text(state === "idling" ? "Idle" : state[0].toUpperCase() + state.slice(1))}</span>)}</div></> : <p className="telemetry-empty"><T text={"No Ene-Farm state history is available today."} /></p>}
+      <div className="state-legend">{["generating", "starting", "stopping", "idling", "stopped"].map((state) => <span key={state}><i data-state={state} />{t(state === "idling" ? "Idle" : state[0].toUpperCase() + state.slice(1))}</span>)}</div></> : <p className="telemetry-empty">{t("noEneFarmStateHistoryIsAvailableToday")}</p>}
     </section>
   );
 }
 
 export function EneFarmDetails({ summary, hotWaterLevel }: { summary: EneFarmSummary | null; hotWaterLevel?: number | null }) {
-  const { text } = useI18n();
+  const { t } = useTranslation("common");
   const metrics = [
     ["Electricity generated", formatEnergy(summary?.generatedKwh)],
     ["Gas used", formatGas(summary?.gasM3)],
@@ -93,7 +93,7 @@ export function EneFarmDetails({ summary, hotWaterLevel }: { summary: EneFarmSum
     ["Hot-water level", hotWaterLevel == null ? "—" : `${hotWaterLevel}/5`],
     ["Data quality", summary?.dataQuality ?? "Unavailable"],
   ];
-  return <dl className="ene-farm-metrics">{metrics.map(([label, value]) => <div key={label}><dt>{text(label)}</dt><dd>{typeof value === "string" ? text(value) : value}</dd></div>)}</dl>;
+  return <dl className="ene-farm-metrics">{metrics.map(([label, value]) => <div key={label}><dt>{t(label)}</dt><dd>{typeof value === "string" ? t(value) : value}</dd></div>)}</dl>;
 }
 
 const savingViews = {
@@ -103,7 +103,7 @@ const savingViews = {
 } as const;
 
 export function OffPeakSavings({ status, todayOnly = false }: { status: StatusSnapshot | null; todayOnly?: boolean }) {
-  const { text } = useI18n();
+  const { t } = useTranslation("common");
   const [view, setView] = useState<keyof typeof savingViews>("total");
   const definition = savingViews[view];
   const periods: Array<[string, SavingsSummary | undefined]> = [
@@ -115,20 +115,21 @@ export function OffPeakSavings({ status, todayOnly = false }: { status: StatusSn
     ] as Array<[string, SavingsSummary | undefined]> : []),
   ];
   return <section className="telemetry-card off-peak-card" aria-labelledby="off-peak-heading">
-    <div className="section-heading"><div><h2 id="off-peak-heading"><T text={"Estimated Off-Peak Savings"} /></h2></div></div>
-    <div className="segmented-control savings-view" aria-label={text("Off-peak savings view")}>{Object.entries(savingViews).map(([key, item]) => <button key={key} type="button" aria-pressed={view === key} onClick={() => setView(key as keyof typeof savingViews)}>{text(item.label)}</button>)}</div>
-    <p className="savings-definition">{text(definition.description)}</p>
-    <dl className="savings-periods">{periods.map(([label, summary]) => <div key={label}><dt>{text(label)}</dt><dd>{formatCurrency(summary?.[definition.key])}</dd></div>)}</dl>
-    <p className="estimate-note"><T text={"Estimates use the configured electricity rates. Provider bills remain authoritative."} /></p>
+    <div className="section-heading"><div><h2 id="off-peak-heading">{t("estimatedOffPeakSavings")}</h2></div></div>
+    <div className="segmented-control savings-view" aria-label={t("offPeakSavingsView")}>{Object.entries(savingViews).map(([key, item]) => <button key={key} type="button" aria-pressed={view === key} onClick={() => setView(key as keyof typeof savingViews)}>{t(item.label)}</button>)}</div>
+    <p className="savings-definition">{t(definition.description)}</p>
+    <dl className="savings-periods">{periods.map(([label, summary]) => <div key={label}><dt>{t(label)}</dt><dd>{formatCurrency(summary?.[definition.key])}</dd></div>)}</dl>
+    <p className="estimate-note">{t("estimatesUseTheConfiguredElectricityRatesProviderBillsRe2bb940")}</p>
   </section>;
 }
 
 export function CircuitHistoryChart({ samples, circuitId, label }: { samples: EnergySample[]; circuitId: string; label: string }) {
+  const { t } = useTranslation("common");
   const titleId = useId();
   const [hovered, setHovered] = useState<number | null>(null);
   const points = useMemo(() => samples.map((sample) => ({ timestamp: sample.timestamp, value: sample.circuitPowerW?.[circuitId] })).filter((point): point is { timestamp: string; value: number } => Number.isFinite(point.value) && Number.isFinite(new Date(point.timestamp).getTime())), [samples, circuitId]);
-  const heading = <div className="circuit-history-heading" aria-live="polite" aria-atomic="true"><p className="eyebrow"><T text={"Selected circuit"} /></p><h3>{label}</h3></div>;
-  if (!points.length) return <div className="circuit-history-chart">{heading}<div className="chart-empty" role="status"><T text={"No history is available for "} />{label} <T text={" in this period."} /></div></div>;
+  const heading = <div className="circuit-history-heading" aria-live="polite" aria-atomic="true"><p className="eyebrow">{t("selectedCircuit")}</p><h3>{label}</h3></div>;
+  if (!points.length) return <div className="circuit-history-chart">{heading}<div className="chart-empty" role="status">{"" + t("noHistoryIsAvailableFor") + " "}{label} {" " + t("inThisPeriod") + ""}</div></div>;
   const width = 920, height = 260, left = 60, right = 24, top = 20, bottom = 38;
   const start = new Date(points[0].timestamp).getTime(), end = new Date(points.at(-1)!.timestamp).getTime();
   const max = Math.max(100, ...points.map((point) => point.value));
@@ -141,7 +142,7 @@ export function CircuitHistoryChart({ samples, circuitId, label }: { samples: En
     setHovered(points.reduce((best, point, index) => Math.abs(new Date(point.timestamp).getTime() - target) < Math.abs(new Date(points[best].timestamp).getTime() - target) ? index : best, 0));
   };
   const active = hovered === null ? null : points[hovered];
-  return <div className="circuit-history-chart">{heading}<svg viewBox={`0 0 ${width} ${height}`} role="img" aria-labelledby={titleId} onPointerMove={pointer} onPointerLeave={() => setHovered(null)}><title id={titleId}>{label} <T text={" circuit power history"} /></title>{[0, .5, 1].map((ratio) => <g key={ratio}><line className="chart-grid-line" x1={left} x2={width - right} y1={top + ratio * (height - top - bottom)} y2={top + ratio * (height - top - bottom)} /><text className="chart-axis-label" x={left - 9} y={top + ratio * (height - top - bottom) + 4} textAnchor="end">{formatPower(max * (1 - ratio))}</text></g>)}<path className="circuit-series-line" d={path} />{active ? <><line className="chart-hover-line" x1={x(active.timestamp)} x2={x(active.timestamp)} y1={top} y2={height - bottom} /><circle cx={x(active.timestamp)} cy={y(active.value)} r="4" className="circuit-hover-point"><title>{formatChartTime(active.timestamp, true)} · {formatPower(active.value)}</title></circle></> : null}<rect className="chart-pointer-target" x={left} y={top} width={width-left-right} height={height-top-bottom} /><text className="chart-axis-label" x={left} y={height-10}>{formatChartTime(points[0].timestamp, end-start > 86_400_000)}</text><text className="chart-axis-label" x={width-right} y={height-10} textAnchor="end">{formatChartTime(points.at(-1)!.timestamp, end-start > 86_400_000)}</text></svg>{active ? <p className="circuit-hover-readout" role="status">{formatChartTime(active.timestamp, true)} · {formatPower(active.value)}</p> : null}<details className="chart-table-disclosure"><summary><T text={"View circuit chart as data table"} /></summary><div className="table-scroll"><table><thead><tr><th><T text={"Time"} /></th><th><T text={"Power"} /></th></tr></thead><tbody>{points.slice(-48).map((point) => <tr key={point.timestamp}><th>{formatChartTime(point.timestamp, true)}</th><td>{formatPower(point.value)}</td></tr>)}</tbody></table></div></details></div>;
+  return <div className="circuit-history-chart">{heading}<svg viewBox={`0 0 ${width} ${height}`} role="img" aria-labelledby={titleId} onPointerMove={pointer} onPointerLeave={() => setHovered(null)}><title id={titleId}>{label} {" " + t("circuitPowerHistory") + ""}</title>{[0, .5, 1].map((ratio) => <g key={ratio}><line className="chart-grid-line" x1={left} x2={width - right} y1={top + ratio * (height - top - bottom)} y2={top + ratio * (height - top - bottom)} /><text className="chart-axis-label" x={left - 9} y={top + ratio * (height - top - bottom) + 4} textAnchor="end">{formatPower(max * (1 - ratio))}</text></g>)}<path className="circuit-series-line" d={path} />{active ? <><line className="chart-hover-line" x1={x(active.timestamp)} x2={x(active.timestamp)} y1={top} y2={height - bottom} /><circle cx={x(active.timestamp)} cy={y(active.value)} r="4" className="circuit-hover-point"><title>{formatChartTime(active.timestamp, true)} · {formatPower(active.value)}</title></circle></> : null}<rect className="chart-pointer-target" x={left} y={top} width={width-left-right} height={height-top-bottom} /><text className="chart-axis-label" x={left} y={height-10}>{formatChartTime(points[0].timestamp, end-start > 86_400_000)}</text><text className="chart-axis-label" x={width-right} y={height-10} textAnchor="end">{formatChartTime(points.at(-1)!.timestamp, end-start > 86_400_000)}</text></svg>{active ? <p className="circuit-hover-readout" role="status">{formatChartTime(active.timestamp, true)} · {formatPower(active.value)}</p> : null}<details className="chart-table-disclosure"><summary>{t("viewCircuitChartAsDataTable")}</summary><div className="table-scroll"><table><thead><tr><th>{t("time")}</th><th>{t("power")}</th></tr></thead><tbody>{points.slice(-48).map((point) => <tr key={point.timestamp}><th>{formatChartTime(point.timestamp, true)}</th><td>{formatPower(point.value)}</td></tr>)}</tbody></table></div></details></div>;
 }
 
 function formatDuration(seconds?: number | null) {

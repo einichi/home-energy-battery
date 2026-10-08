@@ -1,9 +1,9 @@
 import type { HistorySummary } from "../api/contracts";
 import { formatCurrency, formatEnergy } from "../core/format";
-import { useI18n } from "../i18n";
+import { useTranslation } from "react-i18next";
 
 export function OutcomeStrip({ summary, compact = false, visible }: { summary: HistorySummary; compact?: boolean; visible?: (id: string) => boolean }) {
-  const { text } = useI18n();
+  const { t } = useTranslation("common");
   const localSources = [summary.energySources?.solarUsedKwh, summary.energySources?.fuelCellContributionKwh];
   const selfPowered = localSources.some((value) => value !== null && value !== undefined && Number.isFinite(Number(value)))
     ? localSources.reduce<number>((total, value) => total + (Number.isFinite(Number(value)) ? Number(value) : 0), 0)
@@ -20,7 +20,7 @@ export function OutcomeStrip({ summary, compact = false, visible }: { summary: H
   ].filter((item) => visible?.(item.id) !== false);
   return (
     <dl className={`outcome-strip${compact ? " outcome-strip-compact" : ""}`}>
-      {values.map((item) => <div key={item.label}><dt>{text(item.label)}</dt><dd>{item.value}</dd></div>)}
+      {values.map((item) => <div key={item.label}><dt>{t(item.label)}</dt><dd>{item.value}</dd></div>)}
     </dl>
   );
 }
