@@ -1,3 +1,4 @@
+import { MILLISECONDS_PER_DAY } from "../domain/time.js";
 import type { ApplicationConfig, RetentionConfig } from "../contracts/configuration.js";
 import type { AdaptiveChargingState } from "../domain/adaptive-state.js";
 
@@ -108,7 +109,7 @@ export function createRuntimeCoordinator(dependencies: RuntimeCoordinatorDepende
       .catch((error: unknown) => dependencies.logError("adaptive-charging-slot-end-startup", error));
     startScheduler();
     startRecorder();
-    retentionTimer = setInterval(() => { void runRetentionMaintenance(); }, 24 * 60 * 60_000);
+    retentionTimer = setInterval(() => { void runRetentionMaintenance(); }, MILLISECONDS_PER_DAY);
     retentionTimer.unref();
     void runRetentionMaintenance();
   }

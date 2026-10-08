@@ -1,3 +1,4 @@
+import { MILLISECONDS_PER_DAY } from "./domain/time.js";
 import { DatabaseSync } from "node:sqlite";
 import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
@@ -37,7 +38,7 @@ export const SCHEMA_VERSION = 9;
 export const ENERGY_CALCULATION_VERSION = 4;
 const MAX_RAW_AUTO_SAMPLES = 10_000;
 const MAX_RAW_AUTO_BYTES = 32 * 1024 * 1024;
-const AUTO_RAW_DETAIL_WINDOW_MS = 24 * 60 * 60_000;
+const AUTO_RAW_DETAIL_WINDOW_MS = MILLISECONDS_PER_DAY;
 const DEFAULT_MAX_INTEGRATION_GAP_MS = 35 * 60_000;
 const SOLAR_FORECAST_MIN_COVERAGE_RATIO = 0.8;
 const ENERGY_KEYS: string[] = [

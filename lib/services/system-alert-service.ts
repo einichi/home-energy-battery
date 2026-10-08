@@ -1,3 +1,4 @@
+import { MILLISECONDS_PER_DAY } from "../domain/time.js";
 import type { ApplicationConfig } from "../contracts/configuration.js";
 import type { BatterySchedule } from "../contracts/schedules.js";
 import type { AdaptiveChargingState } from "../domain/adaptive-state.js";
@@ -120,7 +121,7 @@ export function createSystemAlertService(dependencies: SystemAlertDependencies) 
     });
     const failedReceipt = dependencies.readCommandReceipts(25, now.getTime()).find((receipt) =>
       ["failed", "timed-out", "mismatched"].includes(receipt.state)
-        && now.getTime() - new Date(receipt.completedAt ?? receipt.requestedAt ?? 0).getTime() <= 24 * 60 * 60_000,
+        && now.getTime() - new Date(receipt.completedAt ?? receipt.requestedAt ?? 0).getTime() <= MILLISECONDS_PER_DAY,
     );
     if (failedReceipt) add({
       id: `command:${failedReceipt.commandId}`, source: "Battery command", severity: "critical", title: "Battery command needs review",

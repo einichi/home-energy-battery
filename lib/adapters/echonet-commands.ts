@@ -44,6 +44,7 @@ import {
   uint32,
 } from "./echonet-codecs.js";
 import { errorMessage } from "../domain/values.js";
+import { STORAGE_BATTERY_CLASS_BYTES } from "../domain/echonet-constants.js";
 
 interface CommandOptions extends Record<string, unknown> {
   _: unknown[];
@@ -130,7 +131,7 @@ async function cmdProbe(opts: CommandOptions) {
   const host = required(opts.host, "--host");
   const instance = Number(opts.instance ?? 1);
   return withClient(opts, async (client) => {
-    const eoj: number[] = [0x02, 0x7d, instance];
+    const eoj: number[] = [...STORAGE_BATTERY_CLASS_BYTES, instance];
     const maps = await client.maps(host, eoj);
     const data = responseData(maps);
     return {
@@ -271,7 +272,7 @@ async function cmdRawSet(opts: CommandOptions) {
 async function cmdStatus(opts: CommandOptions) {
   const host = required(opts.host, "--host");
   const instance = Number(opts.instance ?? 1);
-  const eoj: number[] = [0x02, 0x7d, instance];
+  const eoj: number[] = [...STORAGE_BATTERY_CLASS_BYTES, instance];
   const props: number[] = [
     EPC.OPERATION_STATUS,
     EPC.INSTANT_POWER_W,
@@ -735,7 +736,7 @@ async function setOperationMode(opts: CommandOptions, mode: string) {
   const host = required(opts.host, "--host");
   const instance = Number(opts.instance ?? 1);
   if (!(mode in MODE_TO_EDT)) throw new Error(`unknown mode: ${mode}`);
-  const eoj: number[] = [0x02, 0x7d, instance];
+  const eoj: number[] = [...STORAGE_BATTERY_CLASS_BYTES, instance];
   const edt = Buffer.from([MODE_TO_EDT[mode]]);
   if (opts["dry-run"]) return { host, eoj: eojHex(eoj), epc: "0xDA", edt: rawHex(edt), mode };
   return withClient(opts, async (client) => {
@@ -751,7 +752,7 @@ async function cmdSetMode(opts: CommandOptions) {
 async function cmdVendorProfile(opts: CommandOptions) {
   const host = required(opts.host, "--host");
   const instance = Number(opts.instance ?? 1);
-  const eoj: number[] = [0x02, 0x7d, instance];
+  const eoj: number[] = [...STORAGE_BATTERY_CLASS_BYTES, instance];
 
   const mode = opts._[1];
   if (mode === undefined) {
@@ -800,7 +801,7 @@ async function cmdVendorProfile(opts: CommandOptions) {
 async function cmdOsaifuWindow(opts: CommandOptions, kind: "charge" | "discharge") {
   const host = required(opts.host, "--host");
   const instance = Number(opts.instance ?? 1);
-  const eoj: number[] = [0x02, 0x7d, instance];
+  const eoj: number[] = [...STORAGE_BATTERY_CLASS_BYTES, instance];
   const epc = kind === "charge" ? EPC.VENDOR_OSAIFU_CHARGE_WINDOW : EPC.VENDOR_OSAIFU_DISCHARGE_WINDOW;
   const epcHex = kind === "charge" ? "0xF4" : "0xF5";
   const name = kind === "charge" ? "osaifu_charge_window" : "osaifu_discharge_window";
@@ -856,7 +857,7 @@ async function cmdOsaifuWindow(opts: CommandOptions, kind: "charge" | "discharge
 async function cmdDischargeLimit(opts: CommandOptions) {
   const host = required(opts.host, "--host");
   const instance = Number(opts.instance ?? 1);
-  const eoj: number[] = [0x02, 0x7d, instance];
+  const eoj: number[] = [...STORAGE_BATTERY_CLASS_BYTES, instance];
   const requestedPercent = opts._[1];
 
   if (requestedPercent === undefined) {
@@ -908,7 +909,7 @@ async function cmdDischargeLimit(opts: CommandOptions) {
 async function cmdChargeLike(opts: CommandOptions, mode: "charge" | "discharge") {
   const host = required(opts.host, "--host");
   const instance = Number(opts.instance ?? 1);
-  const eoj: number[] = [0x02, 0x7d, instance];
+  const eoj: number[] = [...STORAGE_BATTERY_CLASS_BYTES, instance];
   const writes: Array<{ epc: number; edt: Buffer }> = [];
   if (opts["target-wh"] !== undefined) {
     writes.push({

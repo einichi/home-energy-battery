@@ -6,7 +6,7 @@ import { finiteNumberOrNull } from "./numbers.js";
 import { applySolarForecastBias, forecastHourForInterval, learnedSolarFactor, nextPlanningBoundary, planningSunsetWithDiscountedWindow, solarCalibrationGroup, solarPowerFromIrradiance, temperatureByDayFromWeather } from "./solar-forecast.js";
 import type { SolarForecast, SolarForecastAccuracy, SolarForecastHour } from "./solar-forecast.js";
 import { discountedBandOccurrence, discountedHorizonEndMs, explicitDiscountedBand, rateForTimestamp } from "./tariffs.js";
-import { halfHourIndex, isAwayAt, localDayKey } from "./time.js";
+import { AWAY_RETURN_BUFFER_MS, halfHourIndex, isAwayAt, localDayKey, MILLISECONDS_PER_DAY } from "./time.js";
 import type { AwayPeriod } from "./time.js";
 import { applyGuardDeliverabilityToTiming, guardDeliverabilityForWindow } from "./guard-deliverability.js";
 import type { GuardDeliverabilityModel, GuardWindowOutcome } from "./guard-deliverability.js";
@@ -33,7 +33,6 @@ export {
   forecastIsFresh,
 } from "./adaptive-availability.js";
 
-const AWAY_RETURN_BUFFER_MS = 30 * 60_000;
 const LOOK_AHEAD_MS = 30 * 60 * 60_000;
 
 export interface AdaptiveTimelineSlot {
@@ -762,7 +761,7 @@ export function buildAdaptiveChargingPlan({
   const dischargeLimit = Number(cachedDischargeLimit?.lastKnown?.decoded?.percent);
   const dischargeLimitReadAt = new Date(String(cachedDischargeLimit?.lastReadAt ?? "")).getTime();
   if (!Number.isFinite(dischargeLimit)) return unavailable("battery discharge limit is unavailable");
-  if (!Number.isFinite(dischargeLimitReadAt) || now.getTime() - dischargeLimitReadAt > 24 * 60 * 60_000) {
+  if (!Number.isFinite(dischargeLimitReadAt) || now.getTime() - dischargeLimitReadAt > MILLISECONDS_PER_DAY) {
     return unavailable("battery discharge limit has not been read successfully in the last 24 hours");
   }
   const initialStoredKwh = capacityKwh * soc / 100;

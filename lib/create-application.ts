@@ -19,6 +19,7 @@ import {
   validBillingMonth,
 } from "./gas-tariffs.js";
 import { timestampConsole } from "./console-timestamps.js";
+import { AWAY_RETURN_BUFFER_MS } from "./domain/time.js";
 import {
   assertSafeUiDevelopmentEnvironment,
   externalIoDisabled,
@@ -144,7 +145,6 @@ const OPERATION_MODE_VERIFY_ATTEMPTS = 4;
 const OPERATION_MODE_VERIFY_DELAY_MS = 750;
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
 const ADAPTIVE_CHARGING_SEASONAL_LOOKBACK_YEARS = 10;
-const AWAY_RETURN_BUFFER_MS = 30 * 60_000;
 let adaptiveControlService: ReturnType<typeof createAdaptiveControlService> | null = null;
 let commitConfigService: ReturnType<typeof createConfigurationCommitService> | null = null;
 const historyStore = (dependencies.createHistoryStore ?? createHistoryStore)({ dataDir: DATA_DIR });

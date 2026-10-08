@@ -1,3 +1,4 @@
+import { MILLISECONDS_PER_DAY } from "../domain/time.js";
 import type { BacktestHistoryPort, BacktestOutcome, BacktestRunRecord } from "../contracts/backtesting.js";
 import {
   BACKTEST_ENGINE_VERSION,
@@ -95,7 +96,7 @@ export function createBacktestService(dependencies: BacktestServiceDependencies)
     const earliestMs = new Date(String(stats.earliest ?? now.toISOString())).getTime();
     const periodEndMs = now.getTime();
     const periodStartMs = request.range === "90d"
-      ? Math.max(Number.isFinite(earliestMs) ? earliestMs : periodEndMs, periodEndMs - 90 * 86_400_000)
+      ? Math.max(Number.isFinite(earliestMs) ? earliestMs : periodEndMs, periodEndMs - 90 * MILLISECONDS_PER_DAY)
       : Number.isFinite(earliestMs) ? earliestMs : periodEndMs;
     const id = dependencies.randomUUID();
     const startedAt = now.toISOString();

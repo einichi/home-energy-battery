@@ -1,3 +1,6 @@
+import { MILLISECONDS_PER_DAY } from "../domain/time.js";
+import runtimeDefaults from "../../shared/runtime-defaults.json" with { type: "json" };
+
 export interface ServerEnvironment {
   port: number;
   dataDir: string;
@@ -24,10 +27,10 @@ export function normalizeServerEnvironment(
     : String(input.DATA_DIR).trim();
   if (!dataDir) throw new Error("DATA_DIR must not be empty");
   return {
-    port: finiteInteger(input.PORT, 8787, 1, 65_535, "PORT"),
+    port: finiteInteger(input.PORT, runtimeDefaults.port, 1, 65_535, "PORT"),
     dataDir,
     echonetTimeoutMs: finiteInteger(input.ECHONET_TIMEOUT_MS, 15_000, 100, 300_000, "ECHONET_TIMEOUT_MS"),
-    scheduleCheckIntervalMs: finiteInteger(input.SCHEDULE_CHECK_INTERVAL_MS, 15_000, 10, 86_400_000, "SCHEDULE_CHECK_INTERVAL_MS"),
-    automationCheckIntervalMs: finiteInteger(input.AUTOMATION_CHECK_INTERVAL_MS, 30_000, 50, 86_400_000, "AUTOMATION_CHECK_INTERVAL_MS"),
+    scheduleCheckIntervalMs: finiteInteger(input.SCHEDULE_CHECK_INTERVAL_MS, 15_000, 10, MILLISECONDS_PER_DAY, "SCHEDULE_CHECK_INTERVAL_MS"),
+    automationCheckIntervalMs: finiteInteger(input.AUTOMATION_CHECK_INTERVAL_MS, 30_000, 50, MILLISECONDS_PER_DAY, "AUTOMATION_CHECK_INTERVAL_MS"),
   };
 }

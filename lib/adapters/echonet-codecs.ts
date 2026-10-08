@@ -1,7 +1,7 @@
 import type { EchonetResponse } from "./echonet-transport.js";
+import { STORAGE_BATTERY_EOJ } from "../domain/echonet-constants.js";
 
 
-const STORAGE_BATTERY_EOJ = "0x027D01";
 const SOLAR_EOJ = "0x027901";
 const FUEL_CELL_EOJ = "0x027C01";
 const POWER_METER_EOJ = "0x028701";

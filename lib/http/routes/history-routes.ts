@@ -1,3 +1,4 @@
+import { MILLISECONDS_PER_DAY } from "../../domain/time.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { billingPeriodKey } from "../../domain/ene-farm.js";
 import type { ApiDependencies } from "../api.js";
@@ -109,7 +110,7 @@ export function createHistoryRouteHandler(dependencies: HistoryRouteDependencies
     }
     if (req.method === "GET" && url.pathname === "/api/ene-farm") {
       const config = await readConfig();
-      const start = url.searchParams.get("start") ?? new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+      const start = url.searchParams.get("start") ?? new Date(Date.now() - MILLISECONDS_PER_DAY).toISOString();
       const end = url.searchParams.get("end") ?? new Date().toISOString();
       const startMs = new Date(start).getTime();
       const endMs = new Date(end).getTime();

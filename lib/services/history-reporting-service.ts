@@ -1,3 +1,4 @@
+import { MILLISECONDS_PER_DAY } from "../domain/time.js";
 import type { ApplicationConfig } from "../contracts/configuration.js";
 import type { HistorySample } from "../contracts/history.js";
 import type { AutomationRule } from "../domain/automation-rules.js";
@@ -105,7 +106,7 @@ export function createHistoryReportingService(dependencies: HistoryReportingDepe
   ) {
     await dependencies.ensureReady();
     const bucketMode = normalizeReportBucket(bucket ?? "day");
-    const { startMs, endMs } = rangeMilliseconds(start, end, 30 * 86_400_000);
+    const { startMs, endMs } = rangeMilliseconds(start, end, 30 * MILLISECONDS_PER_DAY);
     const samples = dependencies.history.querySamples(startMs, endMs, { resolution: "interval" });
     return {
       ...aggregateEnergyReportSamples(samples, {

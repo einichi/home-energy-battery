@@ -18,7 +18,7 @@ export function normalizeDiscoveredDevices(value: unknown): DiscoveredDeviceMap 
 }
 
 export const KNOWN_DISCOVERY_PROBES: ReadonlyArray<{ eoj: string; epcs: readonly string[] }> = [
-  { eoj: "0x027D01", epcs: ["0xE4", "0xDA"] },
+  { eoj: STORAGE_BATTERY_EOJ, epcs: ["0xE4", "0xDA"] },
   { eoj: "0x027901", epcs: ["0xE0"] },
   { eoj: "0x028701", epcs: ["0xC6", "0xB7"] },
   { eoj: "0x027C01", epcs: ["0xC4", "0xCB"] },
@@ -131,3 +131,4 @@ export function mergeDiscoveredDevices(...deviceSets: ReadonlyArray<DiscoveredDe
   return merged;
 }
 import { isPrivateDiscoverySubnet } from "../domain/discovery-subnets.js";
+import { STORAGE_BATTERY_EOJ } from "../domain/echonet-constants.js";

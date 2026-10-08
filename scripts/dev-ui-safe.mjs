@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import runtimeDefaults from "../shared/runtime-defaults.json" with { type: "json" };
 import { fileURLToPath } from "node:url";
 import {
   UI_DEVELOPMENT_DATA_PREFIX,
@@ -15,8 +16,8 @@ const projectDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const apiPort = Number(process.env.UI_DEV_API_PORT ?? 8797);
 const uiPort = Number(process.env.UI_DEV_PORT ?? 5173);
 
-if (!Number.isInteger(apiPort) || apiPort < 1024 || apiPort > 65535 || apiPort === 8787) {
-  throw new Error("UI_DEV_API_PORT must be a non-production port from 1024 to 65535 and may not be 8787");
+if (!Number.isInteger(apiPort) || apiPort < 1024 || apiPort > 65535 || apiPort === runtimeDefaults.port) {
+  throw new Error(`UI_DEV_API_PORT must be a non-production port from 1024 to 65535 and may not be ${runtimeDefaults.port}`);
 }
 if (!Number.isInteger(uiPort) || uiPort < 1024 || uiPort > 65535 || uiPort === apiPort) {
   throw new Error("UI_DEV_PORT must be a distinct port from 1024 to 65535");

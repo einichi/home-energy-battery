@@ -1,6 +1,6 @@
 import { finiteNumberOrNull } from "./numbers.js";
 import { median, percentile, weightedMedian } from "./statistics.js";
-import { halfHourIndex, isAwayAt, localDayKey } from "./time.js";
+import { halfHourIndex, isAwayAt, localDayKey, MILLISECONDS_PER_DAY } from "./time.js";
 import type { AwayPeriod } from "./time.js";
 
 const ADAPTIVE_CHARGING_SEASONAL_LOOKBACK_YEARS = 10;
@@ -287,7 +287,7 @@ export function buildFuelCellGenerationModel(
 export function calendarDayDistance(left: Date, right: Date): number {
   const normalizedLeft = new Date(2000, left.getMonth(), left.getDate());
   const normalizedRight = new Date(2000, right.getMonth(), right.getDate());
-  const distance = Math.abs(normalizedLeft.getTime() - normalizedRight.getTime()) / 86_400_000;
+  const distance = Math.abs(normalizedLeft.getTime() - normalizedRight.getTime()) / MILLISECONDS_PER_DAY;
   return Math.min(distance, 366 - distance);
 }
 
@@ -356,7 +356,7 @@ export function predictBranchDemand(
   const validDays = recordedDays.filter((day) => day.daytimeCoverage >= 0.8);
   const recentCandidates = validDays
     .map((day): ScoredDemandDay => {
-      const ageDays = (target.getTime() - day.date.getTime()) / 86_400_000;
+      const ageDays = (target.getTime() - day.date.getTime()) / MILLISECONDS_PER_DAY;
       const sameDayType = [0, 6].includes(day.date.getDay()) === targetIsWeekend;
       const temperature = Number(temperatureByDay.get(day.key));
       const temperatureDistance = Number.isFinite(targetTemperature) && Number.isFinite(temperature)
@@ -466,7 +466,7 @@ export function predictAwayDemand(
     if (!existing || day.coverage >= existing.coverage) recordedDayMap.set(day.key, day);
   }
   const candidates = [...recordedDayMap.values()].map((day): ScoredDemandDay => {
-    const ageDays = (target.getTime() - day.date.getTime()) / 86_400_000;
+    const ageDays = (target.getTime() - day.date.getTime()) / MILLISECONDS_PER_DAY;
     const sameDayType = [0, 6].includes(day.date.getDay()) === targetIsWeekend;
     const temperature = Number(temperatureByDay.get(day.key));
     const temperatureDistance = Number.isFinite(targetTemperature) && Number.isFinite(temperature)

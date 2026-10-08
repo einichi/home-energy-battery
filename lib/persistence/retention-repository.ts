@@ -1,3 +1,4 @@
+import { MILLISECONDS_PER_DAY } from "../domain/time.js";
 import type { DatabaseSync } from "node:sqlite";
 import type { RetentionConfig } from "../contracts/configuration.js";
 import { normalizeRetentionPolicy, type RetentionPolicy } from "../domain/retention.js";
@@ -26,7 +27,7 @@ export function createRetentionRepository(dependencies: Dependencies) {
   }> {
     const policy = normalizeRetentionPolicy(policyInput);
     const before = await dependencies.stats();
-    const cutoff = (days: number) => now.getTime() - days * 86_400_000;
+    const cutoff = (days: number) => now.getTime() - days * MILLISECONDS_PER_DAY;
     const deleted: Record<string, number> = {
       rawSamples: await deleteInChunks("DELETE FROM samples WHERE id IN (SELECT id FROM samples WHERE timestamp_ms < ? ORDER BY timestamp_ms LIMIT 10000)", [cutoff(policy.rawTelemetryDays)]),
       intervalRollups: 0, dailyRollups: 0, adaptiveChargingEvents: 0, automationEvents: 0, commandReceiptEvents: 0, notificationEvents: 0,

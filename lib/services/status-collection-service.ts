@@ -1,6 +1,7 @@
 import type { ApplicationConfig } from "../contracts/configuration.js";
 import { isDocumentationHost, deviceStatusFailures, fuelCellHotWaterEmptyNotificationActive } from "../domain/status-alerts.js";
 import { numericMetric, primaryFuelCell } from "../domain/telemetry.js";
+import { STORAGE_BATTERY_EOJ } from "../domain/echonet-constants.js";
 import type { DeviceCommandArguments } from "./device-command-queue.js";
 import { asRecord } from "../domain/values.js";
 
@@ -170,7 +171,7 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
 
     const hydrateWindowRaw = async (windowData: UnknownRecord, epcHex: string): Promise<UnknownRecord> => {
       if (!batteryConfigured || windowData.raw) return windowData;
-      const rawRead = await safeCommand("raw-get", { host: config.batteryHost, eoj: "0x027D01" }, [epcHex]);
+      const rawRead = await safeCommand("raw-get", { host: config.batteryHost, eoj: STORAGE_BATTERY_EOJ }, [epcHex]);
       return rawRead.raw ? { ...windowData, raw: rawRead.raw } : windowData;
     };
     const chargeWindowRead = await probe("osaifu charge window raw fallback", () => hydrateWindowRaw(chargeWindow, "0xF4"));

@@ -11,6 +11,7 @@ import {
   verifyBatterySetting,
 } from "./command-verification.js";
 import { asRecord, errorMessage } from "../domain/values.js";
+import { STORAGE_BATTERY_EOJ } from "../domain/echonet-constants.js";
 
 type UnknownRecord = Record<string, unknown>;
 type ActionSource = string;
@@ -113,7 +114,7 @@ export function createDeviceCommandService(dependencies: DeviceCommandServiceDep
     return verifyBatteryOperationMode(result, host, expectedMode, {
       attempts: dependencies.operationModeVerifyAttempts,
       delayMs: dependencies.operationModeVerifyDelayMs,
-      readStatus: () => dependencies.runDeviceCommand("raw-get", { host, eoj: "0x027D01", timeout: 3 }, ["0xDA"], { priority: 0 }),
+      readStatus: () => dependencies.runDeviceCommand("raw-get", { host, eoj: STORAGE_BATTERY_EOJ, timeout: 3 }, ["0xDA"], { priority: 0 }),
     });
   }
 
@@ -133,7 +134,7 @@ export function createDeviceCommandService(dependencies: DeviceCommandServiceDep
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       if (attempt > 1 && delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
       try {
-        const readback = await dependencies.runDeviceCommand("raw-get", { host, eoj: "0x027D01", timeout: 3 }, [targetEpc], { priority: 0 });
+        const readback = await dependencies.runDeviceCommand("raw-get", { host, eoj: STORAGE_BATTERY_EOJ, timeout: 3 }, [targetEpc], { priority: 0 });
         observed = parseTargetWhFromRaw(readback);
         lastError = null;
         if (observed !== null) sawReadable = true;

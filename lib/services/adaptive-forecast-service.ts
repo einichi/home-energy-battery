@@ -1,3 +1,4 @@
+import { MILLISECONDS_PER_DAY } from "../domain/time.js";
 import type { ApplicationConfig } from "../contracts/configuration.js";
 import type { HistorySample } from "../contracts/history.js";
 import { appendAdaptiveChargingLog, type AdaptiveChargingState } from "../domain/adaptive-state.js";
@@ -130,7 +131,7 @@ export function createAdaptiveForecastService(dependencies: AdaptiveForecastDepe
       return dependencies.writeState(state);
     }
     const historicalAge = now.getTime() - new Date(state.historicalWeatherFetchedAt ?? 0).getTime();
-    if (forceHistorical || !Number.isFinite(historicalAge) || historicalAge > 24 * 60 * 60_000) {
+    if (forceHistorical || !Number.isFinite(historicalAge) || historicalAge > MILLISECONDS_PER_DAY) {
       try {
         const historical = parseOpenMeteoForecast(
           await fetchJson(openMeteoUrl(config, true, now), fetchImpl),

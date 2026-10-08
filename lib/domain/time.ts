@@ -1,4 +1,5 @@
-const AWAY_RETURN_BUFFER_MS = 30 * 60_000;
+export const AWAY_RETURN_BUFFER_MS = 30 * 60_000;
+export const MILLISECONDS_PER_DAY = 24 * 60 * 60_000;
 
 export interface AwayPeriod {
   from?: unknown;

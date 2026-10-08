@@ -1,3 +1,4 @@
+import { MILLISECONDS_PER_DAY } from "../domain/time.js";
 import type { ApplicationConfig } from "../contracts/configuration.js";
 import type { HistorySample } from "../contracts/history.js";
 import type { AdaptiveChargingState } from "../domain/adaptive-state.js";
@@ -81,7 +82,7 @@ export function createAdaptiveHistoryService(
 
   async function readHistory(now = new Date()): Promise<TimedHistorySample[]> {
     const endMs = now.getTime();
-    const startMs = endMs - 90 * 86_400_000;
+    const startMs = endMs - 90 * MILLISECONDS_PER_DAY;
     if (historyCache
       && endMs >= historyCache.loadedAt
       && endMs - historyCache.loadedAt < cacheMs
@@ -100,7 +101,7 @@ export function createAdaptiveHistoryService(
 
   async function readBatteryLearningHistory(now = new Date()): Promise<HistorySample[]> {
     const endMs = now.getTime();
-    const startMs = endMs - 90 * 86_400_000;
+    const startMs = endMs - 90 * MILLISECONDS_PER_DAY;
     const rollups = historyStore.querySamples(startMs, endMs, { resolution: "interval" });
     const manualActions = historyStore.eventsBetween("adaptiveCharging", startMs, endMs, ["pause"])
       .filter((event) => /^Manual\b/.test(event.message ?? ""))
@@ -232,7 +233,7 @@ export function createAdaptiveHistoryService(
 
   async function refreshDemandProfile(): Promise<DemandDay[]> {
     const endMs = Date.now();
-    const startMs = endMs - seasonalLookbackYears * 366 * 86_400_000;
+    const startMs = endMs - seasonalLookbackYears * 366 * MILLISECONDS_PER_DAY;
     const index = emptyDemandProfileIndex();
     for (const sample of historyStore.querySamples(startMs, endMs, { resolution: "interval" })) addDemandSample(index, sample);
     return demandProfileDays(index);
