@@ -28,7 +28,7 @@ export function deriveSystemHealth(
   if (!status?.read_at) {
     return { severity: "attention", label: "Connecting", detail: "Waiting for equipment readings", alerts: [] };
   }
-  const activeAlerts = (status.alerts ?? []).filter((alert) => alert.resolution !== "resolved");
+  const activeAlerts = status.alerts ?? [];
   if (activeAlerts.length) {
     const critical = activeAlerts.some((alert) => alert.severity === "critical");
     return {

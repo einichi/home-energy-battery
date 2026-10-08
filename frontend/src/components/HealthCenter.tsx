@@ -24,7 +24,7 @@ export function HealthCenter() {
           <div><strong>{text(alert.title)}</strong><time dateTime={alert.startedAt}>{formatDateTime(alert.startedAt)}</time></div>
           <div className="health-alert-meta">
             {alert.source ? <span className="health-alert-source">{text(alert.source)}</span> : null}
-            <span className="health-alert-resolution">{text(alert.resolution === "resolved" ? "Resolved" : "Active")}</span>
+            <span className="health-alert-resolution">{text("Active")}</span>
           </div>
           <p>{formatDateTimesInText(text(alert.impact))}</p>
           <small>{formatDateTimesInText(text(alert.suggestedAction))}</small>

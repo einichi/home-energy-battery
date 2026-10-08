@@ -19,7 +19,7 @@ export interface SmtpSettings {
 
 export interface NotificationChannel {
   id: string;
-  type: "smtp" | string;
+  type: "smtp";
   enabled: boolean;
   settings: SmtpSettings;
 }

@@ -66,7 +66,7 @@ export interface SettingCacheEntry {
 
 export interface NotificationChannelConfig {
   id: string;
-  type: string;
+  type: "smtp";
   enabled: boolean;
   settings: Record<string, unknown>;
 }

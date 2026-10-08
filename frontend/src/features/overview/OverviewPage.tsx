@@ -61,7 +61,7 @@ export function OverviewPage() {
   const readingsStale = useSnapshotStale(status?.read_at, config?.updateIntervalSeconds);
   const widgetVisible = (id: string) => config?.dashboardWidgets?.find((widget) => widget.id === id)?.visible !== false;
   const attentionItems = [
-    ...(status?.alerts ?? []).filter((alert) => alert.resolution !== "resolved").slice(0, 3).map((alert) => ({ id: alert.id, title: alert.title, detail: formatDateTimesInText(alert.impact), href: alert.href ?? "/system/equipment" })),
+    ...(status?.alerts ?? []).slice(0, 3).map((alert) => ({ id: alert.id, title: alert.title, detail: formatDateTimesInText(alert.impact), href: alert.href ?? "/system/equipment" })),
     ...(status?.batteryStrategy?.manualOverride?.active ? [{ id: "manual-override", title: text("Manual battery override is active"), detail: status.batteryStrategy.manualOverride.label ?? text("Automation will wait until the override ends."), href: "/battery" }] : []),
   ];
   const topCircuits = useMemo(

@@ -97,7 +97,7 @@ export function createBatteryStrategyService(dependencies: BatteryStrategyDepend
     const upcomingAdaptiveSlot = adaptive.plan?.slots
       ?.filter((slot) => new Date(slot.end).getTime() > now.getTime())
       .sort((left, right) => new Date(left.start).getTime() - new Date(right.start).getTime())[0] ?? null;
-    const nextAction = adaptive.owner === "adaptiveCharging" && adaptive.activeSlot
+    const nextAction: BatteryStrategy["nextAction"] = adaptive.owner === "adaptiveCharging" && adaptive.activeSlot
       ? {
           action: "continue-charging",
           title: "Continue charging",

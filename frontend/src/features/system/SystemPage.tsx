@@ -180,12 +180,14 @@ function EquipmentSettings({
     const visibility = Object.fromEntries(
       circuitIds.map((id) => [id, data.has(`visible:${id}`)]),
     );
+    const sort = data.get("sort");
+    const circuitSortMode = sort === "current" || sort === "accumulated" ? sort : "number";
     setCircuitResult(
       await save(
         {
           circuitLabels: labels,
           circuitDashboardVisibility: visibility,
-          circuitSortMode: String(data.get("sort")),
+          circuitSortMode,
         },
         "Circuit settings saved.",
       ),
@@ -623,7 +625,7 @@ function RateSettings({
             <T text={"Rate mode"} />
           </legend>
           <div className="system-toggle-grid">
-            {["simple", "offPeak", "multi"].map((item) => (
+            {(["simple", "offPeak", "multi"] as const).map((item) => (
               <label key={item}>
                 <input
                   name="rateMode"

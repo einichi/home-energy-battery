@@ -305,7 +305,7 @@ export type SystemAlert = {
   impact: string;
   suggestedAction: string;
   href?: string | null;
-  resolution: "active" | "resolved" | string;
+  resolution: "active";
 };
 
 export type BatteryStrategy = {
@@ -315,7 +315,7 @@ export type BatteryStrategy = {
   manualOverride?: { active: boolean; label?: string; until?: string | null; untilChanged?: boolean };
   nextSchedule?: { id: string; name: string; action: string; at: string } | null;
   nextAction?: {
-    action?: "charge" | "continue-charging" | string;
+    action?: "charge" | "continue-charging";
     title: string;
     reason: string;
     at?: string | null;
@@ -360,7 +360,7 @@ export type AppConfig = {
   solarEnabled: boolean;
   smartCosmoEnabled: boolean;
   fuelCellEnabled: boolean;
-  rateMode?: "simple" | "offPeak" | "multi" | string;
+  rateMode?: "simple" | "offPeak" | "multi";
   runtime?: RuntimeInformation;
   batteryHost?: string;
   meterHost?: string;
@@ -371,7 +371,7 @@ export type AppConfig = {
   discoverySubnets?: string[];
   circuitLabels?: Record<string, string>;
   circuitDashboardVisibility?: Record<string, boolean>;
-  circuitSortMode?: "number" | "current" | "accumulated" | string;
+  circuitSortMode?: "number" | "current" | "accumulated";
   standardRateYenPerKwh?: number;
   offPeakRateYenPerKwh?: number;
   offPeakSavingsEnabled?: boolean;
@@ -402,7 +402,7 @@ export type AppConfig = {
 export type NotificationTrigger = { enabled: boolean; cooldownMinutes: number; thresholdPercent?: number };
 export type NotificationConfig = {
   enabled: boolean;
-  channels: Array<{ id: string; type: "smtp" | string; enabled: boolean; settings: { host?: string; port?: number; security?: string; username?: string; from?: string; recipients?: string[] } }>;
+  channels: Array<{ id: string; type: "smtp"; enabled: boolean; settings: { host?: string; port?: number; security?: string; username?: string; from?: string; recipients?: string[] } }>;
   triggers: Record<string, NotificationTrigger>;
 };
 export type NotificationDelivery = { at?: string; ok?: boolean; event?: { title?: string; type?: string; severity?: string; occurredAt?: string }; attempts?: Array<{ channelId?: string; ok?: boolean; error?: string; result?: { messageId?: string | null; response?: string | null } }> };
@@ -494,8 +494,8 @@ export type AwayPeriod = {
   id: string;
   from: string;
   until: string;
-  source?: "manual" | "scheduled" | string;
-  status?: "scheduled" | "active" | "completed" | string;
+  source?: "manual" | "scheduled";
+  status?: "scheduled" | "active" | "completed";
 };
 
 export type AwayPeriodsView = {
@@ -616,7 +616,7 @@ export type AdaptiveChargingStatus = {
   away?: AwayPeriodsView;
   batteryModel?: {
     version?: number;
-    status?: "learning" | "validating" | "active" | "degraded" | string;
+    status?: "learning" | "validating" | "active" | "degraded";
     charge?: { acceptedObservationCount?: number; distinctDays?: number; blockers?: string[] };
     discharge?: { acceptedObservationCount?: number; distinctDays?: number; blockers?: string[] };
     power?: { sampleCount?: number; sessionCount?: number; blockers?: string[] };
