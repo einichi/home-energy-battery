@@ -11,6 +11,7 @@ import type { createAdaptiveForecastService } from "./adaptive-forecast-service.
 import { refreshAdaptivePlan } from "./adaptive-plan-refresh.js";
 import type { PlanSnapshotRecorderInput } from "./adaptive-plan-refresh.js";
 import { ADAPTIVE_CHARGING_SOLAR_WINDOW_DISCHARGE_BUDGET_PERCENT, evaluateAdaptiveSolarHeadroom } from "./adaptive-solar-headroom.js";
+import { prepareAdaptiveEvaluation } from "./adaptive-evaluation-lifecycle.js";
 import {
   adaptiveChargingBaseAvailability,
   adaptiveChargingBreakerSettings,
@@ -21,7 +22,6 @@ import {
   completeAdaptiveChargingWindowInterruption,
   finalizeAdaptiveChargeSession,
   finalizeExpiredAdaptiveChargingWindow,
-  recordAdaptiveChargeSample,
   recordAdaptiveChargingSolarHeadroomInterruption,
   recordAdaptiveChargingWindowInterruption,
   startAdaptiveChargeSession,
@@ -45,7 +45,6 @@ import {
   queueAdaptiveChargingPlanRefresh,
   updateActiveAdaptiveChargingObjective,
 } from "../domain/adaptive-control.js";
-import { backupPreparationBlocksActions } from "../domain/operational-overrides.js";
 import { discountedBandOccurrence, explicitDiscountedBand } from "../domain/tariffs.js";
 import { numericMetric } from "../domain/telemetry.js";
 import { batteryOperationMode } from "../domain/automation-rules.js";
@@ -80,7 +79,6 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
   const readAdaptiveChargingState = dependencies.readState;
   const writeAdaptiveChargingState = dependencies.writeState;
   const historyStore = dependencies.history;
-  const readOperationalOverridesState = dependencies.readOperationalOverrides;
   const releaseAdaptiveCharge = dependencies.releaseCharge;
   const suspendAdaptiveChargeInStandby = dependencies.suspendInStandby;
   const executeAdaptiveChargeStart = dependencies.startCharge;
@@ -165,45 +163,14 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
       // overlapping evaluation can retry the queued plan without re-arming it.
       state = await writeAdaptiveChargingState(state);
     }
-    const awayPeriods = historyStore.awayPeriods({ includeCompleted: true, nowMs: now.getTime() });
-    const activeAway = awayPeriods.find((period) => period.status === "active") ?? null;
-    const awayStateKey = activeAway ? `away:${activeAway.id}:${activeAway.until}` : "home";
-    if (state.lastAwayStateKey === null && !activeAway) {
-      state.lastAwayStateKey = awayStateKey;
-    } else if (state.lastAwayStateKey !== awayStateKey) {
-      queueAdaptiveChargingPlanRefresh(
-        state,
-        activeAway ? "Away period started" : "Away period ended",
-        now,
-      );
-      state.lastPlanEventKey = null;
-      state.lastAwayStateKey = awayStateKey;
-    }
-    recordAdaptiveChargeSample(state, status, now);
-    const operationalOverrides = await readOperationalOverridesState();
-    if (backupPreparationBlocksActions(operationalOverrides)) {
-      if (state.owner === "adaptiveCharging") {
-        finalizeAdaptiveChargeSession(state, "Backup Preparation activated", now);
-        state.owner = null;
-        state.activeSlot = null;
-        state.activePlanCreatedAt = null;
-        state.activeChargedKwh = 0;
-        state.activeLastCheckedAt = null;
-      }
-      state.interruptedCharge = null;
-      state.breakerRecovery = null;
-      state.standbyHoldUntil = null;
-      if (state.lastResult?.skipped !== "Backup Preparation active") {
-        appendAdaptiveChargingLog(
-          state,
-          "Backup Preparation is active; Adaptive Charging will continue observing data without controlling the battery",
-          "pause",
-          now,
-        );
-      }
-      state.lastResult = { ok: true, at: now.toISOString(), skipped: "Backup Preparation active" };
-      return writeAdaptiveChargingState(state);
-    }
+    const lifecycle = await prepareAdaptiveEvaluation(state, status, now, {
+      history: historyStore,
+      readOperationalOverrides: dependencies.readOperationalOverrides,
+      writeState: writeAdaptiveChargingState,
+    });
+    state = lifecycle.state;
+    const awayPeriods = lifecycle.awayPeriods;
+    if (lifecycle.stopped) return state;
     if (state.interruptedCharge
       && new Date(state.interruptedCharge.slotEnd ?? "").getTime() <= now.getTime()) {
       state.interruptedCharge = null;
