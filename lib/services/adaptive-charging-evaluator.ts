@@ -8,10 +8,11 @@ import type { AdaptiveEvaluationStatus } from "./automation-orchestrator.js";
 import type { createAdaptiveChargingOperations } from "./adaptive-charging-operations.js";
 import type { createAdaptiveHistoryService } from "./adaptive-history-service.js";
 import type { createAdaptiveForecastService } from "./adaptive-forecast-service.js";
+import { refreshAdaptivePlan } from "./adaptive-plan-refresh.js";
+import type { PlanSnapshotRecorderInput } from "./adaptive-plan-refresh.js";
 import {
   adaptiveChargingBaseAvailability,
   adaptiveChargingBreakerSettings,
-  buildAdaptiveChargingPlan,
   forecastIsFresh,
 } from "../domain/adaptive-planning.js";
 import {
@@ -30,13 +31,11 @@ import {
   adaptiveChargingExportEvidence,
   adaptiveChargingLiveChargeHeadroom,
   adaptiveChargingLiveImportSafety,
-  adaptiveChargingPlanLogMessage,
   adaptiveChargingPlanRefreshDecision,
   adaptiveChargingSlotAt,
   adaptiveChargingConfiguredActive,
   adaptiveChargingWindowSolarOpportunity,
   advanceAdaptiveChargingBreakerRecovery,
-  applyInterruptedChargeCap,
   beginAdaptiveChargingBreakerRecovery,
   capAdaptiveChargingSlotToRemainingTime,
   consumeBatteryLearningModelSwitch,
@@ -53,7 +52,6 @@ import { backupPreparationBlocksActions } from "../domain/operational-overrides.
 import { discountedBandOccurrence, explicitDiscountedBand } from "../domain/tariffs.js";
 import { numericMetric } from "../domain/telemetry.js";
 import { batteryOperationMode } from "../domain/automation-rules.js";
-import { CURRENT_BACKTEST_MODEL } from "../domain/backtesting.js";
 
 type AdaptiveOperations = ReturnType<typeof createAdaptiveChargingOperations>;
 type AdaptiveHistory = ReturnType<typeof createAdaptiveHistoryService>;
@@ -79,14 +77,7 @@ export interface AdaptiveChargingEvaluatorDependencies {
   readDemandProfileDays: AdaptiveHistory["readDemandProfileDays"];
   solarForecastAccuracy: AdaptiveForecast["accuracy"];
   recordFuelCellPlanForecast(plan: AdaptivePlan | null, now?: Date): number;
-  recordPlanSnapshot?(input: {
-    createdAt: string;
-    modelId: string;
-    modelVersion: string;
-    trigger?: string | null;
-    config: Pick<ApplicationConfig, "rateBands" | "standardRateYenPerKwh" | "batteryCapabilities" | "adaptiveCharging"> & { settingCache?: ApplicationConfig["settingCache"] };
-    plan: AdaptivePlan;
-  }): number;
+  recordPlanSnapshot?(input: PlanSnapshotRecorderInput): number;
   breakerWaitLogMs: number;
 }
 
@@ -99,11 +90,6 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
   const suspendAdaptiveChargeInStandby = dependencies.suspendInStandby;
   const executeAdaptiveChargeStart = dependencies.startCharge;
   const recoverIdleAdaptiveCharge = dependencies.recoverIdle;
-  const readAdaptiveChargingHistory = dependencies.readHistory;
-  const refreshBatteryLearning = dependencies.refreshBatteryLearning;
-  const readAdaptiveChargingDemandProfileDays = dependencies.readDemandProfileDays;
-  const adaptiveChargingSolarForecastAccuracy = dependencies.solarForecastAccuracy;
-  const recordFuelCellPlanForecast = dependencies.recordFuelCellPlanForecast;
   const ADAPTIVE_CHARGING_BREAKER_WAIT_LOG_MS = dependencies.breakerWaitLogMs;
   const executeAdaptiveChargingAction = (action: string, payload: Record<string, unknown> = {}) =>
     dependencies.executeAction(action, payload);
@@ -361,59 +347,16 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
 
     const refreshDecision = adaptiveChargingPlanRefreshDecision(state, config, now);
     if (refreshDecision.refresh) {
-      const samples = await readAdaptiveChargingHistory(now);
-      samples.push({
-        timestamp: now.toISOString(),
-        stateOfChargePercent: liveSoc,
-        batteryPowerW: numericMetric(status.energy?.battery?.instant_power),
-        solarPowerW: numericMetric(status.energy?.solar?.instant_power),
-        branchDemandW: liveBranchDemandW,
+      state = await refreshAdaptivePlan(state, config, status, awayPeriods, refreshDecision, now, {
+        readHistory: dependencies.readHistory,
+        historicalWeather: historyStore.historicalWeather,
+        solarForecastAccuracy: dependencies.solarForecastAccuracy,
+        refreshBatteryLearning: dependencies.refreshBatteryLearning,
+        readDemandProfileDays: dependencies.readDemandProfileDays,
+        recordFuelCellPlanForecast: dependencies.recordFuelCellPlanForecast,
+        recordPlanSnapshot: dependencies.recordPlanSnapshot,
+        appendLog: appendAdaptiveChargingLog,
       });
-      state = {
-        ...state,
-        historicalWeather: historyStore.historicalWeather(),
-        solarForecastAccuracy: adaptiveChargingSolarForecastAccuracy(now),
-      };
-      await refreshBatteryLearning(config, state, now);
-      const historicalDemandDays = await readAdaptiveChargingDemandProfileDays();
-      state.plan = buildAdaptiveChargingPlan({ config, state, samples, historicalDemandDays, awayPeriods, now });
-      recordFuelCellPlanForecast(state.plan, now);
-      state.lastPlanEventKey = refreshDecision.eventKey ?? null;
-      state.pendingPlanReason = null;
-      state.pendingPlanRequestId = null;
-      state.pendingPlanRequestedAt = null;
-      if (state.interruptedCharge) {
-        const capped = applyInterruptedChargeCap(
-          state.plan,
-          state.interruptedCharge,
-          config.batteryCapabilities.maximumChargeWatts,
-          now,
-        );
-        state.plan = capped.plan;
-        state.interruptedCharge = capped.interruption;
-      }
-      if (state.plan) {
-        dependencies.recordPlanSnapshot?.({
-          createdAt: now.toISOString(),
-          modelId: CURRENT_BACKTEST_MODEL.id,
-          modelVersion: CURRENT_BACKTEST_MODEL.version,
-          trigger: refreshDecision.trigger,
-          config: {
-            rateBands: config.rateBands,
-            standardRateYenPerKwh: config.standardRateYenPerKwh,
-            batteryCapabilities: config.batteryCapabilities,
-            adaptiveCharging: config.adaptiveCharging,
-            settingCache: config.settingCache,
-          },
-          plan: state.plan,
-        });
-      }
-      appendAdaptiveChargingLog(
-        state,
-        adaptiveChargingPlanLogMessage(state.plan, refreshDecision.trigger, liveSoc),
-        state.plan?.warning ? "warning" : "plan",
-        now,
-      );
     }
     if (!state.plan?.available) {
       if (state.owner === "adaptiveCharging") await releaseAdaptiveCharge(state, state.plan?.reason || "Plan is unavailable", now);
