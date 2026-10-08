@@ -223,7 +223,9 @@ try {
 
   await page.goto(`${apiOrigin}/ui/reports`, { waitUntil: "domcontentloaded" });
   await page.getByRole("heading", { name: "Reports", exact: true }).waitFor();
-  assert(await page.getByRole("heading", { name: "Period comparison" }).isVisible(), "Reports period comparison is missing");
+  const periodComparison = page.getByRole("heading", { name: "Period comparison" });
+  await periodComparison.waitFor({ state: "visible" });
+  assert(await periodComparison.isVisible(), "Reports period comparison is missing");
   const metricToggle = page.locator(".series-picker label").filter({ hasText: "Solar" });
   await metricToggle.waitFor();
   const reportPeriod = page.locator(".insight-controls label").filter({ hasText: "Period" }).locator("select");
