@@ -1,0 +1,77 @@
+{
+  "unavailablePlan": {
+    "available": false,
+    "reason": "adaptive charging is disabled",
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "forecastFetchedAt": null,
+    "slots": [],
+    "timeline": []
+  },
+  "forecastDrivenPlan": {
+    "available": true,
+    "reason": null,
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "forecastFetchedAt": "2026-01-01T00:00:00.000Z",
+    "slots": [
+      {
+        "start": "2026-01-02T21:51:13.716Z",
+        "end": "2026-01-02T23:00:00.000Z",
+        "targetWh": 2084,
+        "label": "Night",
+        "yenPerKwh": 12
+      }
+    ],
+    "timelineLength": 95,
+    "currentSocPercent": 50,
+    "targetSocPercent": 100,
+    "expectedSunsetSocPercent": 100,
+    "predictedSolarKwh": 30.186000000000025,
+    "predictedDemandKwh": 25.81000000000001,
+    "predictedSurplusKwh": 15.805999999999994,
+    "plannedChargeKwh": 2.084,
+    "demandHistory": {
+      "recordedDayCount": 12,
+      "validDayCount": 12,
+      "sameDayTypeDayCount": 10,
+      "usedDayTypeFallback": true,
+      "recentComparableDayCount": 8,
+      "seasonalComparableDayCount": 2,
+      "seasonalYears": [
+        2025
+      ],
+      "seasonalBlendPercent": 10,
+      "awayComparableDayCount": 0,
+      "awaySlotCount": 0,
+      "awayLearnedSlotCount": 0,
+      "awayFallbackSlotCount": 0,
+      "awayConfidence": "not-scheduled",
+      "awayReturnBufferMinutes": 30
+    }
+  },
+  "chronologicalCharging": {
+    "plannedChargeKwh": 2.7,
+    "plannedStoredChargeKwh": 2.9700000000000006,
+    "requiredGridChargeKwh": 2.727272727272727,
+    "unmetChargeKwh": 0.02727272727272669,
+    "unmetStoredChargeKwh": 0.02999999999999936,
+    "timeConstrainedWh": 0,
+    "expectedEndStoredKwh": 4.470000000000001,
+    "slots": [
+      {
+        "start": "2026-01-01T00:00:00.000Z",
+        "end": "2026-01-01T01:30:00.000Z",
+        "targetWh": 2700,
+        "label": "Night",
+        "yenPerKwh": 12
+      }
+    ],
+    "windows": [
+      {
+        "start": "2026-01-01T00:00:00.000Z",
+        "end": "2026-01-01T01:30:00.000Z",
+        "plannedChargeKwh": 2.7,
+        "unmetChargeKwh": 0.02727272727272669
+      }
+    ]
+  }
+}
