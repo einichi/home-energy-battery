@@ -2,6 +2,8 @@ import { MILLISECONDS_PER_DAY } from "../../domain/time.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { billingPeriodKey } from "../../domain/ene-farm.js";
 import type { ApiRouteServices } from "../api.js";
+import { validateRequestBody } from "../request-validation.js";
+import { DeviceCommandRequestSchema } from "../../../shared/api-schemas.js";
 
 export type HistoryRouteDependencies = Pick<ApiRouteServices,
   | "eneFarmReport"
@@ -63,7 +65,7 @@ export function createHistoryRouteHandler(dependencies: HistoryRouteDependencies
       });
     }
     if (req.method === "POST" && url.pathname === "/api/device-commands") {
-      const body = await readBody(req);
+      const body = validateRequestBody(await readBody(req), DeviceCommandRequestSchema, dependencies.http.requestError);
       return json(res, 202, await startDeviceCommand(String(body.action ?? ""), body.payload ?? {}, { source: "manual" }));
     }
     if (req.method === "GET" && url.pathname.startsWith("/api/device-commands/")) {

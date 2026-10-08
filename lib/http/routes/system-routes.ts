@@ -4,6 +4,15 @@ import type { AppConfig, StatusSnapshot } from "../../../shared/api-contracts.js
 import { invalidDiscoverySubnets } from "../../domain/discovery-subnets.js";
 import { isSupportedSmtpPort, smtpSecurityWarning } from "../../domain/notification-configuration.js";
 import { asRecord } from "../../domain/values.js";
+import { validateRequestBody } from "../request-validation.js";
+import {
+  DiscoveryJobRequestSchema,
+  EmptyRequestSchema,
+  GasTariffImportRequestSchema,
+  HistoryTrimRequestSchema,
+  NotificationsRequestSchema,
+  UpdateAppConfigRequestSchema,
+} from "../../../shared/api-schemas.js";
 
 function explicitSmtpSettings(value: unknown): Record<string, unknown> | null {
   const source = asRecord(value);
@@ -80,7 +89,7 @@ export function createSystemRouteHandler(dependencies: SystemRouteDependencies) 
     url: URL,
   ): Promise<void | false> {
     if (req.method === "POST" && url.pathname === "/api/database-backups") {
-      await readBody(req);
+      validateRequestBody(await readBody(req), EmptyRequestSchema, requestError);
       await manualDatabaseBackup();
       return json(res, 201, await databaseBackupsView());
     }
@@ -93,7 +102,7 @@ export function createSystemRouteHandler(dependencies: SystemRouteDependencies) 
         throw requestError(400, "Invalid database backup filename");
       }
       if (req.method === "POST" && url.pathname.endsWith("/restore")) {
-        await readBody(req);
+        validateRequestBody(await readBody(req), EmptyRequestSchema, requestError);
         await restoreDatabaseBackup(filename);
         return json(res, 200, await databaseBackupsView());
       }
@@ -106,7 +115,7 @@ export function createSystemRouteHandler(dependencies: SystemRouteDependencies) 
       return json(res, 200, await notificationService.view());
     }
     if (req.method === "PUT" && url.pathname === "/api/notifications") {
-      const body = await readBody(req);
+      const body = validateRequestBody(await readBody(req), NotificationsRequestSchema, requestError);
       const notificationInput = body.config ?? body.notifications ?? body;
       const smtpSettings = explicitSmtpSettings(notificationInput);
       if (smtpSettings && !isSupportedSmtpPort(smtpSettings.port)) {
@@ -141,7 +150,7 @@ export function createSystemRouteHandler(dependencies: SystemRouteDependencies) 
       return json(res, 200, response);
     }
     if (req.method === "PUT" && url.pathname === "/api/config") {
-      const body = await readBody(req);
+      const body = validateRequestBody(await readBody(req), UpdateAppConfigRequestSchema, requestError);
       if (Object.hasOwn(body, "discoverySubnets")) {
         const invalid = invalidDiscoverySubnets(body.discoverySubnets);
         if (invalid.length) throw requestError(400, `Discovery subnets must be RFC1918 /24 networks: ${invalid.join(", ")}`);
@@ -155,13 +164,13 @@ export function createSystemRouteHandler(dependencies: SystemRouteDependencies) 
     }
     if (req.method === "POST" && url.pathname === "/api/history/trim") {
       const config = await readConfig();
-      const body = await readBody(req);
+      const body = validateRequestBody(await readBody(req), HistoryTrimRequestSchema, requestError);
       const retention = body.retention
         ?? (body.retentionDays ? normalizeRetentionConfig({}, body.retentionDays) : config.retention);
       return json(res, 200, await trimHistory(retention));
     }
     if (req.method === "POST" && url.pathname === "/api/gas-tariffs/import") {
-      const body = await readBody(req);
+      const body = validateRequestBody(await readBody(req), GasTariffImportRequestSchema, requestError);
       const config = await readConfig();
       const provider = String(body.provider ?? config.fuelCell?.tariff?.provider ?? "tokyo-gas");
       const billingMonth = String(body.billingMonth ?? body.month ?? "");
@@ -188,7 +197,7 @@ export function createSystemRouteHandler(dependencies: SystemRouteDependencies) 
       return json(res, 201, recordGasTariffSnapshot({ ...imported, fetchedAt: new Date().toISOString() }));
     }
     if (req.method === "POST" && url.pathname === "/api/discovery/jobs") {
-      const body = await readBody(req);
+      const body = validateRequestBody(await readBody(req), DiscoveryJobRequestSchema, requestError);
       if (body.mode !== undefined && body.mode !== "broadcast" && body.mode !== "active") {
         throw requestError(400, "discovery mode must be broadcast or active");
       }

@@ -2,6 +2,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AwayPeriod } from "../../contracts/away-period.js";
 import type { ApiRouteServices } from "../api.js";
 import type { AwayPeriodsView } from "../../../shared/api-contracts.js";
+import { AwayPeriodRequestSchema, AwayUntilRequestSchema, BackupPreparationRequestSchema, EmptyRequestSchema } from "../../../shared/api-schemas.js";
+import { validateRequestBody } from "../request-validation.js";
 
 export type OperationsRouteDependencies = Pick<ApiRouteServices,
   | "adaptiveChargingAvailability" | "adaptiveChargingPlanLogMessage" | "adaptiveChargingScheduledEvent"
@@ -42,7 +44,7 @@ export function createOperationsRouteHandler(dependencies: OperationsRouteDepend
     }
     if (req.method === "POST" && url.pathname === "/api/away-periods") {
       const now = new Date();
-      const period = cleanNewAwayPeriod(await readBody(req), now);
+      const period = cleanNewAwayPeriod(validateRequestBody(await readBody(req), AwayPeriodRequestSchema, requestError), now);
       ensureAwayPeriodDoesNotOverlap(period);
       const created = createAwayPeriod(period);
       await queueAdaptiveChargingForAwayChange("Away schedule created", now);
@@ -57,7 +59,7 @@ export function createOperationsRouteHandler(dependencies: OperationsRouteDepend
       if (!existing) throw requestError(404, "Away period not found");
       if (req.method === "PATCH" && !operation) {
         if (existing.status !== "scheduled") throw requestError(409, "Only an Away period that has not started can be edited");
-        const body = await readBody(req);
+        const body = validateRequestBody(await readBody(req), AwayPeriodRequestSchema, requestError);
         const from = awayTimestamp(body.from, "From");
         const until = awayTimestamp(body.until, "Until");
         if (from.getTime() < now.getTime() - 60_000) throw requestError(400, "From cannot be in the past");
@@ -81,7 +83,8 @@ export function createOperationsRouteHandler(dependencies: OperationsRouteDepend
       }
       if (req.method === "POST" && operation === "extend") {
         if (existing.status !== "active") throw requestError(409, "Only an active Away period can be extended");
-        const until = awayTimestamp((await readBody(req)).until, "Until");
+        const body = validateRequestBody(await readBody(req), AwayUntilRequestSchema, requestError);
+        const until = awayTimestamp(body.until, "Until");
         if (until.getTime() <= new Date(existing.until).getTime()) {
           throw requestError(400, "The extended Until time must be later than the current Until time");
         }
@@ -157,13 +160,13 @@ export function createOperationsRouteHandler(dependencies: OperationsRouteDepend
       return json(res, 200, backupPreparationView(await readOperationalOverridesState()));
     }
     if (req.method === "POST" && url.pathname === "/api/backup-preparation/start") {
-      const body = await readBody(req);
+      const body = validateRequestBody(await readBody(req), BackupPreparationRequestSchema, requestError);
       return json(res, 200, await startBackupPreparation({
         allowDemandGuard: body.allowDemandGuard !== false,
       }));
     }
     if (req.method === "POST" && url.pathname === "/api/backup-preparation/end") {
-      await readBody(req);
+      validateRequestBody(await readBody(req), EmptyRequestSchema, requestError);
       return json(res, 200, await endBackupPreparation());
     }
     return false;

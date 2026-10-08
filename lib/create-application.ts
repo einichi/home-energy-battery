@@ -39,6 +39,8 @@ import {
 } from "./http/server.js";
 import { NativeRouter } from "./http/router.js";
 import { createApiHandler } from "./http/api.js";
+import { validateRequestBody } from "./http/request-validation.js";
+import { DeviceCommandRequestSchema } from "../shared/api-schemas.js";
 import { startRuntime, stopRuntime } from "./runtime.js";
 import { parseJsonWithContext } from "./domain/json.js";
 import { logDetailedError } from "./logging.js";
@@ -725,7 +727,7 @@ const apiRouter = new NativeRouter().post(
   async ({ request, response, params }) => {
     const operation = databaseAdministration.getOperation();
     if (operation.busy) return void json(response, 503, { error: `Database ${operation.type} is in progress`, operation: { ...operation } });
-    const body = await readBody(request);
+    const body = validateRequestBody(await readBody(request), DeviceCommandRequestSchema, requestError);
     const action = params.action ?? "";
     if (!DEVICE_ACTIONS.has(action)) throw requestError(404, `unknown action: ${action}`);
     const result = await executeAction(action, body, { source: "manual" });

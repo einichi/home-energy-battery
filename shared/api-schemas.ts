@@ -291,6 +291,56 @@ export const CommandReceiptsResponseSchema = v.object({ receipts: v.array(v.unkn
 export const SchedulesResponseSchema = v.array(v.unknown());
 export const AutomationRulesResponseSchema = v.array(v.unknown());
 
+const OptionalAutomationConditionsSchema = v.partial(v.object({
+  source: v.string(), breakerAmps: v.number(), breakerVoltage: v.number(), reserveAmps: v.number(),
+  restoreBelowAmps: v.number(), restoreDelaySeconds: v.number(),
+}));
+export const AutomationRuleRequestSchema = v.looseObject({
+  id: v.optional(v.string()), name: v.optional(v.string()), type: v.optional(v.string()), enabled: v.optional(v.boolean()),
+  dashboardWarningEnabled: v.optional(v.boolean()), conditions: v.optional(OptionalAutomationConditionsSchema),
+  action: v.optional(v.string()), payload: v.optional(v.record(v.string(), v.unknown())),
+  restoreAction: v.optional(v.string()), restorePayload: v.optional(v.record(v.string(), v.unknown())),
+  state: v.optional(v.record(v.string(), v.unknown())), log: v.optional(v.array(v.unknown())),
+});
+
+const OptionalBatteryScheduleSchema = v.partial(v.object({
+  id: v.string(), name: v.string(), action: v.string(), payload: v.record(v.string(), v.unknown()),
+  repeat: v.union([v.literal("daily"), v.literal("once")]), days: v.array(v.number()), time: v.string(),
+  runAt: v.string(), enabled: v.boolean(),
+}));
+export const BatteryScheduleRequestSchema = v.looseObject(OptionalBatteryScheduleSchema.entries);
+export const BacktestRunRequestSchema = v.looseObject({
+  range: v.optional(v.union([v.literal("90d"), v.literal("all")])),
+  mode: v.optional(v.union([v.literal("both"), v.literal("as-operated"), v.literal("model-only")])),
+  modelId: v.optional(v.string()),
+});
+export const AwayPeriodRequestSchema = v.looseObject({
+  from: v.optional(v.string()), until: v.optional(v.string()), source: v.optional(v.union([v.literal("manual"), v.literal("scheduled")])),
+});
+export const AwayUntilRequestSchema = v.looseObject({ until: v.optional(v.string()) });
+export const BackupPreparationRequestSchema = v.looseObject({ allowDemandGuard: v.optional(v.boolean()) });
+export const DeviceCommandRequestSchema = v.looseObject({ action: v.optional(v.string()), payload: v.optional(v.record(v.string(), v.unknown())) });
+export const NotificationsRequestSchema = v.looseObject({
+  config: v.optional(v.record(v.string(), v.unknown())), notifications: v.optional(v.record(v.string(), v.unknown())),
+  password: v.optional(v.nullable(v.string())), clearPassword: v.optional(v.boolean()),
+  enabled: v.optional(v.boolean()), channels: v.optional(v.array(v.record(v.string(), v.unknown()))),
+  triggers: v.optional(v.record(v.string(), v.unknown())),
+});
+export const UpdateAppConfigRequestSchema = v.looseObject(v.partial(AppConfigSchema).entries);
+export const HistoryTrimRequestSchema = v.looseObject({
+  retention: v.optional(v.record(v.string(), v.unknown())), retentionDays: v.optional(v.number()),
+});
+export const GasTariffImportRequestSchema = v.looseObject({
+  provider: v.optional(v.string()), billingMonth: v.optional(v.string()), month: v.optional(v.string()),
+  sourceUrl: v.optional(v.string()), tariff: v.optional(v.unknown()), bands: v.optional(v.array(v.unknown())),
+});
+export const DiscoveryJobRequestSchema = v.looseObject({
+  // Keep mode validation in the route so its established 400 message is preserved.
+  mode: v.optional(v.unknown()),
+  timeout: v.optional(v.number()), subnets: v.optional(v.array(v.string())),
+});
+export const EmptyRequestSchema = v.looseObject({});
+
 export type AppConfig = v.InferOutput<typeof AppConfigSchema>;
 export type StatusSnapshot = v.InferOutput<typeof StatusSnapshotSchema>;
 export type HistoryResponse = v.InferOutput<typeof HistoryResponseSchema>;

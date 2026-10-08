@@ -2,6 +2,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { BatterySchedule } from "../../contracts/schedules.js";
 import type { AutomationRule } from "../../domain/automation-rules.js";
 import type { ApiRouteServices } from "../api.js";
+import { AutomationRuleRequestSchema, BacktestRunRequestSchema, BatteryScheduleRequestSchema } from "../../../shared/api-schemas.js";
+import { validateRequestBody } from "../request-validation.js";
 
 export type AutomationRouteDependencies = Pick<ApiRouteServices,
   | "ALL_DAYS" | "adaptiveChargingConfiguredActive" | "cleanAutomationRule" | "http"
@@ -49,7 +51,7 @@ export function createAutomationRouteHandler(dependencies: AutomationRouteDepend
       return json(res, 200, dependencies.backtestService.list());
     }
     if (req.method === "POST" && url.pathname === "/api/backtests") {
-      const body = await readBody(req);
+      const body = validateRequestBody(await readBody(req), BacktestRunRequestSchema, dependencies.http.requestError);
       return json(res, 201, await dependencies.backtestService.run({
         range: body.range === "all" ? "all" : body.range === "90d" || body.range === undefined ? "90d" : body.range as never,
         mode: body.mode === "as-operated" || body.mode === "model-only" || body.mode === "both" || body.mode === undefined
@@ -65,7 +67,7 @@ export function createAutomationRouteHandler(dependencies: AutomationRouteDepend
       return json(res, 200, await readAutomationRules());
     }
     if (req.method === "POST" && url.pathname === "/api/automation-rules") {
-      const body = await readBody(req);
+      const body = validateRequestBody(await readBody(req), AutomationRuleRequestSchema, dependencies.http.requestError);
       const rules = await readAutomationRules();
       const rule = cleanAutomationRule({ ...body, id: randomUUID(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
       rules.push(rule);
@@ -75,7 +77,7 @@ export function createAutomationRouteHandler(dependencies: AutomationRouteDepend
     }
     if (req.method === "PATCH" && url.pathname.startsWith("/api/automation-rules/")) {
       const id = url.pathname.split("/").pop();
-      const body = await readBody(req);
+      const body = validateRequestBody(await readBody(req), AutomationRuleRequestSchema, dependencies.http.requestError);
       const rules = await readAutomationRules();
       const index = rules.findIndex((item: AutomationRule) => item.id === id);
       if (index < 0) return json(res, 404, { error: "automation rule not found" });
@@ -99,7 +101,7 @@ export function createAutomationRouteHandler(dependencies: AutomationRouteDepend
       if (adaptiveChargingConfiguredActive(await readConfig())) {
         return json(res, 409, { error: "schedules are preserved but disabled while adaptive charging is enabled" });
       }
-      const body = await readBody(req);
+      const body = validateRequestBody(await readBody(req), BatteryScheduleRequestSchema, dependencies.http.requestError);
       const schedule: BatterySchedule = {
         id: randomUUID(),
         name: String(body.name || body.action || "Battery setting change"),
@@ -124,7 +126,7 @@ export function createAutomationRouteHandler(dependencies: AutomationRouteDepend
         return json(res, 409, { error: "schedules are preserved but disabled while adaptive charging is enabled" });
       }
       const id = url.pathname.split("/").pop();
-      const body = await readBody(req);
+      const body = validateRequestBody(await readBody(req), BatteryScheduleRequestSchema, dependencies.http.requestError);
       const schedule = await mutateSchedules((schedules: BatterySchedule[]) => {
         const existing = schedules.find((item) => item.id === id);
         if (!existing) return null;
