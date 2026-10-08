@@ -654,7 +654,7 @@ const api = createApiHandler({
   getStatusSnapshot,
   historicalWeather: historyStore.historicalWeather,
   importGasTariff,
-  json,
+  http: { json, readBody, requestError },
   manualDatabaseBackup: databaseAdministration.createBackup,
   measuredFuelCellGasByBillingPeriod,
   mergeAutomationRule,
@@ -671,7 +671,6 @@ const api = createApiHandler({
   readAdaptiveChargingHistory,
   readAdaptiveChargingState,
   readAutomationRules,
-  readBody,
   readCommandReceipt,
   readCommandReceipts,
   readConfig,
@@ -689,7 +688,6 @@ const api = createApiHandler({
   refreshBatteryLearning,
   removeDatabaseBackup: databaseAdministration.removeBackup,
   removeAwayPeriod,
-  requestError,
   restoreDatabaseBackup: databaseAdministration.restoreBackup,
   resumeAdaptiveCharging: (now) => {
     if (!adaptiveControlService) throw new Error("Adaptive control service is not initialized");

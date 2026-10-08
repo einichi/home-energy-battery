@@ -4,10 +4,10 @@ import type { AutomationRule } from "../../domain/automation-rules.js";
 import type { ApiDependencies } from "../api.js";
 
 type AutomationRouteDependencies = Pick<ApiDependencies,
-  | "ALL_DAYS" | "adaptiveChargingConfiguredActive" | "cleanAutomationRule" | "json"
+  | "ALL_DAYS" | "adaptiveChargingConfiguredActive" | "cleanAutomationRule" | "http"
   | "backtestService"
   | "mergeAutomationRule" | "mutateSchedules" | "parseRunAt" | "randomUUID"
-  | "readAutomationRules" | "readBody" | "readConfig" | "readSchedules"
+  | "readAutomationRules" | "readConfig" | "readSchedules"
   | "writeAutomationRuleStates" | "writeAutomationRules"
 >;
 
@@ -33,9 +33,10 @@ function applySchedulePatch(existing: BatterySchedule, body: Record<string, unkn
 }
 
 export function createAutomationRouteHandler(dependencies: AutomationRouteDependencies) {
+  const { json, readBody } = dependencies.http;
   const {
-    ALL_DAYS, adaptiveChargingConfiguredActive, cleanAutomationRule, json, mergeAutomationRule,
-    mutateSchedules, parseRunAt, randomUUID, readAutomationRules, readBody, readConfig,
+    ALL_DAYS, adaptiveChargingConfiguredActive, cleanAutomationRule, mergeAutomationRule,
+    mutateSchedules, parseRunAt, randomUUID, readAutomationRules, readConfig,
     readSchedules, writeAutomationRuleStates, writeAutomationRules,
   } = dependencies;
 

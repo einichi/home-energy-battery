@@ -5,10 +5,9 @@ import type { ApiDependencies } from "../api.js";
 
 type HistoryRouteDependencies = Pick<ApiDependencies,
   | "eneFarmReport"
-  | "json"
+  | "http"
   | "measuredFuelCellGasByBillingPeriod"
   | "normalizeReportBucket"
-  | "readBody"
   | "readCommandReceipt"
   | "readCommandReceipts"
   | "readConfig"
@@ -32,12 +31,11 @@ function rangeParamError(url: URL): string | null {
 }
 
 export function createHistoryRouteHandler(dependencies: HistoryRouteDependencies) {
+  const { json, readBody } = dependencies.http;
   const {
     eneFarmReport,
-    json,
     measuredFuelCellGasByBillingPeriod,
     normalizeReportBucket,
-    readBody,
     readCommandReceipt,
     readCommandReceipts,
     readConfig,

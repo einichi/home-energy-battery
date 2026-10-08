@@ -10,24 +10,25 @@ type OperationsRouteDependencies = Pick<ApiDependencies,
   | "awayTimestamp" | "backupPreparationView" | "buildAdaptiveChargingPlan" | "cleanNewAwayPeriod"
   | "createAwayPeriod" | "endBackupPreparation" | "ensureAwayPeriodDoesNotOverlap" | "findAwayPeriod"
   | "forecastIsFresh" | "historicalWeather" | "listAwayPeriods" | "removeAwayPeriod"
-  | "json" | "queueAdaptiveChargingForAwayChange" | "readAdaptiveChargingDemandProfileDays"
-  | "readAdaptiveChargingHistory" | "readAdaptiveChargingState" | "readAutomationRules" | "readBody"
+  | "http" | "queueAdaptiveChargingForAwayChange" | "readAdaptiveChargingDemandProfileDays"
+  | "readAdaptiveChargingHistory" | "readAdaptiveChargingState" | "readAutomationRules"
   | "readConfig" | "readOperationalOverridesState" | "recordFuelCellPlanForecast"
-  | "refreshAdaptiveChargingForecast" | "refreshBatteryLearning" | "requestError"
+  | "refreshAdaptiveChargingForecast" | "refreshBatteryLearning"
   | "resumeAdaptiveCharging" | "startBackupPreparation" | "updateAwayPeriod" | "writeAdaptiveChargingState"
 >;
 
 export function createOperationsRouteHandler(dependencies: OperationsRouteDependencies) {
+  const { json, readBody, requestError } = dependencies.http;
   const {
     adaptiveChargingAvailability, adaptiveChargingPlanLogMessage, adaptiveChargingScheduledEvent,
     adaptiveChargingSolarForecastAccuracy, adaptiveChargingView, appendAdaptiveChargingLog,
     applyInterruptedChargeCap, assertActionAllowedByOperationalOverride, awayPeriodsView,
     awayTimestamp, backupPreparationView, buildAdaptiveChargingPlan, cleanNewAwayPeriod, createAwayPeriod,
-    endBackupPreparation, ensureAwayPeriodDoesNotOverlap, findAwayPeriod, forecastIsFresh, historicalWeather, json,
+    endBackupPreparation, ensureAwayPeriodDoesNotOverlap, findAwayPeriod, forecastIsFresh, historicalWeather,
     listAwayPeriods, removeAwayPeriod,
     queueAdaptiveChargingForAwayChange, readAdaptiveChargingDemandProfileDays, readAdaptiveChargingHistory,
-    readAdaptiveChargingState, readAutomationRules, readBody, readConfig, readOperationalOverridesState,
-    recordFuelCellPlanForecast, refreshAdaptiveChargingForecast, refreshBatteryLearning, requestError,
+    readAdaptiveChargingState, readAutomationRules, readConfig, readOperationalOverridesState,
+    recordFuelCellPlanForecast, refreshAdaptiveChargingForecast, refreshBatteryLearning,
     resumeAdaptiveCharging, startBackupPreparation, updateAwayPeriod, writeAdaptiveChargingState,
   } = dependencies;
 

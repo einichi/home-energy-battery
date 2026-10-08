@@ -29,6 +29,12 @@ type DeviceCommandService = ReturnType<typeof import("../services/device-command
 type SystemAlertService = ReturnType<typeof import("../services/system-alert-service.js").createSystemAlertService>;
 type BacktestService = ReturnType<typeof import("../services/backtest-service.js").createBacktestService>;
 
+export interface ApiHttpDependencies {
+  json<T>(response: ServerResponse, status: number, body: T): void;
+  readBody(request: IncomingMessage): Promise<JsonObject>;
+  requestError(status: number, message: string): Error;
+}
+
 export interface ApiDependencies {
   ALL_DAYS: number[];
   DEFAULT_CONFIG: ApplicationConfig;
@@ -69,7 +75,7 @@ export interface ApiDependencies {
   historicalWeather(): SolarForecastHour[];
   findAwayPeriod: AwayPeriodService["find"];
   importGasTariff: typeof import("../gas-tariffs.js").importGasTariff;
-  json<T>(response: ServerResponse, status: number, body: T): void;
+  http: ApiHttpDependencies;
   manualDatabaseBackup(): Promise<unknown>;
   measuredFuelCellGasByBillingPeriod: EneFarmReportingService["measuredGasByBillingPeriod"];
   mergeAutomationRule: typeof import("../domain/automation-rules.js").mergeAutomationRule;
@@ -86,7 +92,6 @@ export interface ApiDependencies {
   readAdaptiveChargingHistory: AdaptiveHistoryService["readHistory"];
   readAdaptiveChargingState: AdaptiveStateService["read"];
   readAutomationRules: AutomationStoreService["read"];
-  readBody(request: IncomingMessage): Promise<JsonObject>;
   readCommandReceipt: CommandReceiptService["read"];
   readCommandReceipts: CommandReceiptService["list"];
   readConfig: ConfigurationService["read"];
@@ -104,7 +109,6 @@ export interface ApiDependencies {
   refreshBatteryLearning: AdaptiveHistoryService["refreshBatteryLearning"];
   removeDatabaseBackup(filename: string): Promise<unknown>;
   removeAwayPeriod: AwayPeriodService["remove"];
-  requestError(status: number, message: string): Error;
   restoreDatabaseBackup(filename: string): Promise<unknown>;
   resumeAdaptiveCharging(now?: Date): Promise<AdaptiveChargingState>;
   startBackupPreparation(options?: { allowDemandGuard?: boolean }, now?: Date): Promise<unknown>;
@@ -124,9 +128,9 @@ export interface ApiDependencies {
 export function createApiHandler(dependencies: ApiDependencies) {
   const {
     databaseBackupsView,
-    json,
     getDatabaseOperation,
   } = dependencies;
+  const { json } = dependencies.http;
   const handleSystemRoute = createSystemRouteHandler(dependencies);
   const handleHistoryRoute = createHistoryRouteHandler(dependencies);
   const handleOperationsRoute = createOperationsRouteHandler(dependencies);

@@ -27,17 +27,15 @@ type SystemRouteDependencies = Pick<ApiDependencies,
   | "getLatestStatusSnapshot"
   | "getStatusSnapshot"
   | "importGasTariff"
-  | "json"
+  | "http"
   | "manualDatabaseBackup"
   | "normalizeGasTariffPayload"
   | "normalizeNotificationConfig"
   | "normalizeRetentionConfig"
   | "notificationService"
-  | "readBody"
   | "readConfig"
   | "recordGasTariffSnapshot"
   | "removeDatabaseBackup"
-  | "requestError"
   | "restoreDatabaseBackup"
   | "systemAlertsView"
   | "trimHistory"
@@ -46,6 +44,7 @@ type SystemRouteDependencies = Pick<ApiDependencies,
 >;
 
 export function createSystemRouteHandler(dependencies: SystemRouteDependencies) {
+  const { json, readBody, requestError } = dependencies.http;
   const {
     DEFAULT_CONFIG,
     EXTERNAL_IO_DISABLED,
@@ -60,17 +59,14 @@ export function createSystemRouteHandler(dependencies: SystemRouteDependencies) 
     getLatestStatusSnapshot,
     getStatusSnapshot,
     importGasTariff,
-    json,
     manualDatabaseBackup,
     normalizeGasTariffPayload,
     normalizeNotificationConfig,
     normalizeRetentionConfig,
     notificationService,
-    readBody,
     readConfig,
     recordGasTariffSnapshot,
     removeDatabaseBackup,
-    requestError,
     restoreDatabaseBackup,
     systemAlertsView,
     trimHistory,
