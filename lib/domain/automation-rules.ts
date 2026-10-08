@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { configNumber } from "./configuration.js";
+import { asRecord } from "./values.js";
 
 const DEFAULT_GUARD_CONDITIONS = {
   breakerVoltage: 100,
@@ -47,14 +48,10 @@ export interface AutomationStatus {
   energy?: { battery?: { operation_mode?: { value?: unknown; human?: unknown }; instant_power?: { value?: unknown } } };
 }
 
-function record(value: unknown): UnknownRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as UnknownRecord : {};
-}
-
 
 export function cleanAutomationRuleConfig(value: unknown = {}): AutomationRuleConfig {
-  const input = record(value);
-  const conditions = record(input.conditions);
+  const input = asRecord(value);
+  const conditions = asRecord(input.conditions);
   const source = String(conditions.source ?? "");
   return {
     id: String(input.id || randomUUID()),
@@ -81,12 +78,12 @@ export function cleanAutomationRuleConfig(value: unknown = {}): AutomationRuleCo
 
 
 export function cleanAutomationRuleState(value: unknown = {}): AutomationRuleState {
-  const input = record(value);
+  const input = asRecord(value);
   return {
-    lastResult: input.lastResult && typeof input.lastResult === "object" ? record(input.lastResult) : null,
-    state: record(input.state),
+    lastResult: input.lastResult && typeof input.lastResult === "object" ? asRecord(input.lastResult) : null,
+    state: asRecord(input.state),
     log: (Array.isArray(input.log) ? input.log : []).map((entry) => {
-      const item = record(entry);
+      const item = asRecord(entry);
       return { at: String(item.at ?? ""), message: String(item.message ?? ""), ...(item.kind ? { kind: String(item.kind) } : {}) };
     }).slice(-100),
     stateUpdatedAt: String(input.stateUpdatedAt || input.updatedAt || new Date().toISOString()),

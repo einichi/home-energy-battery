@@ -1,4 +1,4 @@
-type UnknownRecord = Record<string, unknown>;
+import { asRecord } from "./values.js";
 
 export interface NotificationTrigger {
   [key: string]: unknown;
@@ -81,12 +81,6 @@ export function smtpSecurityWarning(settings: { port?: unknown; security?: unkno
   return null;
 }
 
-function record(value: unknown): UnknownRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as UnknownRecord
-    : {};
-}
-
 function boolValue(value: unknown, fallback: boolean): boolean {
   if (value === undefined || value === null) return fallback;
   if (typeof value === "string") return !["false", "0", "off", "no"].includes(value.trim().toLowerCase());
@@ -104,8 +98,8 @@ function stringList(value: unknown): string[] {
 }
 
 function normalizeSmtpChannel(value: unknown = {}): NotificationChannel {
-  const channel = record(value);
-  const settings = record(channel.settings ?? channel);
+  const channel = asRecord(value);
+  const settings = asRecord(channel.settings ?? channel);
   const securityValue = String(settings.security ?? "");
   const security = VALID_SECURITY.has(securityValue) ? securityValue as SmtpSettings["security"] : "starttls";
   const fallbackPort = security === "tls" ? 465 : 587;
@@ -125,14 +119,14 @@ function normalizeSmtpChannel(value: unknown = {}): NotificationChannel {
 }
 
 export function normalizeNotificationConfig(value: unknown = {}): NormalizedNotificationConfig {
-  const source = record(value);
+  const source = asRecord(value);
   const sourceChannels = Array.isArray(source.channels) ? source.channels : [];
-  const smtpSource = sourceChannels.find((channel) => record(channel).type === "smtp")
+  const smtpSource = sourceChannels.find((channel) => asRecord(channel).type === "smtp")
     ?? source.smtp
     ?? DEFAULT_NOTIFICATION_CONFIG.channels[0];
   const triggers: Record<string, NotificationTrigger> = {};
   for (const [id, defaults] of Object.entries(DEFAULT_NOTIFICATION_TRIGGERS)) {
-    const input = record(record(source.triggers)[id]);
+    const input = asRecord(asRecord(source.triggers)[id]);
     triggers[id] = {
       enabled: boolValue(input.enabled, defaults.enabled),
       cooldownMinutes: Math.round(boundedNumber(input.cooldownMinutes, defaults.cooldownMinutes, 1, 10080)),

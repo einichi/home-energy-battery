@@ -3,18 +3,13 @@ import type { ApiDependencies } from "../api.js";
 import type { AppConfig, StatusSnapshot } from "../../../shared/api-contracts.js";
 import { invalidDiscoverySubnets } from "../../domain/discovery-subnets.js";
 import { isSupportedSmtpPort, smtpSecurityWarning } from "../../domain/notification-configuration.js";
-
-function record(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
+import { asRecord } from "../../domain/values.js";
 
 function explicitSmtpSettings(value: unknown): Record<string, unknown> | null {
-  const source = record(value);
+  const source = asRecord(value);
   const channels = Array.isArray(source.channels) ? source.channels : [];
-  const smtp = channels.map(record).find((channel) => channel.type === "smtp") ?? record(source.smtp);
-  const settings = record(smtp.settings ?? smtp);
+  const smtp = channels.map(asRecord).find((channel) => channel.type === "smtp") ?? asRecord(source.smtp);
+  const settings = asRecord(smtp.settings ?? smtp);
   return Object.keys(settings).length ? settings : null;
 }
 
@@ -155,7 +150,7 @@ export function createSystemRouteHandler(dependencies: SystemRouteDependencies) 
         const invalid = invalidDiscoverySubnets(body.discoverySubnets);
         if (invalid.length) throw requestError(400, `Discovery subnets must be RFC1918 /24 networks: ${invalid.join(", ")}`);
       }
-      const smtpSettings = explicitSmtpSettings(record(body.notifications));
+      const smtpSettings = explicitSmtpSettings(asRecord(body.notifications));
       if (smtpSettings && !isSupportedSmtpPort(smtpSettings.port)) {
         throw requestError(400, "SMTP port must be 25, 465, or 587");
       }

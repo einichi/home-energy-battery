@@ -11,13 +11,10 @@ import {
 } from "../domain/adaptive-control.js";
 import { batteryChargingWatts, batteryOperationMode } from "../domain/automation-rules.js";
 import { numericMetric } from "../domain/telemetry.js";
+import { errorMessage } from "../domain/values.js";
 
 type AdaptiveChargingState = ReturnType<typeof cleanAdaptiveChargingState>;
 type DeviceActionExecutor = (action: string, payload?: Record<string, unknown>) => Promise<unknown>;
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 export interface AdaptiveChargingOperationDependencies {
   execute: DeviceActionExecutor;

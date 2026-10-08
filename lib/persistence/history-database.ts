@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { errorMessage } from "../domain/values.js";
 
 export interface HistoryDatabaseInspection {
   state: "new" | "current" | "migratable" | "invalid" | "incompatible";
@@ -63,10 +64,6 @@ function errorCode(error: unknown): string | null {
   return error !== null && typeof error === "object" && "code" in error
     ? String(error.code)
     : null;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function parseJson(text: unknown): unknown {

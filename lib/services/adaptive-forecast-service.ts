@@ -11,6 +11,7 @@ import {
   type SolarForecastHour,
 } from "../domain/solar-forecast.js";
 import { localDayKey } from "../domain/time.js";
+import { errorMessage } from "../domain/values.js";
 
 interface ForecastOutcome {
   rawPredictedKwh: number;
@@ -52,10 +53,6 @@ interface RefreshOptions {
   fetchImpl?: typeof fetch;
   now?: Date;
   forceHistorical?: boolean;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export function createAdaptiveForecastService(dependencies: AdaptiveForecastDependencies) {

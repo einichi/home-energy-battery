@@ -1,3 +1,5 @@
+import { asRecord } from "./values.js";
+
 export type BatteryProfile = "osaifu" | "eco" | "backup";
 export const BATTERY_PROFILES: ReadonlySet<string> = new Set<BatteryProfile>(["osaifu", "eco", "backup"]);
 
@@ -26,27 +28,20 @@ export interface OperationalOverridesState {
   log: BackupPreparationLogEntry[];
 }
 
-type UnknownRecord = Record<string, unknown>;
 const BACKUP_PREPARATION_LOG_LIMIT = 50;
-
-function record(value: unknown): UnknownRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as UnknownRecord
-    : {};
-}
 
 function profile(value: unknown): BatteryProfile | null {
   return value === "osaifu" || value === "eco" || value === "backup" ? value : null;
 }
 
 export function cleanOperationalOverridesState(value: unknown = {}): OperationalOverridesState {
-  const input = record(value);
-  const backup = record(input.backupPreparation);
+  const input = asRecord(value);
+  const backup = asRecord(input.backupPreparation);
   const phase: BackupPreparationPhase = backup.phase === "starting" || backup.phase === "active" || backup.phase === "ending"
     ? backup.phase
     : backup.active === true ? "active" : "inactive";
   const log = (Array.isArray(input.log) ? input.log : [])
-    .map(record)
+    .map(asRecord)
     .filter((entry) => typeof entry.at === "string" && typeof entry.message === "string")
     .map((entry): BackupPreparationLogEntry => ({
       at: String(entry.at),
@@ -65,7 +60,7 @@ export function cleanOperationalOverridesState(value: unknown = {}): Operational
       startedAt: typeof backup.startedAt === "string" ? backup.startedAt : null,
       endedAt: typeof backup.endedAt === "string" ? backup.endedAt : null,
       updatedAt: typeof backup.updatedAt === "string" ? backup.updatedAt : null,
-      lastResult: Object.keys(record(backup.lastResult)).length ? record(backup.lastResult) : null,
+      lastResult: Object.keys(asRecord(backup.lastResult)).length ? asRecord(backup.lastResult) : null,
     },
     log,
   };
@@ -81,14 +76,14 @@ export function appendBackupPreparationLog(
 }
 
 export function backupPreparationBlocksActions(value: unknown): boolean {
-  return record(record(value).backupPreparation).active === true;
+  return asRecord(asRecord(value).backupPreparation).active === true;
 }
 
 export function backupPreparationAllowsActionSource(value: unknown, source: string): boolean {
   if (!backupPreparationBlocksActions(value)) return true;
   if (source === "backup-preparation") return true;
   return source === "charging-demand-guard"
-    && record(record(value).backupPreparation).allowDemandGuard !== false;
+    && asRecord(asRecord(value).backupPreparation).allowDemandGuard !== false;
 }
 
 export function backupPreparationView(value: unknown): OperationalOverridesState["backupPreparation"] & { log: BackupPreparationLogEntry[] } {

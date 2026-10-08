@@ -22,6 +22,7 @@ export type {
   NotificationTrigger,
   SmtpSettings,
 } from "./domain/notification-configuration.js";
+import { asRecord } from "./domain/values.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -85,12 +86,6 @@ export interface NotificationServiceDependencies {
   providers?: Record<string, NotificationProvider>;
   recordEvent?(event: UnknownRecord): Promise<unknown> | unknown;
   stateStore: NotificationStateStore;
-}
-
-function record(value: unknown): UnknownRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as UnknownRecord
-    : {};
 }
 
 const DELIVERY_LIMIT = 100;
@@ -174,10 +169,10 @@ export async function sendSmtpNotification(
 }
 
 function cleanNotificationState(value: unknown = {}): NotificationState {
-  const source = record(value);
+  const source = asRecord(value);
   return {
-    observations: record(source.observations) as NotificationState["observations"],
-    triggerAttempts: record(source.triggerAttempts) as NotificationState["triggerAttempts"],
+    observations: asRecord(source.observations) as NotificationState["observations"],
+    triggerAttempts: asRecord(source.triggerAttempts) as NotificationState["triggerAttempts"],
     sentOnceKeys: (Array.isArray(source.sentOnceKeys) ? source.sentOnceKeys : []).map(String).slice(-ONCE_KEY_LIMIT),
     deliveries: (Array.isArray(source.deliveries) ? source.deliveries : []).slice(-DELIVERY_LIMIT) as NotificationState["deliveries"],
   };
@@ -207,7 +202,7 @@ async function writeJsonAtomic(file: string, value: unknown, mode: number | null
 }
 
 function cleanEvent(event: unknown = {}): NotificationEvent {
-  const source = record(event);
+  const source = asRecord(event);
   const severity = String(source.severity ?? "");
   return {
     type: String(source.type || "notification"),
@@ -241,8 +236,8 @@ export function createNotificationService({
   ]);
 
   async function readSecrets(): Promise<NotificationSecrets> {
-    const value = record(await readJson(secretsFile, { channels: {} }));
-    return { channels: record(value.channels) as NotificationSecrets["channels"] };
+    const value = asRecord(await readJson(secretsFile, { channels: {} }));
+    return { channels: asRecord(value.channels) as NotificationSecrets["channels"] };
   }
 
   async function readState(): Promise<NotificationState> {
@@ -351,7 +346,7 @@ export function createNotificationService({
         return;
       }
       if (active && !observation.active && activeEvent
-        && config.triggers[String(record(activeEvent).type ?? "")]?.enabled === false) {
+        && config.triggers[String(asRecord(activeEvent).type ?? "")]?.enabled === false) {
         observation.activeCount = 0;
         state.observations[key] = observation;
         await writeState(state);

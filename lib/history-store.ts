@@ -29,6 +29,7 @@ import {
   type HistoryResolution,
 } from "./persistence/history-query-repository.js";
 import type { HistorySample } from "./contracts/history.js";
+import { timestampMs } from "./domain/values.js";
 
 export { historyDatabaseFile } from "./persistence/history-database.js";
 
@@ -84,11 +85,6 @@ function finite(value: unknown): number | null {
   if (value === null || value === undefined || value === "" || typeof value === "boolean") return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
-}
-
-function timestampMs(value: unknown): number | null {
-  const time = new Date(String(value ?? "")).getTime();
-  return Number.isFinite(time) ? time : null;
 }
 
 function localBucketStart(timeMs: number, resolution: HistoryResolution): number {

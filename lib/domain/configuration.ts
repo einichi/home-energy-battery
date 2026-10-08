@@ -14,14 +14,9 @@ import type {
 } from "../contracts/configuration.js";
 import { normalizeCircuitLabels } from "./circuits.js";
 import { isDocumentationHost } from "./status-alerts.js";
+import { asRecord } from "./values.js";
 
 type UnknownRecord = Record<string, unknown>;
-
-function record(value: unknown): UnknownRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as UnknownRecord
-    : {};
-}
 
 export const DEFAULT_DASHBOARD_WIDGETS: readonly DashboardWidget[] = [
   { id: "solarPower", group: "trends", visible: true, priority: 10 },
@@ -173,11 +168,11 @@ function normalizeRateModeRecord(input: UnknownRecord): RateMode {
 }
 
 export function normalizeRateMode(input: unknown = {}): RateMode {
-  return normalizeRateModeRecord(record(input));
+  return normalizeRateModeRecord(asRecord(input));
 }
 
 export function normalizeRateBands(input: unknown = {}): RateBand[] {
-  const sourceInput = record(input);
+  const sourceInput = asRecord(input);
   const hasRateMode = sourceInput.rateMode === "simple" || sourceInput.rateMode === "offPeak" || sourceInput.rateMode === "multi";
   const rateMode = hasRateMode ? sourceInput.rateMode as RateMode : normalizeRateModeRecord(sourceInput);
   const standardRate = configNumber(sourceInput.standardRateYenPerKwh, DEFAULT_CONFIG.standardRateYenPerKwh, 0, 1000);
@@ -189,7 +184,7 @@ export function normalizeRateBands(input: unknown = {}): RateBand[] {
   // tariffs, off-peak windows) is honoured.
   const isSimpleArtifact = (bands: unknown[]) => {
     if (bands.length !== 1) return false;
-    const band = record(bands[0]);
+    const band = asRecord(bands[0]);
     return String(band.start) === String(band.end);
   };
   const usableProvidedBands = providedBands && (rateMode === "simple" || !isSimpleArtifact(providedBands))
@@ -208,7 +203,7 @@ export function normalizeRateBands(input: unknown = {}): RateBand[] {
             ]
           : [{ start: "00:00", end: "07:00", yenPerKwh: offPeakRate, label: "Off-peak" }];
   const bands = source.map((value): RateBand => {
-    const band = record(value);
+    const band = asRecord(value);
     return {
       start: isValidTime(band.start) ? String(band.start) : "00:00",
       end: isValidTime(band.end) ? String(band.end) : "00:00",
@@ -220,7 +215,7 @@ export function normalizeRateBands(input: unknown = {}): RateBand[] {
 }
 
 function normalizeBatteryCapabilities(value: unknown): BatteryCapabilities {
-  const input = record(value);
+  const input = asRecord(value);
   return {
     usableCapacityKwh: optionalConfigNumber(input.usableCapacityKwh, 0.1, 1000),
     maximumChargeWatts: optionalSteppedConfigNumber(input.maximumChargeWatts, 50, 100000, 1),
@@ -229,7 +224,7 @@ function normalizeBatteryCapabilities(value: unknown): BatteryCapabilities {
 }
 
 function normalizeAdaptiveCharging(value: unknown): AdaptiveChargingConfig {
-  const input = record(value);
+  const input = asRecord(value);
   return {
     enabled: configBool(input.enabled, DEFAULT_CONFIG.adaptiveCharging.enabled),
     latitude: optionalConfigNumber(input.latitude, -90, 90),
@@ -244,8 +239,8 @@ function normalizeAdaptiveCharging(value: unknown): AdaptiveChargingConfig {
 }
 
 function normalizeFuelCellConfig(value: unknown): FuelCellConfig {
-  const input = record(value);
-  const tariff = record(input.tariff);
+  const input = asRecord(value);
+  const tariff = asRecord(input.tariff);
   const region = String(tariff.region ?? "tokyo").trim();
   const discount = String(tariff.equipmentDiscount ?? "").trim();
   return {
@@ -284,7 +279,7 @@ function normalizeFuelCellHosts(input: UnknownRecord): { primary: string; proxie
 export function normalizeDashboardWidgets(value: unknown = []): DashboardWidget[] {
   const inputById = new Map<string, UnknownRecord>();
   for (const candidate of Array.isArray(value) ? value : []) {
-    const widget = record(candidate);
+    const widget = asRecord(candidate);
     const id = String(widget.id ?? "");
     if (DEFAULT_DASHBOARD_WIDGETS.some((item) => item.id === id)) inputById.set(id, widget);
   }
@@ -302,10 +297,10 @@ function normalizeCircuitDashboardVisibility(value: unknown): Record<string, boo
   const output: Record<string, boolean> = {};
   const entries: Array<[unknown, unknown]> = Array.isArray(value)
     ? value.map((item) => {
-        const input = record(item);
+        const input = asRecord(item);
         return [input.channel, input.visible];
       })
-    : Object.entries(record(value));
+    : Object.entries(asRecord(value));
   for (const [channelValue, visibleValue] of entries) {
     const channel = Number(channelValue);
     if (Number.isInteger(channel) && channel >= 1 && channel <= 252) output[String(channel)] = configBool(visibleValue, true);
@@ -314,7 +309,7 @@ function normalizeCircuitDashboardVisibility(value: unknown): Record<string, boo
 }
 
 export function normalizeRetentionConfig(value: unknown, legacyDays?: unknown): RetentionConfig {
-  const input = record(value);
+  const input = asRecord(value);
   const normalized = normalizeRetentionPolicy(input, legacyDays);
   return {
     rawTelemetryDays: nullableRetentionDays(normalized.rawTelemetryDays, DEFAULT_RETENTION.rawTelemetryDays),
@@ -329,14 +324,14 @@ export function normalizeRetentionConfig(value: unknown, legacyDays?: unknown): 
 }
 
 function normalizeSettingCache(value: unknown): Record<string, SettingCacheEntry> {
-  const input = record(value);
+  const input = asRecord(value);
   const output: Record<string, SettingCacheEntry> = {};
   for (const key of ["discharge_limit", "osaifu_charge_window", "osaifu_discharge_window"]) {
-    const cached = record(input[key]);
+    const cached = asRecord(input[key]);
     if (cached.lastKnown) {
-      const lastKnown = record(cached.lastKnown);
+      const lastKnown = asRecord(cached.lastKnown);
       output[key] = {
-        lastKnown: { ...lastKnown, decoded: record(lastKnown.decoded) },
+        lastKnown: { ...lastKnown, decoded: asRecord(lastKnown.decoded) },
         lastReadAt: cached.lastReadAt ?? null,
       };
     }
@@ -345,13 +340,13 @@ function normalizeSettingCache(value: unknown): Record<string, SettingCacheEntry
 }
 
 export function cleanConfig(value: unknown = {}, options: { externalIoDisabled?: boolean } = {}): ApplicationConfig {
-  const input = record(value);
+  const input = asRecord(value);
   const rateMode = normalizeRateModeRecord(input);
   const rateBands = normalizeRateBands({ ...input, rateMode });
   const standardRate = configNumber(input.standardRateYenPerKwh, Math.max(...rateBands.map((band) => band.yenPerKwh)));
   const offPeakRate = configNumber(input.offPeakRateYenPerKwh, Math.min(...rateBands.map((band) => band.yenPerKwh)));
   const fuelCellHosts = normalizeFuelCellHosts(input);
-  const notifications = normalizeNotificationConfig(record(input.notifications)) as NotificationConfig;
+  const notifications = normalizeNotificationConfig(asRecord(input.notifications)) as NotificationConfig;
   return {
     batteryHost: String(input.batteryHost ?? DEFAULT_CONFIG.batteryHost).trim(),
     meterHost: String(input.meterHost ?? DEFAULT_CONFIG.meterHost).trim(),

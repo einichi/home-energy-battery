@@ -1,3 +1,5 @@
+import { asRecord } from "../domain/values.js";
+
 type UnknownRecord = Record<string, unknown>;
 
 export interface CommandEvent extends UnknownRecord {
@@ -12,13 +14,9 @@ export interface CommandEventRepository {
   eventsByKeyPrefix(prefix: string): unknown[];
 }
 
-function record(value: unknown): UnknownRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as UnknownRecord : {};
-}
-
 function event(value: unknown): CommandEvent {
-  const source = record(value);
-  return { ...source, type: String(source.type ?? "event"), at: String(source.at ?? ""), payload: record(source.payload) } as CommandEvent;
+  const source = asRecord(value);
+  return { ...source, type: String(source.type ?? "event"), at: String(source.at ?? ""), payload: asRecord(source.payload) } as CommandEvent;
 }
 
 function receiptFromEvents(commandId: string, events: CommandEvent[]) {
@@ -32,7 +30,7 @@ function receiptFromEvents(commandId: string, events: CommandEvent[]) {
     action: String(latest.payload.action ?? requested?.payload.action ?? "unknown"),
     source: String(latest.payload.source ?? requested?.payload.source ?? "unknown"),
     target: latest.payload.target ?? requested?.payload.target ?? null,
-    request: record(latest.payload.request ?? requested?.payload.request),
+    request: asRecord(latest.payload.request ?? requested?.payload.request),
     state: latest.type,
     requestedAt: requested?.at ?? null,
     completedAt: terminal?.at ?? null,

@@ -7,6 +7,7 @@ import { batteryChargingWatts } from "./automation-rules.js";
 import { finiteNumberOrNull } from "./numbers.js";
 import { median } from "./statistics.js";
 import { numericMetric } from "./telemetry.js";
+import { asRecord } from "./values.js";
 
 const ADAPTIVE_CHARGE_SESSION_LIMIT = 30;
 const ADAPTIVE_CHARGE_SAMPLE_LIMIT = 500;
@@ -240,10 +241,6 @@ interface AdaptiveStatus {
   meter?: { branch_demand_power?: { value?: unknown }; grid_import_power?: { value?: unknown } };
 }
 
-function record(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
@@ -252,7 +249,7 @@ function stringOrNull(value: unknown): string | null {
 export function cleanAdaptiveChargingState(): AdaptiveChargingState;
 export function cleanAdaptiveChargingState<T extends Record<string, unknown>>(input: T): AdaptiveChargingState & T;
 export function cleanAdaptiveChargingState(input: unknown = {}): AdaptiveChargingState {
-  const value = record(input);
+  const value = asRecord(input);
   const rawPlan = value.plan && typeof value.plan === "object" ? value.plan as AdaptivePlan : null;
   const plan = rawPlan?.available === false
     && rawPlan.reason === "discounted windows cannot safely reach their planned SOC targets"
@@ -263,11 +260,11 @@ export function cleanAdaptiveChargingState(input: unknown = {}): AdaptiveChargin
       requiredGridChargeKwh: Number(rawPlan.requiredGridChargeKwh),
     }) }
     : rawPlan;
-  const activeChargeSession = record(value.activeChargeSession);
-  const interruptedCharge = record(value.interruptedCharge);
-  const breakerRecovery = record(value.breakerRecovery);
-  const activeWindowExecution = record(value.activeWindowExecution);
-  const exportConfirmation = record(value.exportConfirmation);
+  const activeChargeSession = asRecord(value.activeChargeSession);
+  const interruptedCharge = asRecord(value.interruptedCharge);
+  const breakerRecovery = asRecord(value.breakerRecovery);
+  const activeWindowExecution = asRecord(value.activeWindowExecution);
+  const exportConfirmation = asRecord(value.exportConfirmation);
   return {
     revision: Math.max(0, Math.floor(Number(value.revision) || 0)),
     forecast: value.forecast && typeof value.forecast === "object" ? value.forecast as SolarForecast : null,
@@ -356,7 +353,7 @@ export function cleanAdaptiveChargingState(input: unknown = {}): AdaptiveChargin
       }
       : null,
     windowSummaries: (Array.isArray(value.windowSummaries) ? value.windowSummaries : [])
-      .map(record)
+      .map(asRecord)
       .filter((summary) => summary.key && summary.windowStart && summary.windowEnd)
       .map((summary) => ({
         key: String(summary.key),
@@ -402,7 +399,7 @@ export function cleanAdaptiveChargingState(input: unknown = {}): AdaptiveChargin
       : null,
     historicalWeatherFetchedAt: stringOrNull(value.historicalWeatherFetchedAt),
     lastAwayStateKey: stringOrNull(value.lastAwayStateKey),
-    log: (Array.isArray(value.log) ? value.log : []).map(record)
+    log: (Array.isArray(value.log) ? value.log : []).map(asRecord)
       .filter((entry) => typeof entry.at === "string" && typeof entry.message === "string")
       .map((entry) => ({ at: String(entry.at), kind: String(entry.kind ?? "info"), message: String(entry.message) }))
       .slice(-200),
@@ -412,9 +409,9 @@ export function cleanAdaptiveChargingState(input: unknown = {}): AdaptiveChargin
 
 
 export function cleanAdaptiveChargingPerformance(input: unknown = {}): AdaptiveChargingPerformance {
-  const value = record(input);
+  const value = asRecord(input);
   const samples = (Array.isArray(value.samples) ? value.samples : [])
-    .map(record)
+    .map(asRecord)
     .map((sample) => ({
       at: stringOrNull(sample.at),
       batteryChargingW: Number(sample.batteryChargingW),
@@ -431,7 +428,7 @@ export function cleanAdaptiveChargingPerformance(input: unknown = {}): AdaptiveC
       && sample.batteryChargingW > 0)
     .slice(-ADAPTIVE_CHARGE_SAMPLE_LIMIT);
   const sessions = (Array.isArray(value.sessions) ? value.sessions : [])
-    .map(record)
+    .map(asRecord)
     .map((session) => ({
       startedAt: stringOrNull(session.startedAt),
       endedAt: stringOrNull(session.endedAt),

@@ -1,24 +1,16 @@
+import { asRecord, errorMessage } from "../domain/values.js";
+
 type UnknownRecord = Record<string, unknown>;
 type ReadStatus = () => Promise<unknown>;
 type Wait = (milliseconds: number) => Promise<unknown>;
 
-function record(value: unknown): UnknownRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as UnknownRecord
-    : {};
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export function commandRequestPayload(value: unknown = {}): UnknownRecord {
-  const payload = record(value);
+  const payload = asRecord(value);
   return Object.fromEntries(Object.entries(payload).filter(([key]) => key !== "host"));
 }
 
 export function commandResultSummary(value: unknown = {}): UnknownRecord {
-  const result = record(value);
+  const result = asRecord(value);
   return {
     ok: result.ok ?? null,
     esv: result.esv ?? null,
@@ -47,7 +39,7 @@ export function assertDeviceCommandResult(
   if (result.error) failures.push(String(result.error));
   if (result.ok === false) failures.push(result.esv ? `rejected with ${String(result.esv)}` : "was rejected");
   for (const value of Array.isArray(result.results) ? result.results : []) {
-    const write = record(value);
+    const write = asRecord(value);
     if (write.ok === false) failures.push(`${String(write.epc ?? "write")} rejected with ${String(write.esv ?? "unknown ESV")}`);
   }
   if (failures.length) throw new Error(`${description} failed: ${failures.join("; ")}`);
@@ -81,9 +73,9 @@ const OPERATION_MODE_ALIASES: Record<string, string> = {
 };
 
 export function batteryOperationModeFromReadback(value: unknown): string | null {
-  const status = record(value);
-  const battery = record(status.battery);
-  const operationMode = record(battery.operation_mode);
+  const status = asRecord(value);
+  const battery = asRecord(status.battery);
+  const operationMode = asRecord(battery.operation_mode);
   const decoded = operationMode.value ?? operationMode.human ?? null;
   if (decoded !== null) return String(decoded);
   const rawMatch = String(status.raw ?? "").match(/^0x([0-9a-f]{2})$/i);
@@ -101,7 +93,7 @@ export async function verifyBatteryOperationMode(
     wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   }: { attempts?: number; delayMs?: number; readStatus: ReadStatus; wait?: Wait },
 ): Promise<UnknownRecord & { verified: true; readBack: { operationMode: string; attempts: number } }> {
-  const result = record(value);
+  const result = asRecord(value);
   const requestedMode = String(expectedMode).toLowerCase().replaceAll("-", "_");
   const normalizedExpected = OPERATION_MODE_ALIASES[requestedMode] ?? requestedMode;
   let actualMode: string | null = null;
@@ -149,7 +141,7 @@ export async function verifyBatterySetting(
     wait?: Wait;
   },
 ): Promise<UnknownRecord & { verified: true; readBack: { value: unknown; attempts: number } }> {
-  const result = record(value);
+  const result = asRecord(value);
   let observed: unknown = null;
   let lastReadError: unknown = null;
   const maximumAttempts = Math.max(1, Math.floor(Number(attempts) || 1));

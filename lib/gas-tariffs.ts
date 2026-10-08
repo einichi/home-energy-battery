@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { asRecord } from "./domain/values.js";
 
 const TOKYO_GAS_PLAN_URL = "https://home.tokyo-gas.co.jp/gas_power/plan/gas/enefarm.html";
 const TOKYO_GAS_TARIFF_API = "https://tw-api.tokyo-gas.co.jp/bff/web/gasryokin/v1/get-ryokinhyo-data";
@@ -13,9 +14,6 @@ export const TOKYO_GAS_REGIONS = Object.freeze({
 
 type JsonRecord = Record<string, unknown>;
 
-function record(value: unknown): JsonRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
-}
 export type GasTariffBand = {
   minM3: number;
   maxM3: number | null;
@@ -56,10 +54,10 @@ export function validBillingMonth(value: unknown): value is string {
 }
 
 export function normalizeGasTariffPayload(input: unknown = {}): GasTariff {
-  const value = record(input);
+  const value = asRecord(input);
   const bands = (Array.isArray(value.bands) ? value.bands : [])
     .map((value) => {
-      const band = record(value);
+      const band = asRecord(value);
       return ({
       minM3: Math.max(0, finite(band.minM3, 0)),
       maxM3: band.maxM3 === null || band.maxM3 === "" || band.maxM3 === undefined ? null : Math.max(0, finite(band.maxM3, 0)),
@@ -73,7 +71,7 @@ export function normalizeGasTariffPayload(input: unknown = {}): GasTariff {
   if (!bands.length) throw new Error("At least one gas tariff usage band is required");
   const discounts = (Array.isArray(value.discounts) ? value.discounts : [])
     .map((value) => {
-      const discount = record(value);
+      const discount = asRecord(value);
       return ({
       id: String(discount.id ?? discount.label ?? "discount").trim().slice(0, 80),
       label: String(discount.label ?? discount.id ?? "Discount").trim().slice(0, 100),
@@ -162,20 +160,20 @@ function tokyoGasDiscounts(season: "winter" | "other"): GasTariffDiscount[] {
 export function parseTokyoGasTariffApiPayload(value: unknown, { billingMonth, plan = "enefarm" }: ImportOptions = {}): GasTariff {
   if (!validBillingMonth(billingMonth)) throw new Error("billingMonth must be YYYY-MM");
   if (plan !== "enefarm") throw new Error(`Tokyo Gas tariff plan is not supported: ${plan}`);
-  const source = record(value);
+  const source = asRecord(value);
   const document: JsonRecord = typeof source.ryokinhyoFileContent === "string"
     ? JSON.parse(source.ryokinhyoFileContent) as JsonRecord
     : source;
   const season = tokyoGasSeasonForBillingMonth(billingMonth);
-  const kateiyo = record(document.kateiyo);
-  const enefarm = record(kateiyo.enefarm);
-  const period = record(season === "winter" ? enefarm.touki : enefarm.sonotaki);
+  const kateiyo = asRecord(document.kateiyo);
+  const enefarm = asRecord(kateiyo.enefarm);
+  const period = asRecord(season === "winter" ? enefarm.touki : enefarm.sonotaki);
   const bands = (Array.isArray(period.hyo) ? period.hyo : []).map((value) => {
-    const row = record(value);
-    const usage = record(row.shiyoryo);
-    const baseCharge = record(row.kihonryokin);
-    const unitRate = record(record(row.taniryokin).genryohityoseigo);
-    const table = record(row.ryokinhyo);
+    const row = asRecord(value);
+    const usage = asRecord(row.shiyoryo);
+    const baseCharge = asRecord(row.kihonryokin);
+    const unitRate = asRecord(asRecord(row.taniryokin).genryohityoseigo);
+    const table = asRecord(row.ryokinhyo);
     const upper = finite(usage.base_val_jogen, 0);
     return {
       minM3: Math.max(0, Math.floor(finite(usage.base_val_kagen, 0))),

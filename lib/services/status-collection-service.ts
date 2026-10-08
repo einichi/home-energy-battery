@@ -2,30 +2,25 @@ import type { ApplicationConfig } from "../contracts/configuration.js";
 import { isDocumentationHost, deviceStatusFailures, fuelCellHotWaterEmptyNotificationActive } from "../domain/status-alerts.js";
 import { numericMetric, primaryFuelCell } from "../domain/telemetry.js";
 import type { DeviceCommandArguments } from "./device-command-queue.js";
+import { asRecord } from "../domain/values.js";
 
 type DeviceCommandOptions = { priority?: number; queueTimeoutMs?: number };
 
 type UnknownRecord = Record<string, unknown>;
 type ProbeProgress = (result: { label: string; durationMs: number }) => void;
 
-function record(value: unknown): UnknownRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as UnknownRecord
-    : {};
-}
-
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 function hasMetricValue(value: unknown): boolean {
-  const item = record(value);
+  const item = asRecord(value);
   return item.value !== null && item.value !== undefined;
 }
 
 function hasDecodedChannels(value: unknown): boolean {
-  const item = record(value);
-  return Array.isArray(record(item.decoded).channels);
+  const item = asRecord(value);
+  return Array.isArray(asRecord(item.decoded).channels);
 }
 
 export type HomeLoadSource = "derived" | "branch_fallback" | "unavailable" | "inconsistent";
@@ -35,7 +30,7 @@ export type HomeLoadSource = "derived" | "branch_fallback" | "unavailable" | "in
 const HOME_LOAD_NEGATIVE_LIMIT_W = 200;
 
 function metricNumber(value: unknown): number | null {
-  const item = record(value);
+  const item = asRecord(value);
   if (!hasMetricValue(item)) return null;
   const number = Number(item.value);
   return Number.isFinite(number) ? number : null;
@@ -100,7 +95,7 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
 
   async function safeCommand(command: string, args: DeviceCommandArguments = {}, positional: unknown[] = [], options: DeviceCommandOptions = {}): Promise<UnknownRecord> {
     try {
-      return record(await dependencies.runDeviceCommand(command, args, positional, options));
+      return asRecord(await dependencies.runDeviceCommand(command, args, positional, options));
     } catch (error: unknown) {
       return { error: message(error) };
     }
@@ -113,7 +108,7 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
     try {
       return {
         configured: true,
-        ...record(await dependencies.runDeviceCommand("meter-status", { host: config.meterHost, eoj: config.meterEoj })),
+        ...asRecord(await dependencies.runDeviceCommand("meter-status", { host: config.meterHost, eoj: config.meterEoj })),
       };
     } catch (error: unknown) {
       return { configured: true, host: config.meterHost, eoj: config.meterEoj, error: message(error) };
@@ -191,14 +186,14 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
     const livePower = await probe("live power", () => batteryConfigured
       ? safeCommand("live-power", livePowerArgs, [], { priority: 5 })
       : Promise.resolve({ error: "battery host is not configured" }));
-    const liveEnergy = record(livePower.energy);
-    const liveBattery = record(liveEnergy.battery);
-    const liveSolar = record(liveEnergy.solar);
-    const liveMeter = record(livePower.meter);
-    const detailBattery = record(energy.battery);
-    const detailSolar = record(energy.solar);
-    const detailFuelCells = Array.isArray(energy.fuel_cells) ? energy.fuel_cells.map(record) : [];
-    const liveFuelCells = Array.isArray(liveEnergy.fuel_cells) ? liveEnergy.fuel_cells.map(record) : [];
+    const liveEnergy = asRecord(livePower.energy);
+    const liveBattery = asRecord(liveEnergy.battery);
+    const liveSolar = asRecord(liveEnergy.solar);
+    const liveMeter = asRecord(livePower.meter);
+    const detailBattery = asRecord(energy.battery);
+    const detailSolar = asRecord(energy.solar);
+    const detailFuelCells = Array.isArray(energy.fuel_cells) ? energy.fuel_cells.map(asRecord) : [];
+    const liveFuelCells = Array.isArray(liveEnergy.fuel_cells) ? liveEnergy.fuel_cells.map(asRecord) : [];
     const livePrimaryFuelCell = liveFuelCells.find((cell) => cell.source_role === "primary") ?? liveFuelCells[0];
     const mergedFuelCells = livePrimaryFuelCell
       ? detailFuelCells.some((cell) => cell.source_role === "primary")
@@ -227,12 +222,12 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
     };
     const readAt = typeof livePower.completed_at === "string" ? livePower.completed_at : new Date().toISOString();
     if (config.smartCosmoEnabled !== false) {
-      const primaryFuelCellReading = mergedFuelCells.find((cell) => record(cell).source_role === "primary") ?? mergedFuelCells[0];
+      const primaryFuelCellReading = mergedFuelCells.find((cell) => asRecord(cell).source_role === "primary") ?? mergedFuelCells[0];
       const homeLoad = deriveHomeLoad({
         gridNet: metricNumber(mergedMeter.grid_net_power),
-        battery: metricNumber(record(mergedEnergy.battery).instant_power),
-        solar: { enabled: config.solarEnabled !== false, value: metricNumber(record(mergedEnergy.solar).instant_power) },
-        fuelCell: { enabled: config.fuelCellEnabled !== false, value: primaryFuelCellReading ? metricNumber(record(primaryFuelCellReading).instant_power) : null },
+        battery: metricNumber(asRecord(mergedEnergy.battery).instant_power),
+        solar: { enabled: config.solarEnabled !== false, value: metricNumber(asRecord(mergedEnergy.solar).instant_power) },
+        fuelCell: { enabled: config.fuelCellEnabled !== false, value: primaryFuelCellReading ? metricNumber(asRecord(primaryFuelCellReading).instant_power) : null },
         branchDemand: metricNumber(mergedMeter.branch_demand_power),
       });
       mergedMeter.home_load_power = {
@@ -282,7 +277,7 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
     status.sample = await dependencies.recordStatusSample(status, config);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const history = record(await dependencies.readHistoryRange(today.toISOString(), readAt, config));
+    const history = asRecord(await dependencies.readHistoryRange(today.toISOString(), readAt, config));
     status.savings = history.summary;
     status.savingsPeriods = dependencies.readCalendarSavings(readAt, config, history.summary);
     return status;
@@ -315,7 +310,7 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
   }
 
   function observeDevice(statusValue: unknown, config: ApplicationConfig): void {
-    const status = record(statusValue);
+    const status = asRecord(statusValue);
     const failures = deviceStatusFailures(status as Parameters<typeof deviceStatusFailures>[0], config);
     void dependencies.observeNotification({
       key: "device-health",
@@ -328,11 +323,11 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
   }
 
   function observeBattery(statusValue: unknown, config: ApplicationConfig): void {
-    const status = record(statusValue);
+    const status = asRecord(statusValue);
     const lowBattery = config.notifications.triggers.lowBattery;
-    const energy = record(status.energy);
-    const battery = record(energy.battery);
-    const stateOfCharge = numericMetric(record(battery.remaining_percent));
+    const energy = asRecord(status.energy);
+    const battery = asRecord(energy.battery);
+    const stateOfCharge = numericMetric(asRecord(battery.remaining_percent));
     const thresholdPercent = Number(lowBattery?.thresholdPercent ?? 20);
     if (!config.notifications.enabled) {
       void dependencies.observeNotification({ key: "low-battery-soc", active: false });
@@ -350,12 +345,12 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
   }
 
   function observeFuelCell(statusValue: unknown, config: ApplicationConfig): void {
-    const status = record(statusValue);
+    const status = asRecord(statusValue);
     if (!config.fuelCellEnabled || !config.fuelCellPrimaryHost) {
       void dependencies.observeNotification({ key: "fuel-cell-hot-water-empty", active: false });
       return;
     }
-    const energy = record(status.energy);
+    const energy = asRecord(status.energy);
     const cells = Array.isArray(energy.fuel_cells) ? energy.fuel_cells : Array.isArray(energy.fuelCells) ? energy.fuelCells : [];
     const primary = primaryFuelCell(cells as Parameters<typeof primaryFuelCell>[0]);
     const active = fuelCellHotWaterEmptyNotificationActive(primary);

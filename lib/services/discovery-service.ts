@@ -21,6 +21,7 @@ import {
   subnetFromHost,
   type DiscoveredDeviceMap,
 } from "./discovery-protocol.js";
+import { asRecord } from "../domain/values.js";
 
 export interface DiscoveryServiceDependencies {
   readConfig: () => Promise<ApplicationConfig>;
@@ -56,12 +57,6 @@ interface DiscoveryJob extends Required<Omit<DiscoveryProgress, "network">> {
   error: string | null;
   createdAt: string;
   updatedAt: string;
-}
-
-function record(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
 }
 
 export function createDiscoveryService(dependencies: DiscoveryServiceDependencies) {
@@ -208,9 +203,9 @@ export function createDiscoveryService(dependencies: DiscoveryServiceDependencie
         const eoj = probe.eoj;
         let detected = false;
         try {
-          const result = record(await dependencies.runDeviceCommand("inspect-host", { host, eoj, timeout: 2 }));
+          const result = asRecord(await dependencies.runDeviceCommand("inspect-host", { host, eoj, timeout: 2 }));
           // inspect-host keys its output with eojHex(): lowercase "0x" + upper-case hex.
-          const entry = record(result[`0x${eoj.replace(/^0x/i, "").toUpperCase()}`]);
+          const entry = asRecord(result[`0x${eoj.replace(/^0x/i, "").toUpperCase()}`]);
           detected = Object.keys(entry).length > 0 && !entry.error;
         } catch {
           // Silent hosts are normal during subnet discovery.
@@ -218,7 +213,7 @@ export function createDiscoveryService(dependencies: DiscoveryServiceDependencie
         for (const epc of probe.epcs) {
           if (detected) break;
           try {
-            const result = record(await dependencies.runDeviceCommand("raw-get", { host, eoj, timeout: 2 }, [epc]));
+            const result = asRecord(await dependencies.runDeviceCommand("raw-get", { host, eoj, timeout: 2 }, [epc]));
             detected = typeof result.raw === "string" && result.raw.startsWith("0x");
           } catch {
             // Not every device exposes every role. Keep trying the remaining hints.

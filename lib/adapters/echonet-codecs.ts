@@ -48,10 +48,6 @@ const EPC: Record<string, number> = {
 
 const ESV_SET_RES = "Set_Res";
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 // ECHONET Lite writes are byte buffers. These tables translate friendly command
 // words into the one-byte EDT payloads observed for storage batteries.
 const MODE_TO_EDT: Record<string, number> = {
@@ -477,7 +473,6 @@ export {
   decodedOrRawData,
   eojHex,
   eojName,
-  errorMessage,
   mapToHex,
   metric,
   numberList,

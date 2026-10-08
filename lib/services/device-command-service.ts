@@ -10,6 +10,7 @@ import {
   verifyBatteryOperationMode,
   verifyBatterySetting,
 } from "./command-verification.js";
+import { asRecord, errorMessage } from "../domain/values.js";
 
 type UnknownRecord = Record<string, unknown>;
 type ActionSource = string;
@@ -25,14 +26,6 @@ export const DEVICE_ACTION_NAMES = [
 ] as const satisfies readonly BatteryAction[];
 
 export const DEVICE_ACTIONS: ReadonlySet<string> = new Set(DEVICE_ACTION_NAMES);
-
-function record(value: unknown): UnknownRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as UnknownRecord : {};
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function numberInRange(value: unknown, label: string, min: number, max: number, step = 1): number {
   const number = Number(value);
@@ -125,7 +118,7 @@ export function createDeviceCommandService(dependencies: DeviceCommandServiceDep
   }
 
   function parseTargetWhFromRaw(readback: unknown): number | null {
-    const raw = record(readback).raw;
+    const raw = asRecord(readback).raw;
     if (typeof raw !== "string" || !/^0x[0-9a-f]+$/i.test(raw)) return null;
     const value = Number.parseInt(raw.slice(2), 16);
     return Number.isFinite(value) ? value : null;
@@ -157,8 +150,8 @@ export function createDeviceCommandService(dependencies: DeviceCommandServiceDep
   }
 
   async function verifyAction(action: string, payload: UnknownRecord, result: unknown, host: string) {
-    const acknowledged = record(result);
-    const decoded = record(acknowledged.decoded);
+    const acknowledged = asRecord(result);
+    const decoded = asRecord(acknowledged.decoded);
     switch (action) {
       case "set-mode": return verifyMode(result, host, payload.mode);
       case "charge":
@@ -171,19 +164,19 @@ export function createDeviceCommandService(dependencies: DeviceCommandServiceDep
         const target = await verifyChargeTarget(result, host, expectedWh, action === "charge" ? "0xAA" : "0xAB");
         return target.unreadable
           ? verifiedMode
-          : { ...verifiedMode, readBack: { ...record(verifiedMode.readBack), targetWh: target.targetWh } };
+          : { ...verifiedMode, readBack: { ...asRecord(verifiedMode.readBack), targetWh: target.targetWh } };
       }
       case "vendor-profile": return verifySetting(result, host, "vendor-profile", String(payload.mode), (readback) => {
-        const value = record(readback);
-        return record(value.decoded).mode ?? value.mode ?? null;
+        const value = asRecord(readback);
+        return asRecord(value.decoded).mode ?? value.mode ?? null;
       });
-      case "discharge-limit": return verifySetting(result, host, "discharge-limit", Number(acknowledged.percent ?? payload.percent), (readback) => Number(record(record(readback).decoded).percent));
+      case "discharge-limit": return verifySetting(result, host, "discharge-limit", Number(acknowledged.percent ?? payload.percent), (readback) => Number(asRecord(asRecord(readback).decoded).percent));
       case "osaifu-charge-window": return verifySetting(result, host, "osaifu-charge-window", [Number(decoded.start_hour ?? payload.startHour), Number(decoded.end_hour ?? payload.endHour)], (readback) => {
-        const readDecoded = record(record(readback).decoded);
+        const readDecoded = asRecord(asRecord(readback).decoded);
         return [Number(readDecoded.start_hour), Number(readDecoded.end_hour)];
       });
       case "osaifu-discharge-window": return verifySetting(result, host, "osaifu-discharge-window", [Number(decoded.start_hour ?? payload.startHour), Number(decoded.end_hour ?? payload.endHour)], (readback) => {
-        const readDecoded = record(record(readback).decoded);
+        const readDecoded = asRecord(asRecord(readback).decoded);
         return [Number(readDecoded.start_hour), Number(readDecoded.end_hour)];
       });
       default: throw new Error(`No readback verifier is defined for ${action}`);
@@ -195,7 +188,7 @@ export function createDeviceCommandService(dependencies: DeviceCommandServiceDep
     commandId?: string;
     requestedRecorded?: boolean;
   } = {}) {
-    const payload = record(payloadValue);
+    const payload = asRecord(payloadValue);
     const source = options.source ?? "manual";
     const commandId = options.commandId ?? randomUUID();
     const startedAtMs = Date.now();
@@ -224,7 +217,7 @@ export function createDeviceCommandService(dependencies: DeviceCommandServiceDep
 
   async function start(action: string, payloadValue: unknown = {}, { source = "manual" }: { source?: ActionSource } = {}) {
     if (!DEVICE_ACTIONS.has(action)) throw dependencies.createHttpError(404, `unknown action: ${action}`);
-    const payload = record(payloadValue);
+    const payload = asRecord(payloadValue);
     const commandId = randomUUID();
     const host = hostFrom(payload, await dependencies.readConfig());
     recordLifecycle(commandId, "requested", { action, source, target: { kind: "battery", host }, request: commandRequestPayload(payload), message: `${source} requested ${action}` });

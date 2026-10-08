@@ -30,7 +30,6 @@ import {
   decodedOrRawData,
   eojHex,
   eojName,
-  errorMessage,
   mapToHex,
   metric,
   numberList,
@@ -44,6 +43,7 @@ import {
   sumInstantPowerChannels,
   uint32,
 } from "./echonet-codecs.js";
+import { errorMessage } from "../domain/values.js";
 
 interface CommandOptions extends Record<string, unknown> {
   _: unknown[];

@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { HistorySample } from "../contracts/history.js";
 import type { SolarForecastHour } from "../domain/solar-forecast.js";
+import { recordOrNull, timestampMs } from "../domain/values.js";
 
 export type HistoryResolution = "interval" | "daily";
 
@@ -59,11 +60,6 @@ function finite(value: unknown): number | null {
   return Number.isFinite(number) ? number : null;
 }
 
-function timestampMs(value: unknown): number | null {
-  const time = new Date(String(value ?? "")).getTime();
-  return Number.isFinite(time) ? time : null;
-}
-
 function parseJson(text: unknown): unknown {
   if (typeof text !== "string") return null;
   try {
@@ -73,22 +69,16 @@ function parseJson(text: unknown): unknown {
   }
 }
 
-function objectValue(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
 function historySample(value: unknown): HistorySample | null {
-  return objectValue(value);
+  return recordOrNull(value);
 }
 
 function rollupState(value: unknown): QueryRollupState {
-  const record = objectValue(value) ?? {};
-  const powersRecord = objectValue(record.powers) ?? {};
+  const record = recordOrNull(value) ?? {};
+  const powersRecord = recordOrNull(record.powers) ?? {};
   const powers: QueryRollupState["powers"] = {};
   for (const [key, rawMetric] of Object.entries(powersRecord)) {
-    const metric = objectValue(rawMetric);
+    const metric = recordOrNull(rawMetric);
     if (!metric) continue;
     powers[key] = {
       weight: finite(metric.weight),
@@ -315,7 +305,7 @@ export function createHistoryQueryRepository({
     const rows = database().prepare("SELECT payload_json FROM weather ORDER BY time_ms").all() as PayloadRow[];
     const result: SolarForecastHour[] = [];
     for (const row of rows) {
-      const record = objectValue(parseJson(row.payload_json));
+      const record = recordOrNull(parseJson(row.payload_json));
       if (!record || !Number.isFinite(Number(record.tiltedIrradianceWm2))) continue;
       // Match insertWeather's canonical-time precedence (non-empty `time`, then
       // non-empty `timestamp`) and normalise it to `timestamp` for consumers.
