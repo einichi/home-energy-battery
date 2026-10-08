@@ -2,9 +2,10 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { HistorySample } from "../contracts/history.js";
 import type { SolarForecastHour } from "../domain/solar-forecast.js";
+import type { HistoryResolution } from "../contracts/history.js";
 import { recordOrNull, timestampMs } from "../domain/values.js";
 
-export type HistoryResolution = "interval" | "daily";
+export type { HistoryResolution } from "../contracts/history.js";
 
 export interface ChargeSession {
   startedAt?: string;

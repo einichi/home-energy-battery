@@ -1,3 +1,5 @@
+export type HistoryResolution = "interval" | "daily";
+
 export interface HistorySample {
   [key: string]: unknown;
   timestamp?: string;
