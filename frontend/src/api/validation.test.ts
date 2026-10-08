@@ -11,7 +11,10 @@ describe("API runtime validation", () => {
   });
 
   it("rejects malformed report and status collections", () => {
-    expect(() => validateApiPayload("/api/reports/energy", { buckets: {}, totals: {} })).toThrow(/buckets must be an array/);
+    expect(() => validateApiPayload("/api/reports/energy", {
+      start: "2026-09-01T00:00:00.000Z", end: "2026-09-02T00:00:00.000Z", bucket: "day",
+      buckets: {}, totals: { key: "total", label: "Total", start: "2026-09-01T00:00:00.000Z", end: "2026-09-02T00:00:00.000Z" },
+    })).toThrow(/invalid payload at buckets/);
     expect(() => validateApiPayload("/api/status", { read_at: "2026-09-19T00:00:00Z", alerts: {} })).toThrow(/invalid payload at alerts/);
     expect(() => validateApiPayload("/api/status", { read_at: "2026-09-19T00:00:00Z", alerts: [{ id: "one", severity: "warning", title: "t", startedAt: "now", impact: "i", suggestedAction: "a", resolution: "active", source: 7 }] })).toThrow(/invalid payload at alerts.0.source/);
   });
@@ -21,6 +24,16 @@ describe("API runtime validation", () => {
     expect(() => validateApiPayload("/api/status", { alerts: [] })).not.toThrow();
     expect(() => validateApiPayload("/api/history", { samples: [], summary: {} })).not.toThrow();
     expect(() => validateApiPayload("/api/config", { updateIntervalSeconds: "15", language: "en", solarEnabled: true, smartCosmoEnabled: true, fuelCellEnabled: false })).toThrow(/updateIntervalSeconds/);
+  });
+
+  it("validates the remaining report and collection response shapes", () => {
+    expect(() => validateApiPayload("/api/history/summary", { sampleCount: 2, energySources: {} })).not.toThrow();
+    expect(() => validateApiPayload("/api/reports/ene-farm", { start: "s", end: "e", bucket: "day", buckets: [], totals: {} })).not.toThrow();
+    expect(() => validateApiPayload("/api/ene-farm", { sampleCount: 2, stateIntervals: [] })).not.toThrow();
+    expect(() => validateApiPayload("/api/command-receipts", { receipts: [] })).not.toThrow();
+    expect(() => validateApiPayload("/api/command-receipts", { receipts: {} })).toThrow(/invalid payload at receipts/);
+    expect(() => validateApiPayload("/api/schedules", [], "GET")).not.toThrow();
+    expect(() => validateApiPayload("/api/automation-rules", {}, "GET")).toThrow(/invalid payload/);
   });
 
   it("accepts object responses from collection mutations", () => {

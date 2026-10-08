@@ -211,6 +211,8 @@ const energyReport = {
   totals: {
     key: "total",
     label: "Selected period",
+    start: "2026-08-13T00:00:00.000Z",
+    end: "2026-09-13T00:00:00.000Z",
     branchDemandKwh: 84,
     solarGenerationKwh: 42,
     gridImportKwh: 39,

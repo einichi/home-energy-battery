@@ -13,7 +13,7 @@ export const MetricSchema = v.object({
   acquired_at: optionalNullableString,
 });
 
-const EnergySourcesSchema = v.object({
+export const EnergySourcesSchema = v.object({
   peakGridKwh: optionalNullableNumber,
   peakGridPercent: optionalNullableNumber,
   offPeakGridKwh: optionalNullableNumber,
@@ -25,7 +25,7 @@ const EnergySourcesSchema = v.object({
   totalKwh: optionalNullableNumber,
 });
 
-const BatteryStatusSchema = v.object({
+export const BatteryStatusSchema = v.object({
   configured: v.optional(v.boolean()),
   instant_power: v.optional(MetricSchema),
   remaining_percent: v.optional(MetricSchema),
@@ -35,7 +35,7 @@ const BatteryStatusSchema = v.object({
   error: optionalNullableString,
 });
 
-const FuelCellStatusSchema = v.object({
+export const FuelCellStatusSchema = v.object({
   instant_power: v.optional(MetricSchema),
   generation_status: v.optional(v.object({ value: v.optional(nullableString), human: optionalNullableString, error: optionalNullableString, acquired_at: optionalNullableString })),
   hot_water_level: v.optional(MetricSchema),
@@ -43,7 +43,7 @@ const FuelCellStatusSchema = v.object({
   error: optionalNullableString,
 });
 
-const SavingsSummarySchema = v.object({
+export const SavingsSummarySchema = v.object({
   start: optionalNullableString,
   end: optionalNullableString,
   solarSavingYen: optionalNullableNumber,
@@ -58,7 +58,7 @@ const SavingsSummarySchema = v.object({
   energySources: v.optional(EnergySourcesSchema),
 });
 
-const SystemAlertSchema = v.object({
+export const SystemAlertSchema = v.object({
   id: v.string(),
   source: optionalNullableString,
   severity: v.union([v.literal("info"), v.literal("warning"), v.literal("critical")]),
@@ -70,13 +70,13 @@ const SystemAlertSchema = v.object({
   resolution: v.literal("active"),
 });
 
-const BatteryWindowSchema = v.object({
+export const BatteryWindowSchema = v.object({
   start_hour: optionalNullableNumber,
   end_hour: optionalNullableNumber,
   human: optionalNullableString,
 });
 
-const BatteryStrategySchema = v.object({
+export const BatteryStrategySchema = v.object({
   kind: v.union([
     v.literal("backup-preparation"), v.literal("demand-guard"), v.literal("adaptive-charging"),
     v.literal("away"), v.literal("manual"), v.literal("schedule"), v.literal("device-auto"),
@@ -94,7 +94,7 @@ const BatteryStrategySchema = v.object({
   }))),
 });
 
-const RuntimeInformationSchema = v.object({
+export const RuntimeInformationSchema = v.object({
   uiDevelopment: v.boolean(),
   simulatedDevices: v.boolean(),
   externalIoDisabled: v.boolean(),
@@ -203,7 +203,7 @@ export const StatusSnapshotSchema = v.object({
 
 const DataQualitySchema = v.object({ quality: optionalNullableString, coverageSeconds: optionalNullableNumber, coveragePercent: optionalNullableNumber });
 const CircuitSummarySchema = v.object({ channel: v.number(), id: v.optional(v.string()), label: v.optional(v.string()), totalKwh: optionalNullableNumber, latestWatts: optionalNullableNumber });
-const HistorySummarySchema = v.object({
+export const HistorySummarySchema = v.object({
   sampleCount: v.optional(v.number()), start: optionalNullableString, end: optionalNullableString,
   solarGenerationKwh: optionalNullableNumber, fuelCellKwh: optionalNullableNumber, branchDemandKwh: optionalNullableNumber,
   gridImportKwh: optionalNullableNumber, gridExportKwh: optionalNullableNumber, batteryChargedKwh: optionalNullableNumber,
@@ -214,7 +214,7 @@ const HistorySummarySchema = v.object({
   dataQuality: v.optional(v.record(v.string(), DataQualitySchema)), energySources: v.optional(EnergySourcesSchema), solarCoveragePercent: optionalNullableNumber,
 });
 
-const EnergySampleSchema = v.object({
+export const EnergySampleSchema = v.object({
   timestamp: v.string(), batteryPowerW: optionalNullableNumber, stateOfChargePercent: optionalNullableNumber,
   solarPowerW: optionalNullableNumber, branchDemandW: optionalNullableNumber, fuelCellPowerW: optionalNullableNumber,
   fuelCellHotWaterLevel: optionalNullableNumber, gridImportW: optionalNullableNumber, gridExportW: optionalNullableNumber,
@@ -224,6 +224,93 @@ const EnergySampleSchema = v.object({
 
 export const HistoryResponseSchema = v.object({ samples: v.array(EnergySampleSchema), summary: HistorySummarySchema });
 
+export const EneFarmIntervalSchema = v.object({
+  start: v.string(), end: v.string(), state: optionalNullableString, durationSeconds: optionalNullableNumber,
+  generatedKwh: optionalNullableNumber, gasM3: optionalNullableNumber, quality: optionalNullableString,
+});
+
+export const EneFarmSummarySchema = v.object({
+  configured: v.optional(v.boolean()), sampleCount: v.optional(v.number()), start: optionalNullableString, end: optionalNullableString,
+  generatedKwh: optionalNullableNumber, gasM3: optionalNullableNumber, electricalYieldKwhPerM3: optionalNullableNumber,
+  operatingSeconds: optionalNullableNumber, startCount: optionalNullableNumber, averageGeneratingW: optionalNullableNumber,
+  currentState: optionalNullableString, stateSince: optionalNullableString, timeInStateSeconds: optionalNullableNumber,
+  lastStopAt: optionalNullableString, dataQuality: optionalNullableString,
+  stateIntervals: v.optional(v.array(EneFarmIntervalSchema)), estimateNotice: optionalNullableString,
+});
+
+export const EnergyReportBucketSchema = v.object({
+  ...HistorySummarySchema.entries,
+  key: v.string(), label: v.string(), start: v.string(), end: v.string(),
+  previousBranchDemandKwh: optionalNullableNumber, branchDemandDeltaKwh: optionalNullableNumber,
+  branchDemandDeltaPercent: optionalNullableNumber, peakDemandW: optionalNullableNumber, sampleCount: v.optional(v.number()),
+});
+
+export const EnergyReportTotalsSchema = v.object({
+  ...HistorySummarySchema.entries,
+  peakDemandW: optionalNullableNumber,
+});
+
+export const EnergyReportSchema = v.object({
+  start: v.string(), end: v.string(), bucket: v.union([v.literal("day"), v.literal("week"), v.literal("month")]),
+  buckets: v.array(EnergyReportBucketSchema), totals: EnergyReportTotalsSchema,
+  features: v.optional(v.object({ solarEnabled: v.optional(v.boolean()), smartCosmoEnabled: v.optional(v.boolean()), fuelCellEnabled: v.optional(v.boolean()) })),
+  meta: v.optional(v.object({ recordsRead: v.optional(v.number()), recordsIncluded: v.optional(v.number()), invalidRecords: v.optional(v.number()), resolution: v.optional(v.string()) })),
+});
+
+export const EneFarmReportBucketSchema = v.object({
+  ...EneFarmSummarySchema.entries,
+  key: v.string(), label: v.string(), onSiteKwh: optionalNullableNumber, generationCoveragePercent: optionalNullableNumber,
+  estimatedGasCost: v.optional(v.nullable(v.object({
+    marginalCostYen: optionalNullableNumber,
+    standingChargeInclusive: v.optional(v.object({ available: v.optional(v.boolean()), totalYen: optionalNullableNumber, allocatedYenPerM3: optionalNullableNumber, reason: optionalNullableString })),
+  }))),
+  carbon: v.optional(v.object({
+    estimated: v.optional(v.boolean()), directGasCo2Kg: optionalNullableNumber, avoidedGridCo2Kg: optionalNullableNumber,
+    electricityOnlyBalanceKg: optionalNullableNumber, methodology: v.optional(v.string()),
+  })),
+});
+
+export const EneFarmReportTotalsSchema = v.object({
+  ...EneFarmSummarySchema.entries,
+  estimatedGasCost: v.optional(v.nullable(v.object({
+    marginalCostYen: optionalNullableNumber,
+    standingChargeInclusive: v.optional(v.object({ available: v.optional(v.boolean()), totalYen: optionalNullableNumber, allocatedYenPerM3: optionalNullableNumber, reason: optionalNullableString })),
+  }))),
+  carbon: v.optional(v.object({
+    estimated: v.optional(v.boolean()), directGasCo2Kg: optionalNullableNumber, avoidedGridCo2Kg: optionalNullableNumber,
+    electricityOnlyBalanceKg: optionalNullableNumber, methodology: v.optional(v.string()),
+  })),
+});
+
+export const EneFarmReportSchema = v.object({
+  start: v.string(), end: v.string(), bucket: v.union([v.literal("day"), v.literal("week"), v.literal("month")]),
+  buckets: v.array(EneFarmReportBucketSchema), totals: EneFarmReportTotalsSchema, estimateNotice: v.optional(v.string()),
+});
+
+export const CommandReceiptsResponseSchema = v.object({ receipts: v.array(v.unknown()) });
+export const SchedulesResponseSchema = v.array(v.unknown());
+export const AutomationRulesResponseSchema = v.array(v.unknown());
+
 export type AppConfig = v.InferOutput<typeof AppConfigSchema>;
 export type StatusSnapshot = v.InferOutput<typeof StatusSnapshotSchema>;
 export type HistoryResponse = v.InferOutput<typeof HistoryResponseSchema>;
+export type BatteryStatus = v.InferOutput<typeof BatteryStatusSchema>;
+export type FuelCellStatus = v.InferOutput<typeof FuelCellStatusSchema>;
+export type SavingsSummary = v.InferOutput<typeof SavingsSummarySchema>;
+export type EnergySources = v.InferOutput<typeof EnergySourcesSchema>;
+export type SystemAlert = v.InferOutput<typeof SystemAlertSchema>;
+export type BatteryWindow = v.InferOutput<typeof BatteryWindowSchema>;
+export type BatteryStrategy = v.InferOutput<typeof BatteryStrategySchema>;
+export type RuntimeInformation = v.InferOutput<typeof RuntimeInformationSchema>;
+export type EneFarmInterval = v.InferOutput<typeof EneFarmIntervalSchema>;
+export type EneFarmSummary = v.InferOutput<typeof EneFarmSummarySchema>;
+export type EnergySample = v.InferOutput<typeof EnergySampleSchema>;
+export type DataQuality = v.InferOutput<typeof DataQualitySchema>;
+export type CircuitSummary = v.InferOutput<typeof CircuitSummarySchema>;
+export type HistorySummary = v.InferOutput<typeof HistorySummarySchema>;
+export type EnergyReportBucket = v.InferOutput<typeof EnergyReportBucketSchema>;
+export type EnergyReportTotals = v.InferOutput<typeof EnergyReportTotalsSchema>;
+export type EnergyReport = v.InferOutput<typeof EnergyReportSchema>;
+export type EneFarmReportBucket = v.InferOutput<typeof EneFarmReportBucketSchema>;
+export type EneFarmReportTotals = v.InferOutput<typeof EneFarmReportTotalsSchema>;
+export type EneFarmReport = v.InferOutput<typeof EneFarmReportSchema>;
