@@ -1,4 +1,10 @@
-import { enrichHistorySample, interpretHistorySample } from "../../lib/history-store.js";
+import {
+  addRollupSample,
+  emptyRollupState,
+  enrichHistorySample,
+  interpretHistorySample,
+  rollupPayload,
+} from "../../lib/history-store.js";
 
 type HistoryCase = { name: string; run: () => unknown };
 
@@ -94,5 +100,43 @@ export const historyCharacterizationCases: HistoryCase[] = [
       operationMode: "standby",
       fuelCellStatus: "generating",
     })),
+  },
+  {
+    name: "rollup: weighted power, peak demand, energy, SOC, and fuel-cell state",
+    run: () => {
+      const state = emptyRollupState(Date.parse("2026-01-01T00:00:00.000Z"), "interval");
+      addRollupSample(state, sample("2026-01-01T00:10:00.000Z", {
+        branchDemandW: 1000,
+        batteryPowerW: 300,
+        stateOfChargePercent: 50,
+        gridImportKwh: 0.1,
+        circuitPowerW: { "1": 100 },
+        circuitEnergyKwh: { "1": 0.05 },
+        circuitCumulativeKwh: { "1": 10 },
+        fuelCellGenerationState: "generating",
+        fuelCellOperatingSeconds: 600,
+        fuelCellDataQuality: "counter",
+        rateYenPerKwh: 20,
+        rateLabel: "Off-peak",
+      }));
+      addRollupSample(state, sample("2026-01-01T00:20:00.000Z", {
+        branchDemandW: 1200,
+        batteryPowerW: 400,
+        intervalAveragePowerW: { branchDemandW: 1100, batteryPowerW: 350 },
+        powerCoverageSeconds: { branchDemandW: 600, batteryPowerW: 600, "circuit:1": 600 },
+        peakBranchDemandW: 1500,
+        stateOfChargePercent: 60,
+        gridImportKwh: 0.2,
+        circuitPowerW: { "1": 120 },
+        circuitEnergyKwh: { "1": 0.06 },
+        circuitCumulativeKwh: { "1": 10.06 },
+        fuelCellGenerationState: "stopped",
+        fuelCellOperatingSeconds: 300,
+        fuelCellDataQuality: "counter",
+        rateYenPerKwh: 25,
+        rateLabel: "Standard",
+      }), "generating");
+      return rollupPayload(state);
+    },
   },
 ];

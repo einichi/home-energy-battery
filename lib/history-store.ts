@@ -440,7 +440,7 @@ export function interpretHistorySample(rawSample: HistorySample, previousRawSamp
   return enrichHistorySample(interpreted, previousRawSample, { metricBaselines });
 }
 
-interface AverageMetric {
+export interface AverageMetric {
   sum: number;
   count: number;
   weightedSum: number;
@@ -449,7 +449,7 @@ interface AverageMetric {
   max: number | null;
 }
 
-interface RollupState {
+export interface RollupState {
   resolution: HistoryResolution;
   startMs: number;
   endMs: number;
@@ -478,7 +478,7 @@ interface RollupState {
   rateLabel: string | null;
 }
 
-function emptyRollupState(startMs: number, resolution: HistoryResolution): RollupState {
+export function emptyRollupState(startMs: number, resolution: HistoryResolution): RollupState {
   return {
     resolution,
     startMs,
@@ -515,7 +515,7 @@ function addAverageMetric(target: Record<string, AverageMetric>, key: string, va
   target[key] = metric;
 }
 
-function addRollupSample(state: RollupState, sample: HistorySample, previousFuelCellState: string | null = null): RollupState {
+export function addRollupSample(state: RollupState, sample: HistorySample, previousFuelCellState: string | null = null): RollupState {
   state.fuelCell ??= { operatingSeconds: 0, startCount: 0, states: {}, qualities: {}, lastState: null, lastHotWaterLevel: null, sourceHosts: {} };
   state.fuelCell.lastHotWaterLevel ??= null;
   state.energyQualities ??= {};
@@ -608,7 +608,7 @@ function addRollupSample(state: RollupState, sample: HistorySample, previousFuel
   return state;
 }
 
-function rollupPayload(state: RollupState): HistorySample {
+export function rollupPayload(state: RollupState): HistorySample {
   const payload: HistorySample = {
     timestamp: state.lastTimestamp ?? new Date(Math.max(state.startMs, state.endMs - 1)).toISOString(),
     rollupResolution: state.resolution,

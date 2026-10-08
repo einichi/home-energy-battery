@@ -215,5 +215,56 @@
     "fuelCellOperatingSeconds": 0,
     "fuelCellStartCount": 0,
     "calculationVersion": 4
+  },
+  "rollup: weighted power, peak demand, energy, SOC, and fuel-cell state": {
+    "timestamp": "2026-01-01T00:20:00.000Z",
+    "rollupResolution": "interval",
+    "rollupStart": "2026-01-01T00:00:00.000Z",
+    "rollupEnd": "2026-01-01T00:30:00.000Z",
+    "rollupSampleCount": 2,
+    "coverageSeconds": {},
+    "energyQuality": {},
+    "offPeakSavingYen": 0,
+    "solarSavingYen": 0,
+    "guardTriggerCount": 0,
+    "fuelCellOperatingSeconds": 900,
+    "fuelCellStartCount": 0,
+    "fuelCellStateDurations": {
+      "generating": 300
+    },
+    "fuelCellGenerationState": "stopped",
+    "fuelCellHotWaterLevel": null,
+    "fuelCellDataQualities": {
+      "counter": 2
+    },
+    "fuelCellSourceHosts": {},
+    "batteryPowerW": 350,
+    "branchDemandW": 1100,
+    "powerCoverageSeconds": {
+      "batteryPowerW": 600,
+      "branchDemandW": 600
+    },
+    "intervalAveragePowerW": {
+      "batteryPowerW": 350,
+      "branchDemandW": 1100
+    },
+    "peakBranchDemandW": 1500,
+    "stateOfChargePercent": 55,
+    "startStateOfChargePercent": 50,
+    "endStateOfChargePercent": 60,
+    "minimumStateOfChargePercent": 50,
+    "maximumStateOfChargePercent": 60,
+    "gridImportKwh": 0.30000000000000004,
+    "circuitPowerW": {
+      "1": 120
+    },
+    "circuitEnergyKwh": {
+      "1": 0.11
+    },
+    "circuitCumulativeKwh": {
+      "1": 10.06
+    },
+    "rateYenPerKwh": 25,
+    "rateLabel": "Standard"
   }
 }
