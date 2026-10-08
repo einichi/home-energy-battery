@@ -10,6 +10,7 @@ import type { createAdaptiveHistoryService } from "./adaptive-history-service.js
 import type { createAdaptiveForecastService } from "./adaptive-forecast-service.js";
 import { refreshAdaptivePlan } from "./adaptive-plan-refresh.js";
 import type { PlanSnapshotRecorderInput } from "./adaptive-plan-refresh.js";
+import { ADAPTIVE_CHARGING_SOLAR_WINDOW_DISCHARGE_BUDGET_PERCENT, evaluateAdaptiveSolarHeadroom } from "./adaptive-solar-headroom.js";
 import {
   adaptiveChargingBaseAvailability,
   adaptiveChargingBreakerSettings,
@@ -28,13 +29,11 @@ import {
 } from "../domain/adaptive-state.js";
 import {
   activeAdaptiveChargingSlotStopReason,
-  adaptiveChargingExportEvidence,
   adaptiveChargingLiveChargeHeadroom,
   adaptiveChargingLiveImportSafety,
   adaptiveChargingPlanRefreshDecision,
   adaptiveChargingSlotAt,
   adaptiveChargingConfiguredActive,
-  adaptiveChargingWindowSolarOpportunity,
   advanceAdaptiveChargingBreakerRecovery,
   beginAdaptiveChargingBreakerRecovery,
   capAdaptiveChargingSlotToRemainingTime,
@@ -44,8 +43,6 @@ import {
   logAdaptiveChargingInitialHeadroomWait,
   preserveInterruptedAdaptiveCharge,
   queueAdaptiveChargingPlanRefresh,
-  updateAdaptiveChargingExportConfirmation,
-  updateAdaptiveChargingSolarHeadroomHold,
   updateActiveAdaptiveChargingObjective,
 } from "../domain/adaptive-control.js";
 import { backupPreparationBlocksActions } from "../domain/operational-overrides.js";
@@ -56,8 +53,6 @@ import { batteryOperationMode } from "../domain/automation-rules.js";
 type AdaptiveOperations = ReturnType<typeof createAdaptiveChargingOperations>;
 type AdaptiveHistory = ReturnType<typeof createAdaptiveHistoryService>;
 type AdaptiveForecast = ReturnType<typeof createAdaptiveForecastService>;
-
-const ADAPTIVE_CHARGING_SOLAR_WINDOW_DISCHARGE_BUDGET_PERCENT = 2;
 
 export interface AdaptiveChargingEvaluatorDependencies {
   readState(): Promise<AdaptiveChargingState>;
@@ -379,72 +374,24 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
       syncAdaptiveChargingWindowExecution(state, activeDiscountedWindow, state.plan, soc, now, refreshDecision.refresh);
     }
     else finalizeExpiredAdaptiveChargingWindow(state, soc, now);
-    const solarOpportunity = adaptiveChargingWindowSolarOpportunity(state.plan, activeDiscountedWindow);
-    const solarWindowPeakSoc = state.activeWindowExecution?.peakSocPercent
-      ?? state.activeWindowExecution?.startSocPercent;
-    const solarWindowSocDrop = Number.isFinite(solarWindowPeakSoc) && Number.isFinite(soc)
-      ? Number(solarWindowPeakSoc) - Number(soc)
-      : 0;
-    const solarWindowDischargeBudgetExceeded = solarOpportunity.available
-      && solarWindowSocDrop >= ADAPTIVE_CHARGING_SOLAR_WINDOW_DISCHARGE_BUDGET_PERCENT;
-    const solarResponsiveWindow = solarOpportunity.available && !solarWindowDischargeBudgetExceeded;
-    const activeWindowTargetSoc = activeDiscountedWindow
-      ? state.plan.windows?.find((window) => window.start === activeDiscountedWindow.start
-        && window.end === activeDiscountedWindow.end)?.targetSocPercent
-      : null;
-    const activeWindowTargetReached = Number.isFinite(activeWindowTargetSoc)
-      && Number.isFinite(soc)
-      && Number(soc) >= Number(activeWindowTargetSoc);
-    const exportEvidence = adaptiveChargingExportEvidence(status);
-    const exportConfirmation = updateAdaptiveChargingExportConfirmation(state, exportEvidence, now);
-    const liveExportNeedsHeadroom = exportConfirmation.confirmed;
-    const solarHeadroomHold = updateAdaptiveChargingSolarHeadroomHold(state, exportEvidence.aboveThreshold, now);
-    if (exportConfirmation.pending && exportConfirmation.count === 1) {
-      appendAdaptiveChargingLog(
-        state,
-        `Grid export (${Math.round(Number(exportEvidence.gridExportW))} W) is awaiting confirmation (${exportConfirmation.count}/${exportConfirmation.requiredChecks})`,
-        "observe",
-        now,
-      );
-    }
-    if (exportConfirmation.rejected) {
-      const lastRejectedLogMs = new Date(state.exportConfirmation.lastRejectedLogAt ?? "").getTime();
-      if (!Number.isFinite(lastRejectedLogMs) || now.getTime() - lastRejectedLogMs >= ADAPTIVE_CHARGING_BREAKER_WAIT_LOG_MS) {
-        appendAdaptiveChargingLog(
-          state,
-          `Rejected incoherent grid export (${Math.round(Number(exportEvidence.gridExportW))} W); calculated grid flow is ${Math.round(Number(exportEvidence.expectedGridW))} W (positive is import) with ${Math.round(Number(exportEvidence.residualW))} W residual`,
-          "observe",
-          now,
-        );
-        state.exportConfirmation.lastRejectedLogAt = now.toISOString();
-      }
-    }
-    if (liveExportNeedsHeadroom && exportConfirmation.count === exportConfirmation.requiredChecks) {
-      appendAdaptiveChargingLog(
-        state,
-        `Grid export (${Math.round(Number(exportEvidence.gridExportW))} W) confirmed after ${exportConfirmation.count} checks; preserving solar headroom`,
-        "stop",
-        now,
-      );
-    }
-    if (solarHeadroomHold.released) {
-      appendAdaptiveChargingLog(
-        state,
-        "Grid export remained clear for two checks; releasing solar headroom hold and allowing planned charging to resume",
-        "resume",
-        now,
-      );
-    }
-    if (liveExportNeedsHeadroom && state.standbyHoldUntil && !activeDiscountedWindow) {
-      await executeAdaptiveChargingAction("set-mode", { mode: "auto" });
-      appendAdaptiveChargingLog(
-        state,
-        "Live grid export indicates solar needs battery headroom; releasing Standby hold and restoring operation mode to Auto",
-        "stop",
-        now,
-      );
-      state.standbyHoldUntil = null;
-    }
+    const solarHeadroom = await evaluateAdaptiveSolarHeadroom(
+      state,
+      status,
+      activeDiscountedWindow,
+      soc,
+      now,
+      ADAPTIVE_CHARGING_BREAKER_WAIT_LOG_MS,
+      executeAdaptiveChargingAction,
+    );
+    const {
+      solarOpportunity,
+      solarWindowSocDrop,
+      solarWindowDischargeBudgetExceeded,
+      solarResponsiveWindow,
+      activeWindowTargetReached,
+      liveExportNeedsHeadroom,
+      solarHeadroomHold,
+    } = solarHeadroom;
     const liveImportSafety = adaptiveChargingLiveImportSafety(status, rules);
     if (state.breakerRecovery && state.owner !== "adaptiveCharging" && !guardActive) {
       const recoveryHeadroom = adaptiveChargingLiveChargeHeadroom(status, config, state, rules);
