@@ -49,10 +49,13 @@ const layerViolations: string[] = [];
 for (const file of sourceFiles(path.join(projectRoot, "lib"))) {
   const relative = path.relative(projectRoot, file);
   for (const imported of importsIn(file)) {
+    const adaptiveControlDomainImport = relative.startsWith("lib/domain/adaptive-control/")
+      && ((imported.startsWith("../") && !imported.startsWith("../../")) || imported.startsWith("../../contracts/"));
     if (relative.startsWith("lib/domain/")
       && imported.startsWith("../")
       && !imported.startsWith("../contracts/")
-      && imported !== "../counter-utils.js") {
+      && imported !== "../counter-utils.js"
+      && !adaptiveControlDomainImport) {
       layerViolations.push(`${relative} -> ${imported}`);
     }
     if (/^lib\/(persistence|adapters)\//.test(relative) && /^\.\.\/(services|http)\//.test(imported)) {
