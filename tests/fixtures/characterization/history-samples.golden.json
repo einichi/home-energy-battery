@@ -1,0 +1,219 @@
+{
+  "enrich: power integrates over the interval": {
+    "timestamp": "2026-01-01T00:30:00.000Z",
+    "branchDemandW": 1000,
+    "batteryPowerW": -500,
+    "calculationVersion": 4,
+    "branchDemandKwh": 0.5,
+    "batteryChargeKwh": 0,
+    "batteryDischargeKwh": 0.25,
+    "coverageSeconds": {
+      "branchDemandKwh": 1800,
+      "batteryChargeKwh": 1800,
+      "batteryDischargeKwh": 1800
+    },
+    "energyQuality": {
+      "branchDemandKwh": "integrated",
+      "batteryChargeKwh": "integrated",
+      "batteryDischargeKwh": "integrated"
+    },
+    "powerCoverageSeconds": {
+      "branchDemandW": 1800,
+      "batteryPowerW": 1800
+    },
+    "intervalAveragePowerW": {
+      "branchDemandW": 1000,
+      "batteryPowerW": -500
+    },
+    "energyIntervalStart": {
+      "branchDemandKwh": "2026-01-01T00:00:00.000Z",
+      "batteryChargeKwh": "2026-01-01T00:00:00.000Z",
+      "batteryDischargeKwh": "2026-01-01T00:00:00.000Z"
+    }
+  },
+  "enrich: exact counter energy with coverage": {
+    "timestamp": "2026-01-01T00:30:00.000Z",
+    "gridImportW": 2000,
+    "gridImportKwh": 0.7,
+    "coverageSeconds": {
+      "gridImportKwh": 1800
+    },
+    "energyQuality": {
+      "gridImportKwh": "counter"
+    },
+    "calculationVersion": 4,
+    "powerCoverageSeconds": {
+      "gridImportW": 1800
+    },
+    "intervalAveragePowerW": {
+      "gridImportW": 1500
+    },
+    "energyIntervalStart": {
+      "gridImportKwh": "2026-01-01T00:00:00.000Z"
+    }
+  },
+  "enrich: no previous sample": {
+    "timestamp": "2026-01-01T00:30:00.000Z",
+    "branchDemandW": 1200,
+    "calculationVersion": 4
+  },
+  "enrich: off-peak saving against standard rate": {
+    "timestamp": "2026-01-01T00:30:00.000Z",
+    "batteryChargeKwh": 1,
+    "gridImportKwh": 1,
+    "rateYenPerKwh": 20,
+    "standardRateYenPerKwh": 30,
+    "maximumRateYenPerKwh": 40,
+    "calculationVersion": 4,
+    "coverageSeconds": {
+      "gridImportKwh": 0,
+      "batteryChargeKwh": 0
+    },
+    "energyQuality": {
+      "gridImportKwh": "counter",
+      "batteryChargeKwh": "counter"
+    },
+    "offPeakSavingYen": 10
+  },
+  "enrich: off-peak saving falls back to maximum rate": {
+    "timestamp": "2026-01-01T00:30:00.000Z",
+    "batteryChargeKwh": 1,
+    "gridImportKwh": 1,
+    "rateYenPerKwh": 20,
+    "maximumRateYenPerKwh": 40,
+    "calculationVersion": 4,
+    "coverageSeconds": {
+      "gridImportKwh": 0,
+      "batteryChargeKwh": 0
+    },
+    "energyQuality": {
+      "gridImportKwh": "counter",
+      "batteryChargeKwh": "counter"
+    },
+    "offPeakSavingYen": 20
+  },
+  "enrich: battery charge keeps its sign in rollups": {
+    "timestamp": "2026-01-01T00:30:00.000Z",
+    "batteryPowerW": 1700,
+    "batteryChargeKwh": 0.85,
+    "batteryDischargeKwh": 0,
+    "calculationVersion": 4,
+    "coverageSeconds": {
+      "batteryChargeKwh": 0,
+      "batteryDischargeKwh": 0
+    },
+    "energyQuality": {
+      "batteryChargeKwh": "counter",
+      "batteryDischargeKwh": "counter"
+    },
+    "powerCoverageSeconds": {
+      "batteryPowerW": 1800
+    },
+    "intervalAveragePowerW": {
+      "batteryPowerW": 1700
+    },
+    "energyIntervalStart": {
+      "batteryChargeKwh": "2026-01-01T00:00:00.000Z",
+      "batteryDischargeKwh": "2026-01-01T00:00:00.000Z"
+    }
+  },
+  "enrich: string, NaN, boolean, and null values are coerced": {
+    "timestamp": "2026-01-01T00:30:00.000Z",
+    "branchDemandW": "1200",
+    "gridImportW": null,
+    "solarGenerationW": true,
+    "batteryPowerW": null,
+    "calculationVersion": 4,
+    "branchDemandKwh": 0.525,
+    "coverageSeconds": {
+      "branchDemandKwh": 1800
+    },
+    "energyQuality": {
+      "branchDemandKwh": "integrated"
+    },
+    "powerCoverageSeconds": {
+      "branchDemandW": 1800
+    },
+    "intervalAveragePowerW": {
+      "branchDemandW": 1050
+    },
+    "energyIntervalStart": {
+      "branchDemandKwh": "2026-01-01T00:00:00.000Z"
+    }
+  },
+  "enrich: metric baselines are applied": {
+    "timestamp": "2026-01-01T00:30:00.000Z",
+    "gridImportKwh": 5,
+    "calculationVersion": 4,
+    "coverageSeconds": {
+      "gridImportKwh": 0
+    },
+    "energyQuality": {
+      "gridImportKwh": "counter"
+    },
+    "energyIntervalStart": {
+      "gridImportKwh": "2026-01-01T00:00:00.000Z"
+    }
+  },
+  "interpret: raw counters with previous sample": {
+    "timestamp": "2026-01-01T00:30:00.000Z",
+    "coverageSeconds": {},
+    "energyQuality": {},
+    "energyIntervalStart": {},
+    "fuelCellCounterIssues": [],
+    "meterCounterIssues": [],
+    "circuitCounterIssues": [],
+    "fuelCellDataQuality": null,
+    "fuelCellGasDataQuality": null,
+    "fuelCellOperatingSeconds": 0,
+    "fuelCellStartCount": 0,
+    "calculationVersion": 4
+  },
+  "interpret: counter reset is not treated as negative energy": {
+    "timestamp": "2026-01-01T00:30:00.000Z",
+    "coverageSeconds": {},
+    "energyQuality": {},
+    "energyIntervalStart": {},
+    "fuelCellCounterIssues": [],
+    "meterCounterIssues": [],
+    "circuitCounterIssues": [],
+    "fuelCellDataQuality": null,
+    "fuelCellGasDataQuality": null,
+    "fuelCellOperatingSeconds": 0,
+    "fuelCellStartCount": 0,
+    "calculationVersion": 4
+  },
+  "interpret: power only, no previous sample": {
+    "timestamp": "2026-01-01T00:30:00.000Z",
+    "gridImportW": 1500,
+    "batteryPowerW": 800,
+    "coverageSeconds": {},
+    "energyQuality": {},
+    "energyIntervalStart": {},
+    "fuelCellCounterIssues": [],
+    "meterCounterIssues": [],
+    "circuitCounterIssues": [],
+    "fuelCellDataQuality": null,
+    "fuelCellGasDataQuality": null,
+    "fuelCellOperatingSeconds": 0,
+    "fuelCellStartCount": 0,
+    "calculationVersion": 4
+  },
+  "interpret: state values pass through": {
+    "timestamp": "2026-01-01T00:30:00.000Z",
+    "stateOfChargePercent": 55,
+    "operationMode": "standby",
+    "fuelCellStatus": "generating",
+    "coverageSeconds": {},
+    "energyQuality": {},
+    "energyIntervalStart": {},
+    "fuelCellCounterIssues": [],
+    "meterCounterIssues": [],
+    "circuitCounterIssues": [],
+    "fuelCellDataQuality": null,
+    "fuelCellGasDataQuality": null,
+    "fuelCellOperatingSeconds": 0,
+    "fuelCellStartCount": 0,
+    "calculationVersion": 4
+  }
+}
