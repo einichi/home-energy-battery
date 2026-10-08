@@ -1,9 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AwayPeriod } from "../../contracts/away-period.js";
-import type { ApiDependencies } from "../api.js";
+import type { ApiRouteServices } from "../api.js";
 import type { AwayPeriodsView } from "../../../shared/api-contracts.js";
 
-type OperationsRouteDependencies = Pick<ApiDependencies,
+export type OperationsRouteDependencies = Pick<ApiRouteServices,
   | "adaptiveChargingAvailability" | "adaptiveChargingPlanLogMessage" | "adaptiveChargingScheduledEvent"
   | "adaptiveChargingSolarForecastAccuracy" | "adaptiveChargingView" | "appendAdaptiveChargingLog"
   | "applyInterruptedChargeCap" | "assertActionAllowedByOperationalOverride" | "awayPeriodsView"

@@ -1,9 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { BatterySchedule } from "../../contracts/schedules.js";
 import type { AutomationRule } from "../../domain/automation-rules.js";
-import type { ApiDependencies } from "../api.js";
+import type { ApiRouteServices } from "../api.js";
 
-type AutomationRouteDependencies = Pick<ApiDependencies,
+export type AutomationRouteDependencies = Pick<ApiRouteServices,
   | "ALL_DAYS" | "adaptiveChargingConfiguredActive" | "cleanAutomationRule" | "http"
   | "backtestService"
   | "mergeAutomationRule" | "mutateSchedules" | "parseRunAt" | "randomUUID"

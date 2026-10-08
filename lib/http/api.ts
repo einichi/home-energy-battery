@@ -11,6 +11,10 @@ import { createHistoryRouteHandler } from "./routes/history-routes.js";
 import { createOperationsRouteHandler } from "./routes/operations-routes.js";
 import { createAutomationRouteHandler } from "./routes/automation-routes.js";
 import type { BatteryStrategy, RuntimeInformation } from "../../shared/api-contracts.js";
+import type { SystemRouteDependencies } from "./routes/system-routes.js";
+import type { HistoryRouteDependencies } from "./routes/history-routes.js";
+import type { OperationsRouteDependencies } from "./routes/operations-routes.js";
+import type { AutomationRouteDependencies } from "./routes/automation-routes.js";
 
 type JsonObject = Record<string, unknown>;
 type ConfigurationService = ReturnType<typeof import("../services/configuration-service.js").createConfigurationService>;
@@ -35,7 +39,7 @@ export interface ApiHttpDependencies {
   requestError(status: number, message: string): Error;
 }
 
-export interface ApiDependencies {
+export interface ApiRouteServices {
   ALL_DAYS: number[];
   DEFAULT_CONFIG: ApplicationConfig;
   EXTERNAL_IO_DISABLED: boolean;
@@ -56,7 +60,6 @@ export interface ApiDependencies {
   backupPreparationView: typeof import("../domain/operational-overrides.js").backupPreparationView;
   batteryStrategyView(now?: Date): Promise<BatteryStrategy>;
   backtestService: BacktestService;
-  billingPeriodKey: typeof import("../domain/ene-farm.js").billingPeriodKey;
   buildAdaptiveChargingPlan: typeof import("../domain/adaptive-planning.js").buildAdaptiveChargingPlan;
   cleanAutomationRule: typeof import("../domain/automation-rules.js").cleanAutomationRule;
   cleanNewAwayPeriod: AwayPeriodService["cleanNew"];
@@ -125,16 +128,22 @@ export interface ApiDependencies {
   writeConfig: ConfigurationService["write"];
 }
 
+export interface ApiDependencies {
+  http: ApiHttpDependencies;
+  api: Pick<ApiRouteServices, "databaseBackupsView" | "getDatabaseOperation">;
+  system: Omit<SystemRouteDependencies, "http">;
+  history: Omit<HistoryRouteDependencies, "http">;
+  operations: Omit<OperationsRouteDependencies, "http">;
+  automation: Omit<AutomationRouteDependencies, "http">;
+}
+
 export function createApiHandler(dependencies: ApiDependencies) {
-  const {
-    databaseBackupsView,
-    getDatabaseOperation,
-  } = dependencies;
+  const { databaseBackupsView, getDatabaseOperation } = dependencies.api;
   const { json } = dependencies.http;
-  const handleSystemRoute = createSystemRouteHandler(dependencies);
-  const handleHistoryRoute = createHistoryRouteHandler(dependencies);
-  const handleOperationsRoute = createOperationsRouteHandler(dependencies);
-  const handleAutomationRoute = createAutomationRouteHandler(dependencies);
+  const handleSystemRoute = createSystemRouteHandler({ ...dependencies.system, http: dependencies.http });
+  const handleHistoryRoute = createHistoryRouteHandler({ ...dependencies.history, http: dependencies.http });
+  const handleOperationsRoute = createOperationsRouteHandler({ ...dependencies.operations, http: dependencies.http });
+  const handleAutomationRoute = createAutomationRouteHandler({ ...dependencies.automation, http: dependencies.http });
 return async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   if (req.method === "GET" && url.pathname === "/api/database-backups") {
     return json(res, 200, await databaseBackupsView());

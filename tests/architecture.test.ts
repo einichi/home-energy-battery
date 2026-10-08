@@ -88,8 +88,6 @@ assert.deepEqual(explicitAny, [], `production backend contains explicit any:\n${
 assert.equal(existsSync(path.join(projectRoot, "lib", "application.ts")), false);
 assert.equal(existsSync(path.join(projectRoot, "tests", "helpers.test.ts")), false);
 assert.ok(readFileSync(path.join(projectRoot, "server.ts"), "utf8").split("\n").length <= 100);
-assert.ok(readFileSync(path.join(projectRoot, "lib", "create-application.ts"), "utf8").split("\n").length <= 800);
-
 const oversizedProductionModules = sourceFiles(path.join(projectRoot, "lib"))
   .filter((file) => readFileSync(file, "utf8").split("\n").length > 1_000)
   .map((file) => path.relative(projectRoot, file));

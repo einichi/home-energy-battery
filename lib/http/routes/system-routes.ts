@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { ApiDependencies } from "../api.js";
+import type { ApiRouteServices } from "../api.js";
 import type { AppConfig, StatusSnapshot } from "../../../shared/api-contracts.js";
 import { invalidDiscoverySubnets } from "../../domain/discovery-subnets.js";
 import { isSupportedSmtpPort, smtpSecurityWarning } from "../../domain/notification-configuration.js";
@@ -13,7 +13,7 @@ function explicitSmtpSettings(value: unknown): Record<string, unknown> | null {
   return Object.keys(settings).length ? settings : null;
 }
 
-type SystemRouteDependencies = Pick<ApiDependencies,
+export type SystemRouteDependencies = Pick<ApiRouteServices,
   | "DEFAULT_CONFIG"
   | "EXTERNAL_IO_DISABLED"
   | "PORT"

@@ -1,9 +1,9 @@
 import { MILLISECONDS_PER_DAY } from "../../domain/time.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { billingPeriodKey } from "../../domain/ene-farm.js";
-import type { ApiDependencies } from "../api.js";
+import type { ApiRouteServices } from "../api.js";
 
-type HistoryRouteDependencies = Pick<ApiDependencies,
+export type HistoryRouteDependencies = Pick<ApiRouteServices,
   | "eneFarmReport"
   | "http"
   | "measuredFuelCellGasByBillingPeriod"
