@@ -109,6 +109,43 @@ const noBreach = simulateModelOnlyExecution(
 );
 assert.equal(noBreach?.reserveViolation, false);
 
+// Pin the current missing-value metrics before the separate `finite()` fix.
+const missingOutcomeService = createBacktestService({
+  history: {
+    adaptivePlanSnapshots: () => [],
+    backtestRuns: () => [],
+    completeBacktestRun: () => {},
+    createBacktestRun: () => {},
+    fuelCellForecastOutcomes: () => [{
+      issuedAt: "2026-01-01T00:00:00.000Z",
+      start: "2026-01-01T00:00:00.000Z",
+      end: "2026-01-01T00:30:00.000Z",
+      medianW: 1000,
+      actualKwh: null,
+    }],
+    querySamples: () => [],
+    saveBacktestOutcome: () => {},
+    solarForecastOutcomes: () => [{
+      issuedAt: "2026-01-01T00:00:00.000Z",
+      errorKwh: null as unknown as number,
+    }],
+    stats: async () => ({ earliest: "2025-01-01T00:00:00.000Z" }),
+  },
+  randomUUID: () => "missing-outcomes",
+  now: () => new Date("2026-01-02T00:00:00.000Z"),
+});
+const missingOutcomeMetrics = await missingOutcomeService.run({ range: "all", mode: "both" });
+assert.deepEqual(missingOutcomeMetrics.components.solar, {
+  sampleCount: 1,
+  meanAbsoluteErrorKwh: 0,
+  meanBiasKwh: 0,
+});
+assert.deepEqual(missingOutcomeMetrics.components.fuelCell, {
+  sampleCount: 1,
+  meanAbsoluteErrorKwh: 0.5,
+  meanBiasKwh: -0.5,
+});
+
 const migrationDir = await mkdtemp(path.join(os.tmpdir(), "backtest-schema-"));
 try {
   const database = new DatabaseSync(path.join(migrationDir, "history.sqlite"));
