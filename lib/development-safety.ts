@@ -5,7 +5,7 @@ const UI_DEVELOPMENT_DATA_PREFIX = "home-energy-battery-ui-dev-";
 
 type Environment = Record<string, string | undefined>;
 
-function enabled(value: unknown): boolean {
+export function enabled(value: unknown): boolean {
   return ["1", "true", "yes", "on"].includes(String(value ?? "").toLowerCase());
 }
 

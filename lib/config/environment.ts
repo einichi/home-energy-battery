@@ -1,9 +1,11 @@
 import { MILLISECONDS_PER_DAY } from "../domain/time.js";
+import { enabled } from "../development-safety.js";
 import runtimeDefaults from "../../shared/runtime-defaults.json" with { type: "json" };
 
 export interface ServerEnvironment {
   port: number;
   dataDir: string;
+  echonetDebug: boolean;
   echonetTimeoutMs: number;
   scheduleCheckIntervalMs: number;
   automationCheckIntervalMs: number;
@@ -29,6 +31,7 @@ export function normalizeServerEnvironment(
   return {
     port: finiteInteger(input.PORT, runtimeDefaults.port, 1, 65_535, "PORT"),
     dataDir,
+    echonetDebug: enabled(input.ECHONET_DEBUG),
     echonetTimeoutMs: finiteInteger(input.ECHONET_TIMEOUT_MS, 15_000, 100, 300_000, "ECHONET_TIMEOUT_MS"),
     scheduleCheckIntervalMs: finiteInteger(input.SCHEDULE_CHECK_INTERVAL_MS, 15_000, 10, MILLISECONDS_PER_DAY, "SCHEDULE_CHECK_INTERVAL_MS"),
     automationCheckIntervalMs: finiteInteger(input.AUTOMATION_CHECK_INTERVAL_MS, 30_000, 50, MILLISECONDS_PER_DAY, "AUTOMATION_CHECK_INTERVAL_MS"),

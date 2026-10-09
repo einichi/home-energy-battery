@@ -397,7 +397,7 @@ async function configureDeviceCommandAdapter(): Promise<void> {
     defaultOptions: {
       timeout: ECHONET_TIMEOUT_MS / 1000,
       netif: environment.ECHONET_NETIF ?? "",
-      debug: environment.ECHONET_DEBUG === "1",
+      debug: environment.echonetDebug,
     },
   });
   activeDeviceAdapter = adapter;
