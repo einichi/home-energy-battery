@@ -128,7 +128,7 @@ export function EquipmentSettings({
           <div><span className="health-dot" aria-hidden="true" /><strong>{device.name}</strong></div>
           <dl>
             <div><dt>{t("address")}</dt><dd>{device.address || t("notConfigured")}</dd></div>
-            <div><dt>EOJ</dt><dd>{device.eoj || t("reportedDuringDiscovery")}</dd></div>
+            <div><dt>{t("EOJ")}</dt><dd>{device.eoj || t("reportedDuringDiscovery")}</dd></div>
             <div><dt>{t("lastSeen")}</dt><dd>{device.error ? t("unavailable") : status?.read_at ? formatDateTime(status.read_at) : t("waitingForStatus")}</dd></div>
             <div><dt>{t("health")}</dt><dd>{device.error ? formatDateTimesInText(device.error) : t("reportingNormally")}</dd></div>
           </dl>

@@ -64,7 +64,7 @@ export function AppShell() {
       ) : null}
       <aside className="sidebar">
         <div className="brand">
-          <span className="brand-mark" aria-hidden="true">↯</span>
+          <span className="brand-mark" aria-hidden="true">{t("↯")}</span>
           <span>{t("homeEnergy")}</span>
         </div>
         <Navigation />
@@ -76,7 +76,7 @@ export function AppShell() {
       <div className="application">
         <header className="mobile-header">
           <div className="brand">
-            <span className="brand-mark" aria-hidden="true">↯</span>
+            <span className="brand-mark" aria-hidden="true">{t("↯")}</span>
             <span>{t("homeEnergy")}</span>
           </div>
           <HealthCenter />

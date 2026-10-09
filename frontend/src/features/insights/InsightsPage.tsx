@@ -76,7 +76,7 @@ function Trend({ report }: { report: EnergyReport }) {
   return <div className="insights-chart-wrap"><svg className="insights-chart" role="img" aria-label={t("energyUseSolarGenerationAndGridImportByReportingPeriod")} viewBox={`0 0 ${width} ${height}`}>
     {[0, .5, 1].map((tick) => <g key={tick}><line x1={pad} x2={width - pad} y1={y(max * tick)} y2={y(max * tick)} /><text x={pad - 8} y={y(max * tick) + 4}>{number(max * tick)}</text></g>)}
     {series.flatMap((item) => segments(item.key).map((points, index) => <polyline key={`${item.key}-${index}`} className={item.className} points={points} />))}
-    {rows.flatMap((row, index) => Number(row.sampleCount ?? 0) > 0 ? series.filter((item) => Number.isFinite(row[item.key])).map((item) => <circle key={`${row.key}-${item.key}`} className={item.className} cx={x(index)} cy={y(Number(row[item.key]))} r="4"><title>{row.label}: {t(item.label)} {formatEnergy(Number(row[item.key]))}</title></circle>) : [])}
+    {rows.flatMap((row, index) => Number(row.sampleCount ?? 0) > 0 ? series.filter((item) => Number.isFinite(row[item.key])).map((item) => <circle key={`${row.key}-${item.key}`} className={item.className} cx={x(index)} cy={y(Number(row[item.key]))} r="4"><title>{t("{period}: {label} {value}", { period: row.label, label: t(item.label), value: formatEnergy(Number(row[item.key])) })}</title></circle>) : [])}
   </svg><div className="chart-legend" aria-label={t("chartLegend")}><span className="demand">{t("demand")}</span><span className="solar">{t("solar")}</span><span className="grid">{t("gridImport")}</span></div></div>;
 }
 
@@ -115,7 +115,7 @@ function CostInsights({ report, eneFarm }: { report: EnergyReport; eneFarm: EneF
       <article className="panel estimated"><span>{t("gridUseOffPeak")}</span><strong>{yen(totals.gridOffPeakSavingYen)}</strong><small>{t("discountedHouseholdGridUse")}</small></article>
       <article className="panel estimated"><span>{t("batteryChargingOffPeak")}</span><strong>{yen(totals.batteryOffPeakSavingYen)}</strong><small>{t("savingsAttributedToDiscountedCharging")}</small></article>
     </section>
-    <section className="panel insight-method"><div className="section-heading"><div><h2>{t("tariffBasisAndCoverage")}</h2><p>{t("theseAreEstimatesNotBilledAmounts")}</p></div><Coverage bucket={latest} /></div><dl><div><dt>{t("configuredTariff")}</dt><dd>{tariff}</dd></div><div><dt>{t("eneFarmMarginalGasCost")}</dt><dd>{yen(eneFarm.totals.estimatedGasCost?.marginalCostYen)} · {t("excludesUnrelatedHouseholdGasUse")}</dd></div><div><dt>{t("calculation")}</dt><dd>{t("observedEnergyIsValuedAgainstTheConfiguredStandardAndDis44c527")}</dd></div></dl><Link className="text-link" to="/system/rates">{t("reviewRateConfiguration")}</Link></section>
+    <section className="panel insight-method"><div className="section-heading"><div><h2>{t("tariffBasisAndCoverage")}</h2><p>{t("theseAreEstimatesNotBilledAmounts")}</p></div><Coverage bucket={latest} /></div><dl><div><dt>{t("configuredTariff")}</dt><dd>{tariff}</dd></div><div><dt>{t("eneFarmMarginalGasCost")}</dt><dd>{t("{cost} · {explanation}", { cost: yen(eneFarm.totals.estimatedGasCost?.marginalCostYen), explanation: t("excludesUnrelatedHouseholdGasUse") })}</dd></div><div><dt>{t("calculation")}</dt><dd>{t("observedEnergyIsValuedAgainstTheConfiguredStandardAndDis44c527")}</dd></div></dl><Link className="text-link" to="/system/rates">{t("reviewRateConfiguration")}</Link></section>
   </>;
 }
 

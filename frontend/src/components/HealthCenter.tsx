@@ -19,7 +19,7 @@ export function HealthCenter() {
         </span>
       </button>
       {open ? <section className="health-alert-center" id={panelId} aria-label={t("systemAlerts")}>
-        <div className="health-alert-heading"><strong>{t("systemAlerts")}</strong><button type="button" onClick={() => setOpen(false)} aria-label={t("closeAlerts")}>×</button></div>
+        <div className="health-alert-heading"><strong>{t("systemAlerts")}</strong><button type="button" onClick={() => setOpen(false)} aria-label={t("closeAlerts")}>{t("×")}</button></div>
         {health.alerts.length ? <ol>{health.alerts.map((alert) => <li key={alert.id} data-severity={alert.severity}>
           <div><strong>{t(alert.title)}</strong><time dateTime={alert.startedAt}>{formatDateTime(alert.startedAt)}</time></div>
           <div className="health-alert-meta">

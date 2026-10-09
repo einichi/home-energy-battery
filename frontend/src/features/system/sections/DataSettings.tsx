@@ -307,11 +307,12 @@ export function DataSettings({
                 <div>
                   <strong>{backup.filename}</strong>
                   <small>
-                    {bytes(backup.sizeBytes)} {" " + t("schemaV") + ""}
-                    {backup.schemaVersion ?? "?"} ·{" "}
-                    {backup.compatible
-                      ? "compatible"
-                      : "not restorable by this version"}
+                    {t("{size} {schemaLabel}{version} · {compatibility}", {
+                      size: bytes(backup.sizeBytes),
+                      schemaLabel: t("schemaV"),
+                      version: backup.schemaVersion ?? "?",
+                      compatibility: t(backup.compatible ? "compatible" : "not restorable by this version"),
+                    })}
                   </small>
                 </div>
                 <div className="button-row">

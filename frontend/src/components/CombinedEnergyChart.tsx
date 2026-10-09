@@ -136,13 +136,13 @@ export function CombinedEnergyChart({ samples, selected, label = "Energy history
         {hasPercentSeries && reservePercent !== null ? (
           <g>
             <line className="chart-reserve-line" x1={chart.left} x2={chart.width - chart.right} y1={percentY(reservePercent)} y2={percentY(reservePercent)} />
-            <text className="chart-axis-label chart-reserve-label" x={chart.width - chart.right - 5} y={percentY(reservePercent) - 5} textAnchor="end">{"" + t("reserve") + " "}{reservePercent}%</text>
+            <text className="chart-axis-label chart-reserve-label" x={chart.width - chart.right - 5} y={percentY(reservePercent) - 5} textAnchor="end">{t("{label} {value}%", { label: t("reserve"), value: reservePercent })}</text>
           </g>
         ) : null}
         {hasPowerSeries && hasPercentSeries ? (
           <>
-            <text className="chart-axis-label" x={chart.width - chart.right + 10} y={chart.top + 4}>100%</text>
-            <text className="chart-axis-label" x={chart.width - chart.right + 10} y={chart.top + plotHeight}>0%</text>
+            <text className="chart-axis-label" x={chart.width - chart.right + 10} y={chart.top + 4}>{t("100%")}</text>
+            <text className="chart-axis-label" x={chart.width - chart.right + 10} y={chart.top + plotHeight}>{t("0%")}</text>
           </>
         ) : null}
         {definitions.map((definition) => (
@@ -173,7 +173,7 @@ export function CombinedEnergyChart({ samples, selected, label = "Energy history
               return (
                 <g key={definition.key}>
                   <circle cx={tooltipX + 14} cy={chart.top + 44 + index * 18} r="3" fill={definition.color} />
-                  <text className="chart-tooltip-value" x={tooltipX + 23} y={chart.top + 48 + index * 18}>{t(definition.label)}: {value === null ? "—" : definition.display(value)}</text>
+                  <text className="chart-tooltip-value" x={tooltipX + 23} y={chart.top + 48 + index * 18}>{t("{label}: {value}", { label: t(definition.label), value: value === null ? "—" : definition.display(value) })}</text>
                 </g>
               );
             })}
@@ -189,7 +189,7 @@ export function CombinedEnergyChart({ samples, selected, label = "Energy history
         </div>
       ) : null}
       {overlays.length ? <div className="chart-overlay-legend" aria-label={t("timelineOverlays")}><span data-tone="charge">{t("chargeWindow")}</span><span data-tone="discharge">{t("dischargeWindow")}</span><span data-tone="schedule">{t("scheduledCommand")}</span></div> : null}
-      {hoveredSample ? <div className="chart-hover-summary" role="status" aria-label={t("chartReadingDetails")}>{formatChartTime(hoveredSample.timestamp, true)} · {definitions.map((definition) => { const value = definition.value(hoveredSample); return `${t(definition.label)}: ${value === null ? t("unavailable") : definition.display(value)}`; }).join(" · ")}</div> : null}
+      {hoveredSample ? <div className="chart-hover-summary" role="status" aria-label={t("chartReadingDetails")}>{t("{time} · {readings}", { time: formatChartTime(hoveredSample.timestamp, true), readings: definitions.map((definition) => { const value = definition.value(hoveredSample); return t("{label}: {value}", { label: t(definition.label), value: value === null ? t("unavailable") : definition.display(value) }); }).join(" · ") })}</div> : null}
       <details className="chart-table-disclosure">
         <summary>{t("viewChartAsDataTable")}</summary>
         <div className="table-scroll">

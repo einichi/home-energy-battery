@@ -136,11 +136,11 @@ export function NotificationSettings({
           <label className="field">
             {t("port")}
             <select name="port" defaultValue={channel?.settings.port ?? 587}>
-              <option value="25">25 — SMTP / STARTTLS</option>
-              <option value="465">465 — Implicit TLS</option>
-              <option value="587">587 — Submission / STARTTLS</option>
+              <option value="25">{t("25 — SMTP / STARTTLS")}</option>
+              <option value="465">{t("465 — Implicit TLS")}</option>
+              <option value="587">{t("587 — Submission / STARTTLS")}</option>
             </select>
-            <small>Use 465 with TLS; 25 and 587 normally use STARTTLS.</small>
+            <small>{t("Use 465 with TLS; 25 and 587 normally use STARTTLS.")}</small>
           </label>
           <label className="field">
             {t("security")}
@@ -242,7 +242,7 @@ export function NotificationSettings({
                         max="95"
                         defaultValue={trigger.thresholdPercent ?? 20}
                       />
-                      <span>%</span>
+              <span>{t("%")}</span>
                     </div>
                   </label>
                 ) : null}
@@ -286,12 +286,10 @@ export function NotificationSettings({
                     ? formatDateTime(delivery.at)
                     : "Unknown time"}
                 </time>
-                <strong>
-                  {delivery.ok ? "Delivered" : "Failed"} ·{" "}
-                  {delivery.event?.title ??
-                    delivery.event?.type ??
-                    "Notification"}
-                </strong>
+                <strong>{t("{status} · {title}", {
+                  status: t(delivery.ok ? "Delivered" : "Failed"),
+                  title: delivery.event?.title ?? delivery.event?.type ?? t("Notification"),
+                })}</strong>
                 <span>
                   {delivery.attempts
                     ?.map(

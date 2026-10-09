@@ -184,7 +184,10 @@ function CommandDialog({ command, close, completed }: {
 }
 
 function hourOptions() {
-  return Array.from({ length: 24 }, (_, hour) => <option key={hour} value={hour}>{String(hour).padStart(2, "0")}:00</option>);
+  return Array.from({ length: 24 }, (_, hour) => {
+    const label = `${String(hour).padStart(2, "0")}:00`;
+    return <option key={hour} value={hour}>{label}</option>;
+  });
 }
 
 function scheduleNextAt(schedule: BatterySchedule, now = new Date()) {
@@ -482,6 +485,15 @@ export function BatteryPage({ view = "status" }: { view?: "status" | "schedules"
       setScheduleBusy(false);
     }
   };
+  const scheduleTimingSummary = scheduleRepeat === "daily"
+    ? t("at {time} on {days}", { time: scheduleTime, days: scheduleDays.map((day) => t(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day])).join(", ") })
+    : t("once at {date}", { date: formatDateTime(scheduleRunAt) });
+  const scheduleReviewText = t("{name} will run {action} with {values} {timing}.", {
+    name: scheduleName,
+    action: actionLabels[scheduleAction] ?? sentence(scheduleAction),
+    values: Object.values(schedulePayload).join(" → "),
+    timing: scheduleTimingSummary,
+  });
 
   return (
     <main className="page battery-page">
@@ -495,12 +507,12 @@ export function BatteryPage({ view = "status" }: { view?: "status" | "schedules"
 
       {view === "status" ? <>
       <section className="battery-hero panel">
-        <div><p className="eyebrow">{t("currentState")}</p><strong className="battery-soc">{formatSoc(battery?.remaining_percent?.value ?? null)}</strong><p>{sentence(battery?.working_status?.value)} · {formatPower(battery?.instant_power?.value ?? null)}</p></div>
+        <div><p className="eyebrow">{t("currentState")}</p><strong className="battery-soc">{formatSoc(battery?.remaining_percent?.value ?? null)}</strong><p>{t("{state} · {power}", { state: sentence(battery?.working_status?.value), power: formatPower(battery?.instant_power?.value ?? null) })}</p></div>
         {battery?.remaining_percent?.error ? <p className="status-banner" role="alert">{battery.remaining_percent.error}</p> : null}
         <dl className="battery-state-grid">
           <div><dt>{t("verifiedOperationMode")}</dt><dd>{sentence(battery?.operation_mode?.value)}</dd></div>
           <div><dt>{t("chargingProfile")}</dt><dd>{sentence(profile)}</dd></div>
-          <div><dt>{t("reserve")}</dt><dd>{reserve}%</dd></div>
+          <div><dt>{t("reserve")}</dt><dd>{t("{value}%", { value: reserve })}</dd></div>
           <div><dt>{t("latestContact")}</dt><dd>{status?.read_at ? formatTime(status.read_at) : "Unavailable"}</dd></div>
         </dl>
       </section>
@@ -519,7 +531,7 @@ export function BatteryPage({ view = "status" }: { view?: "status" | "schedules"
         <section className="panel control-panel">
           <div className="section-heading"><div><p className="eyebrow">{t("everydayControls")}</p><h2>{t("profileAndReserve")}</h2></div></div>
           <label className="field"><span>{t("chargingProfile")}</span><select value={profile} onChange={(event) => changeEverydaySetting(() => setProfile(event.target.value))}><option value="eco">{t("eco")}</option><option value="osaifu">{t("osaifu")}</option><option value="backup">{t("backup")}</option></select></label>
-          <label className="field"><span>{t("minimumReserve")}</span><select value={reserve} onChange={(event) => changeEverydaySetting(() => setReserve(Number(event.target.value)))}>{Array.from({ length: 11 }, (_, step) => <option key={step} value={step * 10}>{step * 10}%</option>)}</select></label>
+          <label className="field"><span>{t("minimumReserve")}</span><select value={reserve} onChange={(event) => changeEverydaySetting(() => setReserve(Number(event.target.value)))}>{Array.from({ length: 11 }, (_, step) => { const label = `${step * 10}%`; return <option key={step} value={step * 10}>{label}</option>; })}</select></label>
           <details className="advanced-controls"><summary>{t("osaifuTimeWindows")}</summary>
             <div className="window-row"><span>{t("charge")}</span><select aria-label="Charge start" value={chargeStart} onChange={(event) => changeEverydaySetting(() => setChargeStart(Number(event.target.value)))}>{hourOptions()}</select><span>{t("to")}</span><select aria-label="Charge end" value={chargeEnd} onChange={(event) => changeEverydaySetting(() => setChargeEnd(Number(event.target.value)))}>{hourOptions()}</select></div>
             <div className="window-row"><span>{t("discharge")}</span><select aria-label="Discharge start" value={dischargeStart} onChange={(event) => changeEverydaySetting(() => setDischargeStart(Number(event.target.value)))}>{hourOptions()}</select><span>{t("to")}</span><select aria-label="Discharge end" value={dischargeEnd} onChange={(event) => changeEverydaySetting(() => setDischargeEnd(Number(event.target.value)))}>{hourOptions()}</select></div>
@@ -565,16 +577,16 @@ export function BatteryPage({ view = "status" }: { view?: "status" | "schedules"
           {scheduleRepeat === "daily" ? <fieldset className="schedule-days"><legend>{t("runOn")}</legend>{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((label, day) => <label key={label}><input type="checkbox" checked={scheduleDays.includes(day)} onChange={(event) => setScheduleDays((days) => event.target.checked ? [...days, day].sort() : days.filter((item) => item !== day))} /><span>{label}</span></label>)}</fieldset> : null}
           </fieldset>
         </form>
-        {scheduleReview ? <div className="schedule-review-note" role="status"><span><strong>{t("review")}</strong> {scheduleName} {" " + t("willRun") + " "}{actionLabels[scheduleAction] ?? sentence(scheduleAction)} {" " + t("with") + " "}{Object.values(schedulePayload).join(" → ")} {scheduleRepeat === "daily" ? `at ${scheduleTime} on ${scheduleDays.map((day) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ")}` : `once at ${formatDateTime(scheduleRunAt)}`}.</span><button className="quiet-button" type="button" onClick={() => setScheduleReview(false)}>{t("edit")}</button></div> : null}
+         {scheduleReview ? <div className="schedule-review-note" role="status"><span><strong>{t("review")}</strong> {scheduleReviewText}</span><button className="quiet-button" type="button" onClick={() => setScheduleReview(false)}>{t("edit")}</button></div> : null}
         <div className="schedule-list">
-          {schedules.map((schedule) => { const next = schedulesDisabled ? null : scheduleNextAt(schedule); return <article key={schedule.id}><div><strong>{schedule.name}</strong><span>{actionLabels[schedule.action] ?? sentence(schedule.action)} · {scheduleRecurrence(schedule)}</span><small>{schedulesDisabled ? "Paused by Adaptive Charging" : `Next run: ${next ? formatDateTime(next) : schedule.enabled ? "No future occurrence" : "Disabled"}`}</small>{schedule.lastResult ? <small data-ok={schedule.lastResult.ok}>{schedule.lastResult.ok ? `Last run succeeded${schedule.lastResult.at ? ` · ${formatDateTime(schedule.lastResult.at)}` : ""}` : formatDateTimesInText(`Last run failed: ${schedule.lastResult.error}`)}</small> : null}{conflictingScheduleIds.has(schedule.id) ? <p className="schedule-conflict">{t("conflictsWithAnotherEnabledScheduleAtThisTime")}</p> : null}</div><div className="button-row"><button className="quiet-button" disabled={schedulesDisabled} title={schedulesDisabled ? "Adaptive Charging must be turned off before changing schedule status" : undefined} type="button" onClick={() => { void updateSchedule(schedule.id, { enabled: !schedule.enabled }).then(loadOperations).catch((error) => setLoadError(error instanceof Error ? error.message : "Schedule could not be updated")); }}>{schedule.enabled ? "Disable" : "Enable"}</button><button className="quiet-button danger" type="button" onClick={() => { void deleteSchedule(schedule.id).then(loadOperations).catch((error) => setLoadError(error instanceof Error ? error.message : "Schedule could not be deleted")); }}>{t("delete")}</button></div></article>; })}
+          {schedules.map((schedule) => { const next = schedulesDisabled ? null : scheduleNextAt(schedule); return <article key={schedule.id}><div><strong>{schedule.name}</strong><span>{t("{action} · {recurrence}", { action: actionLabels[schedule.action] ?? sentence(schedule.action), recurrence: scheduleRecurrence(schedule) })}</span><small>{schedulesDisabled ? "Paused by Adaptive Charging" : `Next run: ${next ? formatDateTime(next) : schedule.enabled ? "No future occurrence" : "Disabled"}`}</small>{schedule.lastResult ? <small data-ok={schedule.lastResult.ok}>{schedule.lastResult.ok ? `Last run succeeded${schedule.lastResult.at ? ` · ${formatDateTime(schedule.lastResult.at)}` : ""}` : formatDateTimesInText(`Last run failed: ${schedule.lastResult.error}`)}</small> : null}{conflictingScheduleIds.has(schedule.id) ? <p className="schedule-conflict">{t("conflictsWithAnotherEnabledScheduleAtThisTime")}</p> : null}</div><div className="button-row"><button className="quiet-button" disabled={schedulesDisabled} title={schedulesDisabled ? "Adaptive Charging must be turned off before changing schedule status" : undefined} type="button" onClick={() => { void updateSchedule(schedule.id, { enabled: !schedule.enabled }).then(loadOperations).catch((error) => setLoadError(error instanceof Error ? error.message : "Schedule could not be updated")); }}>{schedule.enabled ? "Disable" : "Enable"}</button><button className="quiet-button danger" type="button" onClick={() => { void deleteSchedule(schedule.id).then(loadOperations).catch((error) => setLoadError(error instanceof Error ? error.message : "Schedule could not be deleted")); }}>{t("delete")}</button></div></article>; })}
         </div>
       </section> : null}
 
       <section className="panel receipts-panel">
         <div className="section-heading"><div><p className="eyebrow">{t("auditTrail")}</p><h2>{t("recentCommandReceipts")}</h2></div><button className="quiet-button" type="button" onClick={() => void loadOperations()}>{t("refresh")}</button></div>
         <div className="receipt-list">
-          {receipts.map((receipt) => <article key={receipt.commandId}><i data-state={receipt.state} /><div><strong>{actionLabels[receipt.action] ?? sentence(receipt.action)}</strong><span>{requestSummary(receipt)} · {sourceLabels[receipt.source] ?? sentence(receipt.source)}</span><small>{receipt.completedAt || receipt.requestedAt ? formatDateTime(receipt.completedAt ?? receipt.requestedAt) : "Time unavailable"}{receipt.durationMs !== null && receipt.durationMs !== undefined ? ` · ${receipt.durationMs} ms` : ""}</small>{receipt.error ? <p className="receipt-error">{formatDateTimesInText(receipt.error)}</p> : null}</div><b data-state={receipt.state}>{sentence(receipt.state)}</b></article>)}
+          {receipts.map((receipt) => <article key={receipt.commandId}><i data-state={receipt.state} /><div><strong>{actionLabels[receipt.action] ?? sentence(receipt.action)}</strong><span>{t("{summary} · {source}", { summary: requestSummary(receipt), source: sourceLabels[receipt.source] ?? sentence(receipt.source) })}</span><small>{receipt.completedAt || receipt.requestedAt ? formatDateTime(receipt.completedAt ?? receipt.requestedAt) : "Time unavailable"}{receipt.durationMs !== null && receipt.durationMs !== undefined ? ` · ${receipt.durationMs} ms` : ""}</small>{receipt.error ? <p className="receipt-error">{formatDateTimesInText(receipt.error)}</p> : null}</div><b data-state={receipt.state}>{sentence(receipt.state)}</b></article>)}
           {!receipts.length ? <p className="empty-copy">{t("noDeviceCommandsHaveBeenRecordedSinceCommandReceiptsWere184247")}</p> : null}
         </div>
       </section>

@@ -59,7 +59,7 @@ export default defineConfig([
     plugins: { "react-hooks": reactHooks, i18next },
     rules: {
       ...reactHooks.configs.recommended.rules,
-      "i18next/no-literal-string": ["warn", {
+      "i18next/no-literal-string": ["error", {
         framework: "react",
         mode: "jsx-text-only",
         words: { exclude: ["^(?:[a-z][a-z0-9-]*|0|1|true|false)$"] },

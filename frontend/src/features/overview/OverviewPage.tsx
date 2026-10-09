@@ -108,7 +108,7 @@ export function OverviewPage() {
 
       <section className="mobile-operating-summary" aria-label={t("currentOperatingSummary")}>
         <div><span>{t(gridExport != null && gridExport > 0 ? "Grid export" : "Grid import")}</span><strong>{formatPower(gridExport != null && gridExport > 0 ? gridExport : gridImport)}</strong></div>
-        <div><span>{t("battery")}</span><strong>{formatSoc(soc)} · {t(batteryStateLabel(batteryPower))}</strong></div>
+        <div><span>{t("battery")}</span><strong>{t("{soc} · {state}", { soc: formatSoc(soc), state: t(batteryStateLabel(batteryPower)) })}</strong></div>
         <div><span>{t("nextAction")}</span><strong>{formattedNextActionTitle}</strong></div>
       </section>
 
