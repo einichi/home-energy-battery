@@ -66,6 +66,11 @@ try {
   const backtestResult = await backtest.json();
   assert.equal(backtestResult.status, "complete");
   assert.equal(backtestResult.planCount, 0);
+  for (const component of Object.values(backtestResult.components)) {
+    assert.equal(component.sampleCount, 0);
+    assert.equal(component.meanAbsoluteErrorKwh, null);
+    assert.equal(component.meanBiasKwh, null);
+  }
   console.log("production build smoke test passed");
 } finally {
   child.kill("SIGTERM");
