@@ -69,7 +69,12 @@ export function createHistoryRouteHandler(dependencies: HistoryRouteDependencies
       return json(res, 202, await startDeviceCommand(String(body.action ?? ""), body.payload ?? {}, { source: "manual" }));
     }
     if (req.method === "GET" && url.pathname.startsWith("/api/device-commands/")) {
-      const commandId = decodeURIComponent(url.pathname.slice("/api/device-commands/".length));
+      let commandId: string;
+      try {
+        commandId = decodeURIComponent(url.pathname.slice("/api/device-commands/".length));
+      } catch {
+        return json(res, 400, { error: "invalid command id" });
+      }
       if (!/^[a-z0-9-]{8,}$/i.test(commandId)) return json(res, 400, { error: "invalid command id" });
       const receipt = readCommandReceipt(commandId);
       return receipt ? json(res, 200, receipt) : json(res, 404, { error: "command receipt not found" });

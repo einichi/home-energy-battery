@@ -11,6 +11,14 @@ export interface RouteContext {
 
 export type RouteHandler = (context: RouteContext) => void | Promise<void>;
 
+export class MalformedRouteParameterError extends URIError {
+  readonly statusCode = 400;
+
+  constructor() {
+    super("malformed route parameter encoding");
+  }
+}
+
 interface Route {
   method: string;
   pattern: string;
@@ -35,7 +43,7 @@ export function matchRoute(pattern: string, pathname: string): RouteParameters |
       try {
         params[expectedSegment.slice(1)] = decodeURIComponent(actualSegment);
       } catch {
-        return null;
+        throw new MalformedRouteParameterError();
       }
     } else if (expectedSegment !== actualSegment) {
       return null;

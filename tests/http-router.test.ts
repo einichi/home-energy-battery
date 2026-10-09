@@ -8,7 +8,7 @@ assert.deepEqual(matchRoute("/api/device-actions/:action", "/api/device-actions/
 assert.deepEqual(matchRoute("/api/items/:id", "/api/items/a%20b"), { id: "a b" });
 assert.equal(matchRoute("/api/items/:id", "/api/items"), null);
 assert.equal(matchRoute("/api/items/:id", "/api/other/1"), null);
-assert.equal(matchRoute("/api/items/:id", "/api/items/%EF"), null);
+assert.throws(() => matchRoute("/api/items/:id", "/api/items/%EF"), { statusCode: 400 });
 
 const router = new NativeRouter();
 let receivedAction: string | null = null;

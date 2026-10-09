@@ -79,6 +79,8 @@ async function verifyScenario(scenario: any, expectedState: any): Promise<any> {
       body: { action: "set-mode", payload: { mode: "standby" } },
     });
     assert.equal(started.response.status, 202, output);
+    const malformedReceipt = await fetch(`${origin}/api/device-commands/%E0%A4%A`);
+    assert.equal(malformedReceipt.status, 400, "malformed route encoding should return a client error");
     const receipt = await waitFor(async () => {
       const current = await jsonRequest(origin, `/api/device-commands/${started.payload.commandId}`);
       return ["succeeded", "failed", "timed-out", "mismatched"].includes(current.payload.state) ? current.payload : null;
