@@ -109,7 +109,7 @@ const noBreach = simulateModelOnlyExecution(
 );
 assert.equal(noBreach?.reserveViolation, false);
 
-// Pin the current missing-value metrics before the separate `finite()` fix.
+// Missing forecast values are excluded from backtest metrics rather than coerced to zero.
 const missingOutcomeService = createBacktestService({
   history: {
     adaptivePlanSnapshots: () => [],
@@ -136,14 +136,14 @@ const missingOutcomeService = createBacktestService({
 });
 const missingOutcomeMetrics = await missingOutcomeService.run({ range: "all", mode: "both" });
 assert.deepEqual(missingOutcomeMetrics.components.solar, {
-  sampleCount: 1,
-  meanAbsoluteErrorKwh: 0,
-  meanBiasKwh: 0,
+  sampleCount: 0,
+  meanAbsoluteErrorKwh: null,
+  meanBiasKwh: null,
 });
 assert.deepEqual(missingOutcomeMetrics.components.fuelCell, {
-  sampleCount: 1,
-  meanAbsoluteErrorKwh: 0.5,
-  meanBiasKwh: -0.5,
+  sampleCount: 0,
+  meanAbsoluteErrorKwh: null,
+  meanBiasKwh: null,
 });
 
 const migrationDir = await mkdtemp(path.join(os.tmpdir(), "backtest-schema-"));
