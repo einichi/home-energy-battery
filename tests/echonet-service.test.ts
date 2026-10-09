@@ -107,6 +107,30 @@ await assert.rejects(
   /ECHONET client is closed/,
 );
 
+let retryClock = 0;
+let retryInitCalls = 0;
+const retryAdapter = await createEchonetCommandAdapter({
+  now: () => retryClock,
+  client: {
+    async init() {
+      retryInitCalls += 1;
+      if (retryInitCalls === 1) throw new Error("initialization unavailable");
+    },
+    async close() {},
+    async get() { return { message: { data: Buffer.from([0x30]), prop: [] } }; },
+    async set() { return { message: { prop: [] } }; },
+    async discover() { return {}; },
+  } as unknown as EchonetClient,
+});
+await assert.rejects(retryAdapter.execute("status", { host: "192.0.2.10" }), /initialization unavailable/);
+retryClock = 29_999;
+await assert.rejects(retryAdapter.execute("status", { host: "192.0.2.10" }), /initialization unavailable/);
+assert.equal(retryInitCalls, 1, "failed initialization is not retried during its cooldown");
+retryClock = 30_000;
+await retryAdapter.execute("status", { host: "192.0.2.10" });
+assert.equal(retryInitCalls, 2, "initialization retries after the 30-second cooldown");
+await retryAdapter.close();
+
 const inRange = decodePercent({ host: "h", eoj: "0x027D01", epc: 0xe4, name: "battery_remaining_percent", raw: Buffer.from([64]), unit: "%" });
 assert.deepEqual(inRange, { host: "h", eoj: "0x027D01", epc: "0xE4", name: "battery_remaining_percent", raw: "0x40", value: 64, unit: "%", human: "64 %" });
 const outOfRange = decodePercent({ host: "h", eoj: "0x027D01", epc: 0xe4, name: "battery_remaining_percent", raw: Buffer.from([150]), unit: "%" });

@@ -10,6 +10,8 @@ import {
 } from "./adapters/echonet-codecs.js";
 import { executeEchonetCommand } from "./adapters/echonet-commands.js";
 
+const INIT_RETRY_COOLDOWN_MS = 30_000;
+
 function makeClient(opts: Record<string, unknown>): EchonetClient {
   return createEchonetClient({
     timeout: Number(opts.timeout ?? 3),
@@ -18,15 +20,29 @@ function makeClient(opts: Record<string, unknown>): EchonetClient {
   });
 }
 
-async function createEchonetCommandAdapter(options: Record<string, unknown> & { client?: EchonetClient } = {}) {
+async function createEchonetCommandAdapter(options: Record<string, unknown> & { client?: EchonetClient; now?: () => number } = {}) {
   const client = options.client ?? makeClient(options);
+  const now = options.now ?? Date.now;
   let initialization: Promise<void> | null = null;
+  let initializationFailedAt: number | null = null;
   let closed = false;
+  const initialize = () => {
+    if (initialization && (initializationFailedAt === null || now() - initializationFailedAt < INIT_RETRY_COOLDOWN_MS)) {
+      return initialization;
+    }
+    initializationFailedAt = null;
+    initialization = Promise.resolve()
+      .then(() => client.init())
+      .catch((error: unknown) => {
+        initializationFailedAt = now();
+        throw error;
+      });
+    return initialization;
+  };
   return {
     async execute(command: string, args: Record<string, unknown> = {}, positional: unknown[] = []): Promise<unknown> {
       if (closed) throw new Error("ECHONET client is closed");
-      initialization ??= client.init();
-      await initialization;
+      await initialize();
       return executeEchonetCommand(command, args, positional, client);
     },
     async close(): Promise<void> {
