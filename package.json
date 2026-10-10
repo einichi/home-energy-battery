@@ -22,6 +22,7 @@
     "test:ui:lifecycle": "npm run build:server && npm run build:ui && node scripts/ui-lifecycle.mjs",
     "test:production-build": "npm run build:server && npm run build:ui && node scripts/production-build-smoke.mjs",
     "test:server": "npm run build:test-server && node --test --test-concurrency=1 .test-dist/tests/*.test.js",
+    "backtest:fuel-cell": "npm run build:server && node scripts/backtest-fuel-cell.mjs",
     "check": "npm run typecheck:server && npm run typecheck:tests && npm run typecheck:ui && npm run lint:server && npm run lint:ui && npm run build:server && npm run build:ui",
     "test": "npm run test:server && npm run test:ui"
   },

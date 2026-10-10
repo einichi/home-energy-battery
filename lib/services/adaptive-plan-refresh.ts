@@ -6,7 +6,7 @@ import type { SolarForecastHour } from "../domain/solar-forecast.js";
 import { buildAdaptiveChargingPlan } from "../domain/adaptive-planning.js";
 import { adaptiveChargingPlanLogMessage, applyInterruptedChargeCap } from "../domain/adaptive-control.js";
 import { CURRENT_BACKTEST_MODEL } from "../domain/backtesting.js";
-import { numericMetric } from "../domain/telemetry.js";
+import { numericMetric, sampleFromStatus } from "../domain/telemetry.js";
 import type { AdaptiveEvaluationStatus } from "./automation-orchestrator.js";
 import type { createAdaptiveHistoryService } from "./adaptive-history-service.js";
 import type { createAdaptiveForecastService } from "./adaptive-forecast-service.js";
@@ -57,6 +57,17 @@ export async function refreshAdaptivePlan(
       solarPowerW: numericMetric(status.energy?.solar?.instant_power),
       branchDemandW: numericMetric(status.meter?.branch_demand_power),
     });
+    if (config.fuelCellEnabled !== false) {
+      const liveSample = sampleFromStatus(status, config);
+      // Keep the source observation time: a cached status must not make an
+      // old tank reading look fresh merely because the plan was refreshed.
+      samples.push({
+        timestamp: typeof status.read_at === "string" ? status.read_at : now.toISOString(),
+        fuelCellPowerW: liveSample.fuelCellPowerW,
+        fuelCellGenerationState: liveSample.fuelCellGenerationState,
+        fuelCellHotWaterLevel: liveSample.fuelCellHotWaterLevel,
+      });
+    }
   }
   state = {
     ...state,

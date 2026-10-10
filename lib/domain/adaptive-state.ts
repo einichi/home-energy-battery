@@ -62,7 +62,13 @@ export interface AdaptivePlan {
     awayComparableDayCount?: number;
     awayFallbackSlotCount?: number;
   };
-  fuelCellModel?: { method?: string; influence?: string; blockers?: string[] } | null;
+  fuelCellModel?: {
+    method?: string;
+    influence?: string;
+    blockers?: string[];
+    recentHotWaterLevel?: number | null;
+    hotWaterConditionedSlotCount?: number;
+  } | null;
   timeline?: Array<{
     start: string;
     end: string;

@@ -7,6 +7,9 @@ const ADAPTIVE_CHARGING_SEASONAL_LOOKBACK_YEARS = 10;
 const ADAPTIVE_CHARGING_SEASONAL_DAY_RANGE = 28;
 const ADAPTIVE_CHARGING_SEASONAL_DAYS_PER_YEAR = 2;
 const AWAY_LEARNED_MIN_DAYS = 3;
+const FUEL_CELL_HOT_WATER_MIN_DAYS = 4;
+const FUEL_CELL_HOT_WATER_MAX_AGE_MS = 45 * 60_000;
+const FUEL_CELL_HOT_WATER_HORIZON_MS = 6 * 60 * 60_000;
 
 type Occupancy = "all" | "home" | "away";
 
@@ -15,6 +18,7 @@ export interface DemandSample {
   branchDemandW?: unknown;
   fuelCellPowerW?: unknown;
   fuelCellGenerationState?: unknown;
+  fuelCellHotWaterLevel?: unknown;
   intervalAveragePowerW?: { branchDemandW?: unknown };
   powerCoverageSeconds?: { branchDemandW?: unknown };
   coverageSeconds?: { branchDemandKwh?: unknown };
@@ -72,6 +76,8 @@ interface FuelCellConfigInput {
 interface FuelCellForecastOptions {
   temperatureByDay?: Map<string, number>;
   awayPeriods?: AwayPeriod[];
+  /** Disable only for paired offline comparisons with the existing forecast. */
+  hotWaterConditioning?: boolean;
 }
 
 
@@ -192,13 +198,34 @@ export function buildFuelCellGenerationModel(
   const requestedInfluence = config.fuelCell?.includeInAdaptiveCharging ? "active" : "observe";
   const temperatureByDay = options.temperatureByDay instanceof Map ? options.temperatureByDay : new Map();
   const awayPeriods = Array.isArray(options.awayPeriods) ? options.awayPeriods : [];
+  const nowMs = now.getTime();
+  const hotWaterObservations = samples.flatMap((sample) => {
+    if (!Object.hasOwn(sample, "fuelCellHotWaterLevel")) return [];
+    const at = new Date(sample.timestamp).getTime();
+    const level = finiteNumberOrNull(sample.fuelCellHotWaterLevel);
+    return !Number.isFinite(at) || at > nowMs
+      ? []
+      : [{ at, level: level !== null && Number.isInteger(level) && level >= 0 && level <= 5 ? level : null }];
+  }).sort((left, right) => left.at - right.at);
+  const hotWaterAt = (at: number): number | null => {
+    let low = 0;
+    let high = hotWaterObservations.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (hotWaterObservations[middle]!.at <= at) low = middle + 1;
+      else high = middle;
+    }
+    const observation = hotWaterObservations[low - 1];
+    return observation && at - observation.at <= FUEL_CELL_HOT_WATER_MAX_AGE_MS ? observation.level : null;
+  };
+  const recentHotWaterLevel = hotWaterAt(nowMs);
   const powerSamples = samples.flatMap((sample): Array<{ date: Date; watts: number; state: unknown }> => {
     const date = new Date(sample.timestamp);
     const watts = finiteNumberOrNull(sample.fuelCellPowerW);
-    return Number.isNaN(date.getTime()) || watts === null
+    return Number.isNaN(date.getTime()) || date.getTime() > nowMs || watts === null
       ? []
       : [{ date, watts, state: sample.fuelCellGenerationState ?? null }];
-  });
+  }).sort((left, right) => left.date.getTime() - right.date.getTime());
   type FuelCellDay = {
     key: string;
     date: Date;
@@ -261,6 +288,25 @@ export function buildFuelCellGenerationModel(
       const sameRecentState = candidates.filter((day) => day.values.get(bucket)?.state === latest.state);
       if (sameRecentState.length >= 4) candidates = sameRecentState;
     }
+    let hotWaterConditioned = false;
+    const leadMs = date.getTime() - nowMs;
+    if (options.hotWaterConditioning !== false && recentHotWaterLevel !== null && leadMs >= 0 && leadMs <= FUEL_CELL_HOT_WATER_HORIZON_MS) {
+      // Match the tank at the historical forecast ORIGIN, not at its future
+      // target bucket. The latter would leak information unavailable today.
+      const targetDay = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+      const originDay = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+      const dayOffset = Math.round((targetDay - originDay) / MILLISECONDS_PER_DAY);
+      const sameHotWaterLevel = candidates.filter((day) => {
+        const origin = new Date(day.date);
+        origin.setDate(origin.getDate() - dayOffset);
+        origin.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
+        return origin.getTime() < nowMs && hotWaterAt(origin.getTime()) === recentHotWaterLevel;
+      });
+      if (sameHotWaterLevel.length >= FUEL_CELL_HOT_WATER_MIN_DAYS) {
+        candidates = sameHotWaterLevel;
+        hotWaterConditioned = true;
+      }
+    }
     const values = candidates.map((day) => day.values.get(bucket)?.watts)
       .filter((value): value is number => value !== undefined && Number.isFinite(value));
     return {
@@ -268,6 +314,7 @@ export function buildFuelCellGenerationModel(
       medianW: median(values) ?? 0,
       p80W: percentile(values, 0.8) ?? 0,
       sampleCount: values.length,
+      hotWaterConditioned,
     };
   };
   return {
@@ -279,6 +326,7 @@ export function buildFuelCellGenerationModel(
     validObservationDays: validDays.length,
     comparableDays: comparableDays.length,
     recentState: latest?.state ?? null,
+    recentHotWaterLevel,
     forecastAt,
   };
 }

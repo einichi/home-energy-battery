@@ -170,6 +170,33 @@ Home or extended. Completed periods are hidden from the management table but
 remain in SQLite so Away demand can be learned separately from normal household
 demand and reused in later charging plans.
 
+Ene-Farm generation forecasts also use the observed 0–5 hot-water level for
+targets up to six hours ahead. Historical days must match the tank level at the
+equivalent **forecast origin**, not at the future target time. At least four
+matching days and a level reading no older than 45 minutes are required;
+otherwise the existing time/season/temperature/occupancy/state forecast is used.
+The level is not treated as a calibrated volume or a fixed amount of electricity.
+Charging still prioritizes headroom preservation using the P80 generation
+forecast; this conditioning does not change that policy. Plan diagnostics expose
+`fuelCellModel.recentHotWaterLevel` and `hotWaterConditionedSlotCount`.
+
+To compare the existing and hot-water-conditioned forecasts offline, export
+half-hour samples from `GET /api/history?start=...&end=...` (ranges longer than
+two hours return interval rollups), then run:
+
+```bash
+TZ=Asia/Tokyo npm run backtest:fuel-cell -- /path/to/history.json
+```
+
+Use the household's timezone. The input can optionally include `awayPeriods`
+and a `temperatureByDay` date-to-temperature map. The backtest uses only completed
+intervals available at each origin, scores future intervals with at least 80%
+power coverage, and reports median-prediction MAE, P20/P80 pinball loss, and P80
+coverage. It makes no network requests or live charging changes. Overlapping
+forecasts are correlated, so reported interval counts are not independent trials.
+See [the production-history evaluation](docs/ene-farm-hot-water-backtest.md) for
+the measured benefit and limitations.
+
 SMTP notifications are configured from System → Notifications and
 are disabled by default. They can report Charging Demand Guard transitions,
 schedule failures, device outages and recoveries, Adaptive Charging availability,

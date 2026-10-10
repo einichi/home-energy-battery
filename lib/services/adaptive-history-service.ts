@@ -65,7 +65,7 @@ export function createAdaptiveHistoryService(
     let hasMetric = false;
     for (const key of [
       "stateOfChargePercent", "batteryPowerW", "solarPowerW", "branchDemandW",
-      "fuelCellPowerW", "fuelCellGenerationState", "fuelCellDataQuality",
+      "fuelCellPowerW", "fuelCellGenerationState", "fuelCellHotWaterLevel", "fuelCellDataQuality",
     ] as const) {
       if (sample[key] === undefined) continue;
       compact[key] = sample[key];

@@ -100,6 +100,7 @@ export function buildAdaptiveChargingPlan({
   let predictedDemandKwh = 0;
   let predictedSurplusKwh = 0;
   let predictedFuelCellKwh = 0;
+  let hotWaterConditionedSlotCount = 0;
   let awaySlotCount = 0;
   let awayLearnedSlotCount = 0;
   let awayFallbackSlotCount = 0;
@@ -150,6 +151,7 @@ export function buildAdaptiveChargingPlan({
     const highSolarKwh = highSolarW * durationHours / 1000;
     const demandKwh = slotDemandW * durationHours / 1000;
     const fuelCellForecast = fuelCellModel.forecastAt(date);
+    if (fuelCellForecast.hotWaterConditioned) hotWaterConditionedSlotCount += 1;
     const fuelCellActive = fuelCellModel.influence === "active";
     const fuelCellPlanningKwh = fuelCellActive ? fuelCellForecast.p20W * durationHours / 1000 : 0;
     const highFuelCellKwh = fuelCellActive ? fuelCellForecast.p80W * durationHours / 1000 : 0;
@@ -246,6 +248,8 @@ export function buildAdaptiveChargingPlan({
       blockers: fuelCellModel.blockers,
       validObservationDays: fuelCellModel.validObservationDays,
       comparableDays: fuelCellModel.comparableDays,
+      recentHotWaterLevel: fuelCellModel.recentHotWaterLevel,
+      hotWaterConditionedSlotCount,
     },
     chargePerformance,
     batteryModel,
