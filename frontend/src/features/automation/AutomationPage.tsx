@@ -105,6 +105,7 @@ function demandGuard(rules: AutomationRule[]) {
 
 function Timeline({ items = [] }: { items?: AdaptiveTimelineItem[] }) {
   const { t } = useTranslation("automation");
+  const [active, setActive] = useState<number | null>(null);
   if (!items.length) return <div className="automation-empty" role="status">{t("noPlanTimelineIsAvailableYetCompleteSetupOrRecalculateAf4a125b")}</div>;
   const start = new Date(items[0].start).getTime();
   const end = new Date(items.at(-1)?.end ?? items[0].end).getTime();
@@ -117,8 +118,25 @@ function Timeline({ items = [] }: { items?: AdaptiveTimelineItem[] }) {
           const width = (new Date(item.end).getTime() - new Date(item.start).getTime()) / duration * 100;
           const tone = Number(item.plannedChargeWh) > 0 ? "charge" : item.away ? "away" : item.discounted ? "discount" : "observe";
           const detail = `${formatTime(item.start)}–${formatTime(item.end)} · Demand ${formatPower(item.demandW ?? null)} · Solar ${formatPower(item.solarW ?? null)} · Planned charge ${Math.round(Number(item.plannedChargeWh) || 0)} Wh${item.away ? " · Away assumptions" : ""}`;
-          return <i key={`${item.start}:${index}`} data-tone={tone} style={{ left: `${left}%`, width: `${Math.max(.35, width)}%` }} title={detail} aria-label={detail} />;
+          return <button
+            key={`${item.start}:${index}`}
+            className="automation-timeline-segment"
+            type="button"
+            data-tone={tone}
+            style={{ left: `${left}%`, width: `${Math.max(.35, width)}%` }}
+            aria-label={detail}
+            aria-describedby={active === index ? `automation-timeline-detail-${index}` : undefined}
+            onMouseEnter={() => setActive(index)}
+            onMouseLeave={() => setActive(null)}
+            onFocus={() => setActive(index)}
+            onBlur={() => setActive(null)}
+          />;
         })}
+        {active !== null && items[active] ? <div className="automation-timeline-tooltip" id={`automation-timeline-detail-${active}`} role="tooltip">
+          <strong>{formatTime(items[active].start)}–{formatTime(items[active].end)}</strong>
+          <span>{t("Demand")}: {formatPower(items[active].demandW ?? null)} · {t("Solar")}: {formatPower(items[active].solarW ?? null)}</span>
+          <span>{t("Planned charge")}: {Math.round(Number(items[active].plannedChargeWh) || 0)} Wh{items[active].away ? ` · ${t("Away assumptions")}` : ""}</span>
+        </div> : null}
       </div>
       <div className="automation-timeline-axis"><time>{formatDateTime(items[0].start)}</time><time>{formatDateTime(items.at(-1)?.end)}</time></div>
       <div className="automation-timeline-legend"><span data-tone="charge">{t("plannedCharging")}</span><span data-tone="discount">{t("discountedPeriod")}</span><span data-tone="away">{t("awayAssumptions")}</span><span data-tone="observe">{t("forecastOnly")}</span></div>
@@ -259,7 +277,7 @@ function signedEnergy(value?: number | null) {
   return `${number >= 0 ? "+" : ""}${number.toFixed(2)} kWh`;
 }
 
-function PerformanceView({ adaptive }: { adaptive: AdaptiveChargingStatus | null }) {
+function PerformanceView({ adaptive, config }: { adaptive: AdaptiveChargingStatus | null; config: AppConfig | null }) {
   const { t } = useTranslation("automation");
   const [backtests, setBacktests] = useState<BacktestRunSummary[]>([]);
   const [backtestRange, setBacktestRange] = useState<"90d" | "all">("90d");
@@ -291,6 +309,18 @@ function PerformanceView({ adaptive }: { adaptive: AdaptiveChargingStatus | null
   const demandDays = plan?.demandHistory?.validDayCount ?? plan?.demandHistory?.recentComparableDayCount ?? 0;
   const solarOutcomes = adaptive?.solarForecastAccuracy?.outcomes ?? [];
   const windowOutcomes = [...(adaptive?.windowSummaries ?? [])].reverse();
+  const sortedWindowOutcomes = [...windowOutcomes].sort((a, b) => new Date(a.windowStart ?? 0).getTime() - new Date(b.windowStart ?? 0).getTime());
+  const cheaperWindowByKey = new Map<string, { label: string; at: string; endSoc: number | null; nextStartSoc: number | null }>();
+  if (config?.rateMode === "multi" && config.rateBands?.length) {
+    for (const outcome of sortedWindowOutcomes) {
+      const currentBand = config.rateBands.find((band) => band.label === outcome.label);
+      if (!currentBand || !outcome.key) continue;
+      const cheaperLabels = new Set(config.rateBands.filter((band) => band.yenPerKwh < currentBand.yenPerKwh).map((band) => band.label));
+      if (!cheaperLabels.size) continue;
+      const next = sortedWindowOutcomes.find((candidate) => new Date(candidate.windowStart ?? 0).getTime() > new Date(outcome.windowEnd ?? outcome.windowStart ?? 0).getTime() && cheaperLabels.has(candidate.label ?? ""));
+      if (next) cheaperWindowByKey.set(outcome.key, { label: next.label ?? "Discounted", at: next.windowStart ?? "", endSoc: outcome.endSocPercent ?? null, nextStartSoc: next.startSocPercent ?? null });
+    }
+  }
   const fuelOutcomes = useMemo(() => {
     const seen = new Set<string>();
     return (adaptive?.fuelCellForecastOutcomes ?? []).filter((outcome) => {
@@ -328,7 +358,7 @@ function PerformanceView({ adaptive }: { adaptive: AdaptiveChargingStatus | null
       <section className="performance-detail-grid">
         <article className="panel performance-evidence"><div className="section-heading"><div><p className="eyebrow">{t("solar")}</p><h2>{t("forecastOutcomes")}</h2></div><span className="quality-label">{adaptive?.solarForecastAccuracy?.learned ? "Calibrated estimate" : "Learning estimate"}</span></div><dl className="performance-summary"><div><dt>{t("evidence")}</dt><dd>{adaptive?.solarForecastAccuracy?.sampleCount ?? 0} {" " + t("days") + ""}</dd></div><div><dt>{t("meanAbsoluteError")}</dt><dd>{solarMae.length ? formatEnergy(solarMae.reduce((sum, value) => sum + value, 0) / solarMae.length) : "—"}</dd></div></dl>{solarOutcomes.length ? <div className="table-scroll"><table><thead><tr><th>{t("date")}</th><th>{t("issuedEstimate")}</th><th>{t("planningEstimate")}</th><th>{t("recordedGeneration")}</th><th>{t("error")}</th></tr></thead><tbody>{[...solarOutcomes].reverse().slice(0, 8).map((outcome, index) => <tr key={`${outcome.targetDate}:${index}`}><td>{outcome.targetDate ? formatDate(`${outcome.targetDate}T00:00:00`) : "—"}</td><td>{formatEnergy(outcome.predictedKwh)}</td><td>{formatEnergy(outcome.planningKwh)}</td><td>{formatEnergy(outcome.actualKwh)}</td><td>{signedEnergy(outcome.errorKwh)}</td></tr>)}</tbody></table></div> : <p className="automation-empty compact">{t("noCompletedSolarForecastDaysYet")}</p>}</article>
         <article className="panel performance-evidence"><div className="section-heading"><div><p className="eyebrow">{t("demand")}</p><h2>{t("historicalModel")}</h2></div><span className="quality-label">{t("estimated")}</span></div><dl className="performance-summary"><div><dt>{t("recordedDays")}</dt><dd>{plan?.demandHistory?.recordedDayCount ?? 0}</dd></div><div><dt>{t("validDays")}</dt><dd>{plan?.demandHistory?.validDayCount ?? 0}</dd></div><div><dt>{t("recentComparisons")}</dt><dd>{plan?.demandHistory?.recentComparableDayCount ?? 0}</dd></div><div><dt>{t("seasonalComparisons")}</dt><dd>{plan?.demandHistory?.seasonalComparableDayCount ?? 0}</dd></div></dl><p className="panel-note">{t("demandErrorHistoryIsNotAvailableYet")}</p></article>
-        <article className="panel performance-evidence"><div className="section-heading"><div><p className="eyebrow">{t("battery")}</p><h2>{t("chargingWindowOutcomes")}</h2></div><span className="quality-label">{t("recordedEstimated")}</span></div>{windowOutcomes.length ? <div className="table-scroll"><table><thead><tr><th>{t("window")}</th><th>{t("planned")}</th><th>{t("delivered")}</th><th>{t("guardImpact")}</th><th>{t("soc")}</th><th>{t("result")}</th></tr></thead><tbody>{windowOutcomes.slice(0, 8).map((outcome, index) => <tr key={`${outcome.key}:${index}`}><td>{formatDateTime(outcome.windowStart)}<small>{t(outcome.label ?? "Discounted")}</small></td><td>{formatWh(outcome.plannedWh)}</td><td>{formatWh(outcome.deliveredWh)}{Number(outcome.estimatedDeliveryWh) > 0 ? <small>{formatWh(outcome.estimatedDeliveryWh)} {" " + t("boundaryEstimate") + ""}</small> : null}</td><td>{Number(outcome.interruptionCount) > 0 ? t("countInterruptionsMinutesMinUnavailable", { count: outcome.interruptionCount, minutes: Math.round(Number(outcome.guardInterruptedMs) / 60_000) }) : "—"}</td><td>{t("{start} → {end}", { start: formatPercent(outcome.startSocPercent), end: formatPercent(outcome.endSocPercent) })}</td><td>{outcome.socTargetReached ? t("Target reached") : Number(outcome.unmetWh) > 0 ? t("{value} short", { value: formatWh(outcome.unmetWh) }) : t("Completed")}</td></tr>)}</tbody></table></div> : <p className="automation-empty compact">{t("noCompletedChargingWindowsYet")}</p>}</article>
+        <article className="panel performance-evidence"><div className="section-heading"><div><p className="eyebrow">{t("battery")}</p><h2>{t("chargingWindowOutcomes")}</h2></div><span className="quality-label">{t("recordedEstimated")}</span></div>{windowOutcomes.length ? <div className="table-scroll"><table><thead><tr><th>{t("window")}</th><th>{t("planned")}</th><th>{t("delivered")}</th><th>{t("guardImpact")}</th><th>{t("soc")}</th><th>{t("result")}</th>{config?.rateMode === "multi" ? <th>{t("Next cheaper window")}</th> : null}</tr></thead><tbody>{windowOutcomes.slice(0, 8).map((outcome, index) => { const next = outcome.key ? cheaperWindowByKey.get(outcome.key) : undefined; const bridge = next?.endSoc != null && next.nextStartSoc != null ? next.nextStartSoc - next.endSoc : null; return <tr key={`${outcome.key}:${index}`}><td>{formatDateTime(outcome.windowStart)}<small>{t(outcome.label ?? "Discounted")}</small></td><td>{formatWh(outcome.plannedWh)}</td><td>{formatWh(outcome.deliveredWh)}{Number(outcome.estimatedDeliveryWh) > 0 ? <small>{formatWh(outcome.estimatedDeliveryWh)} {" " + t("boundaryEstimate") + ""}</small> : null}</td><td>{Number(outcome.interruptionCount) > 0 ? t("countInterruptionsMinutesMinUnavailable", { count: outcome.interruptionCount, minutes: Math.round(Number(outcome.guardInterruptedMs) / 60_000) }) : "—"}</td><td>{t("{start} → {end}", { start: formatPercent(outcome.startSocPercent), end: formatPercent(outcome.endSocPercent) })}</td><td>{outcome.socTargetReached ? t("Target reached") : Number(outcome.unmetWh) > 0 ? t("{value} short", { value: formatWh(outcome.unmetWh) }) : t("Completed")}</td>{config?.rateMode === "multi" ? <td>{next ? <>{t(next.label)} · {formatDateTime(next.at)}<small>{bridge === null ? t("SOC bridge unavailable") : t("SOC {end} → {next} ({change})", { end: formatPercent(next.endSoc), next: formatPercent(next.nextStartSoc), change: `${bridge > 0 ? "+" : ""}${bridge.toFixed(0)} pp` })}</small></> : <span>{t("No later cheaper outcome recorded")}</span>}</td> : null}</tr>; })}</tbody></table></div> : <p className="automation-empty compact">{t("noCompletedChargingWindowsYet")}</p>}</article>
         <article className="panel performance-evidence"><div className="section-heading"><div><p className="eyebrow">{t("eneFarm")}</p><h2>{t("forecastOutcomes")}</h2></div><span className="quality-label">{t("estimatedVsRecorded")}</span></div><dl className="performance-summary"><div><dt>{t("completedIntervals112850")}</dt><dd>{fuelOutcomes.length}</dd></div><div><dt>{t("meanAbsoluteError")}</dt><dd>{fuelMae.length ? formatEnergy(fuelMae.reduce((sum, value) => sum + value, 0) / fuelMae.length) : "—"}</dd></div></dl>{fuelOutcomes.length ? <div className="table-scroll"><table><thead><tr><th>{t("interval")}</th><th>{t("medianEstimate")}</th><th>{t("recordedOutput")}</th><th>{t("error")}</th><th>{t("planInfluence")}</th></tr></thead><tbody>{fuelOutcomes.slice(0, 8).map((outcome, index) => <tr key={`${outcome.targetStart}:${index}`}><td>{t("{start}–{end}", { start: formatTime(outcome.start.toISOString()), end: formatTime(outcome.end.toISOString()) })}</td><td>{formatEnergy(outcome.predictedKwh)}</td><td>{formatEnergy(outcome.actualKwh)}</td><td>{signedEnergy(outcome.errorKwh)}</td><td>{outcome.influence ?? "—"}</td></tr>)}</tbody></table></div> : <p className="automation-empty compact">{t("noCompletedEneFarmForecastIntervalsYet")}</p>}</article>
       </section>
       <section className="panel backtest-performance" aria-labelledby="backtest-performance-heading">
@@ -370,7 +400,7 @@ export function AutomationPage() {
   const [guardResult, setGuardResult] = useState<ActionResult>(null);
   const [confirmation, setConfirmation] = useState<Confirmation>(null);
   const { config, status, replaceConfig, refresh: refreshStatus } = useEnergyStatus();
-  const { adaptive, rules, away, receipts, loading, manualRefreshing, error, refresh } = useAutomation();
+  const { adaptive, rules, away, receipts, error, refresh } = useAutomation();
   const checks = prerequisites(config);
   const state = masterState(adaptive, checks);
   const next = nextAction(adaptive, checks);
@@ -545,7 +575,7 @@ export function AutomationPage() {
 
   return (
     <main className="page automation-page">
-      <header className="page-heading"><div><p className="eyebrow">{t("decide")}</p><h1>{t("automation")}</h1><p>{t("understandWhatTheSystemWillDoNextWhyItChoseThatActionAnd7a95b9")}</p></div><button className="quiet-button" type="button" onClick={refresh} disabled={loading || manualRefreshing}>{loading ? "Loading…" : manualRefreshing ? "Refreshing…" : "Refresh"}</button></header>
+      <header className="page-heading"><div><p className="eyebrow">{t("decide")}</p><h1>{t("automation")}</h1><p>{t("understandWhatTheSystemWillDoNextWhyItChoseThatActionAnd7a95b9")}</p></div></header>
       {error ? <div className="status-banner" data-severity="critical">{"" + t("automation581c15") + " "}{formatDateTimesInText(error)}</div> : null}
 
       <nav className="automation-tabs" aria-label={t("automationViews")}>{(["plan", "performance", "configuration"] as AutomationView[]).map((item) => <button key={item} type="button" aria-pressed={view === item} onClick={() => setView(item)}>{t(item[0].toUpperCase() + item.slice(1))}</button>)}</nav>
@@ -564,7 +594,7 @@ export function AutomationPage() {
         <Activity adaptive={adaptive} guard={guard} receipts={receipts} />
       </> : null}
 
-      {view === "performance" ? <PerformanceView adaptive={adaptive} /> : null}
+      {view === "performance" ? <PerformanceView adaptive={adaptive} config={config} /> : null}
 
       {view === "configuration" ? <section className="automation-view-stack" aria-label="Automation configuration"><section className="panel setup-checklist"><div className="section-heading"><div><p className="eyebrow">{t("prerequisites")}</p><h2>{t("setupChecklist")}</h2></div><span className="sample-count">{t("{ready}/{total} {label}", { ready: checks.filter((item) => item.ready).length, total: checks.length, label: t("ready") })}</span></div><ul>{checks.map((item) => <li key={item.label} data-ready={item.ready}><i aria-hidden="true">{item.ready ? "✓" : "!"}</i><div><strong>{item.label}</strong><span>{item.detail}</span>{item.href.startsWith("#") ? <a href={item.href}>{item.action}<span aria-hidden="true">{t("→")}</span></a> : <Link to={item.href}>{item.action}<span aria-hidden="true">{t("→")}</span></Link>}</div></li>)}</ul></section>
         <form id="adaptive-settings" className="panel automation-settings-form" key={`adaptive:${JSON.stringify(config?.adaptiveCharging)}:${JSON.stringify(config?.batteryCapabilities)}`} onSubmit={submitAdaptive}><div className="section-heading"><div><p className="eyebrow">{t("planningSettings")}</p><h2>{t("adaptiveChargingConfiguration")}</h2><p className="section-copy">{t("changesInvalidateTheCurrentPlanAndQueueARecalculation")}</p></div></div><label className="automation-toggle"><input name="enabled" type="checkbox" defaultChecked={config?.adaptiveCharging?.enabled === true} /><span><strong>{t("enableAdaptiveCharging")}</strong><small>{t("allowTheApplicationToSelectAndOperateDiscountedChargingW39f85b")}</small></span></label><div className="automation-form-grid"><label className="field">{t("latitude")}<input name="latitude" type="number" min="-90" max="90" step="0.000001" required defaultValue={config?.adaptiveCharging?.latitude ?? ""} /></label><label className="field">{t("longitude")}<input name="longitude" type="number" min="-180" max="180" step="0.000001" required defaultValue={config?.adaptiveCharging?.longitude ?? ""} /></label><label className="field">{t("arrayPeakCapacity")}<div className="input-suffix"><input name="arrayPeakKw" type="number" min="0.1" step="0.1" required defaultValue={config?.adaptiveCharging?.arrayPeakKw ?? ""} /><span>{t("kw")}</span></div></label><label className="field">{t("panelTilt")}<div className="input-suffix"><input name="panelTiltDegrees" type="number" min="0" max="90" step="1" required defaultValue={config?.adaptiveCharging?.panelTiltDegrees ?? 30} /><span>{t("°")}</span></div></label><label className="field">{t("panelAzimuth")}<div className="input-suffix"><input name="panelAzimuthDegrees" type="number" min="-180" max="180" step="1" required defaultValue={config?.adaptiveCharging?.panelAzimuthDegrees ?? 0} /><span>{t("°")}</span></div></label><label className="field">{t("initialSystemLoss")}<div className="input-suffix"><input name="systemLossPercent" type="number" min="0" max="50" step="1" required defaultValue={config?.adaptiveCharging?.systemLossPercent ?? 14} /><span>{t("%")}</span></div></label><label className="field">{t("maximumOffPeakSOC")}<div className="input-suffix"><input name="targetSocPercent" type="number" min="50" max="100" step="1" required defaultValue={config?.adaptiveCharging?.targetSocPercent ?? 100} /><span>{t("%")}</span></div></label><label className="field">{t("forecastConfidenceMargin")}<div className="input-suffix"><input name="forecastMarginPercent" type="number" min="0" max="50" step="1" required defaultValue={config?.adaptiveCharging?.forecastMarginPercent ?? 10} /><span>{t("%")}</span></div></label><label className="field">{t("usableBatteryCapacity")}<div className="input-suffix"><input name="usableCapacityKwh" type="number" min="0.1" step="0.1" required defaultValue={config?.batteryCapabilities?.usableCapacityKwh ?? ""} /><span>{t("kwh")}</span></div></label><label className="field">{t("maximumChargePower")}<div className="input-suffix"><input name="maximumChargeWatts" type="number" min="50" step="1" required defaultValue={config?.batteryCapabilities?.maximumChargeWatts ?? ""} /><span>{t("w")}</span></div></label><label className="field">{t("roundTripEfficiency")}<div className="input-suffix"><input name="roundTripEfficiencyPercent" type="number" min="50" max="100" step="1" required defaultValue={Math.round((config?.batteryCapabilities?.roundTripEfficiency ?? 0.9) * 100)} /><span>{t("%")}</span></div></label></div><div className="form-footer"><button className="button primary" type="submit" disabled={busy !== null || !config}>{busy === "adaptive-config" ? "Saving…" : "Review and save"}</button>{adaptiveResult ? <p className={`inline-save-result ${adaptiveResult.ok ? "success" : "failure"}`} role={adaptiveResult.ok ? "status" : "alert"}>{adaptiveResult.message}</p> : null}</div></form>
