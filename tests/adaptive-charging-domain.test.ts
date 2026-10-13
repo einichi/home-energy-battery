@@ -41,6 +41,7 @@ import {
   dailySolarForecastIssues,
   forecastHourForInterval,
   learnedSolarFactor,
+  solarCalibrationFactor,
   nextPlanningBoundary,
   parseOpenMeteoForecast,
   solarPowerFromIrradiance,
@@ -95,6 +96,7 @@ import {
   adaptiveChargingAvailability,
   adaptiveChargingBaseAvailability,
   adaptiveChargingBreakerSettings,
+  applyPredictedBatteryFlow,
   buildAdaptiveChargingTimelineView,
   discountedPlanStatus,
   forecastIsFresh,
@@ -2519,7 +2521,8 @@ const floorClippedWindowPlan = planChronologicalDiscountedCharging({
 
 assert.equal(floorClippedWindowPlan.slots.length, 1);
 
-assert.ok(Math.abs(floorClippedWindowPlan.plannedChargeKwh - 8 / 3) < 0.001);
+assert.ok(Math.abs(floorClippedWindowPlan.plannedChargeKwh - 2) < 0.001,
+  "a future non-solar-responsive discounted window holds Standby before its forced charge");
 
 assert.ok(floorClippedWindowPlan.unmetChargeKwh < 0.0001);
 
@@ -2775,6 +2778,19 @@ const alignedSolarFactor = learnedSolarFactor(alignedSolarSamples, alignedWeathe
 assert.equal(alignedSolarFactor.learned, true);
 
 assert.equal(alignedSolarFactor.factor, 2);
+
+assert.equal(
+  applyPredictedBatteryFlow(1, 4, 0, 10, 1, 0.5),
+  1.5,
+  "AUTO solar/fuel charging must respect the configured 1 kW capability over a half-hour slot",
+);
+
+const seasonalCalibration = { factor: 2, learned: true, validDays: 30, groupFactors: {
+  "2:morning": 1, "3:morning": 4, "2:midday": 1, "3:midday": 4,
+} };
+const septemberFactor = solarCalibrationFactor(seasonalCalibration, new Date("2026-09-30T08:00:00"));
+const octoberFactor = solarCalibrationFactor(seasonalCalibration, new Date("2026-10-01T08:00:00"));
+assert.ok(Math.abs(octoberFactor - septemberFactor) < 0.2, "solar group calibration should not jump at a calendar-quarter boundary");
 
 assert.match(String(smtpSecurityWarning({ port: 465, security: "starttls" })), /465/);
 assert.match(String(smtpSecurityWarning({ port: 587, security: "tls" })), /STARTTLS/);

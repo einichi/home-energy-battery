@@ -5,6 +5,7 @@ import { automationRuleLabel, automationRuleList } from "../domain/automation-ru
 import { adaptiveChargingConfiguredActive, adaptiveChargingWindowHasShortfall, shouldHoldGuardStandbyForAdaptiveCharging } from "../domain/adaptive-control.js";
 import { adaptiveChargingAvailability, adaptiveChargingBaseAvailability } from "../domain/adaptive-planning.js";
 import type { OperationalOverridesState } from "../domain/operational-overrides.js";
+import { cachedForecastIsUsable } from "../domain/adaptive-availability.js";
 
 export interface AutomationRunContext {
   startedAt?: string;
@@ -74,7 +75,8 @@ export function createAutomationOrchestrator(dependencies: AutomationOrchestrato
     if (!adaptiveChargingConfiguredActive(config)) return;
     const paused = state.pausedUntil && new Date(state.pausedUntil).getTime() > Date.now();
     if (!paused) {
-      const reason = state.lastForecastError?.error
+      const cachedForecastUsable = cachedForecastIsUsable(state);
+      const reason = (state.lastForecastError?.error && !cachedForecastUsable ? state.lastForecastError.error : null)
         ?? (state.plan?.available === false ? state.plan.reason : null)
         ?? (!state.plan ? state.lastResult?.skipped : null);
       dependencies.notifications.observeCondition({
@@ -198,8 +200,13 @@ export function createAutomationOrchestrator(dependencies: AutomationOrchestrato
       context.phase = "evaluating adaptive charging";
       const state = await dependencies.readAdaptiveChargingState();
       const forecastAge = startedAt.getTime() - new Date(state.forecast?.fetchedAt ?? 0).getTime();
+      const failureAt = new Date(String(state.lastForecastError?.at ?? "")).getTime();
+      const retryCount = Math.max(0, Number(state.lastForecastError?.retryCount) || 0);
+      const retryDelayMs = Math.min(30 * 60_000, 60_000 * 2 ** Math.min(5, Math.max(0, retryCount - 1)));
+      const retryDue = !Number.isFinite(failureAt) || startedAt.getTime() - failureAt >= retryDelayMs;
       if (adaptiveChargingAvailability(config, rules).available
-        && (!Number.isFinite(forecastAge) || forecastAge >= dependencies.forecastRefreshMs)) {
+        && ((!Number.isFinite(forecastAge) || forecastAge >= dependencies.forecastRefreshMs)
+          && (!state.lastForecastError || retryDue))) {
         context.phase = "refreshing Open-Meteo forecast";
         await dependencies.refreshAdaptiveChargingForecast(config, { now: startedAt });
       }

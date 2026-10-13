@@ -186,3 +186,17 @@ test("an explicit unavailable reading disables conditioning rather than reusing 
   assert.equal(model.recentHotWaterLevel, null);
   assert.equal(model.forecastAt(data.target).hotWaterConditioned, false);
 });
+
+test("fuel-cell rollup power is weighted by measured duration rather than row count", () => {
+  const now = localDate(2026, 6, 15, 12, 10);
+  const historical = shifted(now, -7);
+  historical.setHours(14, 0, 0, 0);
+  const samples = [
+    sample(historical, { fuelCellPowerW: 1_000, expectedIntervalSeconds: 600 }),
+    sample(new Date(historical.getTime() + 600_000), { fuelCellPowerW: 2_000, expectedIntervalSeconds: 300 }),
+  ];
+  const target = new Date(now);
+  target.setHours(14, 10, 0, 0);
+  const result = buildFuelCellGenerationModel(config, samples, now).forecastAt(target);
+  assert.equal(result.medianW, (1_000 * 600 + 2_000 * 300) / 900);
+});

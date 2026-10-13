@@ -28,3 +28,16 @@ const [first, second] = await Promise.all([
 assert.equal(first.revision, 1);
 assert.equal(second.revision, 2);
 assert.equal((await service.read()).revision, 2);
+
+const forecastRead = await service.read();
+const manualRead = await service.read();
+manualRead.pausedUntil = "2026-07-11T01:00:00.000Z";
+manualRead.owner = "adaptiveCharging";
+manualRead.activePlanCreatedAt = "2026-07-11T00:00:00.000Z";
+await service.write(manualRead);
+forecastRead.lastForecastError = { at: "2026-07-11T00:00:00.000Z", error: "temporary network failure" };
+const rebased = await service.write(forecastRead);
+assert.equal(rebased.pausedUntil, manualRead.pausedUntil, "a delayed forecast write must preserve a concurrent manual pause");
+assert.equal(rebased.owner, "adaptiveCharging", "a delayed forecast write must preserve active charge ownership");
+assert.equal(rebased.activePlanCreatedAt, manualRead.activePlanCreatedAt, "a delayed forecast write must preserve the active deadline");
+assert.deepEqual(rebased.lastForecastError, forecastRead.lastForecastError);

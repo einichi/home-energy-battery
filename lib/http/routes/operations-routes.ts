@@ -5,6 +5,7 @@ import type { AwayPeriodsView } from "../../../shared/api-contracts.js";
 import { AwayPeriodRequestSchema, AwayUntilRequestSchema, BackupPreparationRequestSchema, EmptyRequestSchema } from "../../../shared/api-schemas.js";
 import { validateRequestBody } from "../request-validation.js";
 import { refreshAdaptivePlan } from "../../services/adaptive-plan-refresh.js";
+import { cachedForecastIsUsable } from "../../domain/adaptive-availability.js";
 
 export type OperationsRouteDependencies = Pick<ApiRouteServices,
   | "adaptiveChargingAvailability" | "adaptiveChargingScheduledEvent"
@@ -12,10 +13,10 @@ export type OperationsRouteDependencies = Pick<ApiRouteServices,
   | "assertActionAllowedByOperationalOverride" | "awayPeriodsView"
   | "awayTimestamp" | "backupPreparationView" | "cleanNewAwayPeriod"
   | "createAwayPeriod" | "endBackupPreparation" | "ensureAwayPeriodDoesNotOverlap" | "findAwayPeriod"
-  | "forecastIsFresh" | "historicalWeather" | "listAwayPeriods" | "removeAwayPeriod"
+  | "getStatusSnapshot" | "historicalWeather" | "listAwayPeriods" | "removeAwayPeriod"
   | "http" | "queueAdaptiveChargingForAwayChange" | "readAdaptiveChargingDemandProfileDays"
   | "readAdaptiveChargingHistory" | "readAdaptiveChargingState" | "readAutomationRules"
-  | "readConfig" | "readOperationalOverridesState" | "recordFuelCellPlanForecast" | "recordPlanSnapshot"
+  | "readConfig" | "readOperationalOverridesState" | "recordFuelCellPlanForecast" | "recordPlanSnapshot" | "withAdaptiveChargingMutation"
   | "refreshAdaptiveChargingForecast" | "refreshBatteryLearning"
   | "resumeAdaptiveCharging" | "startBackupPreparation" | "updateAwayPeriod" | "writeAdaptiveChargingState"
 >;
@@ -27,12 +28,12 @@ export function createOperationsRouteHandler(dependencies: OperationsRouteDepend
     adaptiveChargingSolarForecastAccuracy, adaptiveChargingView, appendAdaptiveChargingLog,
     assertActionAllowedByOperationalOverride, awayPeriodsView,
     awayTimestamp, backupPreparationView, cleanNewAwayPeriod, createAwayPeriod,
-    endBackupPreparation, ensureAwayPeriodDoesNotOverlap, findAwayPeriod, forecastIsFresh, historicalWeather,
+    endBackupPreparation, ensureAwayPeriodDoesNotOverlap, findAwayPeriod, getStatusSnapshot, historicalWeather,
     listAwayPeriods, removeAwayPeriod,
     queueAdaptiveChargingForAwayChange, readAdaptiveChargingDemandProfileDays, readAdaptiveChargingHistory,
     readAdaptiveChargingState, readAutomationRules, readConfig, readOperationalOverridesState,
     recordFuelCellPlanForecast, recordPlanSnapshot, refreshAdaptiveChargingForecast, refreshBatteryLearning,
-    resumeAdaptiveCharging, startBackupPreparation, updateAwayPeriod, writeAdaptiveChargingState,
+    resumeAdaptiveCharging, startBackupPreparation, updateAwayPeriod, writeAdaptiveChargingState, withAdaptiveChargingMutation,
   } = dependencies;
 
   return async function handleOperationsRoute(
@@ -113,26 +114,41 @@ export function createOperationsRouteHandler(dependencies: OperationsRouteDepend
       const availability = adaptiveChargingAvailability(config, rules);
       if (!availability.available) return json(res, 409, { error: availability.reason });
       const now = new Date();
-      let state = await refreshAdaptiveChargingForecast(config, { forceHistorical: true, now });
-      if (!state.forecast || !forecastIsFresh(state.forecast, now) || state.lastForecastError) {
-        return json(res, 503, adaptiveChargingView(config, state, rules));
+      await assertActionAllowedByOperationalOverride("adaptive-charging", "recalculate");
+      const currentState = await readAdaptiveChargingState();
+      if (currentState.pausedUntil && new Date(currentState.pausedUntil).getTime() > now.getTime()) {
+        return json(res, 409, adaptiveChargingView(config, currentState, rules));
       }
-      const awayPeriods = listAwayPeriods(true, now.getTime());
-      state = await refreshAdaptivePlan(state, config, null, awayPeriods, {
-        eventKey: adaptiveChargingScheduledEvent(config, now).eventKey ?? `manual:${now.toISOString()}`,
-        trigger: "manual request",
-      }, now, {
-        readHistory: readAdaptiveChargingHistory,
-        historicalWeather,
-        solarForecastAccuracy: adaptiveChargingSolarForecastAccuracy,
-        refreshBatteryLearning,
-        readDemandProfileDays: readAdaptiveChargingDemandProfileDays,
-        recordFuelCellPlanForecast,
-        recordPlanSnapshot,
-        appendLog: appendAdaptiveChargingLog,
+      await refreshAdaptiveChargingForecast(config, { forceHistorical: true, now });
+      return withAdaptiveChargingMutation(async () => {
+        const currentConfig = await readConfig();
+        let state = await readAdaptiveChargingState();
+        await assertActionAllowedByOperationalOverride("adaptive-charging", "recalculate");
+        const status = await getStatusSnapshot({ force: true });
+        const evaluatedAt = new Date();
+        if (state.pausedUntil && new Date(state.pausedUntil).getTime() > evaluatedAt.getTime()) {
+          return json(res, 409, adaptiveChargingView(currentConfig, state, rules));
+        }
+        if (!adaptiveChargingAvailability(currentConfig, rules).available || !cachedForecastIsUsable(state, evaluatedAt)) {
+          return json(res, 503, adaptiveChargingView(currentConfig, state, rules));
+        }
+        const awayPeriods = listAwayPeriods(true, evaluatedAt.getTime());
+        state = await refreshAdaptivePlan(state, currentConfig, status, awayPeriods, {
+          eventKey: adaptiveChargingScheduledEvent(currentConfig, evaluatedAt).eventKey ?? `manual:${evaluatedAt.toISOString()}`,
+          trigger: "manual request",
+        }, evaluatedAt, {
+          readHistory: readAdaptiveChargingHistory,
+          historicalWeather,
+          solarForecastAccuracy: adaptiveChargingSolarForecastAccuracy,
+          refreshBatteryLearning,
+          readDemandProfileDays: readAdaptiveChargingDemandProfileDays,
+          recordFuelCellPlanForecast,
+          recordPlanSnapshot,
+          appendLog: appendAdaptiveChargingLog,
+        });
+        state = await writeAdaptiveChargingState(state);
+        return json(res, 200, adaptiveChargingView(currentConfig, state, rules));
       });
-      state = await writeAdaptiveChargingState(state);
-      return json(res, 200, adaptiveChargingView(config, state, rules));
     }
     if (req.method === "POST" && url.pathname === "/api/adaptive-charging/resume") {
       await assertActionAllowedByOperationalOverride("adaptive-charging", "resume");

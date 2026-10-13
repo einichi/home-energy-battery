@@ -205,6 +205,21 @@ export function solarCalibrationGroup(date: DateInput): string {
   return `${season}:${solarHour}`;
 }
 
+export function solarCalibrationFactor(calibration: SolarCalibration, date: DateInput): number {
+  const value = date instanceof Date ? date : new Date(date);
+  const hourGroup = solarCalibrationGroup(value).split(":")[1] ?? "midday";
+  const daysInMonth = new Date(value.getFullYear(), value.getMonth() + 1, 0).getDate();
+  const monthPosition = value.getMonth() + (value.getDate() - 1) / daysInMonth;
+  const seasonPosition = monthPosition / 3 - 0.5;
+  const lower = Math.floor(seasonPosition);
+  const fraction = seasonPosition - lower;
+  const fallback = calibration.factor !== null && Number.isFinite(calibration.factor) ? calibration.factor : 1;
+  const factorAt = (season: number) => calibration.groupFactors[`${((season % 4) + 4) % 4}:${hourGroup}`] ?? fallback;
+  const left = factorAt(lower);
+  const right = factorAt(lower + 1);
+  return left * (1 - fraction) + right * fraction;
+}
+
 export function learnedSolarFactor(
   samples: readonly SolarHistorySample[],
   historicalWeather: readonly WeatherHourInput[],
@@ -289,7 +304,7 @@ export function dailySolarForecastIssues(
     for (const hour of forecast.hours ?? []) {
       const timestamp = new Date(hour.timestamp ?? hour.time ?? Number.NaN);
       if (Number.isNaN(timestamp.getTime()) || localDayKey(timestamp) !== targetDate) continue;
-      const factor = calibration.groupFactors[solarCalibrationGroup(timestamp)] ?? calibration.factor;
+      const factor = solarCalibrationFactor(calibration, timestamp);
       const rawW = solarPowerFromIrradiance(hour.tiltedIrradianceWm2, config, factor);
       rawPredictedKwh += rawW / 1000;
       predictedKwh += applySolarForecastBias(rawW, peakW, {

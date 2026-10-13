@@ -23,7 +23,7 @@ export interface PlanSnapshotRecorderInput {
   modelId: string;
   modelVersion: string;
   trigger?: string | null;
-  config: Pick<ApplicationConfig, "rateBands" | "standardRateYenPerKwh" | "batteryCapabilities" | "adaptiveCharging"> & { settingCache?: ApplicationConfig["settingCache"] };
+  config: Pick<ApplicationConfig, "rateBands" | "standardRateYenPerKwh" | "batteryCapabilities" | "adaptiveCharging"> & { settingCache?: ApplicationConfig["settingCache"]; solarEnabled?: boolean; fuelCellEnabled?: boolean };
   plan: AdaptivePlan;
 }
 
@@ -104,6 +104,8 @@ export async function refreshAdaptivePlan(
         batteryCapabilities: config.batteryCapabilities,
         adaptiveCharging: config.adaptiveCharging,
         settingCache: config.settingCache,
+        solarEnabled: config.solarEnabled,
+        fuelCellEnabled: config.fuelCellEnabled,
       },
       plan: state.plan,
     });

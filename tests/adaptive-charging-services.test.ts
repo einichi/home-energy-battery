@@ -129,6 +129,12 @@ await evaluator(config, status, [guardRule], new Date(now.getTime() + 15_000));
 assert.deepEqual(actions, [{ action: "set-mode", payload: { mode: "standby" } }], "a stale forecast must not allow discounted-window discharge");
 assert.equal(state.standbyHoldUntil, windowEnd.toISOString());
 
+state.lastForecastError = { at: now.toISOString(), error: "temporary provider timeout", retryCount: 2 };
+state.forecast!.fetchedAt = forecastFetchedAt;
+await evaluator(config, status, [guardRule], new Date(now.getTime() + 16_000));
+assert.notEqual(state.lastResult?.skipped, "temporary provider timeout", "a transient refresh failure must use the still-fresh cached forecast");
+state.lastForecastError = null;
+
 actions.length = 0;
 chargeStartError = new Error("simulated charge failure");
 state.standbyHoldUntil = null;

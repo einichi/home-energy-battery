@@ -18,7 +18,7 @@ export interface AdaptivePlanSnapshot {
     | "standardRateYenPerKwh"
     | "batteryCapabilities"
     | "adaptiveCharging"
-  > & { settingCache?: ApplicationConfig["settingCache"] };
+   > & { settingCache?: ApplicationConfig["settingCache"]; solarEnabled?: boolean; fuelCellEnabled?: boolean };
   plan: AdaptivePlan;
 }
 
@@ -68,6 +68,7 @@ export interface BacktestRunRecord {
 export interface BacktestCaseInput {
   snapshot: AdaptivePlanSnapshot;
   samples: HistorySample[];
+  now?: Date;
 }
 
 export interface BacktestHistoryPort {
@@ -75,7 +76,7 @@ export interface BacktestHistoryPort {
   backtestRuns(limit?: number): BacktestRunSummary[];
   completeBacktestRun(summary: BacktestRunSummary): void;
   createBacktestRun(run: BacktestRunRecord): void;
-  fuelCellForecastOutcomes(limit?: number): Array<Record<string, unknown>>;
+  fuelCellForecastOutcomes(limit?: number, options?: { canonical?: boolean }): Array<Record<string, unknown>>;
   querySamples(startMs: number, endMs: number, options?: { resolution?: "auto" | "raw" | "interval" | "daily" }): HistorySample[];
   saveBacktestOutcome(runId: string, outcome: BacktestOutcome): void;
   solarForecastOutcomes(limit?: number): Array<{ issuedAt: unknown; errorKwh: number }>;

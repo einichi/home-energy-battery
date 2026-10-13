@@ -2,13 +2,14 @@ import type { AdaptiveChargeSlot, adaptiveChargingBreakerSettings } from "../ada
 import type { AutomationStatus } from "../automation-rules.js";
 import type { AdaptiveChargingState, AdaptivePlan, AdaptivePlanWindow, ActiveChargeSession, BreakerRecovery, ExportConfirmation, InterruptedCharge } from "../adaptive-state.js";
 import type { ApplicationConfig } from "../../contracts/configuration.js";
+import { MIN_WINDOW_SOLAR_WH, MIN_WINDOW_SURPLUS_WH, MIN_WINDOW_SURPLUS_W } from "../adaptive-window-policy.js";
 
 export const ADAPTIVE_CHARGING_PREWINDOW_MS = 30 * 60_000;
 export const ADAPTIVE_CHARGING_SLOT_MS = 30 * 60_000;
 export const ADAPTIVE_CHARGING_SOLAR_REPLAN_MS = 5 * 60_000;
-export const ADAPTIVE_CHARGING_MIN_SOLAR_WH = 100;
-export const ADAPTIVE_CHARGING_MIN_SOLAR_SURPLUS_WH = 50;
-export const ADAPTIVE_CHARGING_MIN_SOLAR_SURPLUS_W = 200;
+export const ADAPTIVE_CHARGING_MIN_SOLAR_WH = MIN_WINDOW_SOLAR_WH;
+export const ADAPTIVE_CHARGING_MIN_SOLAR_SURPLUS_WH = MIN_WINDOW_SURPLUS_WH;
+export const ADAPTIVE_CHARGING_MIN_SOLAR_SURPLUS_W = MIN_WINDOW_SURPLUS_W;
 export const ADAPTIVE_CHARGING_BREAKER_RETRY_COOLDOWN_MS = 3 * 60_000;
 export const ADAPTIVE_CHARGING_BREAKER_SAFE_CHECKS = 3;
 export const ADAPTIVE_CHARGING_SOLAR_HEADROOM_CLEAR_CHECKS = 2;

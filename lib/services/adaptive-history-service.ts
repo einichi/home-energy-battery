@@ -39,6 +39,14 @@ interface DemandProfileIndex {
   days: Record<string, DemandProfileAccumulator>;
 }
 
+interface DemandProfileCache {
+  loadedAt: number;
+  index: DemandProfileIndex;
+  days: DemandDay[];
+  positions: Map<string, number>;
+  dirtyDays: Set<string>;
+}
+
 interface AdaptiveHistoryCache {
   loadedAt: number;
   startMs: number;
@@ -58,6 +66,7 @@ export function createAdaptiveHistoryService(
 ) {
   let historyCache: AdaptiveHistoryCache | null = null;
   let demandProfilePromise: Promise<DemandDay[]> | null = null;
+  let demandProfileCache: DemandProfileCache | null = null;
 
   function historySample(sample: HistorySample): TimedHistorySample | null {
     if (typeof sample.timestamp !== "string") return null;
@@ -236,10 +245,30 @@ export function createAdaptiveHistoryService(
     const startMs = endMs - seasonalLookbackYears * 366 * MILLISECONDS_PER_DAY;
     const index = emptyDemandProfileIndex();
     for (const sample of historyStore.querySamples(startMs, endMs, { resolution: "interval" })) addDemandSample(index, sample);
-    return demandProfileDays(index);
+    const days = demandProfileDays(index);
+    demandProfileCache = {
+      loadedAt: endMs, index, days,
+      positions: new Map(days.map((day, position) => [day.key, position])),
+      dirtyDays: new Set(),
+    };
+    return days;
   }
 
   async function readDemandProfileDays(): Promise<DemandDay[]> {
+    if (demandProfileCache && Date.now() - demandProfileCache.loadedAt < Math.max(cacheMs, 60_000)) {
+      const cached = demandProfileCache;
+      for (const key of cached.dirtyDays) {
+        const day = demandProfileDays({ days: { [key]: cached.index.days[key]! } })[0];
+        if (!day) continue;
+        const position = cached.positions.get(key);
+        if (position === undefined) {
+          cached.positions.set(key, cached.days.length);
+          cached.days.push(day);
+        } else cached.days[position] = day;
+      }
+      cached.dirtyDays.clear();
+      return demandProfileCache.days;
+    }
     if (!demandProfilePromise) {
       demandProfilePromise = refreshDemandProfile().finally(() => { demandProfilePromise = null; });
     }
@@ -247,6 +276,10 @@ export function createAdaptiveHistoryService(
   }
 
   function noteSample(sample: HistorySample): void {
+    if (demandProfileCache && new Date(sample.timestamp ?? "").getTime() > demandProfileCache.loadedAt) {
+      addDemandSample(demandProfileCache.index, sample);
+      demandProfileCache.dirtyDays.add(localDayKey(String(sample.timestamp)));
+    }
     if (!historyCache) return;
     const compact = historySample(sample);
     if (!compact) return;
@@ -259,6 +292,7 @@ export function createAdaptiveHistoryService(
   function invalidate(): void {
     historyCache = null;
     demandProfilePromise = null;
+    demandProfileCache = null;
   }
 
   return {

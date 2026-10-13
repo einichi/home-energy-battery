@@ -219,20 +219,23 @@ export function buildFuelCellGenerationModel(
     return observation && at - observation.at <= FUEL_CELL_HOT_WATER_MAX_AGE_MS ? observation.level : null;
   };
   const recentHotWaterLevel = hotWaterAt(nowMs);
-  const powerSamples = samples.flatMap((sample): Array<{ date: Date; watts: number; state: unknown }> => {
+  const powerSamples = samples.flatMap((sample): Array<{ date: Date; watts: number; state: unknown; coverageSeconds: number | null }> => {
     const date = new Date(sample.timestamp);
-    const watts = finiteNumberOrNull(sample.fuelCellPowerW);
+    const watts = finiteNumberOrNull((sample as DemandSample & { intervalAveragePowerW?: { fuelCellPowerW?: unknown } }).intervalAveragePowerW?.fuelCellPowerW ?? sample.fuelCellPowerW);
+    const coverage = finiteNumberOrNull((sample as DemandSample & { powerCoverageSeconds?: { fuelCellPowerW?: unknown } }).powerCoverageSeconds?.fuelCellPowerW
+      ?? sample.expectedIntervalSeconds);
     return Number.isNaN(date.getTime()) || date.getTime() > nowMs || watts === null
       ? []
-      : [{ date, watts, state: sample.fuelCellGenerationState ?? null }];
+      : [{ date, watts, state: sample.fuelCellGenerationState ?? null, coverageSeconds: coverage }];
   }).sort((left, right) => left.date.getTime() - right.date.getTime());
   type FuelCellDay = {
     key: string;
     date: Date;
-    buckets: Map<number, { sum: number; count: number; states: Map<unknown, number> }>;
+    buckets: Map<number, { sum: number; coverage: number; count: number; states: Map<unknown, number> }>;
   };
   const days = new Map<string, FuelCellDay>();
-  for (const sample of powerSamples) {
+  for (let sampleIndex = 0; sampleIndex < powerSamples.length; sampleIndex += 1) {
+    const sample = powerSamples[sampleIndex]!;
     const key = localDayKey(sample.date);
     const day: FuelCellDay = days.get(key) ?? {
       key,
@@ -240,8 +243,15 @@ export function buildFuelCellGenerationModel(
       buckets: new Map(),
     };
     const bucketIndex = halfHourIndex(sample.date);
-    const bucket = day.buckets.get(bucketIndex) ?? { sum: 0, count: 0, states: new Map() };
-    bucket.sum += Math.max(0, sample.watts);
+    const bucket = day.buckets.get(bucketIndex) ?? { sum: 0, coverage: 0, count: 0, states: new Map() };
+    const prior = powerSamples[sampleIndex - 1];
+    const inferredGap = prior && localDayKey(prior.date) === key && halfHourIndex(prior.date) === bucketIndex
+      ? Math.min(90, (sample.date.getTime() - prior.date.getTime()) / 1000) : 1;
+    const seconds = Math.min(1800, Math.max(0, sample.coverageSeconds ?? inferredGap));
+    if (seconds <= 0) continue;
+    const appliedSeconds = Math.min(seconds, 1800 - bucket.coverage);
+    bucket.sum += Math.max(0, sample.watts) * appliedSeconds;
+    bucket.coverage += appliedSeconds;
     bucket.count += 1;
     if (sample.state) bucket.states.set(sample.state, Number(bucket.states.get(sample.state) ?? 0) + 1);
     day.buckets.set(bucketIndex, bucket);
@@ -252,7 +262,7 @@ export function buildFuelCellGenerationModel(
     temperatureC: finiteNumberOrNull(temperatureByDay.get(day.key)),
     away: isAwayAt(new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate(), 12).getTime(), awayPeriods),
     values: new Map([...day.buckets].map(([index, bucket]) => [index, {
-      watts: bucket.sum / bucket.count,
+      watts: bucket.coverage > 0 ? bucket.sum / bucket.coverage : bucket.sum / bucket.count,
       state: [...bucket.states].sort((left, right) => right[1] - left[1])[0]?.[0] ?? null,
     }])),
   }));
@@ -402,7 +412,7 @@ export function predictBranchDemand(
   }
   const recordedDays = [...recordedDayMap.values()];
   const validDays = recordedDays.filter((day) => day.daytimeCoverage >= 0.8);
-  const recentCandidates = validDays
+  const scoredRecentDays = validDays
     .map((day): ScoredDemandDay => {
       const ageDays = (target.getTime() - day.date.getTime()) / MILLISECONDS_PER_DAY;
       const sameDayType = [0, 6].includes(day.date.getDay()) === targetIsWeekend;
@@ -421,8 +431,8 @@ export function predictBranchDemand(
       };
     })
     .filter((day) => Number(day.ageDays) > 0 && Number(day.ageDays) <= 42)
-    .sort((left, right) => left.score - right.score)
-    .slice(0, 8);
+    .sort((left, right) => left.score - right.score);
+  const recentCandidates = scoredRecentDays.slice(0, 8);
   const seasonalCandidates = selectSeasonalDemandDays(
     validDays,
     target,
@@ -438,8 +448,11 @@ export function predictBranchDemand(
   const profile = new Map<number, number>();
   const lowProfile = new Map<number, number>();
   for (let index = 0; index < 48; index += 1) {
-    const recentValue = weightedMedian(recentCandidates
-      .filter((day) => day.values.has(index))
+    // Choose the eight recent comparison days independently per bucket. A
+    // partially recorded current day must not occupy a slot for buckets it
+    // has not observed yet (and future buckets must never be read from it).
+    const bucketCandidates = scoredRecentDays.filter((day) => day.values.has(index)).slice(0, 8);
+    const recentValue = weightedMedian(bucketCandidates
       .map((day) => ({ value: day.values.get(index)!, weight: day.weight })));
     const seasonalValue = weightedMedian(seasonalCandidates
       .filter((day) => day.values.has(index))

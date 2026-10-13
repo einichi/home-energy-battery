@@ -616,15 +616,16 @@ assert.ok(timelineView.every((item: any) => item.predictedSocPercent >= 20));
 
 assert.ok(Math.abs(timelineView[0]!.predictedStartSocPercent! - 40) < 1e-9);
 
-assert.ok(Math.abs(timelineView[0]!.predictedEndSocPercent! - 36) < 1e-9);
+assert.ok(Math.abs(timelineView[0]!.predictedEndSocPercent! - 40) < 1e-9,
+  "non-solar-responsive discounted windows preserve SOC in Standby before charging");
 
 assert.equal(timelineView[1].predictedStartSocPercent, timelineView[0].predictedEndSocPercent);
 
-assert.ok(Math.abs(timelineView[1]!.predictedEndSocPercent! - 44) < 1e-9);
+assert.ok(Math.abs(timelineView[1]!.predictedEndSocPercent! - 48) < 1e-9);
 
 assert.equal(timelineView[2].predictedStartSocPercent, timelineView[1].predictedEndSocPercent);
 
-assert.ok(Math.abs(timelineView[2]!.predictedEndSocPercent! - 47.2) < 1e-9);
+assert.ok(Math.abs(timelineView[2]!.predictedEndSocPercent! - 51.2) < 1e-9);
 
 
 const awayPeriods: any[] = [

@@ -48,5 +48,16 @@ export function forecastIsFresh(
   now: Date = new Date(),
 ): boolean {
   const fetchedAt = new Date(forecast?.fetchedAt ?? "").getTime();
-  return Number.isFinite(fetchedAt) && now.getTime() - fetchedAt <= SOLAR_FORECAST_MAX_AGE_MS;
+  return Number.isFinite(fetchedAt) && fetchedAt <= now.getTime()
+    && now.getTime() - fetchedAt <= SOLAR_FORECAST_MAX_AGE_MS;
+}
+
+export function cachedForecastIsUsable(
+  state: { forecast: Pick<SolarForecast, "fetchedAt"> | null; lastForecastError?: Record<string, unknown> | null },
+  now = new Date(),
+): boolean {
+  const error = state.lastForecastError;
+  const incompatible = error?.kind === "incompatible"
+    || (!error?.kind && /timezone|coordinate|configuration/i.test(String(error?.error ?? "")));
+  return forecastIsFresh(state.forecast, now) && !incompatible;
 }

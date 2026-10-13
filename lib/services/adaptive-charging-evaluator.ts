@@ -46,6 +46,7 @@ import {
 import { discountedBandOccurrence, explicitDiscountedBand } from "../domain/tariffs.js";
 import { numericMetric } from "../domain/telemetry.js";
 import { batteryOperationMode } from "../domain/automation-rules.js";
+import { cachedForecastIsUsable } from "../domain/adaptive-availability.js";
 
 type AdaptiveOperations = ReturnType<typeof createAdaptiveChargingOperations>;
 type AdaptiveHistory = ReturnType<typeof createAdaptiveHistoryService>;
@@ -199,7 +200,12 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
       && !paused
       && !guardActive,
     );
-    const forecastError = state.lastForecastError?.error ? String(state.lastForecastError.error) : null;
+    const refreshError = state.lastForecastError?.error ? String(state.lastForecastError.error) : null;
+    // A transient provider failure does not invalidate a still-fresh cached
+    // forecast. Timezone/configuration incompatibility remains a hard stop.
+    const forecastError = refreshError && !cachedForecastIsUsable(state, now)
+      ? refreshError
+      : null;
     if (!base.available || !guardSettings.valid || paused || !forecastIsFresh(state.forecast, now) || forecastError) {
       const unavailableReason = paused
         ? "Adaptive Charging is paused"

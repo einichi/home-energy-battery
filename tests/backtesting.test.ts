@@ -53,13 +53,13 @@ const evaluated = evaluateBacktestCase({
       rollupStart: "2026-01-01T00:00:00.000Z", rollupEnd: "2026-01-01T00:30:00.000Z",
       branchDemandKwh: 1, solarGenerationKwh: 0.25, fuelCellKwh: 0, gridImportKwh: 0.75,
       rateYenPerKwh: 20, startStateOfChargePercent: 50, endStateOfChargePercent: 50,
-      minimumStateOfChargePercent: 49, coverageSeconds: { branchDemandKwh: 1800 },
+      minimumStateOfChargePercent: 49, coverageSeconds: { branchDemandKwh: 1800, solarGenerationKwh: 1800, fuelCellKwh: 1800, gridImportKwh: 1800 },
     },
     {
       rollupStart: "2026-01-01T00:30:00.000Z", rollupEnd: "2026-01-01T01:00:00.000Z",
       branchDemandKwh: 1, solarGenerationKwh: 0.25, fuelCellKwh: 0, gridImportKwh: 0.75,
       rateYenPerKwh: 20, startStateOfChargePercent: 50, endStateOfChargePercent: 50,
-      minimumStateOfChargePercent: 49, coverageSeconds: { branchDemandKwh: 1800 },
+      minimumStateOfChargePercent: 49, coverageSeconds: { branchDemandKwh: 1800, solarGenerationKwh: 1800, fuelCellKwh: 1800, gridImportKwh: 1800 },
     },
   ],
 });
@@ -67,6 +67,39 @@ assert.equal(evaluated.evaluable, true);
 assert.equal(evaluated.components.demand.errorKwh, 0);
 assert.equal(evaluated.asOperated?.gridCostYen, 30);
 assert.ok(evaluated.modelOnly && evaluated.modelOnly.gridCostYen >= 0);
+
+const longTimelineSnapshot: AdaptivePlanSnapshot = {
+  ...snapshot,
+  plan: {
+    ...snapshot.plan,
+    targetSunset: "2026-01-01T17:00:00.000Z",
+    predictedDemandKwh: 30,
+    timeline: Array.from({ length: 30 }, (_, index) => ({
+      start: new Date(Date.parse("2026-01-01T00:00:00.000Z") + index * 3_600_000).toISOString(),
+      end: new Date(Date.parse("2026-01-01T00:00:00.000Z") + (index + 1) * 3_600_000).toISOString(),
+      demandW: 1000, solarW: 0, fuelCellMedianW: 0,
+    })) as any,
+  },
+};
+const sunsetSamples = Array.from({ length: 17 }, (_, index) => ({
+  rollupStart: new Date(Date.parse("2026-01-01T00:00:00.000Z") + index * 3_600_000).toISOString(),
+  rollupEnd: new Date(Date.parse("2026-01-01T00:00:00.000Z") + (index + 1) * 3_600_000).toISOString(),
+  branchDemandKwh: 1, solarGenerationKwh: 0, fuelCellKwh: 0, gridImportKwh: 1,
+  startStateOfChargePercent: 50, endStateOfChargePercent: 50,
+  coverageSeconds: { branchDemandKwh: 3600 },
+}));
+const sunsetCase = evaluateBacktestCase({ snapshot: longTimelineSnapshot, samples: sunsetSamples as any });
+assert.equal(sunsetCase.components.demand.predictedKwh, 17, "prediction must be clipped to the evaluated sunset horizon");
+assert.equal(sunsetCase.components.demand.actualKwh, 17, "actuals must use the same clipped horizon");
+const overlappingCase = evaluateBacktestCase({
+  snapshot: longTimelineSnapshot,
+  samples: [0, 1].map(() => ({
+    rollupStart: "2026-01-01T00:00:00.000Z", rollupEnd: "2026-01-01T10:00:00.000Z",
+    branchDemandKwh: 10, solarGenerationKwh: 0, fuelCellKwh: 0, gridImportKwh: 10,
+    coverageSeconds: { branchDemandKwh: 36_000 },
+  })) as any,
+});
+assert.equal(overlappingCase.evaluable, false, "overlapping rollups must not manufacture period coverage");
 
 const simConfig = {
   rateBands: [{ start: "00:00", end: "00:00", yenPerKwh: 20, label: "Test" }],
@@ -177,6 +210,14 @@ try {
   assert.equal(result.exactReplayPlanCount, 1);
   assert.equal(service.list().scheduling, "manual");
   assert.equal(service.list().runs[0]?.id, "run-1");
+  store.recordFuelCellForecasts([{
+    start: "2026-01-01T02:00:00.000Z", end: "2026-01-01T02:30:00.000Z", medianW: 1_000,
+  }], "2026-01-01T01:00:00.000Z");
+  store.appendSample({ timestamp: "2026-01-01T02:00:00.000Z", fuelCellPowerW: 1_000 });
+  store.appendSample({ timestamp: "2026-01-01T02:00:30.000Z", fuelCellPowerW: 1_000 });
+  store.settleFuelCellForecastOutcomes(new Date("2026-01-01T02:30:00.000Z"));
+  assert.equal(store.fuelCellForecastOutcomes(10).some((outcome) => outcome.start === "2026-01-01T02:00:00.000Z"), false,
+    "a short measurable fragment must not settle an under-covered fuel forecast interval");
   store.close();
 } finally {
   await rm(serviceDir, { recursive: true, force: true });

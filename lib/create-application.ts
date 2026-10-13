@@ -54,6 +54,7 @@ import {
 import type { ApplicationConfig, RetentionConfig } from "./contracts/configuration.js";
 import type { HistorySample } from "./contracts/history.js";
 import type { AdaptiveChargingState, AdaptivePlan } from "./domain/adaptive-state.js";
+import { cachedForecastIsUsable } from "./domain/adaptive-availability.js";
 import type { AutomationRule } from "./domain/automation-rules.js";
 import { backupPreparationBlocksActions, backupPreparationView } from "./domain/operational-overrides.js";
 import {
@@ -228,6 +229,7 @@ const adaptiveForecastService = createAdaptiveForecastService({
   readState: readAdaptiveChargingState,
   writeState: writeAdaptiveChargingState,
   readHistory: readAdaptiveChargingHistory,
+  readConfig,
   logError: logDetailedError,
 });
 const backtestService = createBacktestService({ history: historyStore, randomUUID });
@@ -301,7 +303,7 @@ const deviceCommandService = createDeviceCommandService({
   assertActionAllowed: assertActionAllowedByOperationalOverride,
   pauseAdaptiveCharging: (action: string) => {
     if (!adaptiveControlService) throw new Error("Adaptive control service is not initialized");
-    return adaptiveControlService.pauseForManualAction(action);
+    return adaptiveStateService.exclusive(() => adaptiveControlService!.pauseForManualAction(action));
   },
   readConfig,
   runDeviceCommand: runDeviceCommandQueued,
@@ -338,7 +340,7 @@ adaptiveControlService = createAdaptiveControlService({
   writeState: writeAdaptiveChargingState,
   releaseCharge: releaseAdaptiveCharge,
   execute: (action, payload) => executeAction(action, payload, { source: "adaptive-charging" }),
-  enforceDeadline: enforceAdaptiveChargingSlotEndDeadline,
+  enforceDeadline: (key) => adaptiveStateService.exclusive(() => enforceAdaptiveChargingSlotEndDeadline(key)),
   logError: logDetailedError,
   deadlineRetryMs: ADAPTIVE_CHARGING_SLOT_END_RETRY_MS,
   maxTimerDelayMs: MAX_TIMER_DELAY_MS,
@@ -423,20 +425,24 @@ function adaptiveChargingView(
     : null;
   const paused = Boolean(state.pausedUntil && new Date(state.pausedUntil).getTime() > now.getTime());
   const planUnavailableReason = state.plan && state.plan.available === false ? state.plan.reason : null;
+  const cachedForecastUsable = cachedForecastIsUsable(state, now);
+  const forecastError = state.lastForecastError?.error && !cachedForecastUsable ? String(state.lastForecastError.error) : null;
   return {
     enabled: config.adaptiveCharging?.enabled === true,
     available: availability.available
-      && forecastIsFresh(state.forecast, now)
+      && cachedForecastUsable
       && !paused
-      && !state.lastForecastError
+      && !forecastError
       && !planUnavailableReason,
     reason: paused
       ? `paused until ${state.pausedUntil}`
       : availability.reason
-        || state.lastForecastError?.error
+        || forecastError
         || planUnavailableReason
         || (!forecastIsFresh(state.forecast, now) ? "solar forecast is stale or unavailable" : null),
-    warning: state.plan?.warning ?? null,
+    warning: state.lastForecastError?.error && cachedForecastUsable
+      ? `Forecast refresh failed; using the cached forecast: ${String(state.lastForecastError.error)}`
+      : state.plan?.warning ?? null,
     away: historyStore.isReady() ? awayPeriodsView(now) : { periods: [], active: null, next: null, state: "home" },
     paused,
     pausedUntil: state.pausedUntil,
@@ -447,7 +453,7 @@ function adaptiveChargingView(
       stale: !forecastIsFresh(state.forecast, now),
     } : null,
     solarForecastAccuracy,
-    fuelCellForecastOutcomes: historyStore.isReady() ? historyStore.fuelCellForecastOutcomes(100) : [],
+    fuelCellForecastOutcomes: historyStore.isReady() ? historyStore.fuelCellForecastOutcomes(100, { canonical: true }) : [],
     plan: state.plan,
     owner: state.owner,
     activeSlot: state.activeSlot,
@@ -469,7 +475,7 @@ function recordFuelCellPlanForecast(plan: AdaptivePlan | null, now: Date = new D
   if (!historyStore.isReady() || !plan?.fuelCellModel) return 0;
   const fuelCellModel = plan.fuelCellModel;
   historyStore.settleFuelCellForecastOutcomes(now);
-  return historyStore.recordFuelCellForecasts((plan.timeline ?? []).map((interval) => ({
+  return historyStore.recordFuelCellForecasts((plan.timeline ?? []).filter((interval) => Number(interval.fuelCellSampleCount) > 0).map((interval) => ({
     start: interval.start,
     end: interval.end,
     p20W: interval.fuelCellP20W,
@@ -510,7 +516,7 @@ async function queueAdaptiveChargingForAwayChange(reason: string, now: Date = ne
   await writeAdaptiveChargingState(state);
 }
 
-const evaluateAdaptiveCharging = createAdaptiveChargingEvaluator({
+const runAdaptiveChargingEvaluation = createAdaptiveChargingEvaluator({
   readState: readAdaptiveChargingState,
   writeState: writeAdaptiveChargingState,
   history: historyStore,
@@ -528,6 +534,8 @@ const evaluateAdaptiveCharging = createAdaptiveChargingEvaluator({
   recordPlanSnapshot: historyStore.recordAdaptivePlanSnapshot,
   breakerWaitLogMs: ADAPTIVE_CHARGING_BREAKER_WAIT_LOG_MS,
 });
+const evaluateAdaptiveCharging: typeof runAdaptiveChargingEvaluation = (...args) =>
+  adaptiveStateService.exclusive(() => runAdaptiveChargingEvaluation(...args));
 
 const automationOrchestrator = createAutomationOrchestrator({
   intervalMs: AUTOMATION_CHECK_INTERVAL_MS,
@@ -677,7 +685,7 @@ const api = createApiHandler({
     endBackupPreparation: backupPreparationService.end,
     ensureAwayPeriodDoesNotOverlap,
     findAwayPeriod,
-    forecastIsFresh,
+    getStatusSnapshot,
     historicalWeather: historyStore.historicalWeather,
     listAwayPeriods,
     removeAwayPeriod,
@@ -694,11 +702,12 @@ const api = createApiHandler({
     refreshBatteryLearning,
     resumeAdaptiveCharging: (now) => {
       if (!adaptiveControlService) throw new Error("Adaptive control service is not initialized");
-      return adaptiveControlService.resume(now);
+      return adaptiveStateService.exclusive(() => adaptiveControlService!.resume(now));
     },
     startBackupPreparation: backupPreparationService.start,
     updateAwayPeriod,
     writeAdaptiveChargingState,
+    withAdaptiveChargingMutation: adaptiveStateService.exclusive,
   },
   automation: {
     ALL_DAYS,

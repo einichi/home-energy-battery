@@ -1,7 +1,7 @@
 import { effectiveBatteryLearningModel } from "./battery-learning.js";
 import { buildFuelCellGenerationModel, predictAwayDemand, predictBranchDemand } from "./demand-forecast.js";
 import { finiteNumberOrNull } from "./numbers.js";
-import { applySolarForecastBias, forecastHourForInterval, learnedSolarFactor, nextPlanningBoundary, planningSunsetWithDiscountedWindow, solarCalibrationGroup, solarPowerFromIrradiance, temperatureByDayFromWeather } from "./solar-forecast.js";
+import { applySolarForecastBias, forecastHourForInterval, learnedSolarFactor, nextPlanningBoundary, planningSunsetWithDiscountedWindow, solarCalibrationFactor, solarPowerFromIrradiance, temperatureByDayFromWeather } from "./solar-forecast.js";
 import { discountedBandOccurrence, discountedHorizonEndMs, explicitDiscountedBand } from "./tariffs.js";
 import { AWAY_RETURN_BUFFER_MS, halfHourIndex, isAwayAt, localDayKey, MILLISECONDS_PER_DAY } from "./time.js";
 import { latestFiniteSocPercent, planningHorizon } from "./adaptive-plan-utils.js";
@@ -125,7 +125,7 @@ export function buildAdaptiveChargingPlan({
     const demand = demandByDay.get(dayKey)!;
     const slotEndMs = nextPlanningBoundary(time, horizonEndMs);
     const hour = forecastHourForInterval(forecast, time, slotEndMs);
-    const factor = calibration.groupFactors?.[solarCalibrationGroup(date)] ?? calibration.factor;
+    const factor = solarCalibrationFactor(calibration, date);
     const uncorrectedSolarW = solarPowerFromIrradiance(hour?.tiltedIrradianceWm2, config, factor);
     const rawSolarW = applySolarForecastBias(
       uncorrectedSolarW,
@@ -152,9 +152,15 @@ export function buildAdaptiveChargingPlan({
     const demandKwh = slotDemandW * durationHours / 1000;
     const fuelCellForecast = fuelCellModel.forecastAt(date);
     if (fuelCellForecast.hotWaterConditioned) hotWaterConditionedSlotCount += 1;
-    const fuelCellActive = fuelCellModel.influence === "active";
-    const fuelCellPlanningKwh = fuelCellActive ? fuelCellForecast.p20W * durationHours / 1000 : 0;
-    const highFuelCellKwh = fuelCellActive ? fuelCellForecast.p80W * durationHours / 1000 : 0;
+    const fuelCellBucketEligible = fuelCellForecast.sampleCount >= 4;
+    if (fuelCellModel.influence === "active" && !fuelCellBucketEligible) {
+      return unavailable(`Ene-Farm generation history is insufficient for ${date.toISOString()}; unknown generation cannot safely reserve battery headroom`);
+    }
+    const fuelCellActive = fuelCellModel.influence === "active" && fuelCellBucketEligible;
+    const planningFuelCellP20W = fuelCellActive ? fuelCellForecast.p20W : 0;
+    const planningFuelCellP80W = fuelCellActive ? fuelCellForecast.p80W : 0;
+    const fuelCellPlanningKwh = planningFuelCellP20W * durationHours / 1000;
+    const highFuelCellKwh = planningFuelCellP80W * durationHours / 1000;
     const medianFuelCellForecastKwh = fuelCellForecast.medianW * durationHours / 1000;
     const medianFuelCellKwh = fuelCellActive ? medianFuelCellForecastKwh : 0;
     predictedSolarKwh += solarKwh;
@@ -168,9 +174,9 @@ export function buildAdaptiveChargingPlan({
       endMs: slotEndMs,
       demandW: slotDemandW,
       solarKwh,
-      fuelCellP20Kwh: fuelCellForecast.p20W * durationHours / 1000,
+      fuelCellP20Kwh: fuelCellModel.influence === "active" ? planningFuelCellP20W * durationHours / 1000 : fuelCellForecast.p20W * durationHours / 1000,
       fuelCellMedianKwh: medianFuelCellForecastKwh,
-      fuelCellP80Kwh: fuelCellForecast.p80W * durationHours / 1000,
+      fuelCellP80Kwh: fuelCellModel.influence === "active" ? planningFuelCellP80W * durationHours / 1000 : fuelCellForecast.p80W * durationHours / 1000,
       fuelCellSampleCount: fuelCellForecast.sampleCount,
       demandKwh,
       netKwh: solarKwh + fuelCellPlanningKwh - demandKwh,
@@ -211,6 +217,7 @@ export function buildAdaptiveChargingPlan({
     floorKwh: dischargeFloorKwh,
     capacityKwh,
     chargeToStoredRatio: batteryModel.chargeToStoredRatio,
+    maximumChargeWatts,
     standbyWindowEnd,
     config,
   });

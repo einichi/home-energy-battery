@@ -66,6 +66,23 @@ function canonicalSnapshots(snapshots: ReturnType<BacktestHistoryPort["adaptiveP
   });
 }
 
+function canonicalFuelOutcomes(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const grouped = new Map<string, Array<Record<string, unknown>>>();
+  for (const row of rows) {
+    const start = new Date(String(row.start ?? row.targetStart ?? "")).getTime();
+    const issued = new Date(String(row.issuedAt ?? "")).getTime();
+    if (!Number.isFinite(start) || !Number.isFinite(issued) || issued > start - 30 * 60_000
+      || row.settlementVersion !== 2 || (finite(row.sampleCount) ?? 0) <= 0 || finite(row.actualKwh) === null) continue;
+    const key = `${row.start ?? row.targetStart}:${row.end ?? ""}`;
+    const group = grouped.get(key) ?? [];
+    group.push(row);
+    grouped.set(key, group);
+  }
+  // One score per target interval, at a fixed 30-minute decision cutoff.
+  return [...grouped.values()].map((group) => group.sort((a, b) =>
+    new Date(String(b.issuedAt)).getTime() - new Date(String(a.issuedAt)).getTime())[0]!);
+}
+
 function validateRequest(input: BacktestRunRequest): { range: BacktestRange; mode: BacktestMode; modelId: string } {
   const invalid = (message: string): never => { throw Object.assign(new Error(message), { statusCode: 400 }); };
   const range = input.range ?? "90d";
@@ -123,7 +140,7 @@ export function createBacktestService(dependencies: BacktestServiceDependencies)
       for (const snapshot of snapshots) {
         const horizonEndMs = new Date(String(snapshot.plan.targetSunset ?? snapshot.plan.timeline?.at(-1)?.end ?? snapshot.createdAt)).getTime();
         const samples = dependencies.history.querySamples(new Date(snapshot.createdAt).getTime(), Math.min(periodEndMs, horizonEndMs), { resolution: "interval" });
-        const outcome = evaluateBacktestCase({ snapshot, samples });
+        const outcome = evaluateBacktestCase({ snapshot, samples, now });
         if (request.mode === "as-operated") outcome.modelOnly = null;
         if (request.mode === "model-only") outcome.asOperated = null;
         outcomes.push(outcome);
@@ -132,8 +149,11 @@ export function createBacktestService(dependencies: BacktestServiceDependencies)
 
       const solarHistorical = dependencies.history.solarForecastOutcomes(10_000)
         .filter((outcome) => new Date(String(outcome.issuedAt)).getTime() >= periodStartMs);
-      const fuelHistorical = dependencies.history.fuelCellForecastOutcomes(10_000)
-        .filter((outcome) => new Date(String(outcome.issuedAt)).getTime() >= periodStartMs);
+      const fuelHistorical = canonicalFuelOutcomes(dependencies.history.fuelCellForecastOutcomes(10_000, { canonical: true }))
+        .filter((outcome) => {
+          const start = new Date(String(outcome.start ?? outcome.targetStart ?? "")).getTime();
+          return Number.isFinite(start) && start >= periodStartMs && start < periodEndMs;
+        });
       const solarErrors = solarHistorical.map((outcome) => finite(outcome.errorKwh));
       const fuelErrors = fuelHistorical.map((outcome) => {
           const hours = Math.max(0, new Date(String(outcome.end)).getTime() - new Date(String(outcome.start ?? outcome.targetStart)).getTime()) / 3_600_000;
@@ -172,7 +192,8 @@ export function createBacktestService(dependencies: BacktestServiceDependencies)
         ],
         components: {
           solar: componentMetrics(solarErrors),
-          demand: componentMetrics(outcomes.map((outcome) => outcome.components.demand.errorKwh)),
+          demand: componentMetrics(outcomes.filter((outcome) => outcome.evaluable)
+            .map((outcome) => outcome.components.demand.errorKwh)),
           fuelCell: componentMetrics(fuelErrors),
         },
         asOperated: request.mode === "model-only" ? null : executionMetrics(outcomes, "asOperated"),

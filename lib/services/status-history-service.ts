@@ -85,7 +85,7 @@ export function createStatusHistoryService(dependencies: StatusHistoryDependenci
     // accepted sample so the next poll still has a baseline for counter deltas.
     const appended = dependencies.history.appendSample(sample);
     if (appended) previousSample = appended;
-    dependencies.noteAdaptiveSample(sample);
+    if (appended) dependencies.noteAdaptiveSample(appended);
     return sample;
   }
 

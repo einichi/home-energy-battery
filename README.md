@@ -180,6 +180,23 @@ Charging still prioritizes headroom preservation using the P80 generation
 forecast; this conditioning does not change that policy. Plan diagnostics expose
 `fuelCellModel.recentHotWaterLevel` and `hotWaterConditionedSlotCount`.
 
+Adaptive Charging continues using a still-fresh cached solar forecast after a
+temporary provider failure, with a visible warning and retries backed off from
+one minute to thirty minutes. Stale forecasts and timezone incompatibilities
+still block charging. If Ene-Farm is actively influencing a plan but a target
+half-hour has fewer than four historical days, that plan is unavailable rather
+than assuming unknown generation is zero for battery headroom.
+
+Backtest engine/model version 2 evaluates plan components over the same sunset
+period, checks measurement coverage, and excludes unsupported older plan
+snapshots. Ene-Farm scores use one forecast per target interval, the latest issue
+available at least thirty minutes before the interval, with at least 80% measured
+energy coverage. Unmeasurable intervals are excluded after two days; older
+outcomes without recorded coverage evidence are not included in these scores.
+Partial rollups are prorated when clipping boundaries, assuming uniform energy
+within the recorded interval. AUTO charging is bounded by the known charging
+power; no discharge-power or inverter limit is invented where none is configured.
+
 To compare the existing and hot-water-conditioned forecasts offline, export
 half-hour samples from `GET /api/history?start=...&end=...` (ranges longer than
 two hours return interval rollups), then run:

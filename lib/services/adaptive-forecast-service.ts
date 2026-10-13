@@ -45,6 +45,7 @@ interface AdaptiveForecastDependencies {
   externalIoDisabled: boolean;
   timezone: string | null;
   readState(): Promise<AdaptiveChargingState>;
+  readConfig?(): Promise<ApplicationConfig>;
   writeState(state: AdaptiveChargingState): Promise<AdaptiveChargingState>;
   readHistory(now?: Date): Promise<Array<HistorySample & { timestamp: string }>>;
   logError(label: string, error: unknown): void;
@@ -107,30 +108,37 @@ export function createAdaptiveForecastService(dependencies: AdaptiveForecastDepe
     config: ApplicationConfig,
     { fetchImpl = fetch, now = new Date(), forceHistorical = false }: RefreshOptions = {},
   ): Promise<AdaptiveChargingState> {
-    const state = await dependencies.readState();
+    const initialState = await dependencies.readState();
+    let forecast: SolarForecast;
+    let incompatible = false;
     try {
-      const forecast = parseOpenMeteoForecast(
+      forecast = parseOpenMeteoForecast(
         await fetchJson(openMeteoUrl(config, false, now), fetchImpl),
         now,
       );
       const timezoneError = adaptiveChargingTimezoneError(forecast, dependencies.timezone);
-      if (timezoneError) throw new Error(timezoneError);
-      state.forecast = forecast;
-      state.lastForecastError = null;
-      appendAdaptiveChargingLog(
-        state,
-        `Open-Meteo forecast refreshed for ${forecast.timezone || "local time"}`,
-        "forecast",
-        now,
-      );
+      if (timezoneError) {
+        incompatible = true;
+        throw new Error(timezoneError);
+      }
       dependencies.history.recordForecast(forecast);
     } catch (error: unknown) {
       const message = errorMessage(error);
-      state.lastForecastError = { at: now.toISOString(), error: message };
+      const state = await dependencies.readState();
+      const prior = state.lastForecastError;
+      const priorRetries = Number(prior?.retryCount) || 0;
+      state.lastForecastError = { at: now.toISOString(), error: message, kind: incompatible ? "incompatible" : "provider", retryCount: priorRetries + 1 };
       appendAdaptiveChargingLog(state, `Forecast refresh failed: ${message}`, "error", now);
       return dependencies.writeState(state);
     }
-    const historicalAge = now.getTime() - new Date(state.historicalWeatherFetchedAt ?? 0).getTime();
+    // Re-read after the network wait. Forecast refresh owns only forecast
+    // fields; carrying its pre-fetch snapshot forward could erase a manual
+    // pause, Away update, or active charge transition.
+    const state = await dependencies.readState();
+    state.forecast = forecast;
+    state.lastForecastError = null;
+    appendAdaptiveChargingLog(state, `Open-Meteo forecast refreshed for ${forecast.timezone || "local time"}`, "forecast", now);
+    const historicalAge = now.getTime() - new Date(initialState.historicalWeatherFetchedAt ?? 0).getTime();
     if (forceHistorical || !Number.isFinite(historicalAge) || historicalAge > MILLISECONDS_PER_DAY) {
       try {
         const historical = parseOpenMeteoForecast(
@@ -165,6 +173,12 @@ export function createAdaptiveForecastService(dependencies: AdaptiveForecastDepe
           now,
         );
       }
+    }
+    if (dependencies.readConfig) {
+      const currentConfig = await dependencies.readConfig();
+      const forecastInputs = (value: ApplicationConfig) => [value.adaptiveCharging.latitude, value.adaptiveCharging.longitude,
+        value.adaptiveCharging.panelTiltDegrees, value.adaptiveCharging.panelAzimuthDegrees];
+      if (JSON.stringify(forecastInputs(currentConfig)) !== JSON.stringify(forecastInputs(config))) return dependencies.readState();
     }
     return dependencies.writeState(state);
   }

@@ -5,6 +5,7 @@ import type { GuardWindowOutcome } from "./guard-deliverability.js";
 import { discountedTimelineWindows, mergeAdaptiveChargingSlots } from "./adaptive-plan-utils.js";
 import { applyAdaptiveChargingTimelineSlot, cumulativeRangeNeeds } from "./adaptive-timeline.js";
 import type { AdaptiveChargeSlot, AdaptiveTimelineSlot, AdaptiveWindowPlan, ChronologicalPlan } from "./adaptive-planning-types.js";
+import { discountedWindowSolarOpportunity } from "./adaptive-window-policy.js";
 
 export function planChronologicalDiscountedCharging({
   timeline = [],
@@ -55,6 +56,7 @@ export function planChronologicalDiscountedCharging({
           dischargeFloorKwh,
           capacityKwh,
           chargeConversion,
+          maximumChargeWatts,
         );
       }
     };
@@ -64,16 +66,19 @@ export function planChronologicalDiscountedCharging({
       simulate(cursor, window.startIndex);
       const storedAtStartKwh = storedKwh;
       let windowSchedulingWatts = maximumChargeWatts;
+      const solarResponsiveWindow = discountedWindowSolarOpportunity(window.slots);
       const simulateWindow = (chargeByIndex: Map<number, number> = new Map()) => {
         let projectedStoredKwh = storedKwh;
-        let chargingStarted = window.startMs < new Date(standbyWindowEnd ?? "").getTime();
+        let chargingStarted = false;
         for (let index = window.startIndex; index < window.endIndex; index += 1) {
           const allocated = chargeByIndex.get(index) ?? 0;
           // While charging, the controller interrupts grid charging to capture
           // solar surplus, so keep surplus (clamped >= 0) instead of dropping it;
           // demand deficits are served by the grid while in charging mode.
           const slot = timeline[index];
-          const netKwh = chargingStarted ? Math.max(0, Number(slot.netKwh || 0)) : slot.netKwh;
+          const heldInStandby = slot.startMs < new Date(standbyWindowEnd ?? "").getTime();
+          const netKwh = heldInStandby ? 0 : chargingStarted ? Math.max(0, Number(slot.netKwh || 0))
+            : solarResponsiveWindow ? slot.netKwh : 0;
           projectedStoredKwh = applyAdaptiveChargingTimelineSlot(
             projectedStoredKwh,
             {
@@ -85,6 +90,7 @@ export function planChronologicalDiscountedCharging({
             dischargeFloorKwh,
             capacityKwh,
             chargeConversion,
+            maximumChargeWatts,
           );
           if (allocated > 0) chargingStarted = true;
         }
@@ -93,7 +99,7 @@ export function planChronologicalDiscountedCharging({
       const noGridStoredKwh = simulateWindow();
       const nextWindow = windows[windowIndex + 1] ?? null;
       const boundaryIndex = nextWindow?.startIndex ?? timeline.length;
-      const rangeNeeds = cumulativeRangeNeeds(timeline, window.endIndex, boundaryIndex, chargeConversion);
+      const rangeNeeds = cumulativeRangeNeeds(timeline, window.endIndex, boundaryIndex, chargeConversion, maximumChargeWatts);
       const solarHeadroomKwh = Math.min(
         Math.max(0, maximumTargetKwh - dischargeFloorKwh),
         rangeNeeds.maximumSurplusKwh,

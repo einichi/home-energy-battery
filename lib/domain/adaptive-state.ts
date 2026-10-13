@@ -51,6 +51,7 @@ export interface AdaptivePlan {
   chargePerformance?: { effectiveWatts?: number };
   batteryModel?: {
     version?: number;
+    capacityKwh?: number;
     chargeToStoredRatio?: number;
     charge?: { whPerSocPoint?: number; source?: string };
     discharge?: { whPerSocPoint?: number; source?: string };

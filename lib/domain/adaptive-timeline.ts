@@ -2,12 +2,15 @@ import { finiteNumberOrNull } from "./numbers.js";
 import { rateForTimestamp } from "./tariffs.js";
 import type { ApplicationConfig } from "../contracts/configuration.js";
 import type { AdaptiveChargeSlot, AdaptiveTimelineSlot, AdaptiveTimelineViewEntry } from "./adaptive-planning-types.js";
+import { discountedTimelineWindows } from "./adaptive-plan-utils.js";
+import { discountedWindowSolarOpportunity } from "./adaptive-window-policy.js";
 
 export function cumulativeRangeNeeds(
   timeline: readonly AdaptiveTimelineSlot[],
   startIndex: number,
   endIndex: number,
   chargeToStoredRatio = 1,
+  maximumChargeWatts = Number.POSITIVE_INFINITY,
 ) {
   let lowCumulative = 0;
   let highCumulative = 0;
@@ -16,8 +19,11 @@ export function cumulativeRangeNeeds(
   for (let index = startIndex; index < endIndex; index += 1) {
     const lowNet = Number(timeline[index]?.netKwh ?? 0);
     const highNet = Number(timeline[index]?.highSolarNetKwh ?? timeline[index]?.netKwh ?? 0);
-    lowCumulative += lowNet > 0 ? lowNet * chargeToStoredRatio : lowNet;
-    highCumulative += highNet > 0 ? highNet * chargeToStoredRatio : highNet;
+    const slot = timeline[index];
+    const durationHours = slot ? Math.max(0, slot.endMs - slot.startMs) / 3_600_000 : 0;
+    const chargeLimit = Number.isFinite(maximumChargeWatts) ? Math.max(0, maximumChargeWatts) * durationHours / 1000 : Number.POSITIVE_INFINITY;
+    lowCumulative += lowNet > 0 ? Math.min(lowNet, chargeLimit) * chargeToStoredRatio : lowNet;
+    highCumulative += highNet > 0 ? Math.min(highNet, chargeLimit) * chargeToStoredRatio : highNet;
     maximumDeficitKwh = Math.max(maximumDeficitKwh, -lowCumulative);
     maximumSurplusKwh = Math.max(maximumSurplusKwh, highCumulative);
   }
@@ -31,20 +37,22 @@ export function applyPredictedBatteryFlow(
   floorKwh: number,
   capacityKwh: number,
   chargeToStoredRatio = 1,
+  maximumChargeKwh = Number.POSITIVE_INFINITY,
 ): number {
   const net = Number(netKwh || 0);
-  const converted = net > 0 ? net * chargeToStoredRatio : net;
+  const converted = net > 0 ? Math.min(net, Math.max(0, maximumChargeKwh)) * chargeToStoredRatio : net;
   return Math.max(floorKwh, Math.min(capacityKwh, storedKwh + converted));
 }
 
 
 export function applyAdaptiveChargingTimelineSlot(
   storedKwh: number,
-  slot: Pick<AdaptiveTimelineSlot, "chargeCapacityKwh" | "netKwh">,
+  slot: Pick<AdaptiveTimelineSlot, "chargeCapacityKwh" | "netKwh" | "startMs" | "endMs">,
   chargeKwh: unknown,
   floorKwh: number,
   capacityKwh: number,
   chargeToStoredRatio = 1,
+  maximumChargeWatts = Number.POSITIVE_INFINITY,
 ): number {
   const allocatedChargeKwh = Math.max(0, Number(chargeKwh) || 0);
   const conversion = Math.min(1.5, Math.max(0.5, Number(chargeToStoredRatio) || 1));
@@ -53,7 +61,11 @@ export function applyAdaptiveChargingTimelineSlot(
     ? Math.min(1, allocatedChargeKwh / slotChargeCapacityKwh)
     : 0;
   const autoNetKwh = Number(slot?.netKwh || 0) * (1 - forcedChargeFraction);
-  const afterAuto = applyPredictedBatteryFlow(storedKwh, autoNetKwh, floorKwh, capacityKwh, conversion);
+  const durationHours = Math.max(0, Number(slot.endMs) - Number(slot.startMs)) / 3_600_000;
+  const autoChargeLimitKwh = Number.isFinite(maximumChargeWatts)
+    ? Math.max(0, maximumChargeWatts) * durationHours / 1000 * (1 - forcedChargeFraction)
+    : Number.POSITIVE_INFINITY;
+  const afterAuto = applyPredictedBatteryFlow(storedKwh, autoNetKwh, floorKwh, capacityKwh, conversion, autoChargeLimitKwh);
   return Math.min(capacityKwh, afterAuto + allocatedChargeKwh * conversion);
 }
 
@@ -65,6 +77,7 @@ export function buildAdaptiveChargingTimelineView({
   floorKwh,
   capacityKwh,
   chargeToStoredRatio = 1,
+  maximumChargeWatts = Number.POSITIVE_INFINITY,
   config,
   standbyWindowEnd = null,
 }: {
@@ -74,6 +87,7 @@ export function buildAdaptiveChargingTimelineView({
   floorKwh: number;
   capacityKwh: number;
   chargeToStoredRatio?: number;
+  maximumChargeWatts?: number;
   config: Pick<ApplicationConfig, "rateBands" | "standardRateYenPerKwh">;
   standbyWindowEnd?: string | null;
 }) {
@@ -87,6 +101,9 @@ export function buildAdaptiveChargingTimelineView({
     && Number.isFinite(slot.endMs)
     && slot.endMs > slot.startMs);
   const view: AdaptiveTimelineViewEntry[] = [];
+  const solarResponsiveIntervals = new Set(discountedTimelineWindows(timeline)
+    .filter((window) => discountedWindowSolarOpportunity(window.slots))
+    .flatMap((window) => window.slots));
 
   for (const interval of timeline) {
     const intervalDurationMs = Math.max(0, interval.endMs - interval.startMs);
@@ -132,6 +149,7 @@ export function buildAdaptiveChargingTimelineView({
         && segmentStartMs >= slot.startMs && segmentStartMs < new Date(slot.windowEnd ?? slot.end).getTime());
       if (standbyHold) segment.netKwh = 0;
       else if (chargingSegment) segment.netKwh = Math.max(0, Number(segment.netKwh || 0));
+      else if (interval.band && !solarResponsiveIntervals.has(interval)) segment.netKwh = 0;
       const startingStoredKwh = storedKwh;
       storedKwh = applyAdaptiveChargingTimelineSlot(
         storedKwh,
@@ -140,6 +158,7 @@ export function buildAdaptiveChargingTimelineView({
         floorKwh,
         capacityKwh,
         chargeToStoredRatio,
+        maximumChargeWatts,
       );
       const durationHours = segmentDurationMs / 3_600_000;
       const rate = interval.band ?? rateForTimestamp(

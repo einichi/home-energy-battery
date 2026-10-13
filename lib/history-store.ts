@@ -1,4 +1,4 @@
-import { ENERGY_CALCULATION_VERSION, addRollupSample, compactHistorySample, emptyRollupState, enrichHistorySample, intervalEnergy, interpretHistorySample, localBucketStart, rollupPayload, updateMetricBaselines } from "./domain/history-samples.js";
+import { ENERGY_CALCULATION_VERSION, addRollupSample, compactHistorySample, emptyRollupState, enrichHistorySample, interpretHistorySample, localBucketStart, rollupPayload, updateMetricBaselines } from "./domain/history-samples.js";
 import type { RollupState } from "./domain/history-samples.js";
 import { MILLISECONDS_PER_DAY } from "./domain/time.js";
 import { DatabaseSync } from "node:sqlite";
@@ -74,7 +74,7 @@ export function createHistoryStore({
   const gasTariffRepository = createGasTariffRepository({ database: requireDatabase });
   const forecastRepository = createForecastRepository({
     database: requireDatabase,
-    intervalEnergy,
+    intervalSamples: (startMs, endMs) => queryRepository.querySamples(startMs, endMs, { resolution: "interval" }),
     solarForecastMinimumCoverageRatio: SOLAR_FORECAST_MIN_COVERAGE_RATIO,
   });
   const backtestRepository = createBacktestRepository(requireDatabase);

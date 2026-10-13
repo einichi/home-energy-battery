@@ -91,6 +91,7 @@ export interface ApiRouteServices {
   readAdaptiveChargingDemandProfileDays: AdaptiveHistoryService["readDemandProfileDays"];
   readAdaptiveChargingHistory: AdaptiveHistoryService["readHistory"];
   readAdaptiveChargingState: AdaptiveStateService["read"];
+  withAdaptiveChargingMutation: AdaptiveStateService["exclusive"];
   readAutomationRules: AutomationStoreService["read"];
   readCommandReceipt: CommandReceiptService["read"];
   readCommandReceipts: CommandReceiptService["list"];

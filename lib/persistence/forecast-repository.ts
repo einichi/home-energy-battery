@@ -9,7 +9,7 @@ interface StoredWeatherRecord { time?: string; timestamp?: string }
 
 export interface ForecastRepositoryDependencies {
   database(): DatabaseSync;
-  intervalEnergy(sample: HistorySample, previousSample: HistorySample | null, directKey: string, wattsKey: string): number | null;
+  intervalSamples(startMs: number, endMs: number): HistorySample[];
   solarForecastMinimumCoverageRatio: number;
 }
 
@@ -26,7 +26,6 @@ function parseJson<T>(text: unknown, fallback: T): T {
 
 export function createForecastRepository(dependencies: ForecastRepositoryDependencies) {
   const requireDatabase = dependencies.database;
-  const intervalEnergy = dependencies.intervalEnergy;
   const SOLAR_FORECAST_MIN_COVERAGE_RATIO = dependencies.solarForecastMinimumCoverageRatio;
 
   function recordForecast<T extends StoredForecast>(forecast: T): boolean {
@@ -281,30 +280,54 @@ export function createForecastRepository(dependencies: ForecastRepositoryDepende
     if (nowMs === null) return 0;
     const rows = requireDatabase().prepare(`
       SELECT target_start_ms, issued_at_ms, payload_json FROM fuel_cell_forecasts
-      WHERE completed_at IS NULL ORDER BY target_start_ms
-    `).all() as Array<Record<string, unknown>>;
+      WHERE completed_at IS NULL AND json_extract(payload_json, '$.end') <= ? ORDER BY target_start_ms
+    `).all(new Date(nowMs).toISOString()) as Array<Record<string, unknown>>;
     const update = requireDatabase().prepare(`
-      UPDATE fuel_cell_forecasts SET actual_kwh = ?, completed_at = ?
+      UPDATE fuel_cell_forecasts SET actual_kwh = ?, completed_at = ?, payload_json = ?
       WHERE target_start_ms = ? AND issued_at_ms = ?
     `);
     let settled = 0;
+    const intervalResults = new Map<string, { actualKwh: number; coverageSeconds: number }>();
     for (const row of rows) {
       const payload = parseJson(row.payload_json, {} as Record<string, unknown>);
+      const startMs = Number(row.target_start_ms);
       const endMs = timestampMs(payload.end);
       if (endMs === null || endMs > nowMs) continue;
-      const samples = requireDatabase().prepare(`
-        SELECT payload_json FROM samples WHERE timestamp_ms >= ? AND timestamp_ms <= ? ORDER BY timestamp_ms, id
-      `).all(row.target_start_ms as number, endMs).map((sample) => parseJson(sample.payload_json, {} as HistorySample));
-      let actualKwh = 0;
-      let measured = false;
-      for (let index = 0; index < samples.length; index += 1) {
-        const value = intervalEnergy(samples[index], samples[index - 1], "fuelCellKwh", "fuelCellPowerW");
-        if (value !== null) { actualKwh += value; measured = true; }
+      const intervalKey = `${startMs}:${endMs}`;
+      let result = intervalResults.get(intervalKey);
+      if (!result) {
+        let actualKwh = 0;
+        let coverageSeconds = 0;
+        let cursorMs = startMs;
+        for (const sample of dependencies.intervalSamples(startMs, endMs)) {
+          const intervalStart = timestampMs(sample.rollupStart);
+          const intervalEnd = timestampMs(sample.rollupEnd);
+          const value = finite(sample.fuelCellKwh);
+          const measuredSeconds = finite(sample.coverageSeconds?.fuelCellKwh);
+          if (intervalStart === null || intervalEnd === null || intervalEnd <= intervalStart || value === null || measuredSeconds === null) continue;
+          const overlapMs = Math.max(0, Math.min(endMs, intervalEnd) - Math.max(cursorMs, intervalStart));
+          if (!overlapMs) continue;
+          const fraction = overlapMs / (intervalEnd - intervalStart);
+          actualKwh += value * fraction;
+          coverageSeconds += Math.min(measuredSeconds, (intervalEnd - intervalStart) / 1000) * fraction;
+          cursorMs = intervalEnd;
+        }
+        result = { actualKwh, coverageSeconds };
+        intervalResults.set(intervalKey, result);
       }
-      if (!measured) continue;
+      const { actualKwh, coverageSeconds } = result;
+      const durationMs = endMs - startMs;
+      const adequatelyCovered = durationMs > 0 && coverageSeconds >= durationMs / 1000 * SOLAR_FORECAST_MIN_COVERAGE_RATIO;
+      const expiredUnmeasured = nowMs - endMs > 2 * 86_400_000;
+      if (!adequatelyCovered && !expiredUnmeasured) continue;
+      const finalPayload = {
+        ...payload, settlementVersion: 2, actualCoverageSeconds: coverageSeconds,
+        ...(!adequatelyCovered ? { settlementExcludedReason: "insufficient measured interval coverage" } : {}),
+      };
       update.run(
-        actualKwh,
+        adequatelyCovered ? actualKwh : null,
         (now instanceof Date ? now : new Date(nowMs)).toISOString(),
+        JSON.stringify(finalPayload),
         Number(row.target_start_ms),
         Number(row.issued_at_ms),
       );
@@ -313,10 +336,20 @@ export function createForecastRepository(dependencies: ForecastRepositoryDepende
     return settled;
   }
 
-  function fuelCellForecastOutcomes(limit: number = 100): Array<Record<string, unknown>> {
+  function fuelCellForecastOutcomes(limit: number = 100, { canonical = false }: { canonical?: boolean } = {}): Array<Record<string, unknown>> {
     return requireDatabase().prepare(`
       SELECT target_start, issued_at, payload_json, actual_kwh, completed_at
-      FROM fuel_cell_forecasts WHERE completed_at IS NOT NULL
+      FROM fuel_cell_forecasts AS forecast WHERE completed_at IS NOT NULL
+      ${canonical ? `AND json_extract(payload_json, '$.settlementVersion') = 2
+        AND json_extract(payload_json, '$.sampleCount') > 0
+        AND actual_kwh IS NOT NULL AND issued_at_ms <= target_start_ms - 1800000
+        AND issued_at_ms = (SELECT MAX(candidate.issued_at_ms) FROM fuel_cell_forecasts AS candidate
+          WHERE candidate.target_start_ms = forecast.target_start_ms
+            AND json_extract(candidate.payload_json, '$.end') = json_extract(forecast.payload_json, '$.end')
+            AND candidate.issued_at_ms <= candidate.target_start_ms - 1800000
+            AND candidate.actual_kwh IS NOT NULL
+            AND json_extract(candidate.payload_json, '$.sampleCount') > 0
+            AND json_extract(candidate.payload_json, '$.settlementVersion') = 2)` : ""}
       ORDER BY target_start_ms DESC, issued_at_ms DESC LIMIT ?
     `).all(Math.max(1, Math.round(limit))).map((row) => ({
       ...parseJson(row.payload_json, {}),
