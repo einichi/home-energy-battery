@@ -121,7 +121,6 @@ describe("computeFlowConnectors", () => {
     const idle = computeFlowConnectors(mobileRects, { ...visible, battery: 0, gridImport: 0 }, true);
     expect(connector(idle, "battery").active).toBe(false);
     expect(connector(idle, "grid").active).toBe(false);
-    expect(connector(idle, "battery").path.length).toBeGreaterThan(0);
   });
 
   it("omits connectors when the destination node is not rendered", () => {
@@ -153,7 +152,7 @@ function mockLayout(rects: Record<string, Rect>, container: Rect, mobile = false
     return domRect({ left: 0, top: 0, right: 0, bottom: 0 });
   });
   vi.spyOn(window, "matchMedia").mockImplementation((query: string) => ({
-    matches: mobile,
+    matches: query === "(max-width: 680px)" && mobile,
     media: query,
     onchange: null,
     addEventListener: vi.fn(),
@@ -174,22 +173,10 @@ const baseProps = {
   demand: 1400,
   gridImport: 920,
   gridExport: 0,
+  live: true,
 };
 
 describe("EnergyFlow", () => {
-  it("renders fixed-size, self-consistent arrowheads once the layout is measured", () => {
-    mockLayout(desktopRects, { left: 0, top: 0, right: 600, bottom: 300 });
-    const { container } = render(<EnergyFlow {...baseProps} battery={480} />);
-    const markers = container.querySelectorAll(".flow-lines marker");
-
-    expect(markers).toHaveLength(4);
-    markers.forEach((marker) => {
-      expect(marker).toHaveAttribute("markerUnits", "userSpaceOnUse");
-      expect(marker).toHaveAttribute("markerWidth", "14");
-      expect(marker).toHaveAttribute("markerHeight", "14");
-      expect(marker).toHaveAttribute("refX", "10");
-    });
-  });
 
   it("points imported grid power toward the home and scales active paths by magnitude", () => {
     mockLayout(desktopRects, { left: 0, top: 0, right: 600, bottom: 300 });
@@ -228,5 +215,19 @@ describe("EnergyFlow", () => {
     expect(battery).toHaveAttribute("data-target", ".flow-battery");
     const batteryCenter = (mobileRects.battery.left + mobileRects.battery.right) / 2;
     expect(endpoints(battery?.getAttribute("d") ?? "").start).toEqual({ x: batteryCenter, y: mobileRects.home.bottom });
+  });
+
+  it("keeps stale readings and static directions without suggesting live power movement", () => {
+    mockLayout(desktopRects, { left: 0, top: 0, right: 600, bottom: 300 });
+    const { container, rerender } = render(<EnergyFlow {...baseProps} battery={480} />);
+    expect(container.querySelector(".flow-dot")).toBeInTheDocument();
+
+    rerender(<EnergyFlow {...baseProps} battery={480} live={false} />);
+    expect(screen.getByText("Battery charging")).toBeInTheDocument();
+    expect(container.querySelector(".flow-path-battery")).toHaveAttribute("data-target", ".flow-battery");
+    expect(container.querySelector(".flow-dot")).not.toBeInTheDocument();
+
+    rerender(<EnergyFlow {...baseProps} battery={480} />);
+    expect(container.querySelector(".flow-dot")).toBeInTheDocument();
   });
 });

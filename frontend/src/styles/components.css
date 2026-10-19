@@ -114,6 +114,11 @@
 .flow-path-fuel { stroke: var(--fuel-cell); }
 .flow-path-battery { stroke: var(--battery); }
 .flow-path-grid { stroke: var(--grid); }
+.flow-dot { pointer-events: none; }
+.flow-dot-solar { fill: var(--solar); }
+.flow-dot-fuel { fill: var(--fuel-cell); }
+.flow-dot-battery { fill: var(--battery); }
+.flow-dot-grid { fill: var(--grid); }
 @keyframes flow-path-in { from { opacity: .2; stroke-width: 1; } }
 @keyframes flow-value-in { from { opacity: .45; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
 
@@ -829,6 +834,7 @@ tbody td { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
 @media (prefers-reduced-motion: reduce) {
   .flow-path, .flow-path[data-active="true"], .flow-node strong { animation: none; transition: none; }
+  .flow-dot { display: none; }
 }
 
 @media (max-width: 420px) {

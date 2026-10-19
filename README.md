@@ -71,6 +71,11 @@ The integrated status service reads:
 
 ## Web UI
 
+Overview's Energy flow card uses moving dots to show power direction, with
+line thickness indicating power magnitude. Motion stops for stale or unavailable
+readings, hidden tabs, offscreen cards, and reduced-motion preferences; static
+arrows and readings remain available.
+
 The HTTP service is intentionally unauthenticated and intended only for a trusted
 local network. Access it with an IPv4 or bracketed IPv6 literal, `localhost`, a
 single-label LAN hostname, or a name below `.local`, `.home.arpa`, or `.internal`.

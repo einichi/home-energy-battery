@@ -33,6 +33,7 @@ export type FlowConnector = {
 
 /** Breakpoint must stay in sync with the `.energy-flow` media query in components.css. */
 const MOBILE_QUERY = "(max-width: 680px)";
+const DOT_PHASES = [0, 1, 2] as const;
 
 function batteryState(power: number | null) {
   if (power === null) return "Battery";
@@ -206,13 +207,49 @@ function Marker({ id, color, size }: { id: string; color: string; size: number }
   return <marker id={id} viewBox="0 0 10 10" refX="10" refY="5" markerUnits="userSpaceOnUse" markerWidth={size} markerHeight={size} orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill={color} /></marker>;
 }
 
-export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridExport, showSolar = true, showFuelCell = true, showBattery = true, showDemand = true, showGrid = true, demandLabel, demandTitle }: {
+function FlowConnection({ connector, animate }: { connector: FlowConnector; animate: boolean }) {
+  const pathRef = useRef<SVGPathElement>(null);
+  const [duration, setDuration] = useState(3);
+
+  useLayoutEffect(() => {
+    const length = pathRef.current?.getTotalLength?.();
+    if (length !== undefined) setDuration(Math.max(2, Math.min(8, length / 55)));
+  }, [connector.path]);
+
+  return (
+    <g>
+      <path
+        ref={pathRef}
+        className={`flow-path ${connector.className}`}
+        data-active={connector.active || undefined}
+        data-target={connector.target}
+        d={connector.path}
+        style={{ "--flow-width": connector.weight } as CSSProperties}
+        markerEnd={connector.active ? `url(#flow-arrow-${connector.id})` : undefined}
+      />
+      {animate && connector.active ? DOT_PHASES.map((index) => (
+        <circle key={index} className={`flow-dot flow-dot-${connector.id}`} r="2.8">
+          <animateMotion
+            path={connector.path}
+            dur={`${duration}s`}
+            begin={`${-index * duration / 3}s`}
+            repeatCount="indefinite"
+            calcMode="paced"
+          />
+        </circle>
+      )) : null}
+    </g>
+  );
+}
+
+export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridExport, live, showSolar = true, showFuelCell = true, showBattery = true, showDemand = true, showGrid = true, demandLabel, demandTitle }: {
   solar: number | null;
   fuelCell: number | null;
   battery: number | null;
   demand: number | null;
   gridImport: number | null;
   gridExport: number | null;
+  live: boolean;
   showSolar?: boolean;
   showFuelCell?: boolean;
   showBattery?: boolean;
@@ -228,6 +265,7 @@ export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridE
   const [, setRevision] = useState(0);
   const [mobile, setMobile] = useState(() => typeof window !== "undefined" && window.matchMedia(MOBILE_QUERY).matches);
   const [geometry, setGeometry] = useState<{ width: number; height: number; connectors: FlowConnector[] }>({ width: 0, height: 0, connectors: [] });
+  const [motionEnabled, setMotionEnabled] = useState(false);
 
   const visible: FlowVisibility = {
     solar,
@@ -247,6 +285,27 @@ export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridE
     update();
     query.addEventListener("change", update);
     return () => query.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let inView = true;
+    const update = () => setMotionEnabled(inView && !document.hidden && !reducedMotion.matches);
+    const observer = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver(([entry]) => {
+      inView = entry.isIntersecting;
+      update();
+    });
+    observer?.observe(root);
+    reducedMotion.addEventListener("change", update);
+    document.addEventListener("visibilitychange", update);
+    update();
+    return () => {
+      observer?.disconnect();
+      reducedMotion.removeEventListener("change", update);
+      document.removeEventListener("visibilitychange", update);
+    };
   }, []);
 
   useEffect(() => {
@@ -307,15 +366,7 @@ export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridE
             <Marker id="flow-arrow-grid" color="var(--grid)" size={markerSize} />
           </defs>
           {geometry.connectors.map((connector) => (
-            <path
-              key={connector.id}
-              className={`flow-path ${connector.className}`}
-              data-active={connector.active || undefined}
-              data-target={connector.target}
-              d={connector.path}
-              style={{ "--flow-width": connector.weight } as CSSProperties}
-              markerEnd={connector.active ? `url(#flow-arrow-${connector.id})` : undefined}
-            />
+            <FlowConnection key={connector.id} connector={connector} animate={live && motionEnabled} />
           ))}
         </svg>
       ) : null}
