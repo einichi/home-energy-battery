@@ -33,6 +33,14 @@ export function createAutomationStoreService(
   documents: AutomationDocumentStore,
   events: AutomationEventStore,
 ) {
+  let workflowQueue: Promise<unknown> = Promise.resolve();
+
+  function exclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const task = workflowQueue.then(operation);
+    workflowQueue = task.catch(() => undefined);
+    return task;
+  }
+
   async function readConfigs() {
     return documents.readDocument("automationRules", []).map(cleanAutomationRuleConfig);
   }
@@ -77,5 +85,5 @@ export function createAutomationStoreService(
     return states;
   }
 
-  return { read, readConfigs, readStates, writeConfigs, writeStates };
+  return { read, readConfigs, readStates, writeConfigs, writeStates, exclusive };
 }

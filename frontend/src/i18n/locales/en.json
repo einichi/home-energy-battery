@@ -2229,7 +2229,12 @@
     "a": "A",
     "reservedHeadroom": "Reserved headroom",
     "restoreBelow": "Restore below",
-    "restoreDelay": "Restore delay"
+    "restoreDelay": "Restore delay",
+    "restoreAutoNow": "Restore Auto now",
+    "restoringAuto": "Restoring…",
+    "restoreAutoSuccess": "Auto mode restored. Demand Guard settings are unchanged.",
+    "restoreAutoFailure": "Auto mode could not be restored.",
+    "restoreAutoHint": "Return to Auto without waiting for the restore threshold or delay. The guard may intervene again if demand remains high."
   },
   "battery": {
     "1 · When": "1 · When",

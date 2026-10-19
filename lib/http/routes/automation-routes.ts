@@ -10,7 +10,7 @@ export type AutomationRouteDependencies = Pick<ApiRouteServices,
   | "backtestService"
   | "mergeAutomationRule" | "mutateSchedules" | "parseRunAt" | "randomUUID"
   | "readAutomationRules" | "readConfig" | "readSchedules"
-  | "writeAutomationRuleStates" | "writeAutomationRules"
+  | "writeAutomationRuleStates" | "writeAutomationRules" | "withAutomationRuleMutation" | "restoreDemandGuard"
 >;
 
 function normalizeScheduleDays(value: unknown, allDays: number[]): number[] {
@@ -39,7 +39,7 @@ export function createAutomationRouteHandler(dependencies: AutomationRouteDepend
   const {
     ALL_DAYS, adaptiveChargingConfiguredActive, cleanAutomationRule, mergeAutomationRule,
     mutateSchedules, parseRunAt, randomUUID, readAutomationRules, readConfig,
-    readSchedules, writeAutomationRuleStates, writeAutomationRules,
+    readSchedules, writeAutomationRuleStates, writeAutomationRules, withAutomationRuleMutation, restoreDemandGuard,
   } = dependencies;
 
   return async function handleAutomationRoute(
@@ -66,36 +66,46 @@ export function createAutomationRouteHandler(dependencies: AutomationRouteDepend
     if (req.method === "GET" && url.pathname === "/api/automation-rules") {
       return json(res, 200, await readAutomationRules());
     }
+    if (req.method === "POST" && url.pathname === "/api/automation-rules/restore") {
+      await readBody(req);
+      return json(res, 200, await restoreDemandGuard());
+    }
     if (req.method === "POST" && url.pathname === "/api/automation-rules") {
       const body = validateRequestBody(await readBody(req), AutomationRuleRequestSchema, dependencies.http.requestError);
-      const rules = await readAutomationRules();
-      const rule = cleanAutomationRule({ ...body, id: randomUUID(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
-      rules.push(rule);
-      await writeAutomationRules(rules);
-      await writeAutomationRuleStates(rules);
-      return json(res, 201, rule);
+      return withAutomationRuleMutation(async () => {
+        const rules = await readAutomationRules();
+        const rule = cleanAutomationRule({ ...body, id: randomUUID(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+        rules.push(rule);
+        await writeAutomationRules(rules);
+        await writeAutomationRuleStates(rules);
+        return json(res, 201, rule);
+      });
     }
     if (req.method === "PATCH" && url.pathname.startsWith("/api/automation-rules/")) {
       const id = url.pathname.split("/").pop();
       const body = validateRequestBody(await readBody(req), AutomationRuleRequestSchema, dependencies.http.requestError);
-      const rules = await readAutomationRules();
-      const index = rules.findIndex((item: AutomationRule) => item.id === id);
-      if (index < 0) return json(res, 404, { error: "automation rule not found" });
-      rules[index] = mergeAutomationRule(
-        { ...rules[index], ...body, id, updatedAt: new Date().toISOString() },
-        rules[index],
-      );
-      await writeAutomationRules(rules);
-      await writeAutomationRuleStates(rules);
-      return json(res, 200, rules[index]);
+      return withAutomationRuleMutation(async () => {
+        const rules = await readAutomationRules();
+        const index = rules.findIndex((item: AutomationRule) => item.id === id);
+        if (index < 0) return json(res, 404, { error: "automation rule not found" });
+        rules[index] = mergeAutomationRule(
+          { ...rules[index], ...body, id, updatedAt: new Date().toISOString() },
+          rules[index],
+        );
+        await writeAutomationRules(rules);
+        await writeAutomationRuleStates(rules);
+        return json(res, 200, rules[index]);
+      });
     }
     if (req.method === "DELETE" && url.pathname.startsWith("/api/automation-rules/")) {
       const id = url.pathname.split("/").pop();
-      const rules = await readAutomationRules();
-      const next = rules.filter((item: AutomationRule) => item.id !== id);
-      await writeAutomationRules(next);
-      await writeAutomationRuleStates(next);
-      return json(res, 200, { ok: next.length !== rules.length });
+      return withAutomationRuleMutation(async () => {
+        const rules = await readAutomationRules();
+        const next = rules.filter((item: AutomationRule) => item.id !== id);
+        await writeAutomationRules(next);
+        await writeAutomationRuleStates(next);
+        return json(res, 200, { ok: next.length !== rules.length });
+      });
     }
     if (req.method === "POST" && url.pathname === "/api/schedules") {
       if (adaptiveChargingConfiguredActive(await readConfig())) {

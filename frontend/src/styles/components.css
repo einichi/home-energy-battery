@@ -328,6 +328,11 @@ tbody td { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .protection-grid strong, .performance-grid strong { overflow: hidden; font-size: .98rem; text-overflow: ellipsis; }
 .protection-grid small, .performance-grid small { color: var(--text-faint); font-size: .64rem; line-height: 1.4; }
 .protection-grid .protection-owner { grid-column: 1 / -1; border-right: 0; border-top: 1px solid var(--border); }
+.demand-guard-restore { display: grid; align-content: start; gap: 6px; min-width: 0; }
+.demand-guard-restore .button-row { align-items: flex-start; }
+.demand-guard-restore-hint { max-width: 340px; margin: 0; color: var(--text-faint); font-size: .66rem; line-height: 1.4; }
+.protection-grid .demand-guard-restore .quiet-button { min-height: 34px; padding-inline: 12px; font-size: .68rem; }
+.overview-page .page-heading .button-row { align-items: flex-start; }
 .automation-timeline { margin-top: 24px; }
 .automation-timeline-track { position: relative; height: 46px; overflow: visible; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-subtle); }
 .automation-timeline-segment { position: absolute; inset-block: 0; min-width: 3px; padding: 0; border: 0; border-inline: 1px solid color-mix(in srgb, var(--surface) 55%, transparent); cursor: help; }

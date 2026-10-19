@@ -88,6 +88,7 @@ import { createOperationalOverrideService } from "./services/operational-overrid
 import { createScheduleService } from "./services/schedule-service.js";
 import { createAdaptiveStateService } from "./services/adaptive-state-service.js";
 import { createAutomationStoreService } from "./services/automation-store-service.js";
+import { createDemandGuardService } from "./services/demand-guard-service.js";
 import { createConfigurationService } from "./services/configuration-service.js";
 import { createAdaptiveChargingOperations } from "./services/adaptive-charging-operations.js";
 import { createAutomationRuleEvaluator } from "./services/automation-rule-evaluator.js";
@@ -315,6 +316,15 @@ const deviceCommandService = createDeviceCommandService({
 });
 const executeAction = deviceCommandService.execute;
 const startDeviceCommand = deviceCommandService.start;
+const demandGuardService = createDemandGuardService({
+  exclusive: automationStoreService.exclusive,
+  readAutomationRules,
+  writeAutomationRuleStates,
+  readOperationalOverridesState,
+  executeAction,
+  notify: notificationService.enqueue,
+  requestError,
+});
 const backupPreparationService = createBackupPreparationService({
   readConfig,
   readAdaptiveChargingState,
@@ -362,6 +372,7 @@ const scheduleRunner = createScheduleRunner({
   readConfig,
   readOperationalOverrides: readOperationalOverridesState,
   readAutomationRules,
+  getStatusSnapshot,
   mutateSchedules,
   writeSchedules,
   executeAction,
@@ -557,7 +568,7 @@ const automationOrchestrator = createAutomationOrchestrator({
 const scheduledAutomationService = createScheduledAutomationService({
   discoveryInProgress,
   discoveryLabel: discoveryService.label,
-  runAutomation: automationOrchestrator.run,
+  runAutomation: (context) => automationStoreService.exclusive(() => automationOrchestrator.run(context)),
   activeDeviceOperationLabel: () => activeEchonetLabel(deviceQueue.activeContext),
   warn: (message) => console.warn(message),
 });
@@ -704,7 +715,8 @@ const api = createApiHandler({
       if (!adaptiveControlService) throw new Error("Adaptive control service is not initialized");
       return adaptiveStateService.exclusive(() => adaptiveControlService!.resume(now));
     },
-    startBackupPreparation: backupPreparationService.start,
+    startBackupPreparation: (options, now) =>
+      automationStoreService.exclusive(() => backupPreparationService.start(options, now)),
     updateAwayPeriod,
     writeAdaptiveChargingState,
     withAdaptiveChargingMutation: adaptiveStateService.exclusive,
@@ -723,6 +735,8 @@ const api = createApiHandler({
     readSchedules,
     writeAutomationRuleStates,
     writeAutomationRules,
+    withAutomationRuleMutation: automationStoreService.exclusive,
+    restoreDemandGuard: demandGuardService.restore,
   },
 });
 const serveStatic = createStaticHandler(path.join(APP_ROOT, "public"));

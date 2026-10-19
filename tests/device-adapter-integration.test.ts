@@ -7,6 +7,9 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { SCHEMA_VERSION } from "../lib/history-store.js";
+import type { AutomationRule } from "../lib/domain/automation-rules.js";
+import type { BatterySchedule } from "../lib/contracts/schedules.js";
+import type { CommandReceipt, CommandReceiptEvent } from "../shared/api-contracts.js";
 
 const dataDir = await mkdtemp(path.join(os.tmpdir(), "device-adapter-integration-"));
 let child: any = null;
@@ -70,7 +73,7 @@ async function requestWithHost(port: number, hostHeader: string, { method = "GET
 const port = await availablePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
-function startTestServer(): any {
+function startTestServer(environmentOverrides: NodeJS.ProcessEnv = {}) {
   const processHandle = spawn(process.execPath, [path.resolve(".test-dist/server.js")], {
     cwd: path.resolve("."),
     env: {
@@ -79,10 +82,12 @@ function startTestServer(): any {
       PORT: String(port),
       TZ: "Asia/Tokyo",
       NODE_ENV: "test",
+      DISABLE_EXTERNAL_IO: "1",
       DEVICE_COMMAND_ADAPTER_MODULE: path.resolve(".test-dist/tests/support/device-simulator.js"),
       DEVICE_SIMULATOR_SCENARIO: "normal",
       SCHEDULE_CHECK_INTERVAL_MS: "50",
       AUTOMATION_CHECK_INTERVAL_MS: "50",
+      ...environmentOverrides,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -361,6 +366,90 @@ try {
   assert.equal(scheduleReceipt.state, "succeeded");
   assert.ok(scheduleReceipt.events.some((event: any) => event.type === "acknowledged"));
   assert.ok(scheduleReceipt.events.some((event: any) => event.type === "verifying"));
+
+  assert.equal((await request(baseUrl, "/api/config", {
+    method: "PUT",
+    body: { batteryCapabilities: { maximumChargeWatts: 2192 } },
+  })).response.status, 200);
+  const restoreGuard = await request(baseUrl, "/api/automation-rules", {
+    method: "POST",
+    body: {
+      name: "Immediate restore and proactive protection",
+      type: "backup-demand-guard",
+      enabled: true,
+      conditions: {
+        source: "gridImportW", breakerAmps: 30, breakerVoltage: 100, reserveAmps: 0,
+        restoreBelowAmps: 1, restoreDelaySeconds: 300,
+      },
+    },
+  });
+  assert.equal(restoreGuard.response.status, 201);
+  const preflightSchedule = await request(baseUrl, "/api/schedules", {
+    method: "POST",
+    body: {
+      name: "Maximum power exceeds reserve", action: "charge", payload: { targetWh: 500 },
+      repeat: "once", runAt: new Date(Date.now() - 1000).toISOString(),
+    },
+  });
+  assert.equal(preflightSchedule.response.status, 201);
+  const preflightBlocked = await waitFor(async () => {
+    const { payload } = await request(baseUrl, "/api/schedules");
+    return payload.find((item: BatterySchedule) => item.id === preflightSchedule.payload.id
+      && item.executionIntent?.state === "blocked");
+  });
+  assert.equal(preflightBlocked.completed, true);
+  assert.equal(preflightBlocked.enabled, false);
+  assert.equal(preflightBlocked.lastResult.projectedDemandW, 3112);
+  assert.equal(preflightBlocked.lastResult.skipped, "Charging Demand Guard: projected charging demand reaches breaker reserve");
+  assert.equal((await request(baseUrl, "/api/status")).payload.energy.battery.operation_mode.value, "auto");
+  assert.equal((await request(baseUrl, "/api/command-receipts?limit=100")).payload.receipts
+    .some((receipt: CommandReceipt) => receipt.source === "schedule" && receipt.action === "charge"), false);
+  assert.equal((await request(baseUrl, "/api/device-actions/charge", {
+    method: "POST", body: { targetWh: 500 },
+  })).response.status, 200);
+  await waitFor(async () => (await request(baseUrl, "/api/automation-rules")).payload
+    .find((item: AutomationRule) => item.id === restoreGuard.payload.id)?.state?.awaitingRestore === true);
+  assert.equal((await request(baseUrl, "/api/status")).payload.energy.battery.operation_mode.value, "standby");
+  // Acknowledgement without matching readback must retain persisted ownership.
+  child.kill("SIGTERM");
+  await new Promise<void>((resolve) => child.once("exit", resolve));
+  child = startTestServer({
+    DEVICE_SIMULATOR_SCENARIO: "readback-mismatch",
+    DEVICE_SIMULATOR_STATE_JSON: JSON.stringify({ battery: { operationMode: "standby" } }),
+  });
+  await waitFor(async () => (await fetch(`${baseUrl}/api/config`)).ok);
+  const failedRestore = await request(baseUrl, "/api/automation-rules/restore", { method: "POST", body: {} });
+  assert.equal(failedRestore.response.status, 500);
+  assert.equal(failedRestore.payload.commandState, "mismatched");
+  const failedGuard = (await request(baseUrl, "/api/automation-rules")).payload
+    .find((item: AutomationRule) => item.id === restoreGuard.payload.id);
+  assert.equal(failedGuard.state.awaitingRestore, true);
+  assert.equal(failedGuard.log.some((entry: { kind?: string }) => entry.kind === "restore"), false);
+  child.kill("SIGTERM");
+  await new Promise<void>((resolve) => child.once("exit", resolve));
+  child = startTestServer({
+    DEVICE_SIMULATOR_STATE_JSON: JSON.stringify({ battery: { operationMode: "standby" } }),
+  });
+  await waitFor(async () => (await fetch(`${baseUrl}/api/config`)).ok);
+  const manualRestore = await request(baseUrl, "/api/automation-rules/restore", { method: "POST", body: {} });
+  assert.equal(manualRestore.response.status, 200, JSON.stringify(manualRestore.payload));
+  const restoredGuard = manualRestore.payload.find((item: AutomationRule) => item.id === restoreGuard.payload.id);
+  assert.equal(restoredGuard.state.awaitingRestore, false);
+  assert.equal(restoredGuard.state.restoreSince, null);
+  assert.equal(restoredGuard.enabled, true);
+  assert.deepEqual(restoredGuard.conditions, restoreGuard.payload.conditions);
+  assert.equal((await request(baseUrl, "/api/status")).payload.energy.battery.operation_mode.value, "auto");
+  const restoreReceipt = (await request(baseUrl, "/api/command-receipts?limit=100")).payload.receipts
+    .find((receipt: CommandReceipt) => receipt.source === "charging-demand-guard"
+      && receipt.action === "set-mode" && receipt.request.mode === "auto");
+  assert.equal(restoreReceipt.state, "succeeded");
+  assert.ok(restoreReceipt.events.some((event: CommandReceiptEvent) => event.type === "verifying"));
+  assert.equal((await request(baseUrl, "/api/automation-rules")).payload
+    .find((item: AutomationRule) => item.id === restoreGuard.payload.id).state.awaitingRestore, false);
+  assert.equal((await request(baseUrl, "/api/automation-rules/restore", { method: "POST", body: {} })).response.status, 409);
+  assert.equal((await request(baseUrl, `/api/automation-rules/${restoreGuard.payload.id}`, {
+    method: "DELETE", body: {},
+  })).response.status, 200);
 
   const inactiveBackupPreparation = await request(baseUrl, "/api/backup-preparation");
   assert.equal(inactiveBackupPreparation.response.status, 200);

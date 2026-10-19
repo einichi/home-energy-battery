@@ -1,15 +1,18 @@
 import { randomUUID } from "node:crypto";
+import type { AutomationStatus } from "../domain/automation-rules.js";
 import type { ApplicationConfig } from "../contracts/configuration.js";
 import type { BatterySchedule } from "../contracts/schedules.js";
 import type { AutomationRule } from "../domain/automation-rules.js";
 import { backupPreparationBlocksActions } from "../domain/operational-overrides.js";
 import { clearStaleScheduleRuns, isDue } from "../domain/schedules.js";
 import { localDayKey } from "../domain/time.js";
+import { chargingStartGuard } from "../domain/automation-rules.js";
 
 export interface ScheduleRunnerDependencies {
   readConfig(): Promise<ApplicationConfig>;
   readOperationalOverrides(): Promise<unknown>;
   readAutomationRules(): Promise<AutomationRule[]>;
+  getStatusSnapshot(options: { maxAgeMs: number }): Promise<AutomationStatus>;
   mutateSchedules<T>(mutator: (schedules: BatterySchedule[]) => Promise<T> | T): Promise<T>;
   writeSchedules(schedules: BatterySchedule[]): Promise<BatterySchedule[]>;
   executeAction(action: string, payload: unknown, options: { source: string }): Promise<unknown>;
@@ -59,14 +62,49 @@ export function createScheduleRunner(dependencies: ScheduleRunnerDependencies) {
         if (guardOwner) {
           schedule.lastResult = { ok: false, skipped: "Charging Demand Guard owns Standby operation mode", at: attemptAt };
           schedule.executionIntent.state = "blocked";
-          // One-time schedules must not stay "enabled" with a permanent blocked
-          // intent: isDue() requires no executionIntent, so they could never run
-          // again. Mirror the Backup Preparation handling and complete them.
+          // One-time schedules must not stay enabled with a permanent blocked
+          // intent: isDue() requires no executionIntent, so complete them.
           if (schedule.repeat !== "daily") {
             schedule.enabled = false;
             schedule.completed = true;
           }
           continue;
+        }
+        const isChargeStart = schedule.action === "charge"
+          || (schedule.action === "set-mode"
+            && schedule.payload !== null
+            && typeof schedule.payload === "object"
+            && !Array.isArray(schedule.payload)
+            && (schedule.payload as Record<string, unknown>).mode === "charging");
+        if (isChargeStart && rules.some((rule) => rule.enabled && rule.type === "backup-demand-guard")) {
+          try {
+            const status = await dependencies.getStatusSnapshot({ maxAgeMs: 0 });
+            const decision = chargingStartGuard(status, config.batteryCapabilities.maximumChargeWatts, rules);
+            if (!decision.allowed) {
+              schedule.lastResult = { ok: false, skipped: decision.reason ?? undefined, at: attemptAt, ...decision };
+              schedule.executionIntent.state = "blocked";
+              schedule.executionIntent.completedAt = attemptAt;
+              if (schedule.repeat !== "daily") {
+                schedule.enabled = false;
+                schedule.completed = true;
+              }
+              continue;
+            }
+          } catch (error: unknown) {
+            schedule.lastResult = {
+              ok: false,
+              skipped: "Charging Demand Guard: status unavailable",
+              at: attemptAt,
+              error: message(error),
+            };
+            schedule.executionIntent.state = "blocked";
+            schedule.executionIntent.completedAt = attemptAt;
+            if (schedule.repeat !== "daily") {
+              schedule.enabled = false;
+              schedule.completed = true;
+            }
+            continue;
+          }
         }
         runningIds.add(schedule.id);
         schedule.running = true;

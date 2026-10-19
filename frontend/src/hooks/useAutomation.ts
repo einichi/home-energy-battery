@@ -56,5 +56,5 @@ export function useAutomation() {
     };
   }, [config?.updateIntervalSeconds, sequence]);
 
-  return { adaptive, rules, away, receipts, error, refresh };
+  return { adaptive, rules, away, receipts, error, refresh, replaceRules: setRules };
 }

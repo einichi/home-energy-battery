@@ -45,7 +45,7 @@ import {
 } from "../domain/adaptive-control.js";
 import { discountedBandOccurrence, explicitDiscountedBand } from "../domain/tariffs.js";
 import { numericMetric } from "../domain/telemetry.js";
-import { batteryOperationMode } from "../domain/automation-rules.js";
+import { batteryOperationMode, chargingStartGuard } from "../domain/automation-rules.js";
 import { cachedForecastIsUsable } from "../domain/adaptive-availability.js";
 
 type AdaptiveOperations = ReturnType<typeof createAdaptiveChargingOperations>;
@@ -427,6 +427,27 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
       && soc !== null && Number.isFinite(soc)
       && soc >= Number(slot.targetSocPercent ?? config.adaptiveCharging.targetSocPercent);
     if (slot && state.owner !== "adaptiveCharging" && !solarHeadroomHoldActive && !slotTargetReached) {
+      const startDecision = chargingStartGuard(
+        status,
+        config.batteryCapabilities.maximumChargeWatts,
+        rules,
+      );
+      if (!startDecision.allowed) {
+        await ensureDiscountedWindowStandby(
+          state,
+          status,
+          activeDiscountedWindow?.end ?? slot.windowEnd ?? slot.end,
+          startDecision.reason ?? "Charging Demand Guard blocked planned charging",
+          now,
+        );
+        state.lastResult = {
+          ok: true,
+          at: now.toISOString(),
+          skipped: startDecision.reason,
+          ...startDecision,
+        };
+        return writeAdaptiveChargingState(state);
+      }
       const resumeFromStandby = Boolean(state.breakerRecovery || state.interruptedCharge || standbyHoldActive);
       const headroom = adaptiveChargingLiveChargeHeadroom(status, config, state, rules);
       if (!headroom.available) {

@@ -9,6 +9,10 @@ export function getAutomationRules(signal?: AbortSignal) {
   return getJson<AutomationRule[]>("/api/automation-rules", signal);
 }
 
+export function restoreDemandGuard() {
+  return sendJson<AutomationRule[]>("/api/automation-rules/restore", "POST", {});
+}
+
 export function getAwayPeriods(signal?: AbortSignal) {
   return getJson<AwayPeriodsView>("/api/away-periods", signal);
 }

@@ -128,6 +128,89 @@ export function batteryChargingWatts(status: AutomationStatus): number | null {
   return Math.max(0, watts);
 }
 
+export interface ChargingStartGuardDecision {
+  allowed: boolean;
+  reason: string | null;
+  ruleId: string | null;
+  demandW: number | null;
+  projectedDemandW: number | null;
+  breakerLimitW: number | null;
+  maximumChargeWatts: number | null;
+}
+
+export function chargingStartGuard(
+  status: AutomationStatus,
+  maximumChargeWatts: unknown,
+  rules: readonly AutomationRule[],
+): ChargingStartGuardDecision {
+  const allowed: ChargingStartGuardDecision = {
+    allowed: true,
+    reason: null,
+    ruleId: null,
+    demandW: null,
+    projectedDemandW: null,
+    breakerLimitW: null,
+    maximumChargeWatts: null,
+  };
+  if (!rules.some((rule) => rule.enabled && rule.type === "backup-demand-guard")) return allowed;
+  let maximum = Number.NaN;
+  if (maximumChargeWatts !== null && maximumChargeWatts !== undefined && maximumChargeWatts !== "") {
+    try {
+      maximum = Number(maximumChargeWatts);
+    } catch {
+      maximum = Number.NaN;
+    }
+  }
+  for (const rule of rules) {
+    if (!rule.enabled || rule.type !== "backup-demand-guard") continue;
+    const limit = Math.max(0, (rule.conditions.breakerAmps - rule.conditions.reserveAmps) * rule.conditions.breakerVoltage);
+    const base = {
+      ...allowed,
+      allowed: false,
+      ruleId: rule.id,
+      breakerLimitW: Number.isFinite(limit) ? limit : null,
+      maximumChargeWatts: Number.isFinite(maximum) ? maximum : null,
+    };
+    if (!Number.isFinite(limit) || limit <= 0) {
+      return { ...base, reason: "Charging Demand Guard: invalid breaker limit" };
+    }
+    if (!Number.isFinite(maximum) || maximum <= 0) {
+      return { ...base, reason: "Charging Demand Guard: maximum battery charge watts unavailable" };
+    }
+    let demand: number;
+    try {
+      demand = automationDemandWatts(status, rule.conditions.source);
+    } catch {
+      demand = Number.NaN;
+    }
+    if (!Number.isFinite(demand)) {
+      return { ...base, reason: "Charging Demand Guard: demand unavailable" };
+    }
+    let charging: number | null = null;
+    if (rule.conditions.source === "gridImportW") {
+      try {
+        charging = batteryChargingWatts(status);
+      } catch {
+        charging = null;
+      }
+    }
+    const projected = rule.conditions.source === "gridImportW"
+      ? Math.max(0, demand - (charging ?? 0)) + maximum
+      : demand + maximum;
+    const decision = {
+      ...base,
+      demandW: demand,
+      projectedDemandW: Number.isFinite(projected) ? projected : null,
+      breakerLimitW: limit,
+      maximumChargeWatts: maximum,
+    };
+    if (projected >= limit) {
+      return { ...decision, reason: "Charging Demand Guard: projected charging demand reaches breaker reserve" };
+    }
+  }
+  return allowed;
+}
+
 
 export function shouldTriggerDemandGuard({ operationMode, batteryChargingW, guardDemandW, breakerLimitW }: {
   operationMode: unknown;

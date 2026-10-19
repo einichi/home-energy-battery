@@ -92,6 +92,7 @@ export interface ApiRouteServices {
   readAdaptiveChargingHistory: AdaptiveHistoryService["readHistory"];
   readAdaptiveChargingState: AdaptiveStateService["read"];
   withAdaptiveChargingMutation: AdaptiveStateService["exclusive"];
+  withAutomationRuleMutation: AutomationStoreService["exclusive"];
   readAutomationRules: AutomationStoreService["read"];
   readCommandReceipt: CommandReceiptService["read"];
   readCommandReceipts: CommandReceiptService["list"];
@@ -112,6 +113,7 @@ export interface ApiRouteServices {
   removeDatabaseBackup(filename: string): Promise<unknown>;
   removeAwayPeriod: AwayPeriodService["remove"];
   restoreDatabaseBackup(filename: string): Promise<unknown>;
+  restoreDemandGuard(): Promise<AutomationRule[]>;
   resumeAdaptiveCharging(now?: Date): Promise<AdaptiveChargingState>;
   startBackupPreparation(options?: { allowDemandGuard?: boolean }, now?: Date): Promise<unknown>;
   startDeviceCommand: DeviceCommandService["start"];

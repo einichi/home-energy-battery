@@ -717,6 +717,42 @@ function mockApi(
   return fetchMock;
 }
 
+/**
+ * Stateful Demand Guard restore route: the POST clears the pending guard exactly
+ * like the backend, instead of falling through to the generic POST success stub.
+ */
+function mockApiWithGuardRestore(options: { triggered?: boolean; fail?: boolean; deferred?: boolean } = {}) {
+  const fetchMock = mockApi();
+  const originalFetch = fetchMock.getMockImplementation()!;
+  let awaitingRestore = options.triggered !== false;
+  let restoreRequests = 0;
+  let rulesServed = 0;
+  let releaseRestore: (() => void) | undefined;
+  const rules = () => automationRules.map((rule) => ({ ...rule, state: { ...rule.state, awaitingRestore } }));
+  fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/api/automation-rules/restore") && init?.method === "POST") {
+      restoreRequests += 1;
+      if (options.fail) return { ok: false, status: 500, json: async () => ({ error: "Device readback mismatch: expected auto" }) } as Response;
+      if (options.deferred) await new Promise<void>((resolve) => { releaseRestore = () => resolve(); });
+      awaitingRestore = false;
+      return { ok: true, status: 200, json: async () => rules() } as Response;
+    }
+    if (url.endsWith("/api/automation-rules")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => {
+          rulesServed += 1;
+          return rules();
+        },
+      } as Response;
+    }
+    return originalFetch(input, init);
+  });
+  return { fetchMock, restoreRequests: () => restoreRequests, rulesServed: () => rulesServed, release: () => releaseRestore?.() };
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("React application shell", () => {
@@ -1246,6 +1282,107 @@ describe("React application shell", () => {
     const prerequisite = screen.getByText("Off-peak electricity pricing").closest("li");
     expect(prerequisite).toHaveAttribute("data-ready", "true");
     expect(screen.getByText(/One discounted off-peak window is enough/)).toBeVisible();
+  });
+
+  it("restores Auto immediately beside Refresh on Overview with duplicate protection", async () => {
+    const api = mockApiWithGuardRestore({ deferred: true });
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <AppProviders>
+          <App />
+        </AppProviders>
+      </MemoryRouter>,
+    );
+
+    const restore = await screen.findByRole("button", { name: "Restore Auto now" });
+    expect(restore).toBeVisible();
+    expect(restore).toHaveAttribute("aria-describedby");
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeVisible();
+
+    fireEvent.click(restore);
+    expect(await screen.findByRole("button", { name: "Restoring…" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Restoring…" }));
+    expect(api.restoreRequests()).toBe(1);
+
+    await act(async () => {
+      api.release();
+    });
+
+    expect(await screen.findByText("Auto mode restored. Demand Guard settings are unchanged.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Restore Auto now" })).toBeNull();
+    expect(api.fetchMock).toHaveBeenCalledWith("/api/automation-rules/restore", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("keeps a failed Demand Guard restoration actionable with the backend error", async () => {
+    const api = mockApiWithGuardRestore({ fail: true });
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <AppProviders>
+          <App />
+        </AppProviders>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Restore Auto now" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Device readback mismatch: expected auto");
+    expect(screen.getByRole("button", { name: "Restore Auto now" })).toBeEnabled();
+    expect(api.restoreRequests()).toBe(1);
+  });
+
+  it("offers the same immediate restoration in Automation Active protections", async () => {
+    mockApiWithGuardRestore();
+    render(
+      <MemoryRouter initialEntries={["/automation"]}>
+        <AppProviders>
+          <App />
+        </AppProviders>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Active protections" })).toBeVisible();
+    fireEvent.click(await screen.findByRole("button", { name: "Restore Auto now" }));
+    expect(await screen.findByText("Auto mode restored. Demand Guard settings are unchanged.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Restore Auto now" })).toBeNull();
+  });
+
+  it("never offers Demand Guard restoration on Battery", async () => {
+    mockApiWithGuardRestore();
+    render(
+      <MemoryRouter initialEntries={["/battery"]}>
+        <AppProviders>
+          <App />
+        </AppProviders>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Battery" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Restore Auto now" })).toBeNull();
+  });
+
+  it("hides the restore action while the guard is only monitoring", async () => {
+    const api = mockApiWithGuardRestore({ triggered: false });
+    const overview = render(
+      <MemoryRouter initialEntries={["/"]}>
+        <AppProviders>
+          <App />
+        </AppProviders>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(api.rulesServed()).toBeGreaterThan(0));
+    expect(screen.queryByRole("button", { name: "Restore Auto now" })).toBeNull();
+    overview.unmount();
+
+    const automation = render(
+      <MemoryRouter initialEntries={["/automation"]}>
+        <AppProviders>
+          <App />
+        </AppProviders>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("heading", { name: "Active protections" })).toBeVisible();
+    expect(await screen.findByText(/headroom before intervention/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Restore Auto now" })).toBeNull();
+    automation.unmount();
   });
 
   it("uses consistent Overview visibility names and direct mobile destinations", async () => {

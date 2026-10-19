@@ -4,6 +4,8 @@ import { EnergyFlow } from "../../components/EnergyFlow";
 import { EnergyPeriodSections } from "../../components/EnergyPeriodSections";
 import { OffPeakSavings } from "../../components/TelemetryParity";
 import { formatDateTime, formatDateTimeRange, formatDateTimesInText, formatFreshness, formatPercent, formatPower, formatSoc, formatTime, metricValue } from "../../core/format";
+import { DemandGuardRestoreControl } from "../automation/DemandGuardRestoreControl";
+import { useAutomationRules } from "../../hooks/useAutomationRules";
 import { useEnergyStatus } from "../../hooks/useEnergyStatus";
 import { useSnapshotStale } from "../../hooks/useSnapshotStale";
 import { useTranslation } from "react-i18next";
@@ -34,6 +36,7 @@ function nextActionTitle(nextAction: NonNullable<NonNullable<ReturnType<typeof u
 export function OverviewPage() {
   const { t } = useTranslation("overview");
   const { config, status, loadingState, manualRefreshing, error, refresh: refreshStatus } = useEnergyStatus();
+  const { rules, error: rulesError, refresh: refreshRules, replaceRules } = useAutomationRules();
   const todayStart = useMemo(() => {
     const value = new Date();
     value.setHours(0, 0, 0, 0);
@@ -88,21 +91,38 @@ export function OverviewPage() {
           </h1>
           <p>{formatFreshness(status?.read_at)}</p>
         </div>
-        <button
-          className="quiet-button"
-          type="button"
-          onClick={() => {
-            refreshStatus();
-          }}
-          disabled={loadingState === "loading" || manualRefreshing}
-        >
-          {t(manualRefreshing ? "Refreshing…" : "Refresh")}
-        </button>
+        <div className="button-row">
+          <button
+            className="quiet-button"
+            type="button"
+            onClick={() => {
+              refreshStatus();
+              refreshRules();
+            }}
+            disabled={loadingState === "loading" || manualRefreshing}
+          >
+            {t(manualRefreshing ? "Refreshing…" : "Refresh")}
+          </button>
+          <DemandGuardRestoreControl
+            rules={rules}
+            onRestored={(nextRules) => {
+              replaceRules(nextRules);
+              refreshRules();
+              refreshStatus();
+            }}
+          />
+        </div>
       </header>
 
       {error ? (
         <div className="status-banner" data-severity="critical">
           {formatDateTimesInText(error)}
+        </div>
+      ) : null}
+
+      {rulesError ? (
+        <div className="status-banner" data-severity="critical">
+          {formatDateTimesInText(rulesError)}
         </div>
       ) : null}
 

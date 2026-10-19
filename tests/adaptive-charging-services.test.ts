@@ -237,6 +237,77 @@ await blockedEvaluator(config, status, [guardRule], new Date(slotStart.getTime()
 assert.equal(blockedState.activeWindowExecution?.guardInterruptionStartedAt, null);
 assert.equal(blockedState.activeWindowExecution?.guardInterruptedMs, 10_000);
 
+for (const source of ["gridImportW", "branchDemandW"] as const) {
+const preflightConfig = cleanConfig({
+  ...config,
+  batteryCapabilities: { ...config.batteryCapabilities, maximumChargeWatts: 2_000 },
+});
+const preflightRule = cleanAutomationRule({
+  ...guardRule,
+  id: `${source}-guard`,
+  conditions: { source, breakerVoltage: 100, breakerAmps: 40, reserveAmps: 5 },
+});
+const preflightState = cleanAdaptiveChargingState({
+  forecast: { fetchedAt: forecastFetchedAt },
+  plan,
+  batteryLearning: {
+    power: { source: "learned", activeWatts: 500 },
+  },
+  standbyHoldUntil: windowEnd.toISOString(),
+  lastPlanEventKey: adaptiveChargingScheduledEvent(preflightConfig, slotStart).eventKey,
+  lastAwayStateKey: "home",
+});
+let preflightChargeStarts = 0;
+const preflightActions: Array<{ action: string; payload: Record<string, unknown> }> = [];
+const preflightEvaluator = createAdaptiveChargingEvaluator({
+  readState: async () => preflightState,
+  writeState: async (next) => next,
+  history: { awayPeriods: () => [], historicalWeather: () => [] },
+  readOperationalOverrides: async () => cleanOperationalOverridesState(),
+  executeAction: async (action, payload) => {
+    preflightActions.push({ action, payload });
+    return { ok: true };
+  },
+  releaseCharge: async () => false,
+  suspendInStandby: async () => false,
+  startCharge: async () => {
+    preflightChargeStarts += 1;
+    return { ok: true };
+  },
+  recoverIdle: async () => false,
+  readHistory: async () => [],
+  refreshBatteryLearning: async () => preflightState.batteryLearning,
+  readDemandProfileDays: async () => [],
+  solarForecastAccuracy: () => ({}) as never,
+  recordFuelCellPlanForecast: () => 0,
+  breakerWaitLogMs: 60_000,
+});
+const preflightStatus = {
+  energy: {
+    battery: {
+      remaining_percent: { value: 70 },
+      instant_power: { value: 0 },
+      operation_mode: { value: "auto" },
+    },
+    solar: { instant_power: { value: 0 } },
+  },
+  meter: {
+    branch_demand_power: { value: 2_000 },
+    grid_import_power: { value: source === "gridImportW" ? 2_000 : 1_000 },
+    grid_export_power: { value: 0 },
+  },
+};
+await preflightEvaluator(preflightConfig, preflightStatus, [preflightRule], slotStart);
+assert.equal(preflightChargeStarts, 0, "maximum-power preflight blocks despite learned headroom passing");
+assert.equal(preflightState.lastResult?.skipped, "Charging Demand Guard: projected charging demand reaches breaker reserve");
+assert.deepEqual(preflightActions, [{ action: "set-mode", payload: { mode: "standby" } }]);
+preflightStatus.meter.branch_demand_power.value = 1_000;
+preflightStatus.meter.grid_import_power.value = 1_000;
+preflightStatus.energy.battery.operation_mode.value = "standby";
+await preflightEvaluator(preflightConfig, preflightStatus, [preflightRule], new Date(slotStart.getTime() + 5_000));
+assert.equal(preflightChargeStarts, 1, "adaptive charging starts when the configured branch-demand source falls within reserve");
+}
+
 const schedule: BatterySchedule = {
   id: "legacy-schedule",
   name: "set-mode",
