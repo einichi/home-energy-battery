@@ -63,6 +63,9 @@ export function OverviewPage() {
   const nextAction = status?.batteryStrategy?.nextAction;
   const formattedNextActionTitle = nextActionTitle(nextAction, t);
   const readingsStale = useSnapshotStale(status?.read_at, config?.updateIntervalSeconds);
+  const demandGuard = rules.find((rule) => rule.type === "backup-demand-guard");
+  const breakerLimitWatts = Number(demandGuard?.conditions?.breakerAmps) * Number(demandGuard?.conditions?.breakerVoltage);
+  const flowPowerLimitWatts = Number.isFinite(breakerLimitWatts) && breakerLimitWatts > 0 ? breakerLimitWatts : undefined;
   const widgetVisible = (id: string) => config?.dashboardWidgets?.find((widget) => widget.id === id)?.visible !== false;
   const attentionItems = [
     ...(status?.alerts ?? []).slice(0, 3).map((alert) => ({ id: alert.id, title: alert.title, detail: formatDateTimesInText(alert.impact), href: alert.href ?? "/system/equipment" })),
@@ -144,7 +147,7 @@ export function OverviewPage() {
               <i aria-hidden="true" /> {t(!status?.read_at ? "Unavailable" : readingsStale ? "Stale · last known values" : "Live")}
             </span>
           </div>
-          <EnergyFlow solar={solarPower} fuelCell={fuelCellPower} battery={batteryPower} demand={demandPower} demandLabel={demandLabel} demandTitle={demandTitle} gridImport={gridImport} gridExport={gridExport} live={Boolean(status?.read_at) && !readingsStale} showSolar={config?.solarEnabled !== false && widgetVisible("solarPower")} showFuelCell={config?.fuelCellEnabled !== false && widgetVisible("fuelCellPower")} showBattery={widgetVisible("batteryPower")} showDemand={widgetVisible("branchDemandPower")} showGrid={widgetVisible(gridExport != null && gridExport > 0 ? "gridExportPower" : "gridImportPower")} />
+          <EnergyFlow solar={solarPower} fuelCell={fuelCellPower} battery={batteryPower} demand={demandPower} demandLabel={demandLabel} demandTitle={demandTitle} gridImport={gridImport} gridExport={gridExport} live={Boolean(status?.read_at) && !readingsStale} powerLimitWatts={flowPowerLimitWatts} showSolar={config?.solarEnabled !== false && widgetVisible("solarPower")} showFuelCell={config?.fuelCellEnabled !== false && widgetVisible("fuelCellPower")} showBattery={widgetVisible("batteryPower")} showDemand={widgetVisible("branchDemandPower")} showGrid={widgetVisible(gridExport != null && gridExport > 0 ? "gridExportPower" : "gridImportPower")} />
         </article>
 
         <article className="battery-panel panel">

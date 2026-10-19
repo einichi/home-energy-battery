@@ -29,6 +29,7 @@ export type FlowConnector = {
   path: string;
   active: boolean;
   weight: number;
+  powerW: number | null;
 };
 
 /** Breakpoint must stay in sync with the `.energy-flow` media query in components.css. */
@@ -78,7 +79,7 @@ export function computeFlowConnectors(rects: Partial<Record<NodeId, Rect>>, stat
   const homeRight = home.right;
   const connectors: FlowConnector[] = [];
   const add = (id: ConnectorId, className: string, target: FlowTarget, path: string, power: number | null) => {
-    connectors.push({ id, className, target, path, active: power !== null && Math.abs(power) > 0, weight: flowWeight(power) });
+    connectors.push({ id, className, target, path, active: power !== null && Math.abs(power) > 0, weight: flowWeight(power), powerW: power });
   };
 
   const solar = rects.solar;
@@ -207,14 +208,15 @@ function Marker({ id, color, size }: { id: string; color: string; size: number }
   return <marker id={id} viewBox="0 0 10 10" refX="10" refY="5" markerUnits="userSpaceOnUse" markerWidth={size} markerHeight={size} orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill={color} /></marker>;
 }
 
-function FlowConnection({ connector, animate }: { connector: FlowConnector; animate: boolean }) {
+function FlowConnection({ connector, animate, powerLimitWatts }: { connector: FlowConnector; animate: boolean; powerLimitWatts: number }) {
   const pathRef = useRef<SVGPathElement>(null);
-  const [duration, setDuration] = useState(3);
+  const [duration, setDuration] = useState(4);
 
   useLayoutEffect(() => {
     const length = pathRef.current?.getTotalLength?.();
-    if (length !== undefined) setDuration(Math.max(2, Math.min(8, length / 55)));
+    if (length !== undefined) setDuration(Math.max(2, Math.min(8, length / 55)) / 0.75);
   }, [connector.path]);
+  const radius = 1.5 + 3.5 * Math.min(1, Math.abs(connector.powerW ?? 0) / powerLimitWatts);
 
   return (
     <g>
@@ -228,7 +230,7 @@ function FlowConnection({ connector, animate }: { connector: FlowConnector; anim
         markerEnd={connector.active ? `url(#flow-arrow-${connector.id})` : undefined}
       />
       {animate && connector.active ? DOT_PHASES.map((index) => (
-        <circle key={index} className={`flow-dot flow-dot-${connector.id}`} r="2.8">
+        <circle key={index} className={`flow-dot flow-dot-${connector.id}`} r={radius}>
           <animateMotion
             path={connector.path}
             dur={`${duration}s`}
@@ -242,7 +244,7 @@ function FlowConnection({ connector, animate }: { connector: FlowConnector; anim
   );
 }
 
-export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridExport, live, showSolar = true, showFuelCell = true, showBattery = true, showDemand = true, showGrid = true, demandLabel, demandTitle }: {
+export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridExport, live, powerLimitWatts = 5_000, showSolar = true, showFuelCell = true, showBattery = true, showDemand = true, showGrid = true, demandLabel, demandTitle }: {
   solar: number | null;
   fuelCell: number | null;
   battery: number | null;
@@ -250,6 +252,7 @@ export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridE
   gridImport: number | null;
   gridExport: number | null;
   live: boolean;
+  powerLimitWatts?: number;
   showSolar?: boolean;
   showFuelCell?: boolean;
   showBattery?: boolean;
@@ -340,7 +343,7 @@ export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridE
       rects[id] = { left: rect.left - rootRect.left, top: rect.top - rootRect.top, right: rect.right - rootRect.left, bottom: rect.bottom - rootRect.top };
     });
     const connectors = computeFlowConnectors(rects, visible, mobile);
-    const signature = `${Math.round(rootRect.width)}x${Math.round(rootRect.height)}|${connectors.map((connector) => `${connector.id}:${connector.active ? 1 : 0}:${connector.weight}:${connector.path}`).join(";")}`;
+    const signature = `${Math.round(rootRect.width)}x${Math.round(rootRect.height)}|${connectors.map((connector) => `${connector.id}:${connector.powerW}:${connector.weight}:${connector.path}`).join(";")}`;
     if (signature === lastSignature.current) return;
     lastSignature.current = signature;
     setGeometry({ width: rootRect.width, height: rootRect.height, connectors });
@@ -366,7 +369,7 @@ export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridE
             <Marker id="flow-arrow-grid" color="var(--grid)" size={markerSize} />
           </defs>
           {geometry.connectors.map((connector) => (
-            <FlowConnection key={connector.id} connector={connector} animate={live && motionEnabled} />
+            <FlowConnection key={connector.id} connector={connector} animate={live && motionEnabled} powerLimitWatts={powerLimitWatts} />
           ))}
         </svg>
       ) : null}

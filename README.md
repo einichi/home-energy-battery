@@ -72,9 +72,11 @@ The integrated status service reads:
 ## Web UI
 
 Overview's Energy flow card uses moving dots to show power direction, with
-line thickness indicating power magnitude. Motion stops for stale or unavailable
-readings, hidden tabs, offscreen cards, and reduced-motion preferences; static
-arrows and readings remain available.
+line thickness and dot size indicating power magnitude. Dot size scales up to
+5 kW by default, or the configured Demand Guard breaker limit (amps × voltage,
+before reserve) when present, and is capped above that limit. Motion stops for
+stale or unavailable readings, hidden tabs, offscreen cards, and reduced-motion
+preferences; static arrows and readings remain available.
 
 The HTTP service is intentionally unauthenticated and intended only for a trusted
 local network. Access it with an IPv4 or bracketed IPv6 literal, `localhost`, a

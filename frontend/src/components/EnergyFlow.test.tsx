@@ -230,4 +230,22 @@ describe("EnergyFlow", () => {
     rerender(<EnergyFlow {...baseProps} battery={480} />);
     expect(container.querySelector(".flow-dot")).toBeInTheDocument();
   });
+
+  it("scales dot size against the upper limit even after line width saturates, and caps overshoot", () => {
+    mockLayout(desktopRects, { left: 0, top: 0, right: 600, bottom: 300 });
+    const { container, rerender } = render(<EnergyFlow {...baseProps} solar={3_500} battery={-3_500} />);
+    const initial = Number(container.querySelector(".flow-dot-solar")?.getAttribute("r"));
+    expect(initial).toBeCloseTo(3.95);
+    expect(Number(container.querySelector(".flow-dot-battery")?.getAttribute("r"))).toBeCloseTo(initial);
+
+    rerender(<EnergyFlow {...baseProps} solar={4_500} battery={0} />);
+    expect(Number(container.querySelector(".flow-dot-solar")?.getAttribute("r"))).toBeGreaterThan(initial);
+    expect(container.querySelector(".flow-dot-battery")).not.toBeInTheDocument();
+
+    rerender(<EnergyFlow {...baseProps} solar={4_500} battery={0} powerLimitWatts={9_000} />);
+    expect(Number(container.querySelector(".flow-dot-solar")?.getAttribute("r"))).toBeCloseTo(3.25);
+
+    rerender(<EnergyFlow {...baseProps} solar={12_000} battery={0} powerLimitWatts={9_000} />);
+    expect(Number(container.querySelector(".flow-dot-solar")?.getAttribute("r"))).toBe(5);
+  });
 });
