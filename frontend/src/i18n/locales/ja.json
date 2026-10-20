@@ -2189,7 +2189,6 @@
     "currentSOC": "現在の充電率",
     "targetSOC": "目標充電率",
     "expectedSunsetSOC": "予測日没時充電率",
-    "forecastConfidence": "予測信頼度",
     "forecastSolar": "太陽光予測",
     "forecastDemand": "需要予測",
     "forecastEneFarm": "エネファーム予測",
@@ -2234,7 +2233,13 @@
     "restoringAuto": "復帰中…",
     "restoreAutoSuccess": "自動運転に戻しました。デマンドガードの設定は変更されていません。",
     "restoreAutoFailure": "自動運転に戻せませんでした。",
-    "restoreAutoHint": "復帰のしきい値や待機時間を待たずに自動運転に戻します。需要が高いままの場合、ガードが再び作動することがあります。"
+    "restoreAutoHint": "復帰のしきい値や待機時間を待たずに自動運転に戻します。需要が高いままの場合、ガードが再び作動することがあります。",
+    "solarForecastBasis": "太陽光予測の算出方法",
+    "historyAdjustedEstimate": "実績に基づき補正",
+    "initialSolarEstimate": "初期推定値を使用",
+    "forecastHistoryDays_other": "{count}日分の実績",
+    "solarForecastAdjustmentExplanation": "十分な実績が集まると、過去の予測誤差を使って太陽光予測を補正します。",
+    "solarForecastBasisSummary": "{basis} · {history}"
   },
   "battery": {
     "1 · When": "1 · 実行日時",
@@ -2424,7 +2429,6 @@
     "Today at a glance": "今日の概要",
     "Unavailable": "利用不可",
     "Working state": "動作状態",
-    "{value} confidence": "信頼度：{value}",
     "chargeValue": "{value} に充電",
     "continueChargingUntilValue": "{value} まで充電を継続",
     "manualBatteryOverrideIsActive": "蓄電池の手動操作が有効です",
@@ -2449,7 +2453,6 @@
     "Waiting for the next automation decision": "次の自動制御の判断を待っています",
     "waitingForTheNextAutomationDecision": "次の自動制御の判断を待っています",
     "targetValue": "目標 {value}",
-    "valueConfidence": "信頼度：{value}",
     "openAutomation": "自動制御を開く →",
     "livePower": "現在の電力",
     "circuitsConsumingMostPower": "消費電力の大きい回路",

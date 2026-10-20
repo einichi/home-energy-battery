@@ -217,7 +217,6 @@ export function OverviewPage() {
           <div className="overview-next-action-meta">
             {nextAction?.at ? <time dateTime={nextAction.at}>{formatDateTime(nextAction.at)}</time> : null}
             {nextAction?.targetSocPercent != null ? <span>{t("targetValue", { value: formatPercent(nextAction.targetSocPercent) })}</span> : null}
-            {nextAction?.confidence ? <span>{t("valueConfidence", { value: nextAction.confidence })}</span> : null}
             <Link className="text-link" to={nextAction?.href ?? "/automation"}>{t("openAutomation")}</Link>
           </div>
         </section>

@@ -1193,7 +1193,7 @@ describe("React application shell", () => {
     expect(screen.getByText("1.1 kWh")).toBeVisible();
     expect(screen.getByText("100 Wh short")).toBeVisible();
     expect(screen.getByText("2 interruptions · 15 min unavailable")).toBeVisible();
-    expect(screen.getAllByText("3 days").length).toBeGreaterThan(0);
+    expect(screen.getByText("3 days recorded")).toBeVisible();
     expect(await screen.findByRole("heading", { name: "Forecast backtesting" })).toBeVisible();
     expect(screen.getByText("No backtest has been run yet.")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Run backtest" }));
