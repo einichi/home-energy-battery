@@ -6,7 +6,7 @@ controlling ECHONET Lite home-energy devices that are specific to my home. It us
 UDP/LAN communication directly through the web application and provides a
 Dockerized React UI.
 
-<img width="3350" height="2336" alt="image" src="https://github.com/user-attachments/assets/f8081b99-bc15-4df6-942c-9fc2f7d97b35" />
+<img width="1622" height="1466" alt="Screenshot 2026-10-21 at 0 57 33" src="https://github.com/user-attachments/assets/2bddfdcc-0c63-4a9d-b298-c6b19c703227" />
 
 I have a Daiwa House pre-built (建売り) home which came with:
 
