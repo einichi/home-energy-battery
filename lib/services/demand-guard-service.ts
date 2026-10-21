@@ -8,6 +8,7 @@ export interface DemandGuardServiceDependencies {
   writeAutomationRuleStates(rules: AutomationRule[]): Promise<unknown>;
   readOperationalOverridesState(): Promise<OperationalOverridesState>;
   executeAction(action: string, payload: Record<string, unknown>, options: { source: string }): Promise<unknown>;
+  replanCharging(rules: AutomationRule[], now: Date): Promise<unknown>;
   notify(event: Record<string, unknown>): unknown;
   requestError(status: number, message: string): Error;
 }
@@ -39,11 +40,12 @@ export function createDemandGuardService(dependencies: DemandGuardServiceDepende
         appendAutomationLog(rule, MANUAL_RESTORE_LOG, now, "restore");
       }
       await dependencies.writeAutomationRuleStates(rules);
+      await dependencies.replanCharging(rules, now);
       await dependencies.notify({
         type: "guardRestored",
         severity: "info",
         title: "Charging Demand Guard restored manually",
-        message: "Operation mode was returned to Auto manually. Demand Guard settings are unchanged and protection may intervene again.",
+        message: "Demand Guard was restored manually. Adaptive Charging will follow the latest plan when available and safe. Protection may intervene again.",
         occurredAt: at,
         dedupeKey: "charging-demand-guard:restored",
       });

@@ -48,6 +48,7 @@ function harness(initialRules: AutomationRule[], overrides = cleanOperationalOve
   const eventStore: AutomationEventStore = { isReady: () => false, recordEvent: () => undefined };
   const store = createAutomationStoreService(documentStore, eventStore);
   const actions: Array<{ action: string; payload: Record<string, unknown>; source: string }> = [];
+  const replans: Array<{ rules: AutomationRule[]; now: Date }> = [];
   const notifications: Array<Record<string, unknown>> = [];
   let execute: () => Promise<unknown> = async () => ({ verified: true });
   const service = createDemandGuardService({
@@ -59,6 +60,10 @@ function harness(initialRules: AutomationRule[], overrides = cleanOperationalOve
       actions.push({ action, payload, source: options.source });
       return execute();
     },
+    replanCharging: async (rules, now) => {
+      assert.equal((await store.read()).every((rule) => !rule.state.awaitingRestore), true);
+      replans.push({ rules, now });
+    },
     notify: (event) => { notifications.push(event); },
     requestError: (status, message) => Object.assign(new Error(message), { statusCode: status }),
   });
@@ -67,6 +72,7 @@ function harness(initialRules: AutomationRule[], overrides = cleanOperationalOve
     store,
     actions,
     notifications,
+    replans,
     setExecute: (next: () => Promise<unknown>) => { execute = next; },
     setOverrides: (next: typeof overrides) => { currentOverrides = next; },
     stateWrites: () => stateWrites,
@@ -98,9 +104,11 @@ function harness(initialRules: AutomationRule[], overrides = cleanOperationalOve
   assert.equal(restored.log.at(-1)?.message, "Charging Demand Guard restored manually; setting operation mode to Auto without waiting for the restore threshold or delay");
   assert.deepEqual(fixture.actions, [{ action: "set-mode", payload: { mode: "auto" }, source: "charging-demand-guard" }]);
   assert.equal(fixture.stateWrites(), 1);
+  assert.equal(fixture.replans.length, 1);
+  assert.equal(fixture.replans[0].now, at);
   assert.equal(fixture.notifications[0]?.dedupeKey, "charging-demand-guard:restored");
   assert.equal(fixture.notifications[0]?.title, "Charging Demand Guard restored manually");
-  assert.equal(fixture.notifications[0]?.message, "Operation mode was returned to Auto manually. Demand Guard settings are unchanged and protection may intervene again.");
+  assert.equal(fixture.notifications[0]?.message, "Demand Guard was restored manually. Adaptive Charging will follow the latest plan when available and safe. Protection may intervene again.");
 }
 
 {
@@ -145,12 +153,14 @@ function harness(initialRules: AutomationRule[], overrides = cleanOperationalOve
   assert.equal((await fixture.store.read())[0].state.awaitingRestore, true);
   assert.equal(fixture.stateWrites(), 0);
   assert.equal(fixture.notifications.length, 0);
+  assert.equal(fixture.replans.length, 0);
 }
 
 {
   const fixture = harness([guardRule("pending")], cleanOperationalOverridesState(), true);
   await assert.rejects(fixture.service.restore(at), /state persistence failed/);
   assert.equal((await fixture.store.read())[0].state.awaitingRestore, true);
+  assert.equal(fixture.replans.length, 0);
   assert.equal(fixture.notifications.length, 0, "persistence failure must not report a successful restore");
 }
 

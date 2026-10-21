@@ -8,7 +8,7 @@ type RestoreOutcome = { ok: boolean; message: string } | null;
 
 /**
  * Direct Demand Guard restore action. Rendered wherever the guard's intervening
- * state is shown; it restores Auto without waiting for the restore threshold or delay.
+ * state is shown; it releases the guard and reevaluates charging against a fresh plan.
  */
 export function DemandGuardRestoreControl({ rules, onRestored }: { rules: AutomationRule[]; onRestored: (rules: AutomationRule[]) => void }) {
   const { t } = useTranslation("automation");

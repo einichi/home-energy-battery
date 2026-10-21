@@ -322,6 +322,15 @@ const demandGuardService = createDemandGuardService({
   writeAutomationRuleStates,
   readOperationalOverridesState,
   executeAction,
+  replanCharging: (rules, now) => adaptiveStateService.exclusive(async () => {
+    const config = await readConfig();
+    if (!adaptiveChargingConfiguredActive(config)) return;
+    if ((await readOperationalOverridesState()).backupPreparation.active) return;
+    if (!adaptiveControlService) throw new Error("Adaptive control service is not initialized");
+    await adaptiveControlService.prepareGuardRestore(now);
+    const status = await getStatusSnapshot({ maxAgeMs: 0 });
+    return runAdaptiveChargingEvaluation(config, status, rules, new Date());
+  }),
   notify: notificationService.enqueue,
   requestError,
 });

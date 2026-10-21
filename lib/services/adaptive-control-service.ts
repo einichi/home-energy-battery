@@ -1,6 +1,6 @@
 import type { ApplicationConfig } from "../contracts/configuration.js";
 import type { AdaptiveChargingState } from "../domain/adaptive-state.js";
-import { appendAdaptiveChargingLog } from "../domain/adaptive-state.js";
+import { appendAdaptiveChargingLog, finalizeAdaptiveChargeSession } from "../domain/adaptive-state.js";
 import {
   adaptiveChargingConfiguredActive,
   adaptiveChargingSlotEndDelayMs,
@@ -59,6 +59,27 @@ export function createAdaptiveControlService(dependencies: AdaptiveControlDepend
     return dependencies.writeState(state);
   }
 
+  async function prepareGuardRestore(now: Date = new Date()): Promise<AdaptiveChargingState> {
+    const state = await dependencies.readState();
+    // Auto has already been verified. Retire any stale ownership, including
+    // when restore arrives before the evaluator observes the guard interruption.
+    finalizeAdaptiveChargeSession(state, "Charging Demand Guard restored manually", now);
+    state.owner = null;
+    state.activeSlot = null;
+    state.activePlanCreatedAt = null;
+    state.activeChargedKwh = 0;
+    state.activeLastCheckedAt = null;
+    state.standbyHoldUntil = null;
+    state.interruptedCharge = null;
+    state.breakerRecovery = null;
+    state.plan = null;
+    queueAdaptiveChargingPlanRefresh(state, "manual Demand Guard restore", now);
+    appendAdaptiveChargingLog(state, "Charging Demand Guard restored manually; recalculating charging from current conditions", "resume", now);
+    // Preserve manual pauses and solar holds. The evaluator still checks all
+    // live start conditions before applying the new plan.
+    return dependencies.writeState(state);
+  }
+
   function clearDeadline(): void {
     if (deadlineTimer) clearTimeout(deadlineTimer);
     deadlineTimer = null;
@@ -104,5 +125,5 @@ export function createAdaptiveControlService(dependencies: AdaptiveControlDepend
     return true;
   }
 
-  return { clearDeadline, pauseForManualAction, resume, syncDeadline };
+  return { clearDeadline, pauseForManualAction, prepareGuardRestore, resume, syncDeadline };
 }

@@ -1284,7 +1284,7 @@ describe("React application shell", () => {
     expect(screen.getByText(/One discounted off-peak window is enough/)).toBeVisible();
   });
 
-  it("restores Auto immediately beside Refresh on Overview with duplicate protection", async () => {
+  it("restores charging control immediately beside Refresh on Overview with duplicate protection", async () => {
     const api = mockApiWithGuardRestore({ deferred: true });
     render(
       <MemoryRouter initialEntries={["/"]}>
@@ -1294,7 +1294,7 @@ describe("React application shell", () => {
       </MemoryRouter>,
     );
 
-    const restore = await screen.findByRole("button", { name: "Restore Auto now" });
+    const restore = await screen.findByRole("button", { name: "Restore charging control" });
     expect(restore).toBeVisible();
     expect(restore).toHaveAttribute("aria-describedby");
     expect(screen.getByRole("button", { name: "Refresh" })).toBeVisible();
@@ -1308,8 +1308,8 @@ describe("React application shell", () => {
       api.release();
     });
 
-    expect(await screen.findByText("Auto mode restored. Demand Guard settings are unchanged.")).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Restore Auto now" })).toBeNull();
+    expect(await screen.findByText("Demand Guard restored. Automated charging follows the latest plan when available and safe.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Restore charging control" })).toBeNull();
     expect(api.fetchMock).toHaveBeenCalledWith("/api/automation-rules/restore", expect.objectContaining({ method: "POST" }));
   });
 
@@ -1323,9 +1323,9 @@ describe("React application shell", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Restore Auto now" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Restore charging control" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Device readback mismatch: expected auto");
-    expect(screen.getByRole("button", { name: "Restore Auto now" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Restore charging control" })).toBeEnabled();
     expect(api.restoreRequests()).toBe(1);
   });
 
@@ -1340,9 +1340,9 @@ describe("React application shell", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "Active protections" })).toBeVisible();
-    fireEvent.click(await screen.findByRole("button", { name: "Restore Auto now" }));
-    expect(await screen.findByText("Auto mode restored. Demand Guard settings are unchanged.")).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Restore Auto now" })).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Restore charging control" }));
+    expect(await screen.findByText("Demand Guard restored. Automated charging follows the latest plan when available and safe.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Restore charging control" })).toBeNull();
   });
 
   it("never offers Demand Guard restoration on Battery", async () => {
@@ -1356,7 +1356,7 @@ describe("React application shell", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "Battery" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Restore Auto now" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Restore charging control" })).toBeNull();
   });
 
   it("hides the restore action while the guard is only monitoring", async () => {
@@ -1369,7 +1369,7 @@ describe("React application shell", () => {
       </MemoryRouter>,
     );
     await waitFor(() => expect(api.rulesServed()).toBeGreaterThan(0));
-    expect(screen.queryByRole("button", { name: "Restore Auto now" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Restore charging control" })).toBeNull();
     overview.unmount();
 
     const automation = render(
@@ -1381,7 +1381,7 @@ describe("React application shell", () => {
     );
     expect(await screen.findByRole("heading", { name: "Active protections" })).toBeVisible();
     expect(await screen.findByText(/headroom before intervention/)).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Restore Auto now" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Restore charging control" })).toBeNull();
     automation.unmount();
   });
 
