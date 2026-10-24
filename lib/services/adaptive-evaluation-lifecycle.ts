@@ -15,6 +15,7 @@ export interface AdaptiveEvaluationLifecycleDependencies {
   };
   readOperationalOverrides(): Promise<unknown>;
   writeState(state: AdaptiveChargingState): Promise<AdaptiveChargingState>;
+  observeAwayFuelCell?(state: AdaptiveChargingState, periods: AwayPeriod[]): Promise<void>;
 }
 
 export async function prepareAdaptiveEvaluation(
@@ -25,7 +26,7 @@ export async function prepareAdaptiveEvaluation(
 ): Promise<{ state: AdaptiveChargingState; awayPeriods: AwayPeriod[]; stopped: boolean }> {
   const awayPeriods = dependencies.history.awayPeriods({ includeCompleted: true, nowMs: now.getTime() });
   const activeAway = awayPeriods.find((period) => period.status === "active") ?? null;
-  const awayStateKey = activeAway ? `away:${activeAway.id}:${activeAway.until}` : "home";
+  const awayStateKey = activeAway ? `away:${activeAway.id}:${activeAway.from}:${activeAway.until}` : "home";
   if (state.lastAwayStateKey === null && !activeAway) {
     state.lastAwayStateKey = awayStateKey;
   } else if (state.lastAwayStateKey !== awayStateKey) {
@@ -34,6 +35,7 @@ export async function prepareAdaptiveEvaluation(
     state.lastAwayStateKey = awayStateKey;
   }
 
+  await dependencies.observeAwayFuelCell?.(state, awayPeriods);
   recordAdaptiveChargeSample(state, status, now);
   if (!backupPreparationBlocksActions(await dependencies.readOperationalOverrides())) {
     return { state, awayPeriods, stopped: false };

@@ -58,6 +58,7 @@ const DEFAULT_RETENTION: RetentionConfig = {
 };
 
 export const DEFAULT_CONFIG: ApplicationConfig = {
+  awayReserveEnabled: false,
   batteryHost: "192.0.2.10",
   meterHost: "192.0.2.20",
   meterEoj: "0x028701",
@@ -348,6 +349,7 @@ export function cleanConfig(value: unknown = {}, options: { externalIoDisabled?:
   const fuelCellHosts = normalizeFuelCellHosts(input);
   const notifications = normalizeNotificationConfig(asRecord(input.notifications)) as NotificationConfig;
   return {
+    awayReserveEnabled: configBool(input.awayReserveEnabled, false),
     batteryHost: String(input.batteryHost ?? DEFAULT_CONFIG.batteryHost).trim(),
     meterHost: String(input.meterHost ?? DEFAULT_CONFIG.meterHost).trim(),
     meterEoj: String(input.meterEoj ?? DEFAULT_CONFIG.meterEoj).trim() || DEFAULT_CONFIG.meterEoj,

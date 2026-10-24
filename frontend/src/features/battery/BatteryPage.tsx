@@ -24,6 +24,8 @@ import { useHistoryRange } from "../../hooks/useHistoryRange";
 import { formatDateTime, formatDateTimesInText, formatMonthDay, formatPower, formatSoc, formatTime, formatWeekdayShort } from "../../core/format";
 import { useDialogFocus } from "../../hooks/useDialogFocus";
 import { useTranslation } from "react-i18next";
+import { useAwayReserve } from "../../hooks/useAwayReserve";
+import { AwayReserveStatus } from "../automation/AwayReserveControl";
 
 type ReviewCommand = DeviceCommand & {
   action: BatteryAction | "backup-start" | "backup-end";
@@ -311,6 +313,7 @@ function recurringWindow(startHour: number, endHour: number, label: string, tone
 export function BatteryPage({ view = "status" }: { view?: "status" | "schedules" | "backup" }) {
   const { t } = useTranslation("battery");
   const { config, status, loadingState, refresh } = useEnergyStatus();
+  const { reserve: awayReserve, refresh: refreshAwayReserve } = useAwayReserve();
   const { history: batteryHistory, loading: batteryHistoryLoading, refresh: refreshBatteryHistory } = useHistoryRange(24 * 60 * 60_000);
   const { state, dispatch } = useCommandLifecycle();
   const [receipts, setReceipts] = useState<CommandReceipt[]>([]);
@@ -417,6 +420,7 @@ export function BatteryPage({ view = "status" }: { view?: "status" | "schedules"
     setReview(null);
   };
   const completed = async () => {
+    refreshAwayReserve();
     refresh();
     refreshBatteryHistory();
     await loadOperations();
@@ -502,6 +506,7 @@ export function BatteryPage({ view = "status" }: { view?: "status" | "schedules"
         <span className="live-state"><i />{t(status ? "Device {value}" : sentence(loadingState), { value: t(host) })}</span>
       </header>
       <nav className="battery-navigation" aria-label={t("batterySections")}><NavLink to="/battery" end>{t("statusControl")}</NavLink><NavLink to="/battery/schedules">{t("schedules")}</NavLink><NavLink to="/battery/backup">{t("disasterPrep")}</NavLink></nav>
+      <AwayReserveStatus reserve={awayReserve} link />
       {backup?.active ? <div className="backup-banner" role="status">{"" + t("disasterPrepIsActiveProfile") + " "}{sentence(backup.currentProfile)}</div> : null}
       {loadError ? <div className="status-banner" role="alert">{loadError}</div> : null}
 
@@ -559,7 +564,7 @@ export function BatteryPage({ view = "status" }: { view?: "status" | "schedules"
       <section className="panel backup-panel">
         <div className="backup-state"><strong>{t(backup?.active ? "Active" : "Inactive")}</strong><span>{backup?.active ? t("sinceValue", { value: backup.startedAt ? formatDateTime(backup.startedAt) : t("recently") }) : t("normalAutomationCanOperate")}</span></div>
         {!backup?.active ? <label className="guard-choice"><input type="checkbox" checked={backupAllowDemandGuard} onChange={(event) => setBackupAllowDemandGuard(event.target.checked)} /><span>{t("allowDemandGuardToRetainBreakerProtection")}</span></label> : null}
-        <button className={`button${backup?.active ? " secondary" : " primary"}`} type="button" onClick={() => openReview({ action: backup?.active ? "backup-end" : "backup-start", label: backup?.active ? "Stop Disaster Prep" : "Start Disaster Prep", payload: { allowDemandGuard: backupAllowDemandGuard, reserve }, impact: backup?.active ? "Stopping restores the battery profile that was active before Disaster Prep began. Adaptive Charging will then recalculate before normal operation resumes." : `Disaster Prep switches the battery to its backup profile and pauses Adaptive Charging so stored energy is prioritized for an outage. Your ${reserve}% reserve remains unchanged, and Demand Guard will ${backupAllowDemandGuard ? "remain available for breaker protection" : "pause"}. All of these temporary changes are reversed when Disaster Prep is stopped.` })}>{t(backup?.active ? "Stop" : "Start")}</button>
+        <button className={`button${backup?.active ? " secondary" : " primary"}`} type="button" onClick={() => openReview({ action: backup?.active ? "backup-end" : "backup-start", label: backup?.active ? "Stop Disaster Prep" : "Start Disaster Prep", payload: { allowDemandGuard: backupAllowDemandGuard, reserve }, impact: backup?.active ? "Stopping restores the battery profile that was active before Disaster Prep began. Adaptive Charging will then recalculate before normal operation resumes." : `Disaster Prep switches the battery to its backup profile and pauses Adaptive Charging so stored energy is prioritized for an outage. ${awayReserve?.ownsReserve ? t("awayReserveBackupImpact", { percent: awayReserve.previousPercent }) : `Your ${reserve}% reserve remains unchanged.`} Demand Guard will ${backupAllowDemandGuard ? "remain available for breaker protection" : "pause"}. All of these temporary changes are reversed when Disaster Prep is stopped.` })}>{t(backup?.active ? "Stop" : "Start")}</button>
       </section> : null}
 
       {view === "schedules" ?

@@ -40,6 +40,7 @@ export interface ApiHttpDependencies {
 }
 
 export interface ApiRouteServices {
+  awayReserveService: Pick<ReturnType<typeof import("../services/away-reserve-service.js").createAwayReserveService>, "view" | "setEnabled">;
   ALL_DAYS: number[];
   DEFAULT_CONFIG: ApplicationConfig;
   EXTERNAL_IO_DISABLED: boolean;

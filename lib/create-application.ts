@@ -20,6 +20,7 @@ import {
 } from "./gas-tariffs.js";
 import { timestampConsole } from "./console-timestamps.js";
 import { AWAY_RETURN_BUFFER_MS } from "./domain/time.js";
+import { awayFuelCellSummary } from "./domain/away-fuel-cell.js";
 import {
   assertSafeUiDevelopmentEnvironment,
   externalIoDisabled,
@@ -95,6 +96,7 @@ import { createAutomationRuleEvaluator } from "./services/automation-rule-evalua
 import { loadDeviceAdapter, type DeviceAdapter } from "./services/device-adapter.js";
 import { createStatusCollectionService } from "./services/status-collection-service.js";
 import { createAwayPeriodService } from "./services/away-period-service.js";
+import { createAwayReserveService } from "./services/away-reserve-service.js";
 import { createDeviceCommandService, DEVICE_ACTIONS } from "./services/device-command-service.js";
 import { createScheduleRunner } from "./services/schedule-runner.js";
 import { createCommandReceiptService } from "./services/command-receipt-service.js";
@@ -147,6 +149,7 @@ const MAX_TIMER_DELAY_MS = 2_147_000_000;
 const ADAPTIVE_CHARGING_SEASONAL_LOOKBACK_YEARS = 10;
 let adaptiveControlService: ReturnType<typeof createAdaptiveControlService> | null = null;
 let commitConfigService: ReturnType<typeof createConfigurationCommitService> | null = null;
+let awayReserveService: ReturnType<typeof createAwayReserveService> | null = null;
 const historyStore = (dependencies.createHistoryStore ?? createHistoryStore)({ dataDir: DATA_DIR });
 const applicationStore = (dependencies.createApplicationStore ?? createApplicationStore)({ dataDir: DATA_DIR });
 const scheduleService = createScheduleService(applicationStore);
@@ -301,7 +304,18 @@ const {
 } = awayPeriodService;
 
 const deviceCommandService = createDeviceCommandService({
-  assertActionAllowed: assertActionAllowedByOperationalOverride,
+  assertActionAllowed: async (source, action) => {
+    if (source === "away-reserve-restore" && action === "discharge-limit") return;
+    // Avoid acquiring the override mutation lock while holding the reserve lock.
+    // Backup Preparation may already hold that lock while restoring this reserve.
+    if (action === "discharge-limit" && source !== "backup-preparation"
+      && backupPreparationBlocksActions(await readOperationalOverridesState())) {
+      throw requestError(409, "Backup Preparation is active and owns battery control");
+    }
+    await assertActionAllowedByOperationalOverride(source, action);
+  },
+  withActionMutation: (action, payload, source, operation) => awayReserveService
+    ? awayReserveService.withCommand(action, payload, source, operation) : operation(),
   pauseAdaptiveCharging: (action: string) => {
     if (!adaptiveControlService) throw new Error("Adaptive control service is not initialized");
     return adaptiveStateService.exclusive(() => adaptiveControlService!.pauseForManualAction(action));
@@ -316,6 +330,30 @@ const deviceCommandService = createDeviceCommandService({
 });
 const executeAction = deviceCommandService.execute;
 const startDeviceCommand = deviceCommandService.start;
+awayReserveService = createAwayReserveService({
+  documents: applicationStore,
+  readConfig,
+  setEnabled: (enabled) => writeConfig({ awayReserveEnabled: enabled }),
+  periods: () => listAwayPeriods(true),
+  backupActive: async () => backupPreparationBlocksActions(await readOperationalOverridesState()),
+  readReserve: (host) => runDeviceCommandQueued("discharge-limit", { host }),
+  executeAction,
+  allowDocumentationHosts: EXTERNAL_IO_DISABLED,
+  reserveVerified: async (percent, host) => {
+    const config = await readConfig();
+    if (config.batteryHost !== host) return;
+    await updateConfig((current) => current.batteryHost !== host ? current : ({ ...current, settingCache: {
+      ...current.settingCache, discharge_limit: { lastKnown: { host, decoded: { percent } }, lastReadAt: new Date().toISOString() },
+    } }));
+    invalidateStatusSnapshot();
+    await adaptiveStateService.exclusive(async () => {
+      const state = await readAdaptiveChargingState();
+      state.plan = null;
+      queueAdaptiveChargingPlanRefresh(state, `Battery reserve verified at ${percent}%`, new Date());
+      await writeAdaptiveChargingState(state);
+    });
+  },
+});
 const demandGuardService = createDemandGuardService({
   exclusive: automationStoreService.exclusive,
   readAutomationRules,
@@ -335,6 +373,7 @@ const demandGuardService = createDemandGuardService({
   requestError,
 });
 const backupPreparationService = createBackupPreparationService({
+  reconcileAwayReserve: () => awayReserveService!.reconcile(true),
   readConfig,
   readAdaptiveChargingState,
   writeAdaptiveChargingState,
@@ -474,6 +513,7 @@ function adaptiveChargingView(
     } : null,
     solarForecastAccuracy,
     fuelCellForecastOutcomes: historyStore.isReady() ? historyStore.fuelCellForecastOutcomes(100, { canonical: true }) : [],
+    awayFuelCell: state.awayFuelCell ? awayFuelCellSummary(state.awayFuelCell) : null,
     plan: state.plan,
     owner: state.owner,
     activeSlot: state.activeSlot,
@@ -534,6 +574,7 @@ async function queueAdaptiveChargingForAwayChange(reason: string, now: Date = ne
   state.lastPlanEventKey = null;
   appendAdaptiveChargingLog(state, `${reason}; Adaptive Charging recalculation queued`, "away", now);
   await writeAdaptiveChargingState(state);
+  await awayReserveService!.reconcile(true);
 }
 
 const runAdaptiveChargingEvaluation = createAdaptiveChargingEvaluator({
@@ -558,6 +599,7 @@ const evaluateAdaptiveCharging: typeof runAdaptiveChargingEvaluation = (...args)
   adaptiveStateService.exclusive(() => runAdaptiveChargingEvaluation(...args));
 
 const automationOrchestrator = createAutomationOrchestrator({
+  reconcileAwayReserve: () => awayReserveService!.reconcile(),
   intervalMs: AUTOMATION_CHECK_INTERVAL_MS,
   forecastRefreshMs: SOLAR_FORECAST_REFRESH_MS,
   readConfig,
@@ -583,6 +625,8 @@ const scheduledAutomationService = createScheduledAutomationService({
 });
 
 const runtimeCoordinator = createRuntimeCoordinator({
+  stopAwayReserve: () => awayReserveService?.stop(),
+  startAwayReserve: () => awayReserveService?.start(),
   scheduleIntervalMs: SCHEDULE_CHECK_INTERVAL_MS,
   automationIntervalMs: AUTOMATION_CHECK_INTERVAL_MS,
   defaultUpdateIntervalSeconds: DEFAULT_CONFIG.updateIntervalSeconds,
@@ -605,7 +649,7 @@ const runtimeCoordinator = createRuntimeCoordinator({
     observeBatterySocNotifications(status, config);
     observeFuelCellHotWaterNotifications(status, config);
   },
-  activeWork: () => scheduledAutomationService.active()
+  activeWork: () => (awayReserveService?.activeCount() ?? 0) > 0 || scheduledAutomationService.active()
     || deviceCommandService.activeCount() > 0
     || deviceQueue.isRunning
     || scheduleRunner.activeCount() > 0
@@ -691,6 +735,7 @@ const api = createApiHandler({
     summarizeEneFarmSamples,
   },
   operations: {
+    awayReserveService,
     adaptiveChargingAvailability,
     adaptiveChargingScheduledEvent,
     adaptiveChargingSolarForecastAccuracy,
@@ -702,7 +747,11 @@ const api = createApiHandler({
     backupPreparationView,
     cleanNewAwayPeriod,
     createAwayPeriod,
-    endBackupPreparation: backupPreparationService.end,
+    endBackupPreparation: async (now) => {
+      const result = await backupPreparationService.end(now);
+      await awayReserveService!.reconcile(true);
+      return result;
+    },
     ensureAwayPeriodDoesNotOverlap,
     findAwayPeriod,
     getStatusSnapshot,
@@ -775,6 +824,7 @@ const applicationInitializer = createApplicationInitializer({
     await writeAdaptiveChargingState(startupAdaptiveChargingState);
     await writeAutomationRuleStates(await readAutomationRules());
     await backupPreparationService.reconcileOnStartup();
+    await awayReserveService!.reconcile(true);
   },
   startBackgroundProcesses: runtimeCoordinator.start,
 });

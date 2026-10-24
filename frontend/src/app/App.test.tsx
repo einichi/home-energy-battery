@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AwayPeriod, AwayPeriodsView } from "../api/contracts";
+import type { AwayPeriod, AwayPeriodsView, AwayReserveStatus } from "../api/contracts";
 import { App } from "./App";
 import { AppProviders } from "./providers";
 
@@ -585,9 +585,16 @@ function mockApi(
   awayView: AwayPeriodsView = awayPeriods,
   language: "en" | "ja" = "en",
   configOverride: Record<string, unknown> = {},
+  reserveOverride: Partial<AwayReserveStatus> = {},
 ) {
+  let reserve: AwayReserveStatus = { enabled: false, phase: "idle", ownsReserve: false, previousPercent: null,
+    windowFrom: null, windowUntil: null, lastError: null, retryAt: null, ...reserveOverride };
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url.endsWith("/api/away-reserve")) {
+      if (init?.method === "PATCH") reserve = { ...reserve, enabled: JSON.parse(String(init.body)).enabled };
+      return { ok: true, status: 200, json: async () => reserve } as Response;
+    }
     const body = url.includes("/api/reports/energy?")
       ? energyReport
       : url.includes("/api/reports/ene-farm?")
@@ -756,6 +763,46 @@ function mockApiWithGuardRestore(options: { triggered?: boolean; fail?: boolean;
 afterEach(() => vi.unstubAllGlobals());
 
 describe("React application shell", () => {
+  it("saves the global Away reserve preference from the Away schedule", async () => {
+    const fetchMock = mockApi();
+    render(<MemoryRouter initialEntries={["/automation"]}><AppProviders><App /></AppProviders></MemoryRouter>);
+    const toggle = await screen.findByRole("checkbox", { name: "Use 0% minimum reserve while away" });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/away-reserve", expect.objectContaining({ method: "PATCH", body: JSON.stringify({ enabled: true }) })));
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(screen.getByText(/Restoring the setting does not recharge the battery/)).toBeVisible();
+  });
+
+  it("shows Away reserve ownership and its settings link on the Battery page", async () => {
+    mockApi("succeeded", false, {}, awayPeriods, "en", {}, { enabled: true, phase: "active", ownsReserve: true, previousPercent: 20 });
+    render(<MemoryRouter initialEntries={["/battery"]}><AppProviders><App /></AppProviders></MemoryRouter>);
+    expect(await screen.findByText("Reserve: 0% · Restore to 20% on return")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Manage Away reserve settings" })).toHaveAttribute("href", "/automation#away-summary-heading");
+  });
+
+  it("keeps a failed preference save visible after refreshing its current state", async () => {
+    const fetchMock = mockApi();
+    const original = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input, init) => String(input).endsWith("/api/away-reserve") && init?.method === "PATCH"
+      ? Promise.resolve({ ok: false, status: 503, json: async () => ({ error: "Could not save reserve" }) } as Response)
+      : original(input, init));
+    render(<MemoryRouter initialEntries={["/automation"]}><AppProviders><App /></AppProviders></MemoryRouter>);
+    const toggle = await screen.findByRole("checkbox", { name: "Use 0% minimum reserve while away" });
+    await waitFor(() => expect(toggle).toBeEnabled()); fireEvent.click(toggle);
+    expect(await screen.findByText("Could not save reserve")).toBeVisible();
+    await waitFor(() => expect(toggle).toBeEnabled());
+    expect(toggle).not.toBeChecked(); expect(screen.getByText("Could not save reserve")).toBeVisible();
+  });
+
+  it("keeps a failed reserve restoration visible", async () => {
+    mockApi("succeeded", false, {}, awayPeriods, "en", {}, { enabled: true, phase: "restoring", ownsReserve: true, previousPercent: 20, lastError: "Battery offline" });
+    render(<MemoryRouter initialEntries={["/automation"]}><AppProviders><App /></AppProviders></MemoryRouter>);
+    expect(await screen.findByText(/Away reserve needs attention: Battery offline/)).toBeVisible();
+    expect(screen.getByText("Restoring the previous minimum reserve of 20%…")).toBeVisible();
+  });
+
   it("renders the next charging window as a localized human-readable range", async () => {
     const fetchMock = mockApi();
     const originalFetch = fetchMock.getMockImplementation()!;

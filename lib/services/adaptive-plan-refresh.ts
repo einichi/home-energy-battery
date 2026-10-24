@@ -66,6 +66,7 @@ export async function refreshAdaptivePlan(
         fuelCellPowerW: liveSample.fuelCellPowerW,
         fuelCellGenerationState: liveSample.fuelCellGenerationState,
         fuelCellHotWaterLevel: liveSample.fuelCellHotWaterLevel,
+        fuelCellSourceHost: liveSample.fuelCellSourceHost,
       });
     }
   }

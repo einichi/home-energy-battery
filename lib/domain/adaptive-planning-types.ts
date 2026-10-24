@@ -4,6 +4,7 @@ import type { GuardDeliverabilityModel, GuardWindowOutcome } from "./guard-deliv
 import type { ApplicationConfig, RateBand } from "../contracts/configuration.js";
 import type { AwayPeriod } from "./time.js";
 import type { SolarForecast, SolarForecastAccuracy, SolarForecastHour } from "./solar-forecast.js";
+import type { AwayFuelCellEvidence } from "./away-fuel-cell.js";
 
 export interface AdaptiveTimelineSlot {
   startMs: number;
@@ -90,6 +91,7 @@ export interface ChronologicalPlan {
   expectedEndStoredKwh: number;
 }
 export interface AdaptivePlanningState {
+  awayFuelCell?: AwayFuelCellEvidence | null;
   forecast: SolarForecast | null;
   historicalWeather?: SolarForecastHour[];
   solarForecastAccuracy?: SolarForecastAccuracy & { sampleCount?: number; measuredFactor?: unknown };

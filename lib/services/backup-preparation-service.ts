@@ -20,6 +20,7 @@ type ExecuteAction = (
 ) => Promise<unknown>;
 
 export interface BackupPreparationDependencies {
+  reconcileAwayReserve?(): Promise<unknown>;
   readConfig(): Promise<ApplicationConfig>;
   readAdaptiveChargingState(): Promise<AdaptiveChargingState>;
   writeAdaptiveChargingState(state: AdaptiveChargingState): Promise<AdaptiveChargingState>;
@@ -154,6 +155,7 @@ export function createBackupPreparationService(dependencies: BackupPreparationDe
       appendBackupPreparationLog(state, `Starting Backup Preparation from ${previousProfile} profile`, "start", now);
       state = await dependencies.writeOperationalOverridesState(state);
       try {
+        await dependencies.reconcileAwayReserve?.();
         if (!state.backupPreparation.allowDemandGuard) await releaseDemandGuard(now);
         await prepareAdaptiveCharging(now);
         const profileResult = await setAndVerifyBatteryChargingProfile("backup", config.batteryHost);

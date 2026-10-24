@@ -133,6 +133,7 @@ export const AppConfigSchema = v.object({
   solarEnabled: v.boolean(), smartCosmoEnabled: v.boolean(), fuelCellEnabled: v.boolean(),
   rateMode: v.optional(v.union([v.literal("simple"), v.literal("offPeak"), v.literal("multi")])),
   runtime: v.optional(RuntimeInformationSchema),
+  awayReserveEnabled: v.optional(v.boolean()),
   batteryHost: v.optional(v.string()), meterHost: v.optional(v.string()), meterEoj: v.optional(v.string()),
   solarHost: v.optional(v.string()), fuelCellPrimaryHost: v.optional(v.string()),
   fuelCellProxyHosts: v.optional(v.array(v.string())), discoverySubnets: v.optional(v.array(v.string())),
@@ -318,6 +319,7 @@ export const AwayPeriodRequestSchema = v.looseObject({
   from: v.optional(v.string()), until: v.optional(v.string()), source: v.optional(v.union([v.literal("manual"), v.literal("scheduled")])),
 });
 export const AwayUntilRequestSchema = v.looseObject({ until: v.optional(v.string()) });
+export const AwayReserveSettingsRequestSchema = v.object({ enabled: v.boolean() });
 export const BackupPreparationRequestSchema = v.looseObject({ allowDemandGuard: v.optional(v.boolean()) });
 export const DeviceCommandRequestSchema = v.looseObject({ action: v.optional(v.string()), payload: v.optional(v.record(v.string(), v.unknown())) });
 export const NotificationsRequestSchema = v.looseObject({

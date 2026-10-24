@@ -32,10 +32,15 @@ try {
   assert.deepEqual(await store.initialize(), { architectureVersion: 1, state: "current" });
   store.writeDocument("config", { batteryHost: "192.0.2.99", language: "en" });
   store.writeDocument("schedules", [{ id: "night-charge", name: "Night charge", action: "charge", enabled: true }]);
+  store.writeDocument("awayReserveState", { version: 1, phase: "applying", previousPercent: 20, host: "192.0.2.99" });
   assert.deepEqual(store.readDocument("config"), { batteryHost: "192.0.2.99", language: "en" });
   assert.deepEqual(store.readDocument("schedules"), [{ id: "night-charge", name: "Night charge", action: "charge", enabled: true }]);
   assert.equal(store.validateCurrent(), true);
   store.close();
+  const reopened = createApplicationStore({ dataDir });
+  await reopened.initialize();
+  assert.deepEqual(reopened.readDocument("awayReserveState"), { version: 1, phase: "applying", previousPercent: 20, host: "192.0.2.99" });
+  reopened.close();
   assert.equal(architectureVersionForDatabase(databaseFile), ARCHITECTURE_VERSION);
 
   const incompatibleDir = await mkdtemp(path.join(os.tmpdir(), "application-store-incompatible-"));

@@ -222,7 +222,33 @@ export type AdaptiveTimelineItem = {
   awayDemandConfidence?: string | null;
 };
 
+export type AwayFuelCellSummary = {
+  periodId: string;
+  from: string;
+  until: string;
+  regime: "provisional-off" | "off-supported" | "normal-model" | "uncertain";
+  reason: "observing" | "quiet-cycle" | "sustained-generation" | "generation-detected" | "insufficient-coverage" | "stale-readings";
+  observationFrom: string;
+  coveragePercent: number;
+  lastReadingAt: string | null;
+  lastGeneratingAt: string | null;
+  nextReviewAt: string;
+  headroomAllowanceRetained: boolean;
+};
+
+export type AwayReserveStatus = {
+  enabled: boolean;
+  phase: "idle" | "applying" | "active" | "restoring" | "suspended" | "manual" | "manual-pending";
+  ownsReserve: boolean;
+  previousPercent: number | null;
+  windowFrom: string | null;
+  windowUntil: string | null;
+  lastError: string | null;
+  retryAt: string | null;
+};
+
 export type AdaptiveChargingPlan = {
+  fuelCellModel?: { awayForecasts?: AwayFuelCellSummary[] } | null;
   available?: boolean;
   reason?: string | null;
   warning?: string | null;
@@ -279,6 +305,7 @@ export type AdaptiveChargingPlan = {
 };
 
 export type AdaptiveChargingStatus = {
+  awayFuelCell?: AwayFuelCellSummary | null;
   enabled: boolean;
   available: boolean;
   reason?: string | null;

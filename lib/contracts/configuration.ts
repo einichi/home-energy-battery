@@ -83,6 +83,7 @@ export interface NotificationConfig {
 }
 
 export interface ApplicationConfig {
+  awayReserveEnabled: boolean;
   [key: string]: unknown;
   batteryHost: string;
   meterHost: string;

@@ -8,6 +8,7 @@ import { finiteNumberOrNull } from "./numbers.js";
 import { median } from "./statistics.js";
 import { numericMetric } from "./telemetry.js";
 import { asRecord } from "./values.js";
+import { cleanAwayFuelCellEvidence, type AwayFuelCellEvidence, type AwayFuelCellSummary } from "./away-fuel-cell.js";
 
 const ADAPTIVE_CHARGE_SESSION_LIMIT = 30;
 const ADAPTIVE_CHARGE_SAMPLE_LIMIT = 500;
@@ -69,6 +70,7 @@ export interface AdaptivePlan {
     blockers?: string[];
     recentHotWaterLevel?: number | null;
     hotWaterConditionedSlotCount?: number;
+    awayForecasts?: AwayFuelCellSummary[];
   } | null;
   timeline?: Array<{
     start: string;
@@ -236,6 +238,7 @@ export interface AdaptiveChargingState {
   lastForecastError: Record<string, unknown> | null;
   historicalWeatherFetchedAt: string | null;
   lastAwayStateKey: string | null;
+  awayFuelCell: AwayFuelCellEvidence | null;
   log: AdaptiveLogEntry[];
   updatedAt: string;
   historicalWeather?: SolarForecastHour[];
@@ -406,6 +409,7 @@ export function cleanAdaptiveChargingState(input: unknown = {}): AdaptiveChargin
       : null,
     historicalWeatherFetchedAt: stringOrNull(value.historicalWeatherFetchedAt),
     lastAwayStateKey: stringOrNull(value.lastAwayStateKey),
+    awayFuelCell: cleanAwayFuelCellEvidence(value.awayFuelCell),
     log: (Array.isArray(value.log) ? value.log : []).map(asRecord)
       .filter((entry) => typeof entry.at === "string" && typeof entry.message === "string")
       .map((entry) => ({ at: String(entry.at), kind: String(entry.kind ?? "info"), message: String(entry.message) }))

@@ -177,6 +177,36 @@ Home or extended. Completed periods are hidden from the management table but
 remain in SQLite so Away demand can be learned separately from normal household
 demand and reused in later charging plans.
 
+Automation → Away schedule includes an opt-in **Use 0% minimum reserve while
+away** preference, disabled by default. It reads and durably saves the actual
+battery reserve before writing 0%, verifies the setting, and restores the saved
+value at the exact return time or Back Home. Extensions and touching periods
+share the original snapshot. Recovery and retries run independently of Adaptive
+Charging, including after a restart; failed restoration remains visible on the
+Automation and Battery pages. Backup Preparation restores/suspends the Away
+override. Deliberate manual or scheduled reserve changes take priority for the
+remaining continuous Away period. The saved value is tied to its battery host.
+Restoring a reserve setting does not recharge the battery; planning preserves
+the actual SOC even when it is below the restored reserve.
+
+For a configured ENE-FARM, each Away period now has its own generation assumption.
+Scheduled periods initially predict no generation. After departure, a rolling
+24-hour window with at least 90% measured coverage, no gap over one hour, fresh
+readings, and no material generation supports continuing that expectation.
+Generation above 10 W withdraws the off assumption immediately; 30 minutes of
+covered generation selects the normal ENE-FARM model while household demand
+continues using Away assumptions. Later quiet periods can revise that decision.
+Missing or stale observations use the baseline forecast rather than confirming
+zero. Evidence survives restarts and extensions, and resets on device replacement
+or a changed departure time. The Automation view explains the assumption in
+English and Japanese.
+
+Away suppresses the P20/median expectation only. The baseline P80 generation
+estimate still reserves battery headroom, and historical-support checks remain
+in place. The off expectation is a policy assumption, not a calibrated zero-P80
+forecast. The fuel-cell adjustment ends at the exact return time, independently
+of the household-demand return buffer. No ENE-FARM commands are issued.
+
 Ene-Farm generation forecasts also use the observed 0–5 hot-water level for
 targets up to six hours ahead. Historical days must match the tank level at the
 equivalent **forecast origin**, not at the future target time. At least four
@@ -194,7 +224,7 @@ still block charging. If Ene-Farm is actively influencing a plan but a target
 half-hour has fewer than four historical days, that plan is unavailable rather
 than assuming unknown generation is zero for battery headroom.
 
-Backtest engine/model version 2 evaluates plan components over the same sunset
+Backtest engine version 2 evaluates plan components over the same sunset
 period, checks measurement coverage, and excludes unsupported older plan
 snapshots. Ene-Farm scores use one forecast per target interval, the latest issue
 available at least thirty minutes before the interval, with at least 80% measured
@@ -203,6 +233,12 @@ outcomes without recorded coverage evidence are not included in these scores.
 Partial rollups are prorated when clipping boundaries, assuming uniform energy
 within the recorded interval. AUTO charging is bounded by the known charging
 power; no discharge-power or inverter limit is invented where none is configured.
+
+Planner model version 3 adds Away ENE-FARM inference. Its snapshots are scored
+separately from version 2. The offline fuel-cell comparison also reports Away
+results by trip, trip day and inferred state, plus generation-energy error over
+measurable intervals using one forecast per target. It replays evidence in time
+order; these forecast metrics do not establish charging savings.
 
 To compare the existing and hot-water-conditioned forecasts offline, export
 half-hour samples from `GET /api/history?start=...&end=...` (ranges longer than

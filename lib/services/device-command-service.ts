@@ -49,6 +49,7 @@ export interface DeviceCommandServiceDependencies {
   createHttpError(status: number, message: string): Error;
   operationModeVerifyAttempts?: number;
   operationModeVerifyDelayMs?: number;
+  withActionMutation?<T>(action: string, payload: UnknownRecord, source: string, operation: () => Promise<T>): Promise<T>;
 }
 
 export function createDeviceCommandService(dependencies: DeviceCommandServiceDependencies) {
@@ -184,7 +185,7 @@ export function createDeviceCommandService(dependencies: DeviceCommandServiceDep
     }
   }
 
-  async function execute(action: string, payloadValue: unknown = {}, options: {
+  async function executeVerified(action: string, payloadValue: unknown = {}, options: {
     source?: ActionSource;
     commandId?: string;
     requestedRecorded?: boolean;
@@ -214,6 +215,13 @@ export function createDeviceCommandService(dependencies: DeviceCommandServiceDep
       }
       throw error;
     }
+  }
+
+  function execute(action: string, payloadValue: unknown = {}, options: { source?: ActionSource; commandId?: string; requestedRecorded?: boolean } = {}) {
+    const operation = () => executeVerified(action, payloadValue, options);
+    return dependencies.withActionMutation
+      ? dependencies.withActionMutation(action, asRecord(payloadValue), options.source ?? "manual", operation)
+      : operation();
   }
 
   async function start(action: string, payloadValue: unknown = {}, { source = "manual" }: { source?: ActionSource } = {}) {

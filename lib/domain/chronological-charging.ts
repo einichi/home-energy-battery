@@ -39,7 +39,7 @@ export function planChronologicalDiscountedCharging({
   const chargeConversion = Math.min(1.5, Math.max(0.5, Number(chargeToStoredRatio) || 1));
   const windows = discountedTimelineWindows(timeline);
   const maximumTargetKwh = capacityKwh * Number(maximumTargetPercent) / 100;
-  const initialStoredKwh = Math.max(dischargeFloorKwh, Math.min(capacityKwh, Number(currentStoredKwh)));
+  const initialStoredKwh = Math.max(0, Math.min(capacityKwh, Number(currentStoredKwh)));
 
   const buildPlan = (targetBoosts: number[] = []): ChronologicalPlan => {
     let storedKwh = initialStoredKwh;

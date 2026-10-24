@@ -2,6 +2,8 @@ import { finiteNumberOrNull } from "./numbers.js";
 import { median, percentile, weightedMedian } from "./statistics.js";
 import { halfHourIndex, isAwayAt, localDayKey, MILLISECONDS_PER_DAY } from "./time.js";
 import type { AwayPeriod } from "./time.js";
+import { activeAwayFuelCellEvidence, awayFuelCellDeviceKey, awayFuelCellSummary, type AwayFuelCellConfig, type AwayFuelCellEvidence, type AwayFuelCellSummary } from "./away-fuel-cell.js";
+import { awayPeriodContains } from "./time.js";
 
 const ADAPTIVE_CHARGING_SEASONAL_LOOKBACK_YEARS = 10;
 const ADAPTIVE_CHARGING_SEASONAL_DAY_RANGE = 28;
@@ -15,12 +17,14 @@ type Occupancy = "all" | "home" | "away";
 
 export interface DemandSample {
   timestamp: string;
+  rollupStart?: string;
+  rollupEnd?: string;
   branchDemandW?: unknown;
   fuelCellPowerW?: unknown;
   fuelCellGenerationState?: unknown;
   fuelCellHotWaterLevel?: unknown;
-  intervalAveragePowerW?: { branchDemandW?: unknown };
-  powerCoverageSeconds?: { branchDemandW?: unknown };
+  intervalAveragePowerW?: { branchDemandW?: unknown; fuelCellPowerW?: unknown };
+  powerCoverageSeconds?: { branchDemandW?: unknown; fuelCellPowerW?: unknown };
   coverageSeconds?: { branchDemandKwh?: unknown };
   expectedIntervalSeconds?: unknown;
   stateOfChargePercent?: unknown;
@@ -69,7 +73,7 @@ interface DemandOptions {
   normalPrediction?: DemandPrediction;
 }
 
-interface FuelCellConfigInput {
+interface FuelCellConfigInput extends AwayFuelCellConfig {
   fuelCell?: { includeInAdaptiveCharging?: boolean };
 }
 
@@ -78,6 +82,9 @@ interface FuelCellForecastOptions {
   awayPeriods?: AwayPeriod[];
   /** Disable only for paired offline comparisons with the existing forecast. */
   hotWaterConditioning?: boolean;
+  awayFuelCell?: AwayFuelCellEvidence | null;
+  /** Offline comparison against the previous occupancy-only forecast. */
+  awayRegimeInference?: boolean;
 }
 
 
@@ -195,10 +202,26 @@ export function buildFuelCellGenerationModel(
   options: FuelCellForecastOptions = {},
 ) {
   const method = "observed";
-  const requestedInfluence = config.fuelCell?.includeInAdaptiveCharging ? "active" : "observe";
+  const requestedInfluence = config.fuelCellEnabled !== false && config.fuelCell?.includeInAdaptiveCharging ? "active" : "observe";
   const temperatureByDay = options.temperatureByDay instanceof Map ? options.temperatureByDay : new Map();
   const awayPeriods = Array.isArray(options.awayPeriods) ? options.awayPeriods : [];
   const nowMs = now.getTime();
+  const awayPolicyEnabled = options.awayRegimeInference !== false && awayFuelCellDeviceKey(config) !== null;
+  const awayEvidence = awayPolicyEnabled
+    ? activeAwayFuelCellEvidence(config, awayPeriods, samples, now, options.awayFuelCell) : null;
+  const awayForecasts: AwayFuelCellSummary[] = awayPolicyEnabled ? awayPeriods
+    .filter((period) => Number.isFinite(Date.parse(String(period.from)))
+      && Date.parse(String(period.until)) > Math.max(nowMs, Date.parse(String(period.from))))
+    .map((period) => {
+      if (awayEvidence && awayEvidence.from === period.from) return awayFuelCellSummary(awayEvidence);
+      return {
+        periodId: (period as AwayPeriod & { id?: string }).id ?? String(period.from),
+        from: String(period.from), until: String(period.until), regime: "provisional-off", reason: "observing",
+        observationFrom: String(period.from), coveragePercent: 0, lastReadingAt: null, lastGeneratingAt: null,
+        nextReviewAt: new Date(Date.parse(String(period.from)) + MILLISECONDS_PER_DAY).toISOString(),
+        headroomAllowanceRetained: true,
+      };
+    }) : [];
   const hotWaterObservations = samples.flatMap((sample) => {
     if (!Object.hasOwn(sample, "fuelCellHotWaterLevel")) return [];
     const at = new Date(sample.timestamp).getTime();
@@ -221,10 +244,11 @@ export function buildFuelCellGenerationModel(
   const recentHotWaterLevel = hotWaterAt(nowMs);
   const powerSamples = samples.flatMap((sample): Array<{ date: Date; watts: number; state: unknown; coverageSeconds: number | null }> => {
     const date = new Date(sample.timestamp);
-    const watts = finiteNumberOrNull((sample as DemandSample & { intervalAveragePowerW?: { fuelCellPowerW?: unknown } }).intervalAveragePowerW?.fuelCellPowerW ?? sample.fuelCellPowerW);
-    const coverage = finiteNumberOrNull((sample as DemandSample & { powerCoverageSeconds?: { fuelCellPowerW?: unknown } }).powerCoverageSeconds?.fuelCellPowerW
-      ?? sample.expectedIntervalSeconds);
-    return Number.isNaN(date.getTime()) || date.getTime() > nowMs || watts === null
+    const watts = finiteNumberOrNull(sample.intervalAveragePowerW?.fuelCellPowerW ?? sample.fuelCellPowerW);
+    const coverage = finiteNumberOrNull(sample.powerCoverageSeconds?.fuelCellPowerW ?? sample.expectedIntervalSeconds);
+    const rollupEnd = sample.rollupEnd === undefined ? null : Date.parse(sample.rollupEnd);
+    return Number.isNaN(date.getTime()) || date.getTime() > nowMs
+      || (rollupEnd !== null && (!Number.isFinite(rollupEnd) || rollupEnd > nowMs)) || watts === null
       ? []
       : [{ date, watts, state: sample.fuelCellGenerationState ?? null, coverageSeconds: coverage }];
   }).sort((left, right) => left.date.getTime() - right.date.getTime());
@@ -260,20 +284,21 @@ export function buildFuelCellGenerationModel(
   const dailyBuckets = [...days.values()].map((day) => ({
     ...day,
     temperatureC: finiteNumberOrNull(temperatureByDay.get(day.key)),
-    away: isAwayAt(new Date(day.date.getFullYear(), day.date.getMonth(), day.date.getDate(), 12).getTime(), awayPeriods),
     values: new Map([...day.buckets].map(([index, bucket]) => [index, {
       watts: bucket.coverage > 0 ? bucket.sum / bucket.coverage : bucket.sum / bucket.count,
       state: [...bucket.states].sort((left, right) => right[1] - left[1])[0]?.[0] ?? null,
+      away: isAwayAt(demandDayBucketMidpoint(day, index), awayPeriods),
     }])),
   }));
   const validDays = dailyBuckets.filter((day) => day.buckets.size >= 16);
   const currentDayType = now.getDay() === 0 || now.getDay() === 6;
-  const currentAway = isAwayAt(now.getTime(), awayPeriods, { forecast: true });
+  const currentAway = awayPolicyEnabled ? false : isAwayAt(now.getTime(), awayPeriods, { forecast: true });
   const currentTemperature = finiteNumberOrNull(temperatureByDay.get(localDayKey(now)));
   const comparableDays = validDays.filter((day) => {
     const weekend = day.date.getDay() === 0 || day.date.getDay() === 6;
     const temperatureMatches = currentTemperature === null ? true : day.temperatureC === null ? false : Math.abs(day.temperatureC - currentTemperature) <= 6;
-    return weekend === currentDayType && day.away === currentAway && monthDistance(day.date, now) <= 2 && temperatureMatches;
+    return weekend === currentDayType && [...day.values.values()].some((value) => value.away === currentAway)
+      && monthDistance(day.date, now) <= 2 && temperatureMatches;
   });
   const blockers: string[] = [];
   if (validDays.length < 7) blockers.push(`${7 - validDays.length} more valid observation days required`);
@@ -285,13 +310,14 @@ export function buildFuelCellGenerationModel(
   const forecastAt = (date: Date) => {
     const bucket = halfHourIndex(date);
     const targetWeekend = date.getDay() === 0 || date.getDay() === 6;
-    const targetAway = isAwayAt(date.getTime(), awayPeriods, { forecast: true });
+    const awayForecast = awayForecasts.find((period) => awayPeriodContains(period, date.getTime())) ?? null;
+    const targetAway = awayForecast ? false : isAwayAt(date.getTime(), awayPeriods, { forecast: true });
     const targetTemperature = finiteNumberOrNull(temperatureByDay.get(localDayKey(date)));
     let candidates = dailyBuckets.filter((day) => day.values.has(bucket));
     const comparable = candidates.filter((day) => {
       const weekend = day.date.getDay() === 0 || day.date.getDay() === 6;
       const temperatureMatches = targetTemperature === null ? true : day.temperatureC === null ? false : Math.abs(day.temperatureC - targetTemperature) <= 6;
-      return weekend === targetWeekend && day.away === targetAway && monthDistance(day.date, date) <= 2 && temperatureMatches;
+      return weekend === targetWeekend && day.values.get(bucket)?.away === targetAway && monthDistance(day.date, date) <= 2 && temperatureMatches;
     });
     if (comparable.length >= 4) candidates = comparable;
     if (latest?.state && Math.abs(date.getTime() - now.getTime()) <= 2 * 60 * 60_000) {
@@ -319,12 +345,14 @@ export function buildFuelCellGenerationModel(
     }
     const values = candidates.map((day) => day.values.get(bucket)?.watts)
       .filter((value): value is number => value !== undefined && Number.isFinite(value));
+    const assumeOff = awayForecast?.regime === "provisional-off" || awayForecast?.regime === "off-supported";
     return {
-      p20W: percentile(values, 0.2) ?? 0,
-      medianW: median(values) ?? 0,
+      p20W: assumeOff ? 0 : percentile(values, 0.2) ?? 0,
+      medianW: assumeOff ? 0 : median(values) ?? 0,
       p80W: percentile(values, 0.8) ?? 0,
       sampleCount: values.length,
       hotWaterConditioned,
+      awayRegime: awayForecast?.regime ?? null,
     };
   };
   return {
@@ -337,6 +365,7 @@ export function buildFuelCellGenerationModel(
     comparableDays: comparableDays.length,
     recentState: latest?.state ?? null,
     recentHotWaterLevel,
+    awayForecasts,
     forecastAt,
   };
 }

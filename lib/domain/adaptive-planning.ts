@@ -93,6 +93,7 @@ export function buildAdaptiveChargingPlan({
   const fuelCellModel = buildFuelCellGenerationModel(config, samples, now, {
     temperatureByDay: temperatures,
     awayPeriods,
+    awayFuelCell: state.awayFuelCell,
   });
   const timeline: AdaptiveTimelineSlot[] = [];
   let predictedSolarKwh = 0;
@@ -105,6 +106,12 @@ export function buildAdaptiveChargingPlan({
   let awayLearnedSlotCount = 0;
   let awayFallbackSlotCount = 0;
   const awayComparableDays = new Set<string>();
+  const awayBoundaries = awayPeriods.flatMap((period) => {
+    const from = Date.parse(String(period.from));
+    const until = Date.parse(String(period.until));
+    const buffer = Math.min(AWAY_RETURN_BUFFER_MS, (until - from) / 4);
+    return [from, until, until - buffer];
+  }).filter(Number.isFinite);
   for (let time = startMs; time < horizonEndMs;) {
     const date = new Date(time);
     const dayKey = localDayKey(date);
@@ -123,7 +130,7 @@ export function buildAdaptiveChargingPlan({
       demandByDay.set(dayKey, { home, away });
     }
     const demand = demandByDay.get(dayKey)!;
-    const slotEndMs = nextPlanningBoundary(time, horizonEndMs);
+    const slotEndMs = Math.min(nextPlanningBoundary(time, horizonEndMs), ...awayBoundaries.filter((boundary) => boundary > time));
     const hour = forecastHourForInterval(forecast, time, slotEndMs);
     const factor = solarCalibrationFactor(calibration, date);
     const uncorrectedSolarW = solarPowerFromIrradiance(hour?.tiltedIrradianceWm2, config, factor);
@@ -257,6 +264,7 @@ export function buildAdaptiveChargingPlan({
       comparableDays: fuelCellModel.comparableDays,
       recentHotWaterLevel: fuelCellModel.recentHotWaterLevel,
       hotWaterConditionedSlotCount,
+      ...(fuelCellModel.awayForecasts.length ? { awayForecasts: fuelCellModel.awayForecasts } : {}),
     },
     chargePerformance,
     batteryModel,

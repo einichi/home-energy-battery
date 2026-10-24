@@ -41,7 +41,8 @@ export function applyPredictedBatteryFlow(
 ): number {
   const net = Number(netKwh || 0);
   const converted = net > 0 ? Math.min(net, Math.max(0, maximumChargeKwh)) * chargeToStoredRatio : net;
-  return Math.max(floorKwh, Math.min(capacityKwh, storedKwh + converted));
+  // Raising a reserve setting does not add energy when SOC is already below it.
+  return Math.max(Math.min(storedKwh, floorKwh), Math.min(capacityKwh, storedKwh + converted));
 }
 
 
@@ -91,7 +92,7 @@ export function buildAdaptiveChargingTimelineView({
   config: Pick<ApplicationConfig, "rateBands" | "standardRateYenPerKwh">;
   standbyWindowEnd?: string | null;
 }) {
-  let storedKwh = Math.max(floorKwh, Math.min(capacityKwh, Number(initialStoredKwh)));
+  let storedKwh = Math.max(0, Math.min(capacityKwh, Number(initialStoredKwh)));
   const normalizedSlots = slots.map((slot) => ({
     ...slot,
     startMs: new Date(slot.start).getTime(),

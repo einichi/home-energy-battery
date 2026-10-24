@@ -553,6 +553,9 @@ tbody td { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .automation-settings-form { padding: 24px; }
 .automation-toggle { display: flex; align-items: flex-start; gap: 11px; margin-top: 20px; padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-subtle); cursor: pointer; }
 .automation-toggle.compact { margin-top: 9px; background: transparent; }
+.away-reserve-status { margin: 12px 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-subtle); font-size: .8rem; line-height: 1.5; }
+.away-reserve-status p { margin: 0 0 6px; }
+.away-reserve-status p:last-child { margin-bottom: 0; }
 .automation-toggle input { width: 18px; height: 18px; flex: 0 0 auto; margin-top: 1px; accent-color: var(--accent); }
 .automation-toggle span { display: grid; gap: 3px; }
 .automation-toggle strong { color: var(--text); font-size: .78rem; }

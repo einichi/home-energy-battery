@@ -12,6 +12,7 @@ import { refreshAdaptivePlan } from "./adaptive-plan-refresh.js";
 import type { PlanSnapshotRecorderInput } from "./adaptive-plan-refresh.js";
 import { ADAPTIVE_CHARGING_SOLAR_WINDOW_DISCHARGE_BUDGET_PERCENT, evaluateAdaptiveSolarHeadroom } from "./adaptive-solar-headroom.js";
 import { prepareAdaptiveEvaluation } from "./adaptive-evaluation-lifecycle.js";
+import { observeAwayFuelCell } from "./away-fuel-cell-service.js";
 import { stopOrRefreshActiveCharge } from "./adaptive-charge-stop.js";
 import {
   adaptiveChargingBaseAvailability,
@@ -166,6 +167,7 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
       history: historyStore,
       readOperationalOverrides: dependencies.readOperationalOverrides,
       writeState: writeAdaptiveChargingState,
+      observeAwayFuelCell: (current, periods) => observeAwayFuelCell(current, config, status, periods, now, dependencies.readHistory),
     });
     state = lifecycle.state;
     const awayPeriods = lifecycle.awayPeriods;

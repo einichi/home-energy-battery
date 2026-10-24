@@ -2,12 +2,13 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AwayPeriod } from "../../contracts/away-period.js";
 import type { ApiRouteServices } from "../api.js";
 import type { AwayPeriodsView } from "../../../shared/api-contracts.js";
-import { AwayPeriodRequestSchema, AwayUntilRequestSchema, BackupPreparationRequestSchema, EmptyRequestSchema } from "../../../shared/api-schemas.js";
+import { AwayPeriodRequestSchema, AwayUntilRequestSchema, AwayReserveSettingsRequestSchema, BackupPreparationRequestSchema, EmptyRequestSchema } from "../../../shared/api-schemas.js";
 import { validateRequestBody } from "../request-validation.js";
 import { refreshAdaptivePlan } from "../../services/adaptive-plan-refresh.js";
 import { cachedForecastIsUsable } from "../../domain/adaptive-availability.js";
 
 export type OperationsRouteDependencies = Pick<ApiRouteServices,
+  | "awayReserveService"
   | "adaptiveChargingAvailability" | "adaptiveChargingScheduledEvent"
   | "adaptiveChargingSolarForecastAccuracy" | "adaptiveChargingView" | "appendAdaptiveChargingLog"
   | "assertActionAllowedByOperationalOverride" | "awayPeriodsView"
@@ -41,6 +42,13 @@ export function createOperationsRouteHandler(dependencies: OperationsRouteDepend
     res: ServerResponse,
     url: URL,
   ): Promise<void | false> {
+    if (req.method === "GET" && url.pathname === "/api/away-reserve") {
+      return json(res, 200, await dependencies.awayReserveService.view());
+    }
+    if (req.method === "PATCH" && url.pathname === "/api/away-reserve") {
+      const body = validateRequestBody(await readBody(req), AwayReserveSettingsRequestSchema, requestError);
+      return json(res, 200, await dependencies.awayReserveService.setEnabled(body.enabled === true));
+    }
     if (req.method === "GET" && url.pathname === "/api/away-periods") {
       return json(res, 200, awayPeriodsView() satisfies AwayPeriodsView);
     }

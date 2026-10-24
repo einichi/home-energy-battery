@@ -3,6 +3,8 @@ import type { ApplicationConfig, RetentionConfig } from "../contracts/configurat
 import type { AdaptiveChargingState } from "../domain/adaptive-state.js";
 
 export interface RuntimeCoordinatorDependencies {
+  stopAwayReserve?(): void;
+  startAwayReserve?(): void;
   scheduleIntervalMs: number;
   automationIntervalMs: number;
   defaultUpdateIntervalSeconds: number;
@@ -96,6 +98,7 @@ export function createRuntimeCoordinator(dependencies: RuntimeCoordinatorDepende
   }
 
   function start(): void {
+    dependencies.startAwayReserve?.();
     if (enabled) return;
     enabled = true;
     Promise.all([dependencies.readAdaptiveState(), dependencies.readOperationalOverrides()])
@@ -115,6 +118,7 @@ export function createRuntimeCoordinator(dependencies: RuntimeCoordinatorDepende
   }
 
   function stop(): void {
+    dependencies.stopAwayReserve?.();
     enabled = false;
     if (scheduleTimer) clearInterval(scheduleTimer);
     if (automationTimer) clearInterval(automationTimer);

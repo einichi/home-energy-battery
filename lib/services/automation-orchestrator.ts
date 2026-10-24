@@ -46,6 +46,7 @@ interface NotificationPort {
 }
 
 export interface AutomationOrchestratorDependencies {
+  reconcileAwayReserve?(): Promise<unknown>;
   intervalMs: number;
   forecastRefreshMs: number;
   readConfig(): Promise<ApplicationConfig>;
@@ -101,6 +102,8 @@ export function createAutomationOrchestrator(dependencies: AutomationOrchestrato
   async function run(context: AutomationRunContext = {}): Promise<void> {
     const startedAt = new Date();
     context.startedAt = startedAt.toISOString();
+    // Reserve restoration must run even with all charging/rule automation disabled.
+    await dependencies.reconcileAwayReserve?.();
     context.phase = "loading automation rules";
     const config = await dependencies.readConfig();
     const rules = await dependencies.readAutomationRules();
