@@ -70,7 +70,7 @@ export function awayFuelCellSummary(evidence: AwayFuelCellEvidence): AwayFuelCel
     regime: evidence.regime, reason: evidence.reason, observationFrom: evidence.observationFrom,
     coveragePercent: evidence.coveragePercent, lastReadingAt: evidence.lastReadingAt,
     lastGeneratingAt: evidence.lastGeneratingAt, nextReviewAt: evidence.nextReviewAt,
-    headroomAllowanceRetained: true,
+    headroomAllowanceRetained: evidence.regime !== "off-supported",
   };
 }
 
@@ -92,7 +92,10 @@ export function cleanAwayFuelCellEvidence(input: unknown): AwayFuelCellEvidence 
     coveragePercent: Math.max(0, Math.min(100, finiteNumberOrNull(value.coveragePercent) ?? 0)),
     lastReadingAt: typeof value.lastReadingAt === "string" && Date.parse(value.lastReadingAt) <= evaluatedAt ? value.lastReadingAt : null,
     lastGeneratingAt: typeof value.lastGeneratingAt === "string" && Date.parse(value.lastGeneratingAt) <= evaluatedAt ? value.lastGeneratingAt : null,
-    headroomAllowanceRetained: true,
+    // Preserve the applied policy marker so observation can queue a refresh
+    // when an upgrade changes the headroom policy for an existing quiet trip.
+    headroomAllowanceRetained: typeof value.headroomAllowanceRetained === "boolean"
+      ? value.headroomAllowanceRetained : value.regime !== "off-supported",
     intervals: (Array.isArray(value.intervals) ? value.intervals : []).filter((entry) => entry
       && Number.isFinite(entry.startMs) && Number.isFinite(entry.endMs) && entry.endMs > entry.startMs
       && entry.endMs <= evaluatedAt
@@ -155,6 +158,7 @@ export function inferAwayFuelCell(
   const intervals = same ? [...prior.intervals] : [];
   let lastReading = same && prior.lastReadingAt ? Date.parse(prior.lastReadingAt) : null;
   let lastGenerating = same && prior.lastGeneratingAt ? Date.parse(prior.lastGeneratingAt) : null;
+  let lastConflictingReading: number | null = null;
   const readings = samples.flatMap((sample) => {
     const at = Date.parse(sample.timestamp ?? "");
     const rollup = sample.rollupStart !== undefined || sample.rollupEnd !== undefined;
@@ -177,6 +181,7 @@ export function inferAwayFuelCell(
     const reading = readings[index]!;
     if ((reading.rollup ? reading.end > observationStart : reading.end >= observationStart) && reading.end <= windowEnd) {
       if (reading.reliable && reading.at >= observationStart) lastReading = Math.max(lastReading ?? 0, reading.at);
+      if (!reading.reliable && reading.at >= observationStart) lastConflictingReading = Math.max(lastConflictingReading ?? 0, reading.at);
       // A boundary-straddling rollup cannot locate its generation after departure.
       if (reading.generating && reading.start >= observationStart) lastGenerating = Math.max(lastGenerating ?? 0, reading.end);
     }
@@ -211,7 +216,12 @@ export function inferAwayFuelCell(
   const sustained = merged.some((entry) => entry.generating && (entry.endMs - entry.startMs) * entry.coverage >= SUSTAINED_GENERATION_MS);
   let regime: AwayFuelCellRegime = "provisional-off";
   let reason: AwayFuelCellReason = "observing";
-  if (nowMs >= observationStart && (!fresh || (duration >= MILLISECONDS_PER_DAY && (coveragePercent < 90 || maximumGap > 60 * 60_000)))) {
+  if (lastConflictingReading !== null && lastConflictingReading >= (lastReading ?? 0)) {
+    // Fresh active/transition status with zero power contradicts being off.
+    // Withdraw released headroom immediately, without waiting for staleness.
+    regime = "uncertain";
+    reason = "insufficient-coverage";
+  } else if (nowMs >= observationStart && (!fresh || (duration >= MILLISECONDS_PER_DAY && (coveragePercent < 90 || maximumGap > 60 * 60_000)))) {
     regime = "uncertain";
     reason = !fresh ? "stale-readings" : "insufficient-coverage";
   } else if (sustained || (same && prior.regime === "normal-model" && !quietCycle)) {
@@ -236,7 +246,7 @@ export function inferAwayFuelCell(
     lastGeneratingAt: lastGenerating === null ? null : new Date(lastGenerating).toISOString(),
     evaluatedAt: now.toISOString(),
     nextReviewAt: new Date(Math.max(nowMs, observationStart) + (duration < MILLISECONDS_PER_DAY ? Math.max(0, MILLISECONDS_PER_DAY - duration) : 60 * 60_000)).toISOString(),
-    headroomAllowanceRetained: true,
+    headroomAllowanceRetained: regime !== "off-supported",
     intervals: merged,
   };
 }

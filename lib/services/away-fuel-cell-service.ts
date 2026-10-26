@@ -21,7 +21,7 @@ export async function observeAwayFuelCell(
   const evidence = activeAwayFuelCellEvidence(config, periods, samples, now, previous);
   state.awayFuelCell = evidence;
   const identity = (value: typeof evidence) => value
-    ? [value.periodId, value.from, value.deviceKey, value.regime, value.reason].join(":") : "none";
+    ? [value.periodId, value.from, value.deviceKey, value.regime, value.reason, value.headroomAllowanceRetained].join(":") : "none";
   if (identity(evidence) !== identity(previous)) {
     const reason = evidence
       ? `Away Ene-Farm forecast: ${evidence.regime} (${evidence.reason})`

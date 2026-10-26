@@ -100,11 +100,16 @@ export function planChronologicalDiscountedCharging({
       const nextWindow = windows[windowIndex + 1] ?? null;
       const boundaryIndex = nextWindow?.startIndex ?? timeline.length;
       const rangeNeeds = cumulativeRangeNeeds(timeline, window.endIndex, boundaryIndex, chargeConversion, maximumChargeWatts);
-      const solarHeadroomKwh = Math.min(
+      const requestedHeadroomKwh = Math.min(
         Math.max(0, maximumTargetKwh - dischargeFloorKwh),
         rangeNeeds.maximumSurplusKwh,
       );
-      const headroomTargetKwh = Math.max(dischargeFloorKwh, maximumTargetKwh - solarHeadroomKwh);
+      // The low-generation scenario must bridge to the next charging window.
+      // Reserving space for an uncertain upper-generation scenario must not
+      // force grid purchases before then. Honor the user's maximum SOC cap.
+      const minimumBridgeKwh = Math.min(maximumTargetKwh, dischargeFloorKwh + rangeNeeds.maximumDeficitKwh);
+      const headroomTargetKwh = Math.max(dischargeFloorKwh, maximumTargetKwh - requestedHeadroomKwh, minimumBridgeKwh);
+      const solarHeadroomKwh = Math.max(0, maximumTargetKwh - headroomTargetKwh);
       const cheaperWindowAhead = Boolean(nextWindow && nextWindow.yenPerKwh < window.yenPerKwh);
       const bridgeTargetKwh = Math.min(
         headroomTargetKwh,

@@ -201,11 +201,18 @@ zero. Evidence survives restarts and extensions, and resets on device replacemen
 or a changed departure time. The Automation view explains the assumption in
 English and Japanese.
 
-Away suppresses the P20/median expectation only. The baseline P80 generation
-estimate still reserves battery headroom, and historical-support checks remain
-in place. The off expectation is a policy assumption, not a calibrated zero-P80
-forecast. The fuel-cell adjustment ends at the exact return time, independently
-of the household-demand return buffer. No ENE-FARM commands are issued.
+Provisional Away periods suppress the P20/median expectation while retaining the
+baseline P80 estimate for headroom. A full, fresh, well-covered quiet cycle also
+sets the upper scenario to zero for the rest of the Away period; stale readings
+or renewed generation restore the baseline allowance. This is a policy scenario,
+not an empirically calibrated zero-P80 forecast. Historical-support checks remain
+in place. The adjustment ends at the exact return time, independently of the
+household-demand return buffer. No ENE-FARM commands are issued.
+
+Headroom cannot reduce the charge target below the low-generation energy needed
+to reach the next discounted window (or the end of the planning horizon), subject
+to the configured maximum SOC. Remaining space still accommodates forecast
+surplus. Insufficient charging time/power is reported as a shortfall.
 
 Ene-Farm generation forecasts also use the observed 0–5 hot-water level for
 targets up to six hours ahead. Historical days must match the tank level at the
@@ -213,8 +220,8 @@ equivalent **forecast origin**, not at the future target time. At least four
 matching days and a level reading no older than 45 minutes are required;
 otherwise the existing time/season/temperature/occupancy/state forecast is used.
 The level is not treated as a calibrated volume or a fixed amount of electricity.
-Charging still prioritizes headroom preservation using the P80 generation
-forecast; this conditioning does not change that policy. Plan diagnostics expose
+Charging uses the P80 generation forecast to preserve headroom after covering
+the bridge to the next charging window. Plan diagnostics expose
 `fuelCellModel.recentHotWaterLevel` and `hotWaterConditionedSlotCount`.
 
 Adaptive Charging continues using a still-fresh cached solar forecast after a
@@ -234,8 +241,9 @@ Partial rollups are prorated when clipping boundaries, assuming uniform energy
 within the recorded interval. AUTO charging is bounded by the known charging
 power; no discharge-power or inverter limit is invented where none is configured.
 
-Planner model version 3 adds Away ENE-FARM inference. Its snapshots are scored
-separately from version 2. The offline fuel-cell comparison also reports Away
+Planner model version 4 releases ENE-FARM headroom after confirmed Away silence
+and prioritizes the energy bridge to the next charging window. Its snapshots
+are scored separately from earlier versions. The offline fuel-cell comparison also reports Away
 results by trip, trip day and inferred state, plus generation-energy error over
 measurable intervals using one forecast per target. It replays evidence in time
 order; these forecast metrics do not establish charging savings.

@@ -14,6 +14,13 @@
     "forecastFetchedAt": "2026-01-01T00:00:00.000Z",
     "slots": [
       {
+        "start": "2026-01-02T02:30:21.848Z",
+        "end": "2026-01-02T03:00:00.000Z",
+        "targetWh": 854,
+        "label": "Night",
+        "yenPerKwh": 12
+      },
+      {
         "start": "2026-01-02T21:51:13.716Z",
         "end": "2026-01-02T23:00:00.000Z",
         "targetWh": 2084,
@@ -21,14 +28,14 @@
         "yenPerKwh": 12
       }
     ],
-    "timelineLength": 95,
+    "timelineLength": 96,
     "currentSocPercent": 50,
     "targetSocPercent": 100,
     "expectedSunsetSocPercent": 100,
     "predictedSolarKwh": 30.186000000000025,
     "predictedDemandKwh": 25.81000000000001,
     "predictedSurplusKwh": 15.805999999999994,
-    "plannedChargeKwh": 2.084,
+    "plannedChargeKwh": 2.9379999999999997,
     "demandHistory": {
       "recordedDayCount": 12,
       "validDayCount": 12,

@@ -49,6 +49,15 @@ every forecast quantile zero.
 
 ## Proposed policy
 
+October 26 correction: planner version 4 sets the upper scenario to zero only
+after a full, fresh, well-covered quiet cycle. Provisional and uncertain periods
+retain the baseline upper scenario. A generation observation or stale evidence
+restores that allowance and queues a refresh, including upgrades from a stored
+quiet-trip policy that retained headroom. Across all regimes, headroom yields to
+the low-generation energy needed before the next charging window, capped by the
+configured maximum SOC. Physical charging shortfalls remain visible. The zero
+upper scenario is a policy decision, not an empirical quantile calibration.
+
 | State | Interpretation | Forecast behavior within this period |
 | --- | --- | --- |
 | Provisional off | Period has begun, or is scheduled; insufficient post-departure evidence | Off expectation for P20/median; retain a supported upper-generation scenario for headroom |

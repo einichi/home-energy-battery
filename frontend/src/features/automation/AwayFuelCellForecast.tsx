@@ -30,7 +30,7 @@ export function AwayFuelCellForecast({ forecasts }: { forecasts: AwayFuelCellSum
         coverage: Math.round(forecast.coveragePercent),
         at: forecast.lastReadingAt ? formatDateTime(forecast.lastReadingAt) : t("unavailable"),
       })}</p>
-      {forecast.headroomAllowanceRetained ? <p className="panel-note">{t("awayFuelCellHeadroom")}</p> : null}
+      <p className="panel-note">{t(forecast.headroomAllowanceRetained ? "awayFuelCellHeadroom" : "awayFuelCellHeadroomReleased")}</p>
     </div>)}
   </div>;
 }

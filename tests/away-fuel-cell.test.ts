@@ -31,9 +31,10 @@ test("a full covered cycle supports off, with no invented coverage or duplicate 
   assert.equal(evidence.regime, "off-supported");
   assert.equal(evidence.coveragePercent, 100);
   assert.equal(evidence.intervals.length, 1, "adjacent evidence is compacted for durable storage");
-  assert.equal(evidence.headroomAllowanceRetained, true);
+  assert.equal(evidence.headroomAllowanceRetained, false);
   const partial = inferAwayFuelCell(period, config.fuelCellPrimaryHost, quiet(start, 3), new Date(start + 1.5 * hour));
   assert.equal(partial.regime, "provisional-off", "midnight must not complete the first observation cycle");
+  assert.equal(partial.headroomAllowanceRetained, true);
 });
 
 test("missing, stale, sparse and conflicting telemetry cannot confirm off", () => {
@@ -56,6 +57,7 @@ test("generation withdraws off immediately; sustained generation selects normal;
   const detected = inferAwayFuelCell(period, config.fuelCellPrimaryHost, [instant], new Date(start + 24 * hour + 60_000), off);
   assert.equal(detected.reason, "generation-detected");
   assert.equal(detected.regime, "uncertain");
+  assert.equal(detected.headroomAllowanceRetained, true);
   const normal = inferAwayFuelCell(period, config.fuelCellPrimaryHost, [rollup(start + 24 * hour, 700)], new Date(start + 24.5 * hour), detected);
   assert.equal(normal.regime, "normal-model");
   const later = inferAwayFuelCell(period, config.fuelCellPrimaryHost, quiet(start + 25 * hour), new Date(start + 49 * hour), normal);
@@ -150,7 +152,7 @@ test("historical occupancy is matched by interval rather than noon on departure 
   assert.equal(model.forecastAt(now).medianW, 700);
 });
 
-test("provisional/supported off changes expectation, retains supported headroom, and respects exact return", () => {
+test("confirmed off releases ENE-FARM headroom and respects exact return", () => {
   const now = new Date(start + 24 * hour);
   const target = new Date(now.getTime() + hour);
   const data = [...historicalGeneration(now), ...quiet()];
@@ -160,9 +162,11 @@ test("provisional/supported off changes expectation, retains supported headroom,
   assert.equal(forecast.awayRegime, "off-supported");
   assert.equal(forecast.medianW, 0);
   assert.equal(forecast.p20W, 0);
-  assert.equal(forecast.p80W, 700);
+  assert.equal(forecast.p80W, 0);
+  assert.equal(model.awayForecasts[0]!.headroomAllowanceRetained, false);
   assert.ok(forecast.sampleCount >= 4);
   assert.equal(model.forecastAt(new Date(Date.parse(period.until))).awayRegime, null);
+  assert.equal(model.forecastAt(new Date(Date.parse(period.until))).p80W, 700);
   const beforeReturn = new Date(Date.parse(period.until) - 5 * 60_000);
   assert.equal(model.forecastAt(beforeReturn).medianW, 0, "fuel-cell policy continues inside the demand return buffer");
   const observe = buildFuelCellGenerationModel({ ...config, fuelCell: { includeInAdaptiveCharging: false } }, data, now, { awayPeriods: [period] });
@@ -182,8 +186,58 @@ test("normal and uncertain regimes use the ordinary generation model; scheduled 
   const scheduled = buildFuelCellGenerationModel(config, [...data, ...quiet(start + 24 * hour)], new Date(start - hour), { awayPeriods: [period] });
   assert.equal(scheduled.forecastAt(new Date(start + hour)).awayRegime, "provisional-off");
   assert.equal(scheduled.forecastAt(new Date(start + hour)).medianW, 0);
+  assert.equal(scheduled.forecastAt(new Date(start + hour)).p80W, 700);
+  assert.equal(scheduled.awayForecasts[0]!.headroomAllowanceRetained, true);
   const uncertain = buildFuelCellGenerationModel(config, historicalGeneration(now), now, { awayPeriods: [period] });
   assert.equal(uncertain.forecastAt(new Date(start + hour)).medianW, 700);
+  assert.equal(uncertain.forecastAt(new Date(start + hour)).p80W, 700);
+});
+
+test("stale or renewed generation restores the upper scenario after confirmed silence", () => {
+  const now = new Date(start + 24 * hour);
+  const off = inferAwayFuelCell(period, config.fuelCellPrimaryHost, quiet(), now);
+  const history = [...historicalGeneration(now), ...quiet()];
+  const staleAt = new Date(now.getTime() + hour);
+  const stale = buildFuelCellGenerationModel(config, history, staleAt, { awayPeriods: [period], awayFuelCell: off });
+  assert.equal(stale.awayForecasts[0]!.regime, "uncertain");
+  assert.equal(stale.awayForecasts[0]!.headroomAllowanceRetained, true);
+  assert.equal(stale.forecastAt(new Date(staleAt.getTime() + hour)).p80W, 700);
+  const resumedAt = new Date(now.getTime() + 60_000);
+  const resumed = buildFuelCellGenerationModel(config,
+    [...history, { timestamp: resumedAt.toISOString(), fuelCellPowerW: 700 }], resumedAt,
+    { awayPeriods: [period], awayFuelCell: off });
+  assert.equal(resumed.awayForecasts[0]!.reason, "generation-detected");
+  assert.equal(resumed.forecastAt(new Date(resumedAt.getTime() + hour)).p80W, 700);
+});
+
+test("fresh contradictory status immediately withdraws confirmed off headroom", () => {
+  const now = new Date(start + 24 * hour);
+  const off = inferAwayFuelCell(period, config.fuelCellPrimaryHost, quiet(), now);
+  const at = now.getTime() + 60_000;
+  for (const state of ["starting", "generating", "stopping"]) {
+    const evidence = inferAwayFuelCell(period, config.fuelCellPrimaryHost,
+      [{ timestamp: iso(at), fuelCellPowerW: 0, fuelCellGenerationState: state }], new Date(at), off);
+    assert.equal(evidence.regime, "uncertain", state);
+    assert.equal(evidence.headroomAllowanceRetained, true);
+    const resolved = inferAwayFuelCell(period, config.fuelCellPrimaryHost,
+      [{ timestamp: iso(at), fuelCellPowerW: 0, fuelCellGenerationState: state },
+        { timestamp: iso(at + 30_000), fuelCellPowerW: 0, fuelCellGenerationState: "stopped" }],
+      new Date(at + 30_000), evidence);
+    assert.equal(resolved.regime, "off-supported", "a newer reliable reading resolves the conflicting status");
+  }
+});
+
+test("upgrading a quiet trip that retained headroom queues one immediate policy refresh", async () => {
+  const now = new Date(start + 24 * hour);
+  const legacy = { ...inferAwayFuelCell(period, config.fuelCellPrimaryHost, quiet(), now), headroomAllowanceRetained: true };
+  const state = cleanAdaptiveChargingState({ awayFuelCell: legacy });
+  const status = { read_at: now.toISOString(), energy: { battery: {}, fuel_cells: [] } };
+  await observeAwayFuelCell(state, config, status, [period], now, async () => quiet());
+  assert.equal(state.awayFuelCell?.headroomAllowanceRetained, false);
+  assert.ok(state.pendingPlanRequestId);
+  const request = state.pendingPlanRequestId;
+  await observeAwayFuelCell(state, config, status, [period], now, async () => quiet());
+  assert.equal(state.pendingPlanRequestId, request);
 });
 
 test("observation queues one refresh per transition and works while operational control is blocked", async () => {
@@ -255,4 +309,44 @@ test("planning splits exact Away boundaries while retaining Away demand and the 
   assert.ok("requiredGridChargeKwh" in baseline && "predictedFuelCellKwh" in baseline);
   assert.ok(Number(plan.requiredGridChargeKwh) >= Number(baseline.requiredGridChargeKwh));
   assert.ok(Number(plan.predictedFuelCellKwh) < Number(baseline.predictedFuelCellKwh));
+});
+
+test("a quiet Away trip with today's tariffs charges through the evening instead of stopping near 26%", () => {
+  const now = new Date(start + 2 * 24 * hour); now.setHours(11, 0, 0, 0);
+  const dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0);
+  const trip = { ...period, from: iso(now.getTime() - 24 * hour), until: iso(now.getTime() + 3 * 24 * hour) };
+  const planningConfig = cleanConfig({ ...config, solarEnabled: true, smartCosmoEnabled: true, rateMode: "multi",
+    standardRateYenPerKwh: 25.77, rateBands: [
+      { start: "01:00", end: "05:00", yenPerKwh: 14.6, label: "Night" },
+      { start: "11:00", end: "13:00", yenPerKwh: 12.6, label: "Day" },
+    ], batteryCapabilities: { usableCapacityKwh: 5.4, maximumChargeWatts: 2_192 },
+    adaptiveCharging: { enabled: true, latitude: 35, longitude: 139, arrayPeakKw: 1.9, targetSocPercent: 100 },
+    settingCache: { discharge_limit: { lastKnown: { decoded: { percent: 0 } }, lastReadAt: now.toISOString() } },
+  });
+  const forecast = { fetchedAt: now.toISOString(), timezone: "Asia/Tokyo", utcOffsetSeconds: 32_400, latitude: 35, longitude: 139,
+    hours: Array.from({ length: 72 }, (_, index) => ({ timestamp: iso(dayStart.getTime() + index * hour), tiltedIrradianceWm2: 0 })),
+    days: Array.from({ length: 3 }, (_, offset) => {
+      const date = new Date(dayStart); date.setDate(date.getDate() + offset);
+      const sunset = new Date(date); sunset.setHours(17);
+      return { date: localDayKey(date), sunrise: null, sunset: sunset.toISOString() };
+    }),
+  };
+  const demandDays = Array.from({ length: 21 }, (_, index) => {
+    const date = new Date(dayStart); date.setDate(date.getDate() - index - 2);
+    return { key: localDayKey(date), date, values: new Map(Array.from({ length: 48 }, (_, bucket) => [bucket, 300])),
+      coverageByBucket: new Map(Array.from({ length: 48 }, (_, bucket) => [bucket, 1_800])), coverage: 1, daytimeCoverage: 1 };
+  });
+  const samples = [...historicalGeneration(now), ...quiet(Date.parse(trip.from)),
+    { timestamp: now.toISOString(), stateOfChargePercent: 0 }];
+  const plan = buildAdaptiveChargingPlan({ config: planningConfig, state: { forecast }, samples,
+    historicalDemandDays: demandDays, awayPeriods: [trip], now });
+  assert.equal(plan.available, true, String(plan.reason));
+  assert.ok("windows" in plan && "fuelCellModel" in plan);
+  assert.equal(plan.fuelCellModel.awayForecasts?.[0]?.headroomAllowanceRetained, false);
+  assert.ok(plan.timeline.every((slot) => slot.fuelCellP80W === 0));
+  assert.equal(plan.windows[0]!.solarHeadroomKwh, 0);
+  assert.equal(plan.windows[0]!.targetSocPercent, 100);
+  assert.ok(plan.windows[0]!.predictedEndStoredKwh >= 3.6, "midday charging covers 12 hours of Away demand");
+  assert.ok(plan.windows[1]!.storedAtStartKwh > 0, "the battery reaches the next discounted window with energy remaining");
+  assert.ok(plan.plannedChargeKwh > 1.385, "the previous 1.385 kWh midday budget was insufficient");
 });

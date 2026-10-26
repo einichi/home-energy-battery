@@ -8,7 +8,7 @@ import { adaptiveChargingWindowSolarOpportunity } from "./adaptive-control/solar
 export const BACKTEST_ENGINE_VERSION = 2;
 export const CURRENT_BACKTEST_MODEL = Object.freeze({
   id: "adaptive-planner",
-  version: "3",
+  version: "4",
   label: "Current Adaptive Charging planner",
 });
 

@@ -349,7 +349,9 @@ export function buildFuelCellGenerationModel(
     return {
       p20W: assumeOff ? 0 : percentile(values, 0.2) ?? 0,
       medianW: assumeOff ? 0 : median(values) ?? 0,
-      p80W: percentile(values, 0.8) ?? 0,
+      // Only a covered, fresh quiet cycle releases the baseline headroom.
+      // Provisional or uncertain trips keep their upper-generation scenario.
+      p80W: awayForecast?.regime === "off-supported" ? 0 : percentile(values, 0.8) ?? 0,
       sampleCount: values.length,
       hotWaterConditioned,
       awayRegime: awayForecast?.regime ?? null,

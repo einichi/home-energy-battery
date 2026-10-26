@@ -16,9 +16,11 @@ describe("Away ENE-FARM forecast explanation", () => {
     expect(screen.getByText("Assumed off — observing")).toBeVisible();
     expect(screen.getByText(/Observation coverage: 95%/)).toBeVisible();
     expect(screen.getByText(/Battery headroom still allows for generation/)).toBeVisible();
-    rerender(<AwayFuelCellForecast forecasts={[{ ...forecast, regime: "off-supported", reason: "quiet-cycle" }]} />);
+    rerender(<AwayFuelCellForecast forecasts={[{ ...forecast, regime: "off-supported", reason: "quiet-cycle", headroomAllowanceRetained: false }]} />);
     expect(screen.getByText("Off supported by measurements")).toBeVisible();
     expect(screen.queryByText("Assumed off — observing")).not.toBeInTheDocument();
+    expect(screen.getByText(/A full quiet observation cycle supports reserving no space/)).toBeVisible();
+    expect(screen.queryByText(/Battery headroom still allows for generation/)).not.toBeInTheDocument();
   });
 
   it("explains normal generation separately from missing observations", () => {
