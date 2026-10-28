@@ -200,7 +200,7 @@ function FlowNode({ node, className, tone, label, value, title, children }: {
   return (
     <div className={`flow-node ${className}`} data-tone={tone} data-flow-node={node} title={title}>
       <div className="flow-node-heading"><FlowIcon type={tone} /><span>{label ?? children}</span></div>
-      <strong key={formatted}>{formatted}</strong>
+      <strong>{formatted}</strong>
     </div>
   );
 }
