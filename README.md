@@ -74,7 +74,9 @@ The integrated status service reads:
 Overview's Energy flow card uses moving dots to show power direction, with
 line thickness and dot size indicating power magnitude. Dot size scales up to
 5 kW by default, or the configured Demand Guard breaker limit (amps × voltage,
-before reserve) when present, and is capped above that limit. Motion stops for
+before reserve) when present, and is capped above that limit. Dots fade in at the
+source and shrink into the destination arrowhead. Live power changes resize dots
+smoothly; flows fade when starting, stopping, or reversing direction. Motion stops for
 stale or unavailable readings, hidden tabs, offscreen cards, and reduced-motion
 preferences; static arrows and readings remain available.
 

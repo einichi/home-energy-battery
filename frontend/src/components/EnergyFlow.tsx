@@ -35,6 +35,7 @@ export type FlowConnector = {
 /** Breakpoint must stay in sync with the `.energy-flow` media query in components.css. */
 const MOBILE_QUERY = "(max-width: 680px)";
 const DOT_PHASES = [0, 1, 2] as const;
+const FLOW_FADE_MS = 350;
 
 function batteryState(power: number | null) {
   if (power === null) return "Battery";
@@ -208,15 +209,56 @@ function Marker({ id, color, size }: { id: string; color: string; size: number }
   return <marker id={id} viewBox="0 0 10 10" refX="10" refY="5" markerUnits="userSpaceOnUse" markerWidth={size} markerHeight={size} orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill={color} /></marker>;
 }
 
-function FlowConnection({ connector, animate, powerLimitWatts }: { connector: FlowConnector; animate: boolean; powerLimitWatts: number }) {
+function FlowDots({ connector, duration, absorbAt, powerLimitWatts }: { connector: FlowConnector; duration: number; absorbAt: number; powerLimitWatts: number }) {
+  const [displayed, setDisplayed] = useState(connector);
+  const visible = connector.active && displayed.target === connector.target;
+
+  // Apply magnitude changes without replacing the running animation elements.
+  if (connector !== displayed && connector.active && (!displayed.active || displayed.target === connector.target)) {
+    setDisplayed(connector);
+  }
+
+  useEffect(() => {
+    // Keep the last moving dots in place during their exit fade. A reversal starts
+    // its new journey only after the previous direction has faded away.
+    if (connector === displayed) return;
+    const timeout = window.setTimeout(() => setDisplayed(connector), FLOW_FADE_MS);
+    return () => window.clearTimeout(timeout);
+  }, [connector, displayed]);
+
+  const radius = 1.5 + 3.5 * Math.min(1, Math.abs(displayed.powerW ?? 0) / powerLimitWatts);
+
+  return displayed.active ? (
+    <g key={displayed.target} className="flow-dots" data-active={visible || undefined} style={{ "--flow-fade-duration": `${FLOW_FADE_MS}ms` } as CSSProperties}>
+      {DOT_PHASES.map((index) => {
+        const timing = { dur: `${duration}s`, begin: `${-index * duration / 3}s`, repeatCount: "indefinite" } as const;
+        return (
+          <g key={index}>
+            <animateMotion path={displayed.path} {...timing} calcMode="paced" />
+            <g>
+              {/* Shrink over the physical length of the arrowhead, right into its tip. */}
+              <animateTransform attributeName="transform" type="scale" values="1;1;0" keyTimes={`0;${absorbAt};1`} {...timing} />
+              <circle className={`flow-dot flow-dot-${connector.id}`} r={radius}>
+                <animate attributeName="opacity" values="0;1;1" keyTimes="0;0.12;1" {...timing} />
+              </circle>
+            </g>
+          </g>
+        );
+      })}
+    </g>
+  ) : null;
+}
+
+function FlowConnection({ connector, animate, powerLimitWatts, markerSize }: { connector: FlowConnector; animate: boolean; powerLimitWatts: number; markerSize: number }) {
   const pathRef = useRef<SVGPathElement>(null);
-  const [duration, setDuration] = useState(4);
+  const [pathLength, setPathLength] = useState(165);
 
   useLayoutEffect(() => {
     const length = pathRef.current?.getTotalLength?.();
-    if (length !== undefined) setDuration(Math.max(2, Math.min(8, length / 55)) / 0.75);
+    if (length !== undefined) setPathLength(length);
   }, [connector.path]);
-  const radius = 1.5 + 3.5 * Math.min(1, Math.abs(connector.powerW ?? 0) / powerLimitWatts);
+  const duration = Math.max(2, Math.min(8, pathLength / 55)) / 0.75;
+  const absorbAt = Math.max(0.12, 1 - markerSize / Math.max(1, pathLength));
 
   return (
     <g>
@@ -227,19 +269,9 @@ function FlowConnection({ connector, animate, powerLimitWatts }: { connector: Fl
         data-target={connector.target}
         d={connector.path}
         style={{ "--flow-width": connector.weight } as CSSProperties}
-        markerEnd={connector.active ? `url(#flow-arrow-${connector.id})` : undefined}
+        markerEnd={`url(#flow-arrow-${connector.id})`}
       />
-      {animate && connector.active ? DOT_PHASES.map((index) => (
-        <circle key={index} className={`flow-dot flow-dot-${connector.id}`} r={radius}>
-          <animateMotion
-            path={connector.path}
-            dur={`${duration}s`}
-            begin={`${-index * duration / 3}s`}
-            repeatCount="indefinite"
-            calcMode="paced"
-          />
-        </circle>
-      )) : null}
+      {animate ? <FlowDots connector={connector} duration={duration} absorbAt={absorbAt} powerLimitWatts={powerLimitWatts} /> : null}
     </g>
   );
 }
@@ -369,7 +401,7 @@ export function EnergyFlow({ solar, fuelCell, battery, demand, gridImport, gridE
             <Marker id="flow-arrow-grid" color="var(--grid)" size={markerSize} />
           </defs>
           {geometry.connectors.map((connector) => (
-            <FlowConnection key={connector.id} connector={connector} animate={live && motionEnabled} powerLimitWatts={powerLimitWatts} />
+            <FlowConnection key={connector.id} connector={connector} animate={live && motionEnabled} powerLimitWatts={powerLimitWatts} markerSize={markerSize} />
           ))}
         </svg>
       ) : null}

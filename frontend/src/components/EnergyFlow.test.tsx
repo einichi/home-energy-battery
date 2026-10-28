@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EnergyFlow, computeFlowConnectors } from "./EnergyFlow";
 import type { FlowVisibility } from "./EnergyFlow";
@@ -165,6 +165,7 @@ function mockLayout(rects: Record<string, Rect>, container: Rect, mobile = false
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 const baseProps = {
@@ -232,6 +233,7 @@ describe("EnergyFlow", () => {
   });
 
   it("scales dot size against the upper limit even after line width saturates, and caps overshoot", () => {
+    vi.useFakeTimers();
     mockLayout(desktopRects, { left: 0, top: 0, right: 600, bottom: 300 });
     const { container, rerender } = render(<EnergyFlow {...baseProps} solar={3_500} battery={-3_500} />);
     const initial = Number(container.querySelector(".flow-dot-solar")?.getAttribute("r"));
@@ -240,6 +242,8 @@ describe("EnergyFlow", () => {
 
     rerender(<EnergyFlow {...baseProps} solar={4_500} battery={0} />);
     expect(Number(container.querySelector(".flow-dot-solar")?.getAttribute("r"))).toBeGreaterThan(initial);
+    expect(container.querySelector(".flow-dot-battery")?.closest(".flow-dots")).not.toHaveAttribute("data-active");
+    act(() => vi.advanceTimersByTime(350));
     expect(container.querySelector(".flow-dot-battery")).not.toBeInTheDocument();
 
     rerender(<EnergyFlow {...baseProps} solar={4_500} battery={0} powerLimitWatts={9_000} />);
@@ -247,5 +251,33 @@ describe("EnergyFlow", () => {
 
     rerender(<EnergyFlow {...baseProps} solar={12_000} battery={0} powerLimitWatts={9_000} />);
     expect(Number(container.querySelector(".flow-dot-solar")?.getAttribute("r"))).toBe(5);
+  });
+
+  it("preserves each dot's journey on power updates and fades out the old direction before reversing", () => {
+    vi.useFakeTimers();
+    mockLayout(desktopRects, { left: 0, top: 0, right: 600, bottom: 300 });
+    const { container, rerender } = render(<EnergyFlow {...baseProps} battery={480} />);
+    const dot = container.querySelector(".flow-dot-battery");
+    const motion = dot?.parentElement?.parentElement?.querySelector("animateMotion");
+    const chargingPath = motion?.getAttribute("path");
+
+    rerender(<EnergyFlow {...baseProps} battery={1200} />);
+    expect(container.querySelector(".flow-dot-battery")).toBe(dot);
+    expect(dot?.parentElement?.parentElement?.querySelector("animateMotion")).toBe(motion);
+    expect(motion).toHaveAttribute("path", chargingPath);
+
+    rerender(<EnergyFlow {...baseProps} battery={-900} />);
+    expect(dot?.closest(".flow-dots")).not.toHaveAttribute("data-active");
+    expect(motion).toHaveAttribute("path", chargingPath);
+    act(() => vi.advanceTimersByTime(350));
+    const reversedDot = container.querySelector(".flow-dot-battery");
+    expect(reversedDot?.closest(".flow-dots")).toHaveAttribute("data-active", "true");
+    expect(reversedDot?.parentElement?.parentElement?.querySelector("animateMotion")?.getAttribute("path")).not.toBe(chargingPath);
+
+    // Returning to idle retains the discharge geometry until its dots have faded.
+    rerender(<EnergyFlow {...baseProps} battery={0} />);
+    expect(reversedDot?.closest(".flow-dots")).not.toHaveAttribute("data-active");
+    act(() => vi.advanceTimersByTime(350));
+    expect(container.querySelector(".flow-dot-battery")).not.toBeInTheDocument();
   });
 });
