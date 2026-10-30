@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { Link } from "react-router-dom";
 import { EnergyFlow } from "../../components/EnergyFlow";
 import { EnergyPeriodSections } from "../../components/EnergyPeriodSections";
@@ -37,6 +37,7 @@ export function OverviewPage() {
   const { t } = useTranslation("overview");
   const { config, status, loadingState, manualRefreshing, error, refresh: refreshStatus } = useEnergyStatus();
   const { rules, error: rulesError, refresh: refreshRules, replaceRules } = useAutomationRules();
+  const refreshButtonRef = useRef<HTMLButtonElement>(null);
   const todayStart = useMemo(() => {
     const value = new Date();
     value.setHours(0, 0, 0, 0);
@@ -97,6 +98,7 @@ export function OverviewPage() {
         <div className="button-row">
           <button
             className="quiet-button"
+            ref={refreshButtonRef}
             type="button"
             onClick={() => {
               refreshStatus();
@@ -106,14 +108,6 @@ export function OverviewPage() {
           >
             {t(manualRefreshing ? "Refreshing…" : "Refresh")}
           </button>
-          <DemandGuardRestoreControl
-            rules={rules}
-            onRestored={(nextRules) => {
-              replaceRules(nextRules);
-              refreshRules();
-              refreshStatus();
-            }}
-          />
         </div>
       </header>
 
@@ -128,6 +122,17 @@ export function OverviewPage() {
           {formatDateTimesInText(rulesError)}
         </div>
       ) : null}
+      <DemandGuardRestoreControl
+        rules={rules}
+        rulesError={rulesError}
+        refreshRules={refreshRules}
+        returnFocusRef={refreshButtonRef}
+        onRestored={(nextRules) => {
+          replaceRules(nextRules);
+          refreshStatus();
+        }}
+      />
+
 
       <section className="mobile-operating-summary" aria-label={t("currentOperatingSummary")}>
         <div><span>{t(gridExport != null && gridExport > 0 ? "Grid export" : "Grid import")}</span><strong>{formatPower(gridExport != null && gridExport > 0 ? gridExport : gridImport)}</strong></div>

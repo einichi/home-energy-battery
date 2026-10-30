@@ -80,6 +80,17 @@ smoothly; flows fade when starting, stopping, or reversing direction. Motion sto
 stale or unavailable readings, hidden tabs, offscreen cards, and reduced-motion
 preferences; static arrows and readings remain available.
 
+Demand Guard restoration appears in a contextual panel below the Overview heading
+and in Automation. It is hidden while protection is monitoring normally or is
+disabled. An unresolved intervention, failed restoration, or unavailable protection
+check keeps the panel visible. Backup Preparation policies that disallow intervention
+offer a policy-review link instead of a restore action. Returning to Auto manually
+skips the normal recovery threshold and delay; it does not force charging or disable
+protection. Successful restoration remains visible for **30 seconds**, then the
+entire panel disappears. A new intervention cancels that dismissal and reopens the
+panel. If keyboard focus is inside the success panel when it disappears, focus
+returns to Overview's Refresh button or Automation's Active protections heading.
+
 The HTTP service is intentionally unauthenticated and intended only for a trusted
 local network. Access it with an IPv4 or bracketed IPv6 literal, `localhost`, a
 single-label LAN hostname, or a name below `.local`, `.home.arpa`, or `.internal`.

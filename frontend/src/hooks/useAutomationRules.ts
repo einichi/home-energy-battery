@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getAutomationRules } from "../api/automation";
 import type { AutomationRule } from "../api/contracts";
 import { useEnergyStatus } from "./useEnergyStatus";
@@ -9,12 +9,14 @@ export function useAutomationRules() {
   const [rules, setRules] = useState<AutomationRule[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [sequence, setSequence] = useState(0);
+  const rulesRevision = useRef(0);
 
   const refresh = useCallback(() => {
     setSequence((value) => value + 1);
   }, []);
 
   const replaceRules = useCallback((nextRules: AutomationRule[]) => {
+    rulesRevision.current += 1;
     setRules(nextRules);
   }, []);
 
@@ -25,13 +27,14 @@ export function useAutomationRules() {
     const poll = async () => {
       controller?.abort();
       controller = new AbortController();
+      const revision = rulesRevision.current;
       try {
         const nextRules = await getAutomationRules(controller.signal);
-        if (stopped) return;
+        if (stopped || revision !== rulesRevision.current) return;
         setRules(nextRules);
         setError(null);
       } catch (reason) {
-        if (!stopped && !controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Automation rules request failed");
+        if (!stopped && !controller.signal.aborted && revision === rulesRevision.current) setError(reason instanceof Error ? reason.message : "Automation rules request failed");
       } finally {
         if (!stopped) {
           const interval = Math.max(5, config?.updateIntervalSeconds ?? 15) * 1000;

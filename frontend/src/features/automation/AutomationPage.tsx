@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { useDialogFocus } from "../../hooks/useDialogFocus";
@@ -405,6 +405,7 @@ export function AutomationPage() {
   const [confirmation, setConfirmation] = useState<Confirmation>(null);
   const { config, status, replaceConfig, refresh: refreshStatus } = useEnergyStatus();
   const { adaptive, rules, away, receipts, error, refresh, replaceRules } = useAutomation();
+  const protectionsHeadingRef = useRef<HTMLHeadingElement>(null);
   const checks = prerequisites(config);
   const state = masterState(adaptive, checks);
   const next = nextAction(adaptive, checks);
@@ -590,7 +591,22 @@ export function AutomationPage() {
           <article className="panel automation-next"><p className="eyebrow">{t("nextAction")}</p><h2>{t(next.title)}</h2><p>{t(next.reason)}</p>{adaptive?.plan?.targetSunset ? <small>{"" + t("planHorizon") + " "}{formatDateTime(adaptive.plan.targetSunset)}</small> : null}{adaptive?.plan?.horizonTruncated ? <small className="plan-horizon-warning" role="status">{"" + t("solarForecastEndsBeforeThePlanningLookAheadThePlanEndsAt") + " "}{formatDateTime(adaptive.plan.forecastLastHour ?? adaptive.plan.horizonEnd ?? null)}</small> : null}</article>
         </section>
 
-        <section className="panel automation-protections" aria-labelledby="protections-heading"><div className="section-heading"><div><p className="eyebrow">{t("safety")}</p><h2 id="protections-heading">{t("activeProtections")}</h2></div></div><div className="protection-grid"><article><span>{t("demandGuard")}</span><strong>{t(guard?.enabled ? guard.state?.awaitingRestore ? "Intervening" : "Monitoring" : "Off")}</strong><small>{guard?.enabled ? `${formatPower(headroom)} headroom before intervention` : "Breaker protection is disabled"}</small><DemandGuardRestoreControl rules={rules} onRestored={(nextRules) => { replaceRules(nextRules); refresh(); refreshStatus(); }} /></article><article><span>{t("breakerContract")}</span><strong>{formatPower(Number.isFinite(breakerWatts) ? breakerWatts : null)}</strong><small>{guard?.conditions?.breakerAmps ?? "—"} {" " + t("aAt") + " "}{guard?.conditions?.breakerVoltage ?? "—"} {" " + t("vc9ee56") + ""}</small></article><article><span>{t("currentGridImport")}</span><strong>{formatPower(gridImport)}</strong><small>{Number.isFinite(thresholdWatts) ? `Guard threshold ${formatPower(thresholdWatts)}` : "Guard threshold unavailable"}</small></article><article><span>{t("disasterPrepPriority")}</span><strong>{t(status?.batteryStrategy?.kind === "backup-preparation" ? "Active" : "Inactive")}</strong><small>{status?.batteryStrategy?.kind === "backup-preparation" ? "Backup readiness owns the battery; Adaptive Charging can observe but cannot issue commands." : "Adaptive Charging may operate when its plan and safety checks allow."}</small></article><article className="protection-owner"><span>{t("operationalOwner")}</span><strong>{status?.batteryStrategy?.title ?? "Unavailable"}</strong><small>{formatDateTimesInText(status?.batteryStrategy?.description ?? "Waiting for battery strategy")}</small></article></div></section>
+        <DemandGuardRestoreControl
+          rules={rules}
+          refreshRules={refresh}
+          returnFocusRef={protectionsHeadingRef}
+          onRestored={(nextRules) => { replaceRules(nextRules); refresh(); refreshStatus(); }}
+        />
+        <section className="panel automation-protections" aria-labelledby="protections-heading">
+          <div className="section-heading"><div><p className="eyebrow">{t("safety")}</p><h2 id="protections-heading" tabIndex={-1} ref={protectionsHeadingRef}>{t("activeProtections")}</h2></div></div>
+          <div className="protection-grid">
+            <article><span>{t("demandGuard")}</span><strong>{t(guard?.enabled ? guard.state?.awaitingRestore ? "Intervening" : "Monitoring" : "Off")}</strong><small>{guard?.enabled ? `${formatPower(headroom)} headroom before intervention` : "Breaker protection is disabled"}</small></article>
+            <article><span>{t("breakerContract")}</span><strong>{formatPower(Number.isFinite(breakerWatts) ? breakerWatts : null)}</strong><small>{guard?.conditions?.breakerAmps ?? "—"} {" " + t("aAt") + " "}{guard?.conditions?.breakerVoltage ?? "—"} {" " + t("vc9ee56") + ""}</small></article>
+            <article><span>{t("currentGridImport")}</span><strong>{formatPower(gridImport)}</strong><small>{Number.isFinite(thresholdWatts) ? `Guard threshold ${formatPower(thresholdWatts)}` : "Guard threshold unavailable"}</small></article>
+            <article><span>{t("disasterPrepPriority")}</span><strong>{t(status?.batteryStrategy?.kind === "backup-preparation" ? "Active" : "Inactive")}</strong><small>{status?.batteryStrategy?.kind === "backup-preparation" ? "Backup readiness owns the battery; Adaptive Charging can observe but cannot issue commands." : "Adaptive Charging may operate when its plan and safety checks allow."}</small></article>
+            <article className="protection-owner"><span>{t("operationalOwner")}</span><strong>{status?.batteryStrategy?.title ?? "Unavailable"}</strong><small>{formatDateTimesInText(status?.batteryStrategy?.description ?? "Waiting for battery strategy")}</small></article>
+          </div>
+        </section>
 
         <section className="panel automation-plan" aria-labelledby="automation-plan-heading"><div className="section-heading"><div><p className="eyebrow">{t("todayAndTonight")}</p><h2 id="automation-plan-heading">{t("sharedAutomationTimeline")}</h2></div><div className="automation-plan-actions"><span className="sample-count">{adaptive?.plan?.timeline?.length ?? 0} {" " + t("intervals") + ""}</span><button className="quiet-button" type="button" disabled={busy !== null || !adaptive?.enabled || !configurationReady} onClick={() => void runPlanAction("recalculate")}>{busy === "recalculate" ? "Recalculating…" : "Recalculate plan"}</button>{adaptive?.paused ? <button className="button primary" type="button" disabled={busy !== null || !configurationReady} onClick={() => setConfirmation({ title: "Resume Adaptive Charging", impact: "Adaptive Charging will clear the current pause and recalculate its plan. It may resume control of battery charging when the next eligible discounted window begins. Active Disaster Prep still takes priority.", confirmLabel: "Resume automation", run: () => runPlanAction("resume") })}>{t("resume")}</button> : null}</div></div><Timeline items={adaptive?.plan?.timeline} /><div className="selected-windows"><h3>{t("selectedDiscountedWindows")}</h3>{adaptive?.plan?.slots?.length ? <div>{adaptive.plan.slots.map((slot, index) => <article key={`${slot.start}:${index}`}><span>{t(slot.label ?? "Discounted rate")}</span><strong>{t("{start}–{end}", { start: formatTime(slot.start), end: formatTime(slot.end) })}</strong><small>{formatWh(slot.targetWh)} {" " + t("planned80e610") + ""}{slot.targetSocPercent == null ? "" : ` · target ${formatPercent(slot.targetSocPercent)}`}</small></article>)}</div> : <p>{t("noDiscountedChargingWindowIsSelectedForThisPlan")}</p>}</div>{planResult ? <p className={`inline-save-result ${planResult.ok ? "success" : "failure"}`} role={planResult.ok ? "status" : "alert"}>{planResult.message}</p> : null}</section>
 

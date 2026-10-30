@@ -202,7 +202,7 @@ export type AutomationRule = {
     restoreBelowAmps?: number | null;
     restoreDelaySeconds?: number | null;
   };
-  state?: { awaitingRestore?: boolean; triggeredAt?: string | null };
+  state?: { awaitingRestore?: boolean; triggeredAt?: string | null; restoreSince?: string | null };
   log?: AutomationLogEntry[];
 };
 

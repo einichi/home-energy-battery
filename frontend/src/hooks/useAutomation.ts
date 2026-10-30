@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getAdaptiveCharging, getAutomationRules, getAwayPeriods } from "../api/automation";
 import { getCommandReceipts } from "../api/battery";
 import type { AdaptiveChargingStatus, AutomationRule, AwayPeriodsView, CommandReceipt } from "../api/contracts";
@@ -14,9 +14,15 @@ export function useAutomation() {
   const [receipts, setReceipts] = useState<CommandReceipt[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [sequence, setSequence] = useState(0);
+  const rulesRevision = useRef(0);
 
   const refresh = useCallback(() => {
     setSequence((value) => value + 1);
+  }, []);
+
+  const replaceRules = useCallback((nextRules: AutomationRule[]) => {
+    rulesRevision.current += 1;
+    setRules(nextRules);
   }, []);
 
   useEffect(() => {
@@ -26,6 +32,7 @@ export function useAutomation() {
     const poll = async () => {
       controller?.abort();
       controller = new AbortController();
+      const revision = rulesRevision.current;
       try {
         const [nextAdaptive, nextRules, nextAway, nextReceipts] = await Promise.all([
           getAdaptiveCharging(controller.signal),
@@ -33,14 +40,14 @@ export function useAutomation() {
           getAwayPeriods(controller.signal),
           getCommandReceipts(controller.signal),
         ]);
-        if (stopped) return;
+        if (stopped || revision !== rulesRevision.current) return;
         setAdaptive(nextAdaptive);
         setRules(nextRules);
         setAway(nextAway);
         setReceipts(nextReceipts.receipts);
         setError(null);
       } catch (reason) {
-        if (!stopped && !controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Automation status request failed");
+        if (!stopped && !controller.signal.aborted && revision === rulesRevision.current) setError(reason instanceof Error ? reason.message : "Automation status request failed");
       } finally {
         if (!stopped) {
           const interval = Math.max(5, config?.updateIntervalSeconds ?? 15) * 1000;
@@ -56,5 +63,5 @@ export function useAutomation() {
     };
   }, [config?.updateIntervalSeconds, sequence]);
 
-  return { adaptive, rules, away, receipts, error, refresh, replaceRules: setRules };
+  return { adaptive, rules, away, receipts, error, refresh, replaceRules };
 }
