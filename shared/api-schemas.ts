@@ -5,6 +5,7 @@ const nullableNumber = v.nullable(v.number());
 const optionalNullableString = v.optional(nullableString);
 const optionalNullableNumber = v.optional(nullableNumber);
 const numberMap = v.record(v.string(), v.nullable(v.number()));
+const EquipmentReadErrorSchema = v.object({ host: optionalNullableString, error: optionalNullableString });
 
 export const MetricSchema = v.object({
   value: v.optional(v.nullable(v.number())),
@@ -36,6 +37,7 @@ export const BatteryStatusSchema = v.object({
 });
 
 export const FuelCellStatusSchema = v.object({
+  host: optionalNullableString,
   instant_power: v.optional(MetricSchema),
   generation_status: v.optional(v.object({ value: v.optional(nullableString), human: optionalNullableString, error: optionalNullableString, acquired_at: optionalNullableString })),
   hot_water_level: v.optional(MetricSchema),
@@ -179,19 +181,21 @@ export const StatusSnapshotSchema = v.object({
   statusDetailsPending: v.optional(v.boolean()),
   unavailableEquipment: v.optional(v.array(v.string())),
   alerts: v.optional(v.array(SystemAlertSchema)),
-  hosts: v.optional(v.object({ battery: optionalNullableString })),
+  hosts: v.optional(v.object({
+    battery: optionalNullableString, solar: optionalNullableString, meter: optionalNullableString, fuel_cell_primary: optionalNullableString,
+  })),
   energy: v.optional(v.object({
     battery: v.optional(BatteryStatusSchema),
     solar: v.optional(v.object({ configured: v.optional(v.boolean()), instant_power: v.optional(MetricSchema), error: optionalNullableString })),
     fuel_cells: v.optional(v.array(FuelCellStatusSchema)), error: optionalNullableString,
-    errors: v.optional(v.array(v.object({ error: optionalNullableString }))),
+    errors: v.optional(v.array(EquipmentReadErrorSchema)),
   })),
   meter: v.optional(v.object({
     configured: v.optional(v.boolean()), branch_demand_power: v.optional(MetricSchema), home_load_power: v.optional(MetricSchema),
     home_load_source: v.optional(v.union([v.literal("derived"), v.literal("branch_fallback"), v.literal("unavailable"), v.literal("inconsistent")])),
     home_load_missing: v.optional(v.array(v.string())), grid_import_power: v.optional(MetricSchema), grid_export_power: v.optional(MetricSchema),
     channel_power: v.optional(v.object({ decoded: v.optional(v.object({ channels: v.optional(v.array(v.object({ channel: v.number(), value: optionalNullableNumber }))) })) })),
-    error: optionalNullableString, errors: v.optional(v.array(v.object({ error: optionalNullableString }))),
+    host: optionalNullableString, error: optionalNullableString, errors: v.optional(v.array(EquipmentReadErrorSchema)),
   })),
   settings: v.optional(v.object({
     mode: v.optional(v.object({ decoded: v.optional(v.object({ mode: optionalNullableString })), mode: optionalNullableString, error: optionalNullableString })),

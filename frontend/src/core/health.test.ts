@@ -36,4 +36,18 @@ describe("system health", () => {
     expect(result.severity).toBe("attention");
     expect(result.detail).toBe("battery did not respond");
   });
+
+  it("counts read failures from one Ene-Farm as one equipment issue when alerts are absent", () => {
+    const now = Date.parse("2026-09-12T12:00:00.000Z");
+    const host = "10.250.0.150";
+    const result = deriveSystemHealth({
+      read_at: "2026-09-12T11:59:59.000Z",
+      energy: {
+        fuel_cells: [{ host, source_role: "primary", error: "Read failed" }],
+        errors: ["c4", "cb", "f4"].map((code) => ({ error: `${host} 0x027C01 EPC 0x${code} timed out` })),
+      },
+    }, config, "ready", now);
+    expect(result.label).toBe("1 equipment issue");
+    expect(result.detail).toContain(`Ene-Farm (${host})`);
+  });
 });

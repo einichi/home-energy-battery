@@ -4,19 +4,11 @@ import type { BatterySchedule } from "../contracts/schedules.js";
 import type { AdaptiveChargingState } from "../domain/adaptive-state.js";
 import type { AutomationRule } from "../domain/automation-rules.js";
 import { adaptiveChargingConfiguredActive } from "../domain/adaptive-control.js";
+import { summarizeEquipmentIssues, type EquipmentIssueStatus } from "../../shared/equipment-issues.js";
 
-interface StatusErrorEntry { error?: unknown }
-export interface SystemStatusSnapshot extends Record<string, unknown> {
+export interface SystemStatusSnapshot extends Record<string, unknown>, EquipmentIssueStatus {
   read_at?: string;
-  unavailableEquipment?: string[];
-  energy?: {
-    error?: unknown;
-    battery?: { error?: unknown; configured?: boolean };
-    solar?: { error?: unknown };
-    fuel_cells?: StatusErrorEntry[];
-    errors?: StatusErrorEntry[];
-  };
-  meter?: { error?: unknown; errors?: StatusErrorEntry[] };
+  energy?: EquipmentIssueStatus["energy"] & { battery?: { configured?: boolean } };
 }
 
 interface SystemAlertInput {
@@ -83,23 +75,15 @@ export function createSystemAlertService(dependencies: SystemAlertDependencies) 
     ]);
     const alerts: SystemAlert[] = [];
     const add = (alert: SystemAlertInput) => alerts.push({ resolution: "active", ...alert });
-    const equipmentErrors = [
-      snapshot.energy?.error,
-      snapshot.energy?.battery?.error,
-      snapshot.energy?.solar?.error,
-      ...(snapshot.energy?.fuel_cells ?? []).map((item) => item.error),
-      ...(snapshot.energy?.errors ?? []).map((item) => item.error),
-      snapshot.meter?.error,
-      ...(snapshot.meter?.errors ?? []).map((item) => item.error),
-    ].filter(Boolean);
+    const equipment = summarizeEquipmentIssues(snapshot, config);
     const unavailable = snapshot.unavailableEquipment ?? [];
-    if (unavailable.length || equipmentErrors.length) add({
+    if (equipment) add({
       id: "equipment",
-      source: equipmentErrors.some((error) => /timeout|unreachable|network|EHOST|ENET/i.test(String(error))) ? "Local network" : "Device",
+      source: equipment.networkError ? "Local network" : "Device",
       severity: "warning",
-      title: unavailable.length ? "Equipment unavailable" : `${equipmentErrors.length} equipment issue${equipmentErrors.length === 1 ? "" : "s"}`,
+      title: equipment.title,
       startedAt: snapshot.read_at ?? now.toISOString(),
-      impact: unavailable.length ? unavailable.join(", ") : String(equipmentErrors[0]),
+      impact: equipment.detail,
       suggestedAction: "Inspect configured equipment and its latest contact status.",
       href: "/system/equipment",
     });

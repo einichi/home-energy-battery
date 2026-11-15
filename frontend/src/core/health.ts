@@ -1,20 +1,8 @@
 import type { AppConfig, LoadingState, StatusSnapshot, SystemAlert } from "../api/contracts";
+import { summarizeEquipmentIssues } from "../../../shared/equipment-issues";
 
 export type HealthSeverity = "healthy" | "attention" | "critical";
 export type SystemHealth = { severity: HealthSeverity; label: string; detail: string; alerts: SystemAlert[] };
-
-function statusErrors(status: StatusSnapshot | null): string[] {
-  if (!status) return [];
-  return [
-    status.energy?.error,
-    status.energy?.battery?.error,
-    status.energy?.solar?.error,
-    ...(status.energy?.fuel_cells ?? []).map((item) => item.error),
-    ...(status.energy?.errors ?? []).map((item) => item.error),
-    status.meter?.error,
-    ...(status.meter?.errors ?? []).map((item) => item.error),
-  ].filter((value): value is string => Boolean(value));
-}
 
 export function deriveSystemHealth(
   status: StatusSnapshot | null,
@@ -46,12 +34,12 @@ export function deriveSystemHealth(
   if (!Number.isFinite(ageMs) || ageMs > staleAfterMs) {
     return { severity: "attention", label: "Readings stale", detail: "The last equipment update is older than expected", alerts: [{ id: "stale-readings", source: "Device", severity: "warning", title: "Equipment readings are stale", startedAt: status.read_at, impact: "Displayed measurements are last-known values and may no longer represent current conditions.", suggestedAction: "Review equipment connectivity and the application service.", href: "/system/equipment", resolution: "active" }] };
   }
-  const errors = statusErrors(status);
-  if (errors.length) {
+  const equipment = summarizeEquipmentIssues(status, config);
+  if (equipment) {
     return {
       severity: "attention",
-      label: `${errors.length} equipment issue${errors.length === 1 ? "" : "s"}`,
-      detail: errors[0],
+      label: equipment.title,
+      detail: equipment.detail,
       alerts: [],
     };
   }
