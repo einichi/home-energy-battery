@@ -8,7 +8,7 @@ import {
   isPrivateDiscoverySubnet,
   normalizePrivateDiscoverySubnets,
 } from "../lib/domain/discovery-subnets.js";
-import { ipRangeFromCidr, subnetFromHost } from "../lib/services/discovery-protocol.js";
+import { ipRangeFromCidr, subnetFromHost } from "../lib/domain/discovery-protocol.js";
 
 for (const host of [
   "192.168.1.10:8787",

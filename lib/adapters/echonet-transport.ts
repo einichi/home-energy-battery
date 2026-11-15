@@ -9,8 +9,10 @@ export interface EchonetProperty {
 }
 
 export interface EchonetResponse {
+  device?: { address?: string };
   message?: {
     esv?: string;
+    seoj?: number[];
     data?: {
       list?: number[][];
       inf?: number[];

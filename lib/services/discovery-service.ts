@@ -1,4 +1,3 @@
-import dgram from "node:dgram";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import { normalizeSubnets } from "../domain/configuration.js";
@@ -10,17 +9,12 @@ import {
   KNOWN_DISCOVERY_PROBES,
   addDiscoveredInstance,
   inferDevice,
-  instanceListRequest,
   ipRangeFromCidr,
-  isGetResponse,
   mergeDiscoveredDevices,
   normalizeDiscoveredDevices,
-  parseInstanceListResponse,
-  parseTid,
-  propertyRequest,
   subnetFromHost,
   type DiscoveredDeviceMap,
-} from "./discovery-protocol.js";
+} from "../domain/discovery-protocol.js";
 import { asRecord } from "../domain/values.js";
 
 export interface DiscoveryServiceDependencies {
@@ -90,94 +84,16 @@ export function createDiscoveryService(dependencies: DiscoveryServiceDependencie
   }
 
 
-  function sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-
-  async function activeScanSubnets(subnets: string[], timeoutMs: number, progress: (patch: DiscoveryProgress) => void = () => undefined): Promise<DiscoveredDeviceMap> {
-    // Broadcast discovery is polite but not always reliable through controllers or
-    // Docker networking, so this scan pokes each /24 address directly. It binds an
-    // ephemeral source port instead of ECHONET's 3610 so it can run even if another
-    // local reader has recently held the standard port.
-    const socket = dgram.createSocket("udp4");
-    const tidToHost = new Map<number, string>();
-    const tidToDirectProbe = new Map<number, { host: string; instance: string }>();
-    const found: DiscoveredDeviceMap = {};
-    let tid = 1;
+  async function activeScanSubnets(subnets: string[], timeout: number, progress: (patch: DiscoveryProgress) => void): Promise<DiscoveredDeviceMap> {
     const hosts = [...new Set(subnets.flatMap(ipRangeFromCidr))];
-    let scanned = 0;
-    const retryRounds = 3;
-    const batchSize = 16;
-
-    await new Promise<void>((resolve, reject) => {
-      const bindEphemeral = () => {
-        socket.removeAllListeners("error");
-        socket.once("error", reject);
-        socket.bind(0, "0.0.0.0", resolve);
-      };
-      socket.once("error", (err) => {
-        if ((err as NodeJS.ErrnoException).code === "EADDRINUSE") {
-          bindEphemeral();
-        } else {
-          reject(err);
-        }
-      });
-      socket.bind(3610, "0.0.0.0", resolve);
-    });
-
-    socket.on("message", (msg, rinfo) => {
-      const parsed = parseInstanceListResponse(msg);
-      if (parsed) {
-        const host = tidToHost.get(parsed.tid) ?? rinfo.address;
-        for (const instance of parsed.instances) {
-          addDiscoveredInstance(found, host, instance);
-        }
-        progress({ found: Object.keys(found).length });
-        return;
-      }
-      const tidValue = parseTid(msg);
-      const directProbe = tidValue ? tidToDirectProbe.get(tidValue) : null;
-      if (directProbe && isGetResponse(msg)) {
-        addDiscoveredInstance(found, directProbe.host ?? rinfo.address, directProbe.instance);
-        progress({ found: Object.keys(found).length });
-      }
-    });
-
     progress({ phase: "active-scan", total: hosts.length, scanned: 0, found: 0 });
-    for (let round = 0; round < retryRounds; round += 1) {
-      for (let index = 0; index < hosts.length; index += 1) {
-        const host = hosts[index];
-        tid = (tid % 0xfffe) + 1;
-        tidToHost.set(tid, host);
-        socket.send(instanceListRequest(tid), 3610, host, () => {});
-        if (round === 0) {
-          for (const probe of KNOWN_DISCOVERY_PROBES) {
-            const epc = probe.epcs[0];
-            tid = (tid % 0xfffe) + 1;
-            tidToDirectProbe.set(tid, {
-              host,
-              instance: probe.eoj.slice(2).toLowerCase(),
-            });
-            socket.send(propertyRequest(tid, probe.eoj, epc), 3610, host, () => {});
-          }
-        }
-        if (round === 0) scanned += 1;
-        if (
-          round === 0 &&
-          (scanned === hosts.length || scanned % batchSize === 0)
-        ) {
-          progress({ phase: "active-scan", total: hosts.length, scanned, found: Object.keys(found).length });
-        }
-        if ((index + 1) % batchSize === 0) await sleep(20);
-      }
-      await sleep(120);
-    }
-
-    progress({ phase: "waiting", total: hosts.length, scanned, found: Object.keys(found).length });
-    await new Promise<void>((resolve) => setTimeout(resolve, timeoutMs));
-    socket.close();
-    return found;
+    if (!hosts.length) return {};
+    const result = await dependencies.runDeviceCommand("discover", {
+      hosts,
+      timeout,
+      onProgress: (scanned: number, found: number) => progress({ scanned, found }),
+    }, [], { priority: 6, queueTimeoutMs: 180_000 });
+    return normalizeDiscoveredDevices(result);
   }
 
 
@@ -198,15 +114,17 @@ export function createDiscoveryService(dependencies: DiscoveryServiceDependencie
     let scanned = 0;
     progress({ phase: "identifying", total: hosts.length, scanned: 0, found: Object.keys(enriched).length });
     for (const host of hosts) {
-      const instances: string[] = [];
       for (const probe of KNOWN_DISCOVERY_PROBES) {
         const eoj = probe.eoj;
+        const instance = eoj.slice(2).toLowerCase();
+        if (enriched[host]?.all_instances.some((entry) => entry.startsWith(instance.slice(0, 4)))) continue;
         let detected = false;
         try {
           const result = asRecord(await dependencies.runDeviceCommand("inspect-host", { host, eoj, timeout: 2 }));
           // inspect-host keys its output with eojHex(): lowercase "0x" + upper-case hex.
           const entry = asRecord(result[`0x${eoj.replace(/^0x/i, "").toUpperCase()}`]);
-          detected = Object.keys(entry).length > 0 && !entry.error;
+          detected = ["inf_property_map", "set_property_map", "get_property_map"]
+            .some((key) => Array.isArray(entry[key]) && entry[key].length > 0);
         } catch {
           // Silent hosts are normal during subnet discovery.
         }
@@ -214,17 +132,12 @@ export function createDiscoveryService(dependencies: DiscoveryServiceDependencie
           if (detected) break;
           try {
             const result = asRecord(await dependencies.runDeviceCommand("raw-get", { host, eoj, timeout: 2 }, [epc]));
-            detected = typeof result.raw === "string" && result.raw.startsWith("0x");
+            detected = typeof result.raw === "string" && result.raw.length > 2 && result.raw.startsWith("0x");
           } catch {
             // Not every device exposes every role. Keep trying the remaining hints.
           }
         }
-        if (detected) instances.push(eoj.slice(2).toLowerCase());
-      }
-      if (instances.length) {
-        enriched[host] = mergeDiscoveredDevices(enriched, {
-          [host]: { all_instances: instances, storage_battery_instances: [] },
-        })[host];
+        if (detected) addDiscoveredInstance(enriched, host, instance);
       }
       scanned += 1;
       progress({ phase: "identifying", total: hosts.length, scanned, found: Object.keys(enriched).length });
@@ -236,6 +149,8 @@ export function createDiscoveryService(dependencies: DiscoveryServiceDependencie
   function suggestedConfigFromDiscovery(devices: DiscoveredDeviceMap, currentConfig: ApplicationConfig): ApplicationConfig {
     const next: ApplicationConfig = structuredClone(currentConfig);
     const fuelCellHosts = new Set(next.fuelCellHosts);
+    const primaryCandidates: string[] = [];
+    let primaryFound = false;
     for (const [host, device] of Object.entries(devices)) {
       const instances = device.all_instances ?? [];
       if (instances.some((item) => item.toLowerCase().startsWith("027d"))) next.batteryHost = host;
@@ -250,7 +165,16 @@ export function createDiscoveryService(dependencies: DiscoveryServiceDependencie
       if (instances.some((item) => item.toLowerCase().startsWith("027c"))) {
         fuelCellHosts.add(host);
         next.fuelCellEnabled = true;
+        if (host === next.fuelCellPrimaryHost) primaryFound = true;
+        if (host !== currentConfig.meterHost && !next.fuelCellProxyHosts.includes(host) &&
+            !instances.some((item) => item.startsWith("0287"))) {
+          primaryCandidates.push(host);
+        }
       }
+    }
+    if (!primaryFound && primaryCandidates.length === 1) {
+      fuelCellHosts.delete(next.fuelCellPrimaryHost);
+      next.fuelCellPrimaryHost = primaryCandidates[0]!;
     }
     next.fuelCellHosts = [...fuelCellHosts];
     return dependencies.cleanConfig(next);
@@ -274,7 +198,7 @@ export function createDiscoveryService(dependencies: DiscoveryServiceDependencie
   async function discoverDevices(timeout: unknown = 5, mode: string = "broadcast", progress: (patch: DiscoveryProgress) => void = () => undefined, requestedSubnets: unknown = []): Promise<DiscoveryResult> {
     const config = await dependencies.readConfig();
     const network = localNetworkHints(config);
-    const scanTimeout = Number(timeout) || 5;
+    const scanTimeout = Math.max(1, Number(timeout) || 5);
     const subnets = normalizeSubnets(requestedSubnets).length
       ? normalizeSubnets(requestedSubnets)
       : network.userSubnets.length
@@ -285,7 +209,7 @@ export function createDiscoveryService(dependencies: DiscoveryServiceDependencie
     if (mode === "active") {
       const activeDevices = await activeScanSubnets(
         subnets,
-        Math.max(1000, scanTimeout * 1000),
+        scanTimeout,
         (patch) => progress({ ...patch, network }),
       );
       const devices = await enrichDiscoveredDevices(
@@ -298,7 +222,7 @@ export function createDiscoveryService(dependencies: DiscoveryServiceDependencie
 
     const activeDevices = await activeScanSubnets(
       subnets,
-      Math.max(1000, scanTimeout * 1000),
+      scanTimeout,
       (patch) => progress({ ...patch, network }),
     );
     progress({ phase: "broadcast", total: 0, scanned: 0, found: Object.keys(activeDevices).length, network });

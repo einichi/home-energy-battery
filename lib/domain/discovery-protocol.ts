@@ -1,3 +1,6 @@
+import { isPrivateDiscoverySubnet } from "./discovery-subnets.js";
+import { STORAGE_BATTERY_EOJ } from "./echonet-constants.js";
+
 export interface DiscoveredDevice {
   all_instances: string[];
   storage_battery_instances: number[];
@@ -52,65 +55,6 @@ export function ipRangeFromCidr(cidr: unknown): string[] {
   return Array.from({ length: 254 }, (_, index) => `${prefix}.${index + 1}`);
 }
 
-export function instanceListRequest(tid: number): Buffer {
-  return Buffer.from([
-    0x10, 0x81,
-    (tid >> 8) & 0xff, tid & 0xff,
-    0x05, 0xff, 0x01,
-    0x0e, 0xf0, 0x01,
-    0x62,
-    0x01,
-    0xd6, 0x00,
-  ]);
-}
-
-export function propertyRequest(tid: number, eojHexText: string, epcHexText: string): Buffer {
-  const eoj = Buffer.from(eojHexText.replace(/^0x/i, ""), "hex");
-  const epc = Number.parseInt(epcHexText.replace(/^0x/i, ""), 16);
-  return Buffer.from([
-    0x10, 0x81,
-    (tid >> 8) & 0xff, tid & 0xff,
-    0x05, 0xff, 0x01,
-    eoj[0]!, eoj[1]!, eoj[2]!,
-    0x62,
-    0x01,
-    epc, 0x00,
-  ]);
-}
-
-export function parseInstanceListResponse(message: Buffer): { tid: number; instances: string[] } | null {
-  if (message.length < 14 || message[0] !== 0x10 || message[1] !== 0x81) return null;
-  const tid = message.readUInt16BE(2);
-  const esv = message[10];
-  if (esv === undefined || ![0x72, 0x52].includes(esv)) return null;
-  const opc = message[11] ?? 0;
-  let offset = 12;
-  for (let index = 0; index < opc && offset + 2 <= message.length; index += 1) {
-    const epc = message[offset];
-    const pdc = message[offset + 1] ?? 0;
-    const edt = message.subarray(offset + 2, offset + 2 + pdc);
-    offset += 2 + pdc;
-    if (epc !== 0xd6 || edt.length < 1) continue;
-    const count = edt[0] ?? 0;
-    const instances: string[] = [];
-    for (let position = 1; position + 2 < edt.length && instances.length < count; position += 3) {
-      instances.push(edt.subarray(position, position + 3).toString("hex"));
-    }
-    return { tid, instances };
-  }
-  return null;
-}
-
-export function parseTid(message: Buffer): number | null {
-  return message.length >= 4 && message[0] === 0x10 && message[1] === 0x81
-    ? message.readUInt16BE(2)
-    : null;
-}
-
-export function isGetResponse(message: Buffer): boolean {
-  return message.length >= 14 && message[0] === 0x10 && message[1] === 0x81 && message[10] === 0x72;
-}
-
 export function addDiscoveredInstance(found: DiscoveredDeviceMap, host: string, instance: unknown): void {
   const normalized = String(instance).toLowerCase();
   const device = found[host] ??= { all_instances: [], storage_battery_instances: [] };
@@ -130,5 +74,3 @@ export function mergeDiscoveredDevices(...deviceSets: ReadonlyArray<DiscoveredDe
   }
   return merged;
 }
-import { isPrivateDiscoverySubnet } from "../domain/discovery-subnets.js";
-import { STORAGE_BATTERY_EOJ } from "../domain/echonet-constants.js";

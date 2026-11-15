@@ -1,5 +1,6 @@
 import { createEchonetClient } from "./echonet-transport.js";
 import type { EchonetClient } from "./echonet-transport.js";
+import { discoverHosts } from "./echonet-discovery.js";
 import {
   DEFAULT_VENDOR_EPCS,
   EDT_TO_FUEL_CELL_INTERCONNECTION,
@@ -95,8 +96,11 @@ async function withClient<T>(opts: CommandOptions, fn: (client: EchonetClient) =
 
 async function cmdDiscover(opts: CommandOptions) {
   return withClient(opts, async (client) => {
-    const devices = await client.discover();
-    return devices;
+    if (!Array.isArray(opts.hosts)) return client.discover();
+    const onProgress = typeof opts.onProgress === "function"
+      ? opts.onProgress as (scanned: number, found: number) => void
+      : undefined;
+    return discoverHosts(client, opts.hosts.map(String), onProgress);
   });
 }
 
