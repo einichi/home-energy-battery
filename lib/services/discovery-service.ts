@@ -27,6 +27,7 @@ interface DiscoveryNetworkHints {
   configuredSubnets: string[];
   containerSubnets: string[];
   userSubnets: string[];
+  scanSubnets: string[];
 }
 
 interface DiscoveryProgress {
@@ -41,6 +42,7 @@ interface DiscoveryResult {
   discovered: Array<{ host: string; roles: string[]; instances: string[] }>;
   network: DiscoveryNetworkHints;
   suggestedConfig: ApplicationConfig;
+  broadcastUnavailable?: boolean;
 }
 
 interface DiscoveryJob extends Required<Omit<DiscoveryProgress, "network">> {
@@ -59,7 +61,7 @@ export function createDiscoveryService(dependencies: DiscoveryServiceDependencie
   const DISCOVERY_JOB_TTL_MS = 10 * 60 * 1000;
 
 
-  function localNetworkHints(config: ApplicationConfig): DiscoveryNetworkHints {
+  function localNetworkHints(config: ApplicationConfig, requestedSubnets: unknown): DiscoveryNetworkHints {
     const hosts = [
       config.batteryHost,
       config.meterHost,
@@ -76,11 +78,11 @@ export function createDiscoveryService(dependencies: DiscoveryServiceDependencie
         }
       }
     }
-    return {
-      configuredSubnets,
-      containerSubnets: [...new Set(containerSubnets)],
-      userSubnets: normalizeSubnets(config.discoverySubnets),
-    };
+    const requested = normalizeSubnets(requestedSubnets);
+    const userSubnets = normalizeSubnets(config.discoverySubnets);
+    const localSubnets = [...new Set(containerSubnets)];
+    const scanSubnets = [requested, userSubnets, configuredSubnets, localSubnets].find((subnets) => subnets.length) ?? [];
+    return { configuredSubnets, containerSubnets: localSubnets, userSubnets, scanSubnets };
   }
 
 
@@ -148,31 +150,32 @@ export function createDiscoveryService(dependencies: DiscoveryServiceDependencie
 
   function suggestedConfigFromDiscovery(devices: DiscoveredDeviceMap, currentConfig: ApplicationConfig): ApplicationConfig {
     const next: ApplicationConfig = structuredClone(currentConfig);
-    const fuelCellHosts = new Set(next.fuelCellHosts);
-    const primaryCandidates: string[] = [];
-    let primaryFound = false;
-    for (const [host, device] of Object.entries(devices)) {
-      const instances = device.all_instances ?? [];
-      if (instances.some((item) => item.toLowerCase().startsWith("027d"))) next.batteryHost = host;
-      if (instances.some((item) => item.toLowerCase().startsWith("0279"))) {
-        next.solarHost = host;
-        next.solarEnabled = true;
-      }
-      if (instances.some((item) => item.toLowerCase().startsWith("0287"))) {
-        next.meterHost = host;
-        next.smartCosmoEnabled = true;
-      }
-      if (instances.some((item) => item.toLowerCase().startsWith("027c"))) {
-        fuelCellHosts.add(host);
-        next.fuelCellEnabled = true;
-        if (host === next.fuelCellPrimaryHost) primaryFound = true;
-        if (host !== currentConfig.meterHost && !next.fuelCellProxyHosts.includes(host) &&
-            !instances.some((item) => item.startsWith("0287"))) {
-          primaryCandidates.push(host);
-        }
-      }
+    const hostsWithClass = (classCode: string) => Object.keys(devices)
+      .filter((host) => devices[host]?.all_instances.some((instance) => instance.startsWith(classCode)));
+    const matchingHost = (classCode: string, current: string) => {
+      const candidates = hostsWithClass(classCode);
+      return candidates.includes(current) ? current : candidates.length === 1 ? candidates[0] : undefined;
+    };
+    next.batteryHost = matchingHost("027d", next.batteryHost) ?? next.batteryHost;
+    const solar = matchingHost("0279", next.solarHost);
+    if (solar) {
+      next.solarHost = solar;
+      next.solarEnabled = true;
     }
-    if (!primaryFound && primaryCandidates.length === 1) {
+    const meter = matchingHost("0287", next.meterHost);
+    if (meter) {
+      next.meterHost = meter;
+      next.smartCosmoEnabled = true;
+    }
+    const fuelCellHosts = new Set(next.fuelCellHosts);
+    const discoveredFuelCells = hostsWithClass("027c");
+    for (const host of discoveredFuelCells) {
+      fuelCellHosts.add(host);
+      next.fuelCellEnabled = true;
+    }
+    const primaryCandidates = discoveredFuelCells.filter((host) => host !== currentConfig.meterHost &&
+      !next.fuelCellProxyHosts.includes(host) && !devices[host]?.all_instances.some((instance) => instance.startsWith("0287")));
+    if (!discoveredFuelCells.includes(next.fuelCellPrimaryHost) && primaryCandidates.length === 1) {
       fuelCellHosts.delete(next.fuelCellPrimaryHost);
       next.fuelCellPrimaryHost = primaryCandidates[0]!;
     }
@@ -197,43 +200,26 @@ export function createDiscoveryService(dependencies: DiscoveryServiceDependencie
 
   async function discoverDevices(timeout: unknown = 5, mode: string = "broadcast", progress: (patch: DiscoveryProgress) => void = () => undefined, requestedSubnets: unknown = []): Promise<DiscoveryResult> {
     const config = await dependencies.readConfig();
-    const network = localNetworkHints(config);
+    const network = localNetworkHints(config, requestedSubnets);
     const scanTimeout = Math.max(1, Number(timeout) || 5);
-    const subnets = normalizeSubnets(requestedSubnets).length
-      ? normalizeSubnets(requestedSubnets)
-      : network.userSubnets.length
-        ? network.userSubnets
-        : network.configuredSubnets.length
-          ? network.configuredSubnets
-          : network.containerSubnets;
-    if (mode === "active") {
-      const activeDevices = await activeScanSubnets(
-        subnets,
-        scanTimeout,
-        (patch) => progress({ ...patch, network }),
-      );
-      const devices = await enrichDiscoveredDevices(
-        activeDevices,
-        config,
-        (patch) => progress({ ...patch, network }),
-      );
-      return discoveryResult(devices, network, config);
-    }
-
-    const activeDevices = await activeScanSubnets(
-      subnets,
+    let devices = await activeScanSubnets(
+      network.scanSubnets,
       scanTimeout,
       (patch) => progress({ ...patch, network }),
     );
-    progress({ phase: "broadcast", total: 0, scanned: 0, found: Object.keys(activeDevices).length, network });
-    const broadcastDevices = normalizeDiscoveredDevices(await dependencies.runDeviceCommand("discover", { timeout: scanTimeout }));
-    progress({ phase: "broadcast", total: 0, scanned: 0, found: Object.keys(mergeDiscoveredDevices(activeDevices, broadcastDevices)).length, network });
-    const devices = await enrichDiscoveredDevices(
-      mergeDiscoveredDevices(activeDevices, broadcastDevices),
-      config,
-      (patch) => progress({ ...patch, network }),
-    );
-    return discoveryResult(devices, network, config);
+    let broadcastUnavailable = false;
+    if (mode === "broadcast") {
+      progress({ phase: "broadcast", total: 0, scanned: 0, found: Object.keys(devices).length, network });
+      try {
+        const broadcastDevices = await dependencies.runDeviceCommand("discover", { timeout: scanTimeout });
+        devices = mergeDiscoveredDevices(devices, normalizeDiscoveredDevices(broadcastDevices));
+      } catch {
+        broadcastUnavailable = true;
+      }
+    }
+    const enriched = await enrichDiscoveredDevices(devices, config, (patch) => progress({ ...patch, network }));
+    const result = discoveryResult(enriched, network, config);
+    return broadcastUnavailable ? { ...result, broadcastUnavailable } : result;
   }
 
 

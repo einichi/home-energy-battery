@@ -589,8 +589,12 @@ function mockApi(
 ) {
   let reserve: AwayReserveStatus = { enabled: false, phase: "idle", ownsReserve: false, previousPercent: null,
     windowFrom: null, windowUntil: null, lastError: null, retryAt: null, ...reserveOverride };
+  let discoveryMode: "active" | "broadcast" = "broadcast";
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url.endsWith("/api/discovery/jobs") && init?.method === "POST") {
+      discoveryMode = JSON.parse(String(init.body)).mode;
+    }
     if (url.endsWith("/api/away-reserve")) {
       if (init?.method === "PATCH") reserve = { ...reserve, enabled: JSON.parse(String(init.body)).enabled };
       return { ok: true, status: 200, json: async () => reserve } as Response;
@@ -615,10 +619,11 @@ function mockApi(
                 ? {
                     id: "discovery-1",
                     status: "running",
-                    phase: "broadcast",
+                    phase: "active-scan",
                     scanned: 0,
                     total: 10,
                     found: 0,
+                    network: { scanSubnets: ["10.250.0.0/24"] },
                   }
                 : url.endsWith("/api/discovery/jobs/discovery-1")
                   ? {
@@ -627,9 +632,17 @@ function mockApi(
                       phase: "complete",
                       scanned: 10,
                       total: 10,
-                      found: 1,
+                      found: discoveryMode === "broadcast" ? 2 : 0,
+                      network: { scanSubnets: ["10.250.0.0/24"] },
                       result: {
-                        discovered: [{ host: "192.0.2.50", roles: ["battery"] }],
+                        discovered: discoveryMode === "broadcast"
+                          ? [
+                              { host: "192.0.2.50", roles: ["Battery"] },
+                              { host: "10.250.0.135", roles: ["Smart Cosmo / home power meter", "Ene-Farm"] },
+                            ]
+                          : [],
+                        suggestedConfig: discoveryMode === "broadcast" ? { batteryHost: "192.0.2.50", language: "ja" } : {},
+                        broadcastUnavailable: discoveryMode === "broadcast",
                       },
                     }
                   : url.endsWith("/api/config")
@@ -934,10 +947,29 @@ describe("React application shell", () => {
     expect(equipmentResult).toBeVisible();
     expect(equipmentResult.closest(".form-footer")).toContainElement(screen.getByRole("button", { name: "Save equipment" }));
     fireEvent.click(screen.getByRole("button", { name: "Broadcast discovery" }));
-    expect(await screen.findByText(/Listening for equipment responses|0 of 10 addresses/)).toBeVisible();
+    expect(await screen.findByText("Checking subnet before broadcast")).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledWith("/api/discovery/jobs", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ mode: "broadcast" }),
+    }));
+    expect(screen.queryByText("active-scan")).not.toBeInTheDocument();
     expect(screen.getByRole("progressbar")).toBeVisible();
     expect(await screen.findByText("Discovery complete")).toBeVisible();
-    expect(screen.getByText(/192\.0\.2\.50/)).toBeVisible();
+    expect(screen.getByText("192.0.2.50", { selector: "strong" })).toBeVisible();
+    expect(screen.getByText("Subnet scan targeted 10.250.0.0/24")).toBeVisible();
+    expect(screen.getByText("Broadcast discovery couldn’t finish. Results are from direct checks.")).toBeVisible();
+    expect(screen.getByText(/Ene-Farm proxy/)).toBeVisible();
+    expect(screen.queryByText(/10 of 10 subnet addresses checked/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Apply reviewed suggestions" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/config", expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ batteryHost: "192.0.2.50" }),
+    })));
+    expect(await screen.findByText("Discovered equipment suggestions applied.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Active subnet scan" }));
+    expect(await screen.findByText("Scanning subnet addresses")).toBeVisible();
+    expect(await screen.findByText("No devices detected")).toBeVisible();
+    expect(screen.queryByText("This scan suggests no configuration changes.")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Circuit 1 label"), {
       target: { value: "Kitchen" },
     });

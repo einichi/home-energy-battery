@@ -8,6 +8,36 @@ import type { Result, SaveSettings } from "./types.js";
 import { ResultMessage } from "./ResultMessage.js";
 import { entries } from "./form-utils.js";
 
+const discoverySettingLabels = {
+  batteryHost: "batteryAddress",
+  meterHost: "smartCosmoAddress",
+  solarHost: "solarAddress",
+  fuelCellPrimaryHost: "eneFarmPrimaryAddress",
+  fuelCellProxyHosts: "eneFarmFallbackProxies",
+  solarEnabled: "solarGeneration",
+  smartCosmoEnabled: "smartCosmoMeter",
+  fuelCellEnabled: "eneFarm",
+} as const;
+
+function discoveryChanges(suggested: Partial<AppConfig> | undefined, current: AppConfig) {
+  return (Object.keys(discoverySettingLabels) as Array<keyof typeof discoverySettingLabels>)
+    .flatMap((key) => {
+      const value = suggested?.[key];
+      return value !== undefined && JSON.stringify(value) !== JSON.stringify(current[key]) ? [[key, value] as const] : [];
+    });
+}
+
+function discoveryPhaseLabel(phase: DiscoveryJob["phase"], mode: "broadcast" | "active" | null) {
+  switch (phase) {
+    case "starting": return "Starting discovery";
+    case "active-scan": return mode === "broadcast" ? "Checking subnet before broadcast" : "Scanning subnet addresses";
+    case "broadcast": return "Broadcasting discovery requests";
+    case "waiting": return "Waiting for device replies";
+    case "identifying": return "Identifying device roles";
+    default: return "Searching for devices…";
+  }
+}
+
 export function EquipmentSettings({
   config,
   status,
@@ -25,6 +55,8 @@ export function EquipmentSettings({
   >(null);
   const [equipmentResult, setEquipmentResult] = useState<Result>(null);
   const [circuitResult, setCircuitResult] = useState<Result>(null);
+  const [discoverySaveResult, setDiscoverySaveResult] = useState<Result>(null);
+  const [savingDiscovery, setSavingDiscovery] = useState(false);
   const discoveryRun = useRef(0);
   useEffect(() => () => { discoveryRun.current += 1; }, []);
   const circuitIds = [
@@ -59,18 +91,28 @@ export function EquipmentSettings({
   const discover = async (mode: "broadcast" | "active") => {
     const runId = ++discoveryRun.current;
     setDiscovery(null);
+    setDiscoverySaveResult(null);
     setDiscoveryMode(mode);
+    setDiscoveryJob({ id: "", status: "queued", phase: "starting" });
     try {
       let job = await startDiscovery(mode);
+      if (discoveryRun.current !== runId) return;
       setDiscoveryJob(job);
-      while ((job.status === "queued" || job.status === "running") && discoveryRun.current === runId) {
+      while (job.status === "queued" || job.status === "running") {
         await new Promise((resolve) => setTimeout(resolve, 250));
         if (discoveryRun.current !== runId) return;
         job = await getDiscoveryJob(job.id);
+        if (discoveryRun.current !== runId) return;
         setDiscoveryJob(job);
       }
-      if (job.status === "complete") setDiscovery(job.result ?? null);
+      if (job.status === "complete" && job.result) {
+        setDiscovery({
+          ...job.result,
+          suggestedConfig: Object.fromEntries(discoveryChanges(job.result.suggestedConfig, config)),
+        });
+      }
     } catch (error) {
+      if (discoveryRun.current !== runId) return;
       setDiscoveryJob({
         id: "failed",
         status: "failed",
@@ -111,15 +153,28 @@ export function EquipmentSettings({
       )
     : undefined;
   const devices = [
-    { id: "battery", name: "Battery", address: config.batteryHost, eoj: null, enabled: true, error: status?.energy?.battery?.error },
-    { id: "meter", name: "Smart Cosmo", address: config.meterHost, eoj: config.meterEoj, enabled: config.smartCosmoEnabled !== false, error: status?.meter?.error },
-    { id: "solar", name: "Solar", address: config.solarHost, eoj: null, enabled: config.solarEnabled !== false, error: status?.energy?.solar?.error },
-    { id: "fuel-cell", name: "Ene-Farm", address: config.fuelCellPrimaryHost, eoj: null, enabled: config.fuelCellEnabled !== false, error: status?.energy?.fuel_cells?.find((item) => item.source_role === "primary")?.error },
-  ].filter((device) => device.enabled);
-  const suggestedChanges = Object.entries(discovery?.suggestedConfig ?? {}).filter(([key, value]) => JSON.stringify(config[key as keyof AppConfig]) !== JSON.stringify(value));
+    { id: "battery", name: "Battery", role: "Battery", address: config.batteryHost, eoj: null, enabled: true, error: status?.energy?.battery?.error },
+    { id: "meter", name: "Smart Cosmo", role: "Smart Cosmo / home power meter", address: config.meterHost, eoj: config.meterEoj, enabled: config.smartCosmoEnabled !== false, error: status?.meter?.error },
+    { id: "solar", name: "Solar", role: "Solar generation", address: config.solarHost, eoj: null, enabled: config.solarEnabled !== false, error: status?.energy?.solar?.error },
+    { id: "fuel-cell", name: "Ene-Farm", role: "Ene-Farm", address: config.fuelCellPrimaryHost, eoj: null, enabled: config.fuelCellEnabled !== false, error: status?.energy?.fuel_cells?.find((item) => item.source_role === "primary")?.error },
+  ].filter((device) => device.enabled).map((device) => ({
+    ...device,
+    error: device.error ?? (status?.unavailableEquipment?.includes(device.name) ? t("Device unavailable") : null),
+  }));
+  const discoveredDevices = discovery?.discovered ?? [];
+  const missingDevices = discovery ? devices.filter(({ address, role }) =>
+    address && !/^(192\.0\.2|198\.51\.100|203\.0\.113)\./.test(address) &&
+    !discoveredDevices.some((device) => device.host === address && device.roles?.includes(role))) : [];
+  const suggestedChanges = discoveryChanges(discovery?.suggestedConfig, config);
   const applyDiscoverySuggestions = async () => {
-    if (!discovery?.suggestedConfig || !suggestedChanges.length) return;
-    setEquipmentResult(await save(discovery.suggestedConfig, "Discovered equipment suggestions applied."));
+    if (!suggestedChanges.length) return;
+    setSavingDiscovery(true);
+    setDiscoverySaveResult(null);
+    try {
+      setDiscoverySaveResult(await save(Object.fromEntries(suggestedChanges), "Discovered equipment suggestions applied."));
+    } finally {
+      setSavingDiscovery(false);
+    }
   };
   return (
     <div className="system-stack">
@@ -314,14 +369,14 @@ export function EquipmentSettings({
               {t("deviceDiscovery")}
             </h2>
             <p>
-              {t("searchTheLocalNetworkAndReviewResultsBeforeApplyingAnyAdec2fdc")}
+              {t("discoveryUsesSavedSubnets")}
             </p>
           </div>
         </div>
         <div className="button-row">
           <button
             className="quiet-button"
-            disabled={discovering}
+            disabled={discovering || savingDiscovery}
             onClick={() => void discover("broadcast")}
           >
             {t(discovering && discoveryMode === "broadcast"
@@ -330,7 +385,7 @@ export function EquipmentSettings({
           </button>
           <button
             className="quiet-button"
-            disabled={discovering}
+            disabled={discovering || savingDiscovery}
             onClick={() => void discover("active")}
           >
             {t(discovering && discoveryMode === "active"
@@ -345,34 +400,65 @@ export function EquipmentSettings({
           >
             <div>
               <strong>
-                {discoveryJob.status === "complete"
+                {t(discoveryJob.status === "complete"
                   ? "Discovery complete"
                   : discoveryJob.status === "failed"
                     ? "Discovery failed"
-                    : discoveryJob.phase || "Searching for devices…"}
+                    : discoveryPhaseLabel(discoveryJob.phase, discoveryMode))}
               </strong>
-              <span>
-                {discoveryJob.error ??
-                  (discoveryJob.total
-                    ? `${discoveryJob.scanned ?? 0} of ${discoveryJob.total} addresses · ${discoveryJob.found ?? 0} found`
-                    : "Listening for equipment responses…")}
-              </span>
-              {discovering ? <small>{t("liveEquipmentPollingIsPausedWhileDiscoveryUsesTheLocalDe7bd542")}</small> : null}
+              {discoveryJob.error ? <span>{discoveryJob.error}</span> : null}
+              {discovering && discoveryJob.total ? (
+                <span>{t(discoveryJob.phase === "identifying" ? "discoveryHostsChecked" : "discoveryAddressesChecked", {
+                  scanned: discoveryJob.scanned ?? 0,
+                  total: discoveryJob.total,
+                  found: discoveryJob.found ?? 0,
+                })}</span>
+              ) : null}
             </div>
             {discovering ? (
               <progress max="100" value={discoveryPercent} />
             ) : null}
+            {discoveryJob.network?.scanSubnets?.length ? (
+              <small>{t("discoverySubnetTargets", { subnets: discoveryJob.network.scanSubnets.join(", ") })}</small>
+            ) : null}
+            {discovering ? <small>{t("liveEquipmentPollingIsPausedWhileDiscoveryUsesTheLocalDe7bd542")}</small> : null}
           </div>
         ) : null}
         {discovery ? (
           <div className="discovery-results">
-            <strong>
-              {discovery.discovered?.length ?? 0} {" " + t("devicesFound") + ""}
-            </strong>
-            {discovery.discovered?.map((item) => (
-              <article key={item.host}><div><strong>{item.host}</strong><span>{item.roles?.join(", ") || "Unknown role"}</span></div><small>{item.instances?.length ?? 0} {" " + t("objectInstancesReported") + ""}</small></article>
-            ))}
-            {suggestedChanges.length ? <div className="discovery-suggestions"><strong>{t("suggestedConfigurationChanges")}</strong><dl>{suggestedChanges.map(([key, value]) => <div key={key}><dt>{key.replace(/([A-Z])/g, " $1")}</dt><dd>{Array.isArray(value) ? value.join(", ") : String(value)}</dd></div>)}</dl><button className="button primary" type="button" onClick={() => void applyDiscoverySuggestions()}>{t("applyReviewedSuggestions")}</button></div> : <p className="field-help">{t("noSavedEquipmentAddressesNeedToChange")}</p>}
+            <strong>{discoveredDevices.length
+              ? t("discoveredDeviceCount", { count: discoveredDevices.length })
+              : t("noDevicesDetected")}</strong>
+            {discovery.broadcastUnavailable ? <p>{t("discoveryBroadcastUnavailable")}</p> : null}
+            {discoveredDevices.map((item) => {
+              const isProxy = item.host === config.meterHost || config.fuelCellProxyHosts?.includes(item.host) ||
+                item.roles?.includes("Smart Cosmo / home power meter");
+              const roles = item.roles?.map((role) => t(role === "Ene-Farm" && isProxy ? "eneFarmProxy" : role));
+              return (
+                <article key={item.host}>
+                  <div><strong>{item.host}</strong><span>{roles?.join(", ") || t("Unknown energy device")}</span></div>
+                  <small>{item.instances?.length ?? 0} {t("objectInstancesReported")}</small>
+                </article>
+              );
+            })}
+            {missingDevices.length ? <p>{t("discoveryMissingAddresses", {
+              devices: missingDevices.map(({ name, address }) => `${t(name)} (${address})`).join(", "),
+            })}</p> : null}
+            {suggestedChanges.length ? (
+              <div className="discovery-suggestions">
+                <strong>{t("suggestedConfigurationChanges")}</strong>
+                <dl>{suggestedChanges.map(([key, value]) => (
+                  <div key={key}>
+                    <dt>{t(discoverySettingLabels[key])}</dt>
+                    <dd>{typeof value === "boolean" ? t(value ? "discoveryEnabled" : "discoveryDisabled") : Array.isArray(value) ? value.join(", ") : value}</dd>
+                  </div>
+                ))}</dl>
+                <button className="button primary" type="button" disabled={savingDiscovery} onClick={() => void applyDiscoverySuggestions()}>
+                  {t("applyReviewedSuggestions")}
+                </button>
+              </div>
+            ) : discoveredDevices.length > 0 && !discoverySaveResult?.ok ? <p>{t("noDiscoveryChangesSuggested")}</p> : null}
+            <ResultMessage result={discoverySaveResult} />
           </div>
         ) : null}
       </section>

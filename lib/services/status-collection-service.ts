@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import type { ApplicationConfig } from "../contracts/configuration.js";
 import { isDocumentationHost, deviceStatusFailures, fuelCellHotWaterEmptyNotificationActive } from "../domain/status-alerts.js";
 import { numericMetric, primaryFuelCell } from "../domain/telemetry.js";
@@ -9,6 +10,8 @@ type DeviceCommandOptions = { priority?: number; queueTimeoutMs?: number };
 
 type UnknownRecord = Record<string, unknown>;
 type ProbeProgress = (result: { label: string; durationMs: number }) => void;
+const STATUS_READ_TIMEOUT_SECONDS = 1.5;
+const LIVE_READ_MAX_AGE_MS = 5000;
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -85,7 +88,11 @@ export interface StatusCollectionDependencies {
 
 export function createStatusCollectionService(dependencies: StatusCollectionDependencies) {
   let latestSnapshot: UnknownRecord | null = null;
+  let latestDisplaySnapshot: UnknownRecord | null = null;
   let refreshPromise: Promise<UnknownRecord> | null = null;
+  let displayPromise: Promise<UnknownRecord> | null = null;
+  let revision = 0;
+  let refreshRevision = 0;
 
   function fuelCellArgs(config: ApplicationConfig): DeviceCommandArguments {
     return {
@@ -96,7 +103,7 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
 
   async function safeCommand(command: string, args: DeviceCommandArguments = {}, positional: unknown[] = [], options: DeviceCommandOptions = {}): Promise<UnknownRecord> {
     try {
-      return asRecord(await dependencies.runDeviceCommand(command, args, positional, options));
+      return asRecord(await dependencies.runDeviceCommand(command, { timeout: STATUS_READ_TIMEOUT_SECONDS, ...args }, positional, options));
     } catch (error: unknown) {
       return { error: message(error) };
     }
@@ -109,7 +116,9 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
     try {
       return {
         configured: true,
-        ...asRecord(await dependencies.runDeviceCommand("meter-status", { host: config.meterHost, eoj: config.meterEoj })),
+        ...asRecord(await dependencies.runDeviceCommand("meter-status", {
+          host: config.meterHost, eoj: config.meterEoj, timeout: STATUS_READ_TIMEOUT_SECONDS,
+        })),
       };
     } catch (error: unknown) {
       return { configured: true, host: config.meterHost, eoj: config.meterEoj, error: message(error) };
@@ -142,7 +151,7 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
     };
   }
 
-  async function readAll(onProbeComplete: ProbeProgress = () => undefined): Promise<UnknownRecord> {
+  async function readAll(onProbeComplete: ProbeProgress, publishLive: (status: UnknownRecord) => void): Promise<UnknownRecord> {
     const config = await dependencies.readConfig();
     const energyArgs: DeviceCommandArguments = {
       "battery-host": config.batteryHost,
@@ -150,7 +159,6 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
       ...(config.fuelCellEnabled ? fuelCellArgs(config) : { "no-fuel-cell": true }),
     };
     const batteryConfigured = Boolean(config.batteryHost && !isDocumentationHost(config.batteryHost));
-    const skippedSetting: UnknownRecord = { available: false, error: "battery host is not configured", lastKnown: null, lastReadAt: null };
     const probe = async <T>(label: string, reader: () => Promise<T>): Promise<T> => {
       const startedAt = Date.now();
       try {
@@ -159,39 +167,80 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
         onProbeComplete({ label, durationMs: Date.now() - startedAt });
       }
     };
+    const meterConfigured = config.smartCosmoEnabled && Boolean(config.meterHost && !isDocumentationHost(config.meterHost));
+    const solarConfigured = config.solarEnabled && Boolean(config.solarHost && !isDocumentationHost(config.solarHost));
+    const fuelCellConfigured = config.fuelCellEnabled && Boolean(config.fuelCellPrimaryHost && !isDocumentationHost(config.fuelCellPrimaryHost));
+    const readLivePower = () => probe<UnknownRecord>("live power", () => batteryConfigured || meterConfigured || solarConfigured || fuelCellConfigured
+      ? safeCommand("live-power", {
+          "battery-host": config.batteryHost,
+          "no-battery": !batteryConfigured,
+          ...(solarConfigured ? { "solar-host": config.solarHost } : { "no-solar": true }),
+          ...(meterConfigured ? { "meter-host": config.meterHost, "meter-eoj": config.meterEoj } : { "no-meter": true }),
+          ...(fuelCellConfigured ? fuelCellArgs(config) : { "no-fuel-cell": true }),
+        }, [], { priority: 5 })
+      : Promise.resolve({}));
+    const livePower = await readLivePower();
+    const liveEnergy = asRecord(livePower.energy);
+    const liveMeter = asRecord(livePower.meter);
+    const liveFuelCells = Array.isArray(liveEnergy.fuel_cells) ? liveEnergy.fuel_cells.map(asRecord) : [];
+    if ([
+      asRecord(liveEnergy.battery).instant_power, asRecord(liveEnergy.solar).instant_power,
+      liveMeter.grid_import_power, liveMeter.branch_demand_power, ...liveFuelCells.map((cell) => cell.instant_power),
+    ].some(hasMetricValue)) {
+      publishLive({ ...buildStatus(config, livePower), statusDetailsPending: true });
+    }
+    const batteryPowerUnreachable = Array.isArray(livePower.errors) && livePower.errors.some((error) => {
+      const entry = asRecord(error);
+      return entry.host === config.batteryHost && entry.eoj === STORAGE_BATTERY_EOJ;
+    });
+    const readBatterySettings = batteryConfigured && !batteryPowerUnreachable;
+    const skippedSetting = (key = ""): UnknownRecord => {
+      const cached = batteryConfigured ? config.settingCache[key] : null;
+      return {
+        available: false,
+        error: batteryConfigured ? "battery did not respond" : "battery host is not configured",
+        lastKnown: cached?.lastKnown ?? null,
+        lastReadAt: cached?.lastReadAt ?? null,
+      };
+    };
     const [energy, meter, mode, dischargeLimit, chargeWindow, dischargeWindow, vendor] = await Promise.all([
       probe("energy status", () => batteryConfigured ? safeCommand("energy-status", energyArgs) : Promise.resolve({ battery: { configured: false } })),
       probe("home power meter status", () => readMeterStatus(config)),
-      probe("charging profile", () => batteryConfigured ? safeCommand("vendor-profile", { host: config.batteryHost }) : Promise.resolve({ error: "battery host is not configured" })),
-      probe("discharge limit", () => batteryConfigured ? settingWithCache(config, "discharge_limit", () => safeCommand("discharge-limit", { host: config.batteryHost })) : Promise.resolve(skippedSetting)),
-      probe("osaifu charge window", () => batteryConfigured ? settingWithCache(config, "osaifu_charge_window", () => safeCommand("osaifu-charge-window", { host: config.batteryHost })) : Promise.resolve(skippedSetting)),
-      probe("osaifu discharge window", () => batteryConfigured ? settingWithCache(config, "osaifu_discharge_window", () => safeCommand("osaifu-discharge-window", { host: config.batteryHost })) : Promise.resolve(skippedSetting)),
-      probe("vendor properties", () => batteryConfigured ? safeCommand("dump-vendor", { host: config.batteryHost }) : Promise.resolve({ error: "battery host is not configured" })),
+      probe("charging profile", () => readBatterySettings ? safeCommand("vendor-profile", { host: config.batteryHost }) : Promise.resolve(skippedSetting())),
+      probe("discharge limit", () => readBatterySettings ? settingWithCache(config, "discharge_limit", () => safeCommand("discharge-limit", { host: config.batteryHost })) : Promise.resolve(skippedSetting("discharge_limit"))),
+      probe("osaifu charge window", () => readBatterySettings ? settingWithCache(config, "osaifu_charge_window", () => safeCommand("osaifu-charge-window", { host: config.batteryHost })) : Promise.resolve(skippedSetting("osaifu_charge_window"))),
+      probe("osaifu discharge window", () => readBatterySettings ? settingWithCache(config, "osaifu_discharge_window", () => safeCommand("osaifu-discharge-window", { host: config.batteryHost })) : Promise.resolve(skippedSetting("osaifu_discharge_window"))),
+      probe("vendor properties", () => readBatterySettings ? safeCommand("dump-vendor", { host: config.batteryHost }) : Promise.resolve(skippedSetting())),
     ]);
 
     const hydrateWindowRaw = async (windowData: UnknownRecord, epcHex: string): Promise<UnknownRecord> => {
-      if (!batteryConfigured || windowData.raw) return windowData;
+      if (!readBatterySettings || windowData.raw) return windowData;
       const rawRead = await safeCommand("raw-get", { host: config.batteryHost, eoj: STORAGE_BATTERY_EOJ }, [epcHex]);
       return rawRead.raw ? { ...windowData, raw: rawRead.raw } : windowData;
     };
     const chargeWindowRead = await probe("osaifu charge window raw fallback", () => hydrateWindowRaw(chargeWindow, "0xF4"));
     const dischargeWindowRead = await probe("osaifu discharge window raw fallback", () => hydrateWindowRaw(dischargeWindow, "0xF5"));
-    const livePowerArgs: DeviceCommandArguments = {
-      "battery-host": config.batteryHost,
-      ...(config.solarEnabled ? { "solar-host": config.solarHost } : { "no-solar": true }),
-      ...(config.smartCosmoEnabled && config.meterHost
-        ? { "meter-host": config.meterHost, "meter-eoj": config.meterEoj }
-        : { "no-meter": true }),
-      ...(config.fuelCellEnabled ? fuelCellArgs(config) : { "no-fuel-cell": true }),
-    };
-    const livePower = await probe("live power", () => batteryConfigured
-      ? safeCommand("live-power", livePowerArgs, [], { priority: 5 })
-      : Promise.resolve({ error: "battery host is not configured" }));
+    const liveAt = Date.parse(String(livePower.completed_at ?? ""));
+    const finalPower = Date.now() - liveAt > LIVE_READ_MAX_AGE_MS ? await readLivePower() : livePower;
+    const status = buildStatus(config, finalPower, energy, meter, {
+      mode, discharge_limit: dischargeLimit, osaifu_charge_window: chargeWindowRead, osaifu_discharge_window: dischargeWindowRead, vendor,
+    });
+    status.sample = await dependencies.recordStatusSample(status, config);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const readAt = String(status.read_at);
+    const history = asRecord(await dependencies.readHistoryRange(today.toISOString(), readAt, config));
+    status.savings = history.summary;
+    status.savingsPeriods = dependencies.readCalendarSavings(readAt, config, history.summary);
+    return status;
+  }
+
+  function buildStatus(config: ApplicationConfig, livePower: UnknownRecord, energy: UnknownRecord = {}, meter: UnknownRecord = {}, settings?: UnknownRecord): UnknownRecord {
     const liveEnergy = asRecord(livePower.energy);
     const liveBattery = asRecord(liveEnergy.battery);
     const liveSolar = asRecord(liveEnergy.solar);
     const liveMeter = asRecord(livePower.meter);
-    const detailBattery = asRecord(energy.battery);
+    const detailBattery: UnknownRecord = { configured: Boolean(config.batteryHost && !isDocumentationHost(config.batteryHost)), ...asRecord(energy.battery) };
     const detailSolar = asRecord(energy.solar);
     const detailFuelCells = Array.isArray(energy.fuel_cells) ? energy.fuel_cells.map(asRecord) : [];
     const liveFuelCells = Array.isArray(liveEnergy.fuel_cells) ? liveEnergy.fuel_cells.map(asRecord) : [];
@@ -204,7 +253,7 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
               ...(hasMetricValue(livePrimaryFuelCell.instant_power) ? { instant_power: livePrimaryFuelCell.instant_power } : {}),
             }
           : cell)
-        : hasMetricValue(livePrimaryFuelCell.instant_power) ? [...detailFuelCells, livePrimaryFuelCell] : detailFuelCells
+        : [...detailFuelCells, livePrimaryFuelCell]
       : detailFuelCells;
     const mergedEnergy: UnknownRecord = {
       ...energy,
@@ -216,6 +265,7 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
       .filter((key) => hasMetricValue(liveMeter[key]));
     if (hasDecodedChannels(liveMeter.channel_power)) liveMeterKeys.push("channel_power");
     const mergedMeter: UnknownRecord = {
+      configured: config.smartCosmoEnabled && Boolean(config.meterHost && !isDocumentationHost(config.meterHost)),
       ...meter,
       ...Object.fromEntries(
         liveMeterKeys.map((key) => [key, liveMeter[key]]),
@@ -240,7 +290,16 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
       mergedMeter.home_load_source = homeLoad.source;
       mergedMeter.home_load_missing = homeLoad.missing;
     }
-    const status: UnknownRecord = {
+    const primaryFuelCellReading = mergedFuelCells.find((cell) => cell.source_role === "primary");
+    const configuredAndMissing = (host: string | null, ...metrics: unknown[]) =>
+      Boolean(host && !isDocumentationHost(host) && !metrics.some(hasMetricValue));
+    const unavailableEquipment = [
+      configuredAndMissing(config.batteryHost, asRecord(mergedEnergy.battery).instant_power, detailBattery.remaining_percent) ? "Battery" : null,
+      config.solarEnabled && configuredAndMissing(config.solarHost, asRecord(mergedEnergy.solar).instant_power) ? "Solar" : null,
+      config.smartCosmoEnabled && configuredAndMissing(config.meterHost, mergedMeter.grid_import_power, mergedMeter.branch_demand_power) ? "Smart Cosmo" : null,
+      config.fuelCellEnabled && configuredAndMissing(config.fuelCellPrimaryHost, primaryFuelCellReading?.instant_power, primaryFuelCellReading?.generation_status) ? "Ene-Farm" : null,
+    ].filter((device): device is string => device !== null);
+    return {
       hosts: {
         battery: config.batteryHost,
         meter: config.smartCosmoEnabled ? config.meterHost || null : null,
@@ -265,7 +324,8 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
         errors: Array.isArray(livePower.errors) ? livePower.errors : [],
         ...(typeof livePower.error === "string" ? { error: livePower.error } : {}),
       },
-      settings: { mode, discharge_limit: dischargeLimit, osaifu_charge_window: chargeWindowRead, osaifu_discharge_window: dischargeWindowRead, vendor },
+      ...(settings ? { settings } : {}),
+      unavailableEquipment,
       read_at: readAt,
       rates: {
         rateMode: config.rateMode,
@@ -275,39 +335,52 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
         rateBands: config.rateBands,
       },
     };
-    status.sample = await dependencies.recordStatusSample(status, config);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const history = asRecord(await dependencies.readHistoryRange(today.toISOString(), readAt, config));
-    status.savings = history.summary;
-    status.savingsPeriods = dependencies.readCalendarSavings(readAt, config, history.summary);
-    return status;
   }
 
-  function snapshotAgeMs(now = Date.now()): number {
-    const readAt = new Date(String(latestSnapshot?.read_at ?? "")).getTime();
+  function snapshotAgeMs(snapshot: UnknownRecord, now = Date.now()): number {
+    const readAt = new Date(String(snapshot.read_at ?? "")).getTime();
     return Number.isFinite(readAt) ? Math.max(0, now - readAt) : Number.POSITIVE_INFINITY;
   }
 
-  async function refresh(onProbeComplete: ProbeProgress = () => undefined): Promise<UnknownRecord> {
+  function refresh(onProbeComplete: ProbeProgress): Promise<UnknownRecord> {
     if (refreshPromise) return refreshPromise;
-    refreshPromise = readAll(onProbeComplete)
+    const startedAtRevision = refreshRevision = revision;
+    let resolveLive!: (status: UnknownRecord) => void;
+    const live = new Promise<UnknownRecord>((resolve) => { resolveLive = resolve; });
+    refreshPromise = readAll(onProbeComplete, (status) => {
+      if (startedAtRevision === revision) latestDisplaySnapshot = status;
+      resolveLive(status);
+    })
       .then((status) => {
-        latestSnapshot = status;
+        if (startedAtRevision === revision) {
+          latestSnapshot = status;
+          latestDisplaySnapshot = status;
+        }
         return status;
       })
-      .finally(() => { refreshPromise = null; });
+      .finally(() => { refreshPromise = null; displayPromise = null; });
+    // Use the complete snapshot when the details are already about to arrive.
+    displayPromise = Promise.race([live.then(async (status) => {
+      await delay(200);
+      return status;
+    }), refreshPromise]);
+    void displayPromise.catch(() => {});
     return refreshPromise;
   }
 
-  async function get(options: { maxAgeMs?: number; force?: boolean; onProbeComplete?: ProbeProgress } = {}): Promise<UnknownRecord> {
-    const { maxAgeMs = 0, force = false, onProbeComplete = () => undefined } = options;
-    if (!force && latestSnapshot && snapshotAgeMs() <= Math.max(0, Number(maxAgeMs) || 0)) return latestSnapshot;
-    return refresh(onProbeComplete);
+  async function get(options: { maxAgeMs?: number; force?: boolean; display?: boolean; onProbeComplete?: ProbeProgress } = {}): Promise<UnknownRecord> {
+    const { maxAgeMs = 0, force = false, display = false, onProbeComplete = () => undefined } = options;
+    const snapshot = display ? latestDisplaySnapshot : latestSnapshot;
+    if (!force && snapshot && snapshotAgeMs(snapshot) <= Math.max(0, Number(maxAgeMs) || 0)) return snapshot;
+    if (refreshPromise && refreshRevision !== revision) await refreshPromise.catch(() => {});
+    const full = refresh(onProbeComplete);
+    return display ? displayPromise ?? full : full;
   }
 
   function invalidate(): void {
+    revision += 1;
     latestSnapshot = null;
+    latestDisplaySnapshot = null;
   }
 
   function observeDevice(statusValue: unknown, config: ApplicationConfig): void {
@@ -367,7 +440,7 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
 
   return {
     get,
-    getLatest: () => latestSnapshot,
+    getLatest: () => latestDisplaySnapshot,
     hasActiveRefresh: () => refreshPromise !== null,
     invalidate,
     observeBattery,

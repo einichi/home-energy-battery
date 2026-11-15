@@ -69,9 +69,11 @@ export function EnergyStatusProvider({ children }: { children: ReactNode }) {
       controller?.abort();
       controller = new AbortController();
       setLoadingState((current) => current === "loading" ? current : "refreshing");
+      let detailsPending = false;
       try {
         const next = await getStatus(controller.signal);
         if (stopped || request !== latestRequest.current) return;
+        detailsPending = next.statusDetailsPending === true;
         setStatus(next);
         setStatusError(null);
         setLoadingState("ready");
@@ -82,7 +84,7 @@ export function EnergyStatusProvider({ children }: { children: ReactNode }) {
       } finally {
         if (isManualRefresh) setManualRefreshing(false);
         if (!stopped) {
-          const interval = Math.max(5, config?.updateIntervalSeconds ?? 15) * 1000;
+          const interval = detailsPending ? 1000 : Math.max(5, config?.updateIntervalSeconds ?? 15) * 1000;
           timer = window.setTimeout(poll, document.hidden ? Math.max(interval, 300_000) : interval);
         }
       }

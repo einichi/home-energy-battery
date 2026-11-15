@@ -8,6 +8,7 @@ import { adaptiveChargingConfiguredActive } from "../domain/adaptive-control.js"
 interface StatusErrorEntry { error?: unknown }
 export interface SystemStatusSnapshot extends Record<string, unknown> {
   read_at?: string;
+  unavailableEquipment?: string[];
   energy?: {
     error?: unknown;
     battery?: { error?: unknown; configured?: boolean };
@@ -91,13 +92,14 @@ export function createSystemAlertService(dependencies: SystemAlertDependencies) 
       snapshot.meter?.error,
       ...(snapshot.meter?.errors ?? []).map((item) => item.error),
     ].filter(Boolean);
-    if (equipmentErrors.length) add({
+    const unavailable = snapshot.unavailableEquipment ?? [];
+    if (unavailable.length || equipmentErrors.length) add({
       id: "equipment",
       source: equipmentErrors.some((error) => /timeout|unreachable|network|EHOST|ENET/i.test(String(error))) ? "Local network" : "Device",
       severity: "warning",
-      title: `${equipmentErrors.length} equipment issue${equipmentErrors.length === 1 ? "" : "s"}`,
+      title: unavailable.length ? "Equipment unavailable" : `${equipmentErrors.length} equipment issue${equipmentErrors.length === 1 ? "" : "s"}`,
       startedAt: snapshot.read_at ?? now.toISOString(),
-      impact: String(equipmentErrors[0]),
+      impact: unavailable.length ? unavailable.join(", ") : String(equipmentErrors[0]),
       suggestedAction: "Inspect configured equipment and its latest contact status.",
       href: "/system/equipment",
     });
@@ -108,7 +110,15 @@ export function createSystemAlertService(dependencies: SystemAlertDependencies) 
       suggestedAction: "Review the battery address and installed-equipment settings.", href: "/system/equipment",
     });
     const adaptive = dependencies.adaptiveChargingView(config, adaptiveState, rules, now);
-    if (config.adaptiveCharging?.enabled && adaptive.paused) add({
+    const equipmentPause = adaptiveChargingConfiguredActive(config) &&
+      (unavailable.length > 0 || adaptiveState.lastResult?.kind === "equipment-unavailable");
+    if (equipmentPause) add({
+      id: "automation-paused", source: "Automation", severity: "warning", title: "Adaptive Charging paused",
+      startedAt: adaptiveState.updatedAt ?? now.toISOString(),
+      impact: unavailable.length ? unavailable.join(", ") : String(adaptive.reason ?? "Waiting for equipment"),
+      suggestedAction: "Check equipment connectivity.", href: "/system/equipment",
+    });
+    else if (config.adaptiveCharging?.enabled && adaptive.paused) add({
       id: "automation-paused", source: "Automation", severity: "warning", title: "Adaptive Charging paused",
       startedAt: adaptiveState.updatedAt ?? now.toISOString(), impact: String(adaptive.reason ?? "The active plan cannot currently control battery charging."),
       suggestedAction: "Review the active override and resume automation when appropriate.", href: "/automation",

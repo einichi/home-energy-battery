@@ -7,10 +7,10 @@ export class ApiError extends Error {
   }
 }
 
-export async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+export async function getJson<T>(url: string, signal?: AbortSignal, headers?: Record<string, string>): Promise<T> {
   const response = await fetch(url, {
     method: "GET",
-    headers: { accept: "application/json" },
+    headers: { accept: "application/json", ...headers },
     signal,
   });
   if (!response.ok) {

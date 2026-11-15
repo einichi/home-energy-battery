@@ -483,6 +483,8 @@ function adaptiveChargingView(
     ? now.getTime() - new Date(state.forecast.fetchedAt).getTime()
     : null;
   const paused = Boolean(state.pausedUntil && new Date(state.pausedUntil).getTime() > now.getTime());
+  const equipmentPause = adaptiveChargingConfiguredActive(config) && state.lastResult?.kind === "equipment-unavailable" && typeof state.lastResult.skipped === "string"
+    ? state.lastResult.skipped : null;
   const planUnavailableReason = state.plan && state.plan.available === false ? state.plan.reason : null;
   const cachedForecastUsable = cachedForecastIsUsable(state, now);
   const forecastError = state.lastForecastError?.error && !cachedForecastUsable ? String(state.lastForecastError.error) : null;
@@ -491,11 +493,12 @@ function adaptiveChargingView(
     available: availability.available
       && cachedForecastUsable
       && !paused
+      && !equipmentPause
       && !forecastError
       && !planUnavailableReason,
     reason: paused
       ? `paused until ${state.pausedUntil}`
-      : availability.reason
+      : equipmentPause || availability.reason
         || forecastError
         || planUnavailableReason
         || (!forecastIsFresh(state.forecast, now) ? "solar forecast is stale or unavailable" : null),

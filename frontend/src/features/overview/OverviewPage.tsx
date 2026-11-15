@@ -10,11 +10,7 @@ import { useEnergyStatus } from "../../hooks/useEnergyStatus";
 import { useSnapshotStale } from "../../hooks/useSnapshotStale";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-
-function preferredFuelCell(status: ReturnType<typeof useEnergyStatus>["status"]) {
-  const fuelCells = status?.energy?.fuel_cells ?? [];
-  return fuelCells.find((cell) => cell.source_role === "primary") ?? fuelCells[0];
-}
+import { liveFuelCellPower } from "../../core/energy";
 
 function batteryStateLabel(power: number | null) {
   if (power === null) return "Unavailable";
@@ -44,11 +40,10 @@ export function OverviewPage() {
     return value.toISOString();
   }, []);
   const battery = status?.energy?.battery;
-  const fuelCell = preferredFuelCell(status);
   const soc = metricValue(battery?.remaining_percent);
   const batteryPower = metricValue(battery?.instant_power);
   const solarPower = metricValue(status?.energy?.solar?.instant_power);
-  const fuelCellPower = metricValue(fuelCell?.instant_power);
+  const fuelCellPower = liveFuelCellPower(status);
   const homeLoadMetric = status?.meter?.home_load_power;
   const homeLoadSource = status?.meter?.home_load_source;
   const homeLoadIsDerived = homeLoadSource === "derived";

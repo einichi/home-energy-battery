@@ -179,6 +179,40 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
     }
     const paused = state.pausedUntil && new Date(state.pausedUntil).getTime() > now.getTime();
     const guardActive = rules.some((rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore);
+    const unavailableEquipment = status.unavailableEquipment ?? [];
+    if (unavailableEquipment.length && (adaptiveChargingConfiguredActive(config) || state.owner === "adaptiveCharging" || state.standbyHoldUntil)) {
+      const reason = `Equipment unavailable: ${unavailableEquipment.join(", ")}`;
+      let error: string | undefined;
+      if (!guardActive && !unavailableEquipment.includes("Battery")) {
+        try {
+          if (state.owner === "adaptiveCharging") {
+            preserveInterruptedAdaptiveCharge(state, now);
+            await releaseAdaptiveCharge(state, reason, now);
+          } else if (state.standbyHoldUntil) {
+            await executeAdaptiveChargingAction("set-mode", { mode: "auto" });
+            state.standbyHoldUntil = null;
+          }
+        } catch (failure) {
+          error = failure instanceof Error ? failure.message : String(failure);
+        }
+      }
+      if (state.lastResult?.skipped !== reason) appendAdaptiveChargingLog(state, reason, "pause", now);
+      finalizeExpiredAdaptiveChargingWindow(state, numericMetric(status.energy?.battery?.remaining_percent), now);
+      state.lastResult = { ok: !error, at: now.toISOString(), kind: "equipment-unavailable", skipped: reason, ...(error ? { error } : {}) };
+      return writeAdaptiveChargingState(state);
+    }
+    if (!unavailableEquipment.length && state.lastResult?.kind === "equipment-unavailable") {
+      if (!guardActive && state.owner === "adaptiveCharging") {
+        preserveInterruptedAdaptiveCharge(state, now);
+        await releaseAdaptiveCharge(state, "Equipment availability restored", now);
+      } else if (!guardActive && state.standbyHoldUntil) {
+        await executeAdaptiveChargingAction("set-mode", { mode: "auto" });
+        state.standbyHoldUntil = null;
+      }
+      queueAdaptiveChargingPlanRefresh(state, "Equipment availability restored", now);
+      state.lastResult = { ok: true, at: now.toISOString(), kind: "equipment-restored" };
+      state = await writeAdaptiveChargingState(state);
+    }
     const activeDiscountedWindow = discountedBandOccurrence(config, now);
     const standbyHoldUntilMs = new Date(state.standbyHoldUntil ?? "").getTime();
     if (state.standbyHoldUntil

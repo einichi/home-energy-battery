@@ -259,6 +259,7 @@ const preflightState = cleanAdaptiveChargingState({
 });
 let preflightChargeStarts = 0;
 const preflightActions: Array<{ action: string; payload: Record<string, unknown> }> = [];
+const releaseReasons: string[] = [];
 const preflightEvaluator = createAdaptiveChargingEvaluator({
   readState: async () => preflightState,
   writeState: async (next) => next,
@@ -268,7 +269,12 @@ const preflightEvaluator = createAdaptiveChargingEvaluator({
     preflightActions.push({ action, payload });
     return { ok: true };
   },
-  releaseCharge: async () => false,
+  releaseCharge: async (current, reason) => {
+    releaseReasons.push(reason);
+    current.owner = null;
+    current.activeSlot = null;
+    return true;
+  },
   suspendInStandby: async () => false,
   startCharge: async () => {
     preflightChargeStarts += 1;
@@ -306,6 +312,19 @@ preflightStatus.meter.grid_import_power.value = 1_000;
 preflightStatus.energy.battery.operation_mode.value = "standby";
 await preflightEvaluator(preflightConfig, preflightStatus, [preflightRule], new Date(slotStart.getTime() + 5_000));
 assert.equal(preflightChargeStarts, 1, "adaptive charging starts when the configured branch-demand source falls within reserve");
+
+preflightActions.length = 0;
+await preflightEvaluator(preflightConfig, { ...preflightStatus, unavailableEquipment: ["Ene-Farm"] }, [preflightRule], slotStart);
+assert.deepEqual(releaseReasons, ["Equipment unavailable: Ene-Farm"], "Adaptive Charging releases its active charge");
+assert.equal(preflightState.owner, null);
+preflightState.standbyHoldUntil = windowEnd.toISOString();
+await preflightEvaluator(preflightConfig, { ...preflightStatus, unavailableEquipment: ["Ene-Farm"] }, [preflightRule], slotStart);
+assert.deepEqual(preflightActions, [{ action: "set-mode", payload: { mode: "auto" } }], "Adaptive Charging releases its standby hold");
+assert.equal(preflightState.standbyHoldUntil, null);
+assert.equal(preflightState.lastResult?.kind, "equipment-unavailable");
+assert.equal(preflightChargeStarts, 1, "a missing device prevents another charging start");
+await preflightEvaluator(preflightConfig, { ...preflightStatus, unavailableEquipment: [] }, [preflightRule], new Date(slotStart.getTime() + 10_000));
+assert.notEqual(preflightState.lastResult?.kind, "equipment-unavailable", "fresh equipment readings clear the equipment pause");
 }
 
 const schedule: BatterySchedule = {

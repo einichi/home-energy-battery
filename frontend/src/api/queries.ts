@@ -10,7 +10,7 @@ export function updateConfig(config: Partial<AppConfig>) {
 }
 
 export function getStatus(signal?: AbortSignal) {
-  return getJson<StatusSnapshot>("/api/status", signal);
+  return getJson<StatusSnapshot>("/api/status", signal, { "x-home-energy-status": "display" });
 }
 
 export function getHistory(start: Date, end: Date, signal?: AbortSignal) {

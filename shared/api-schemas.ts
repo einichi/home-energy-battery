@@ -176,6 +176,8 @@ export const StatusSnapshotSchema = v.object({
     errors: v.optional(v.array(v.object({ error: optionalNullableString }))), error: optionalNullableString,
   })),
   statusRefreshPaused: v.optional(v.boolean()), statusRefreshPausedReason: optionalNullableString,
+  statusDetailsPending: v.optional(v.boolean()),
+  unavailableEquipment: v.optional(v.array(v.string())),
   alerts: v.optional(v.array(SystemAlertSchema)),
   hosts: v.optional(v.object({ battery: optionalNullableString })),
   energy: v.optional(v.object({

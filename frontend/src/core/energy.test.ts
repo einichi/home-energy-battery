@@ -18,4 +18,20 @@ describe("energy view model", () => {
     expect(samples).toHaveLength(1);
     expect(samples[0].branchDemandW).toBe(1400);
   });
+
+  it("shows proxy power while preserving details already recorded for the same reading", () => {
+    const readAt = "2026-09-12T12:00:00.000Z";
+    const status = {
+      read_at: readAt,
+      energy: { fuel_cells: [
+        { source_role: "primary" as const },
+        { source_role: "proxy" as const, instant_power: { value: 420 } },
+      ] },
+    };
+    const sample = statusToEnergySample(status);
+    expect(sample?.fuelCellPowerW).toBe(420);
+    expect(sample?.fuelCellHotWaterLevel).toBeNull();
+    const existing = [{ timestamp: readAt, branchDemandW: 1400, stateOfChargePercent: 65 }];
+    expect(withLatestStatus(existing, { ...status, statusDetailsPending: true })).toEqual(existing);
+  });
 });

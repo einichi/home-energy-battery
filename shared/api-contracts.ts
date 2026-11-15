@@ -86,7 +86,7 @@ export type NotificationView = { config: NotificationConfig; passwordConfigured?
 export type HistoryStats = { sizeBytes?: number; fileSizes?: { mainBytes?: number; walBytes?: number; shmBytes?: number; totalBytes?: number }; sampleCount?: number; averageSampleBytes?: number; estimatedDailyGrowthBytes?: number; earliest?: string | null; latest?: string | null; daysRecorded?: number; rollups?: { interval?: number; daily?: number }; events?: Record<string, number>; schemaVersion?: number; lastCompaction?: { completedAt?: string } | null };
 export type DatabaseBackup = { filename: string; createdAt?: string; modifiedAt?: string; sizeBytes?: number; schemaVersion?: number; compatible?: boolean; kind?: string };
 export type DatabaseBackupsView = { schemaVersion?: number; operation?: { busy?: boolean; phase?: string; percent?: number; error?: string | null }; backups: DatabaseBackup[] };
-export type DiscoveryView = { discovered?: Array<{ host: string; roles?: string[]; instances?: unknown[] }>; suggestedConfig?: Partial<AppConfig> };
+export type DiscoveryView = { discovered?: Array<{ host: string; roles?: string[]; instances?: unknown[] }>; suggestedConfig?: Partial<AppConfig>; broadcastUnavailable?: boolean };
 export type DiscoveryJob = {
   id: string;
   status: "queued" | "running" | "complete" | "failed";
@@ -94,7 +94,7 @@ export type DiscoveryJob = {
   total?: number;
   scanned?: number;
   found?: number;
-  network?: string;
+  network?: { scanSubnets?: string[] } | null;
   result?: DiscoveryView;
   error?: string;
   createdAt?: string;

@@ -58,6 +58,8 @@ export function createBatteryStrategyService(dependencies: BatteryStrategyDepend
         .filter((item): item is { schedule: BatterySchedule; at: string } => typeof item.at === "string")
         .sort((left, right) => new Date(left.at).getTime() - new Date(right.at).getTime())[0] ?? null;
     const paused = adaptive.pausedUntil && new Date(adaptive.pausedUntil).getTime() > now.getTime();
+    const equipmentPause = config.adaptiveCharging?.enabled && adaptive.lastResult?.kind === "equipment-unavailable"
+      && typeof adaptive.lastResult.skipped === "string" ? adaptive.lastResult.skipped : null;
     const manualDirect = recentTerminal?.state === "succeeded"
       && recentTerminal.source === "manual"
       && ["charge", "discharge", "set-mode"].includes(recentTerminal.action)
@@ -71,6 +73,8 @@ export function createBatteryStrategyService(dependencies: BatteryStrategyDepend
       strategy = { kind: "backup-preparation", title: "Disaster Prep", description: `Holding the ${backup.currentProfile ?? "backup"} profile while normal automation is suspended.` };
     } else if (guard) {
       strategy = { kind: "demand-guard", title: "Charging Demand Guard", description: "Standby is being held to preserve configured breaker headroom." };
+    } else if (equipmentPause) {
+      strategy = { kind: "adaptive-charging", title: "Adaptive Charging paused", description: equipmentPause };
     } else if (adaptive.owner === "adaptiveCharging") {
       strategy = { kind: "adaptive-charging", title: "Adaptive Charging", description: adaptive.plan?.reason ?? "The active charging plan currently owns battery operation." };
     } else if (away.active) {
@@ -97,7 +101,9 @@ export function createBatteryStrategyService(dependencies: BatteryStrategyDepend
     const upcomingAdaptiveSlot = adaptive.plan?.slots
       ?.filter((slot) => new Date(slot.end).getTime() > now.getTime())
       .sort((left, right) => new Date(left.start).getTime() - new Date(right.start).getTime())[0] ?? null;
-    const nextAction: BatteryStrategy["nextAction"] = adaptive.owner === "adaptiveCharging" && adaptive.activeSlot
+    const nextAction: BatteryStrategy["nextAction"] = equipmentPause
+      ? { title: "Waiting for equipment", reason: equipmentPause, href: "/system/equipment" }
+      : adaptive.owner === "adaptiveCharging" && adaptive.activeSlot
       ? {
           action: "continue-charging",
           title: "Continue charging",

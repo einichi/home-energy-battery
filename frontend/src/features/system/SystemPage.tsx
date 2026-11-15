@@ -56,12 +56,12 @@ export function SystemPage() {
   const save: SaveSettings = async (patch, message) => {
     if (!config)
       return { ok: false, message: "Configuration is not available." };
-    // Prevent overlapping full-config saves from clobbering each other.
+    // Keep edits ordered while the server applies each patch.
     if (savingRef.current) return { ok: false, message: "A save is already in progress." };
     savingRef.current = true;
     setBusy(true);
     try {
-      const next = await updateConfig({ ...config, ...patch });
+      const next = await updateConfig(patch);
       replaceConfig({ ...next, runtime: next.runtime ?? config.runtime });
       return { ok: true, message };
     } catch (error) {

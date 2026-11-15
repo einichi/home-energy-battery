@@ -230,7 +230,9 @@ export function createSystemRouteHandler(dependencies: SystemRouteDependencies) 
       }
       const config = await readConfig();
       const maxAgeMs = Math.max(5, Number(config.updateIntervalSeconds) || DEFAULT_CONFIG.updateIntervalSeconds) * 1000;
-      const snapshot = await getStatusSnapshot({ maxAgeMs });
+      const display = req.headers["x-home-energy-status"] === "display";
+      res.setHeader("Vary", "X-Home-Energy-Status");
+      const snapshot = await getStatusSnapshot({ maxAgeMs, display });
       const response = {
         ...snapshot,
         batteryStrategy: await batteryStrategyView(),

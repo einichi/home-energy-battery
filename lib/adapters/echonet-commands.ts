@@ -304,6 +304,7 @@ async function cmdStatus(opts: CommandOptions) {
 }
 
 async function cmdLivePower(opts: CommandOptions) {
+  const batteryEnabled = !opts["no-battery"];
   const batteryHost = String(opts["battery-host"] ?? "192.0.2.10");
   const solarEnabled = !opts["no-solar"];
   const solarHost = String(opts["solar-host"] ?? batteryHost);
@@ -335,14 +336,14 @@ async function cmdLivePower(opts: CommandOptions) {
     }
     const timestamped = (value: Record<string, unknown>, acquiredAt: string) => ({ ...value, acquired_at: acquiredAt });
 
-    // Keep the balance-critical reads adjacent inside one queue item. Writes may
-    // still run before this command, but slower settings and counter reads cannot
-    // be interleaved between these measurements.
-    const solarPower = solarEnabled ? await read(solarHost, SOLAR_EOJ, EPC.SOLAR_INSTANT_POWER_W) : null;
-    const batteryPower = await read(batteryHost, STORAGE_BATTERY_EOJ, EPC.INSTANT_POWER_W);
-    const fuelCellPower = fuelCellEnabled ? await read(fuelCellPrimaryHost, FUEL_CELL_EOJ, EPC.FUEL_CELL_INSTANT_POWER_W) : null;
-    const gridPower = meterEnabled ? await read(meterHost, meterEojText, EPC.METER_INSTANT_POWER_W) : null;
-    const channelPowerRaw = meterEnabled ? await read(meterHost, meterEojText, EPC.METER_INSTANT_POWER_LIST) : null;
+    // Keep the readings in one queue item while each reply arrives independently.
+    const [solarPower, batteryPower, fuelCellPower, gridPower, channelPowerRaw] = await Promise.all([
+      solarEnabled ? read(solarHost, SOLAR_EOJ, EPC.SOLAR_INSTANT_POWER_W) : null,
+      batteryEnabled ? read(batteryHost, STORAGE_BATTERY_EOJ, EPC.INSTANT_POWER_W) : null,
+      fuelCellEnabled ? read(fuelCellPrimaryHost, FUEL_CELL_EOJ, EPC.FUEL_CELL_INSTANT_POWER_W) : null,
+      meterEnabled ? read(meterHost, meterEojText, EPC.METER_INSTANT_POWER_W) : null,
+      meterEnabled ? read(meterHost, meterEojText, EPC.METER_INSTANT_POWER_LIST) : null,
+    ]);
     const netGridWatts = gridPower?.raw && gridPower.raw.length === 4 ? gridPower.raw.readInt32BE(0) : null;
     const channelPower = decodeInstantPowerList(channelPowerRaw?.raw ?? null);
     const branchDemandWatts = sumInstantPowerChannels(channelPower);
@@ -364,7 +365,7 @@ async function cmdLivePower(opts: CommandOptions) {
             unit: "W",
           }), solarPower.acquiredAt),
         } : null,
-        battery: {
+        battery: batteryPower ? {
           instant_power: timestamped(decodeSignedW({
             host: batteryHost,
             eoj: STORAGE_BATTERY_EOJ,
@@ -372,7 +373,7 @@ async function cmdLivePower(opts: CommandOptions) {
             name: "battery_instant_power",
             raw: batteryPower.raw,
           }), batteryPower.acquiredAt),
-        },
+        } : { configured: false },
         fuel_cells: fuelCellPower ? [{
           host: fuelCellPrimaryHost,
           source_role: "primary",
@@ -448,11 +449,17 @@ async function cmdEnergyStatus(opts: CommandOptions) {
   const fuelCellProxyHosts: unknown[] = values(opts["fuel-cell-proxy-host"], legacyFuelCellHosts.slice(1));
   return withClient(opts, async (client) => {
     const errors: Array<Record<string, unknown>> = [];
+    const connected = new Set<string>();
+    const unreachable = new Set<string>();
     async function read(host: string, eoj: unknown, epc: number): Promise<Buffer | null> {
+      const target = `${host}/${String(eoj)}`;
+      if (unreachable.has(target)) return null;
       try {
         const res = await client.get(host, parseEoj(eoj), epc);
+        connected.add(target);
         return propRaw(res, epc);
       } catch (error: unknown) {
+        if (!connected.has(target)) unreachable.add(target);
         errors.push({
           host,
           eoj,
@@ -616,9 +623,12 @@ async function cmdMeterStatus(opts: CommandOptions) {
   const eojText = String(opts.eoj ?? POWER_METER_EOJ);
   const eoj = parseEoj(eojText);
   return withClient(opts, async (client) => {
+    let reachable = false;
     async function read(epc: number): Promise<Buffer | null> {
+      if (!reachable && errors.length) return null;
       try {
         const res = await client.get(host, eoj, epc);
+        reachable = true;
         return propRaw(res, epc);
       } catch (error: unknown) {
         errors.push({
@@ -633,13 +643,11 @@ async function cmdMeterStatus(opts: CommandOptions) {
 
     const errors: Array<Record<string, unknown>> = [];
 
-    // Some controller/meters expose both long-term import/export counters and
-    // instantaneous values. The dashboard cares mostly about the instantaneous
-    // net grid power and per-channel demand list.
+    // Check connectivity using live power before requesting optional counters.
+    const instantRaw = await read(EPC.METER_INSTANT_POWER_W);
     const normalRaw = await read(EPC.METER_CUMULATIVE_NORMAL);
     const reverseRaw = await read(EPC.METER_CUMULATIVE_REVERSE);
     const unitRaw = await read(EPC.METER_CUMULATIVE_UNIT);
-    const instantRaw = await read(EPC.METER_INSTANT_POWER_W);
     const channelsRaw = await read(EPC.METER_INSTANT_POWER_LIST);
     const cumulativeChannelsRaw = await read(EPC.METER_CUMULATIVE_POWER_LIST);
     const unit = cumulativeUnit(unitRaw);

@@ -11,6 +11,8 @@ test("active discovery uses the initialized ECHONET client and suggests an unamb
   const newPrimary = "10.250.0.250";
   const proxy = "10.250.0.135";
   const config = cleanConfig({
+    batteryHost: "10.250.0.152",
+    solarHost: "10.250.0.152",
     meterHost: proxy,
     fuelCellPrimaryHost: oldPrimary,
     fuelCellProxyHosts: [proxy],
@@ -34,6 +36,17 @@ test("active discovery uses the initialized ECHONET client and suggests an unamb
           },
         };
       }
+      if (replyAsAnotherPrimary && epc === 0xd6 && [newPrimary, "10.250.0.251"].includes(host)) {
+        return {
+          device: { address: host },
+          message: {
+            esv: "Get_Res",
+            seoj: eoj,
+            data: { list: [[0x02, 0x7d, 0x01], [0x02, 0x79, 0x01]] },
+            prop: [{ epc, buffer: Buffer.from([2, 2, 0x7d, 1, 2, 0x79, 1]) }],
+          },
+        };
+      }
       if (epc === 0xc4 && [newPrimary, "10.250.0.251"].includes(host)) {
         return {
           device: { address: replyAsAnotherPrimary ? host : newPrimary },
@@ -44,7 +57,7 @@ test("active discovery uses the initialized ECHONET client and suggests an unamb
     },
     async set() { throw new Error("unexpected device write"); },
     async maps() { return { message: { esv: "Get_SNA" } }; },
-    async discover() { throw new Error("unexpected multicast discovery"); },
+    async discover() { throw new Error("simulated multicast failure"); },
   };
   const adapter = await createEchonetCommandAdapter({ client });
   t.after(() => adapter.close());
@@ -55,8 +68,8 @@ test("active discovery uses the initialized ECHONET client and suggests an unamb
     cleanConfig,
     runDeviceCommand: adapter.execute,
   });
-  async function runScan() {
-    const { id } = service.startJob(1, "active");
+  async function runScan(mode: "active" | "broadcast") {
+    const { id } = service.startJob(1, mode);
     while (service.getJob(id)?.status === "running") await delay(10);
     const job = service.getJob(id);
     assert.equal(job?.status, "complete", job?.error ?? undefined);
@@ -64,7 +77,7 @@ test("active discovery uses the initialized ECHONET client and suggests an unamb
     return job.result;
   }
 
-  const result = await runScan();
+  const result = await runScan("active");
   assert.equal(initCalls, 1);
   assert.deepEqual(result.discovered.map(({ host }) => host).sort(), [proxy, newPrimary].sort());
   assert.equal(result.suggestedConfig.fuelCellPrimaryHost, newPrimary);
@@ -72,7 +85,14 @@ test("active discovery uses the initialized ECHONET client and suggests an unamb
   assert.deepEqual(result.suggestedConfig.fuelCellHosts, [newPrimary, proxy]);
   assert.equal(config.fuelCellPrimaryHost, oldPrimary);
 
+  const partialResult = await runScan("broadcast");
+  assert.equal(partialResult.broadcastUnavailable, true);
+  assert.deepEqual(partialResult.discovered, result.discovered);
+  assert.deepEqual(partialResult.network.scanSubnets, ["10.250.0.0/24"]);
+
   replyAsAnotherPrimary = true;
-  const ambiguousResult = await runScan();
+  const ambiguousResult = await runScan("active");
   assert.equal(ambiguousResult.suggestedConfig.fuelCellPrimaryHost, oldPrimary);
+  assert.equal(ambiguousResult.suggestedConfig.batteryHost, config.batteryHost);
+  assert.equal(ambiguousResult.suggestedConfig.solarHost, config.solarHost);
 });
