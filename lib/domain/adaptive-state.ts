@@ -157,6 +157,8 @@ export interface BreakerRecovery {
   interruptedAt: string;
   cooldownUntil: string | null;
   consecutiveSafeChecks: number;
+  // Present for demand telemetry interruptions. Null means the safe streak has yet to start.
+  demandStableSince?: string | null;
   lastCheckedAt: string | null;
   lastWaitLogAt: string | null;
   currentImportW: number | null;
@@ -326,6 +328,9 @@ export function cleanAdaptiveChargingState(input: unknown = {}): AdaptiveChargin
         interruptedAt: String(breakerRecovery.interruptedAt),
         cooldownUntil: stringOrNull(breakerRecovery.cooldownUntil),
         consecutiveSafeChecks: Math.max(0, Math.round(Number(breakerRecovery.consecutiveSafeChecks) || 0)),
+        ...(breakerRecovery.demandStableSince !== undefined
+          ? { demandStableSince: stringOrNull(breakerRecovery.demandStableSince) }
+          : {}),
         lastCheckedAt: stringOrNull(breakerRecovery.lastCheckedAt),
         lastWaitLogAt: stringOrNull(breakerRecovery.lastWaitLogAt),
         currentImportW: finiteNumberOrNull(breakerRecovery.currentImportW),

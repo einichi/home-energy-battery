@@ -48,6 +48,13 @@ export function sampleSolarGenerationKwh(
   return samplePowerKwh(sample, "solarGenerationKwh", "solarPowerW", previousSample, range);
 }
 
+export function sampleBatteryDischargeKwh(
+  sample: HistorySample,
+  previousSample: HistorySample | null | undefined,
+  range: TimeRange = {},
+): number {
+  return samplePowerKwh(sample, "batteryDischargeKwh", "batteryPowerW", previousSample, range, (watts) => -watts);
+}
 
 export function samplePowerKwh(
   sample: HistorySample,
@@ -55,20 +62,21 @@ export function samplePowerKwh(
   wattsKey: string,
   previousSample: HistorySample | null | undefined,
   range: TimeRange = {},
+  convertWatts: (watts: number) => number = (watts) => watts,
 ): number {
   const direct = finiteNumberOrNull(sample[directKey]);
   if (Number.isFinite(direct)) return Number(direct) * intervalOverlapFraction(sample, directKey, previousSample ?? undefined, range, false);
   if (!previousSample?.timestamp || !sample?.timestamp) return 0;
   const watts = finiteNumberOrNull(sample[wattsKey]);
   const previousWatts = finiteNumberOrNull(previousSample[wattsKey]);
-  if (!Number.isFinite(watts) || !Number.isFinite(previousWatts)) return 0;
+  if (watts === null || previousWatts === null) return 0;
   const elapsedMs = new Date(sample.timestamp).getTime() - new Date(previousSample.timestamp).getTime();
   const expectedSeconds = Number(sample.expectedIntervalSeconds);
   const maximumGapMs = Number.isFinite(expectedSeconds)
     ? Math.max(90_000, Math.min(2 * 60 * 60_000, expectedSeconds * 2.5 * 1000))
     : 35 * 60_000;
   if (!Number.isFinite(elapsedMs) || elapsedMs <= 0 || elapsedMs > maximumGapMs) return 0;
-  const averageWatts = (Math.max(0, Number(watts)) + Math.max(0, Number(previousWatts))) / 2;
+  const averageWatts = (Math.max(0, convertWatts(watts)) + Math.max(0, convertWatts(previousWatts))) / 2;
   return elapsedMs / 3_600_000 * averageWatts / 1000
     * intervalOverlapFraction(sample, directKey, previousSample ?? undefined, range);
 }
@@ -251,18 +259,7 @@ export function summarizeSamples(
   const battery = samples.reduce<{ chargedKwh: number; dischargedKwh: number }>(
     (acc, sample, index) => {
       const charged = samplePowerKwh(sample, "batteryChargeKwh", "batteryPowerW", samples[index - 1], range);
-      const dischargeSample: HistorySample = { ...sample, batteryPowerW: -Number(sample.batteryPowerW) };
-      const previous = samples[index - 1];
-      const previousDischargeSample = previous
-        ? { ...previous, batteryPowerW: -Number(previous.batteryPowerW) }
-        : null;
-      const discharged = samplePowerKwh(
-        dischargeSample,
-        "batteryDischargeKwh",
-        "batteryPowerW",
-        previousDischargeSample,
-        range,
-      );
+      const discharged = sampleBatteryDischargeKwh(sample, samples[index - 1], range);
       acc.chargedKwh += charged;
       acc.dischargedKwh += discharged;
       return acc;

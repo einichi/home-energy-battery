@@ -175,12 +175,56 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
     if (state.interruptedCharge
       && new Date(state.interruptedCharge.slotEnd ?? "").getTime() <= now.getTime()) {
       state.interruptedCharge = null;
-      state.breakerRecovery = null;
+      if (state.breakerRecovery?.demandStableSince === undefined) state.breakerRecovery = null;
     }
     const paused = state.pausedUntil && new Date(state.pausedUntil).getTime() > now.getTime();
-    const guardActive = rules.some((rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore);
+    const activeGuards = rules.filter((rule) => rule.enabled && rule.type === "backup-demand-guard" && rule.state?.awaitingRestore);
+    const guardActive = activeGuards.length > 0;
+    const guardStandbyConfirmed = activeGuards.some((rule) => rule.state.standbyUnconfirmed !== true);
+    const telemetryGuardHolding = activeGuards.some((rule) => rule.state.trigger === "demand-unavailable" && rule.state.standbyUnconfirmed !== true);
     const unavailableEquipment = status.unavailableEquipment ?? [];
-    if (unavailableEquipment.length && (adaptiveChargingConfiguredActive(config) || state.owner === "adaptiveCharging" || state.standbyHoldUntil)) {
+    const liveBranchDemandW = numericMetric(status.meter?.branch_demand_power);
+    const liveGridImportW = numericMetric(status.meter?.grid_import_power);
+    const liveSoc = numericMetric(status.energy?.battery?.remaining_percent);
+    const demandUnavailable = liveBranchDemandW === null || liveGridImportW === null;
+    const telemetryReady = !demandUnavailable && liveSoc !== null && !unavailableEquipment.length;
+    if (state.breakerRecovery && (demandUnavailable || (state.breakerRecovery.demandStableSince !== undefined && !telemetryReady))) {
+      state.breakerRecovery.consecutiveSafeChecks = 0;
+      if (state.breakerRecovery.demandStableSince !== undefined) state.breakerRecovery.demandStableSince = null;
+    }
+    const demandPausePending = state.lastResult?.kind === "demand-standby-retry";
+    if (!guardActive && state.owner === "adaptiveCharging" && (demandUnavailable || demandPausePending)) {
+      const reason = "Demand unavailable";
+      const interruption = preserveInterruptedAdaptiveCharge(state, now);
+      try {
+        await suspendAdaptiveChargeInStandby(state, reason, now, null, undefined, state.activeSlot?.windowEnd);
+      } catch (failure: unknown) {
+        const error = failure instanceof Error ? failure.message : String(failure);
+        appendAdaptiveChargingLog(state, `${reason}; could not confirm Standby: ${error}`, "error", now);
+        state.lastResult = { ok: false, at: now.toISOString(), kind: "demand-standby-retry", skipped: reason, error };
+        return writeAdaptiveChargingState(state);
+      }
+      if (interruption) recordAdaptiveChargingWindowInterruption(state, now);
+      beginAdaptiveChargingBreakerRecovery(state, adaptiveChargingLiveChargeHeadroom(status, config, state, rules), now, { demandUnavailable: true });
+      state.lastResult = { ok: true, at: now.toISOString(), kind: "demand-unavailable", skipped: reason };
+      return writeAdaptiveChargingState(state);
+    }
+    if (!guardActive && state.breakerRecovery?.demandStableSince !== undefined) {
+      const headroom = adaptiveChargingLiveChargeHeadroom(status, config, state, rules);
+      const recovery = advanceAdaptiveChargingBreakerRecovery(state, { ...headroom, available: headroom.available && telemetryReady }, now);
+      if (!recovery.ready) {
+        logAdaptiveChargingBreakerWait(state, headroom, recovery, now);
+        state.lastResult = { ok: true, at: now.toISOString(), kind: "demand-recovery", skipped: "waiting for stable demand and charging headroom" };
+        return writeAdaptiveChargingState(state);
+      }
+      if (!discountedBandOccurrence(config, now)) {
+        await executeAdaptiveChargingAction("set-mode", { mode: "auto" });
+        state.standbyHoldUntil = null;
+        state.breakerRecovery = null;
+      }
+    }
+    if (unavailableEquipment.length && !telemetryGuardHolding
+      && (adaptiveChargingConfiguredActive(config) || state.owner === "adaptiveCharging" || state.standbyHoldUntil)) {
       const reason = `Equipment unavailable: ${unavailableEquipment.join(", ")}`;
       let error: string | undefined;
       if (!guardActive && !unavailableEquipment.includes("Battery")) {
@@ -264,6 +308,10 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
       return writeAdaptiveChargingState(state);
     }
     if (guardActive) {
+      if (!guardStandbyConfirmed) {
+        state.lastResult = { ok: false, at: now.toISOString(), skipped: "Charging Demand Guard could not confirm Standby" };
+        return writeAdaptiveChargingState(state);
+      }
       if (activeDiscountedWindow && state.plan?.available) {
         syncAdaptiveChargingWindowExecution(
           state,
@@ -287,7 +335,7 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
         if (!interruption) state.plan = null;
         if (interruption) {
           recordAdaptiveChargingWindowInterruption(state, now);
-          beginAdaptiveChargingBreakerRecovery(state, adaptiveChargingLiveChargeHeadroom(status, config, state, rules), now);
+          beginAdaptiveChargingBreakerRecovery(state, adaptiveChargingLiveChargeHeadroom(status, config, state, rules), now, { demandUnavailable: telemetryGuardHolding });
         }
         appendAdaptiveChargingLog(
           state,
@@ -298,7 +346,7 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
           now,
         );
       }
-      if (state.breakerRecovery) {
+      if (state.breakerRecovery && !demandUnavailable && (state.breakerRecovery.demandStableSince === undefined || telemetryReady)) {
         const headroom = adaptiveChargingLiveChargeHeadroom(status, config, state, rules);
         const recoveryStatus = advanceAdaptiveChargingBreakerRecovery(state, headroom, now);
         logAdaptiveChargingBreakerWait(state, headroom, recoveryStatus, now);
@@ -312,9 +360,6 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
       completeAdaptiveChargingWindowInterruption(state, now);
     }
 
-    const liveSoc = numericMetric(status.energy?.battery?.remaining_percent);
-    const liveBranchDemandW = numericMetric(status.meter?.branch_demand_power);
-    const liveGridImportW = numericMetric(status.meter?.grid_import_power);
     const telemetryChecks: Array<[number | null, string]> = [
       [liveSoc, "battery state of charge"],
       [liveBranchDemandW, "total circuit load"],

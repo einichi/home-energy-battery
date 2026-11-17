@@ -23,6 +23,7 @@ export function createDemandGuardService(dependencies: DemandGuardServiceDepende
       if (pending.length === 0) {
         throw dependencies.requestError(409, "Charging Demand Guard is not awaiting restore");
       }
+      const notifyRestore = pending.some((rule) => rule.state.trigger !== "demand-unavailable");
       const overrides = await dependencies.readOperationalOverridesState();
       if (overrides.backupPreparation.active && overrides.backupPreparation.allowDemandGuard === false) {
         throw dependencies.requestError(409, "Backup Preparation has Demand Guard intervention disabled");
@@ -34,21 +35,23 @@ export function createDemandGuardService(dependencies: DemandGuardServiceDepende
       );
       const at = now.toISOString();
       for (const rule of pending) {
-        rule.state = { ...rule.state, awaitingRestore: false, restoreSince: null };
+        rule.state = { ...rule.state, awaitingRestore: false, restoreSince: null, standbyUnconfirmed: false, trigger: null, minimumRestoreDelaySeconds: 0 };
         rule.stateUpdatedAt = at;
         rule.lastResult = { ok: true, at, kind: "restore", manual: true, result };
         appendAutomationLog(rule, MANUAL_RESTORE_LOG, now, "restore");
       }
       await dependencies.writeAutomationRuleStates(rules);
       await dependencies.replanCharging(rules, now);
-      await dependencies.notify({
-        type: "guardRestored",
-        severity: "info",
-        title: "Charging Demand Guard restored manually",
-        message: "Demand Guard was restored manually. Adaptive Charging will follow the latest plan when available and safe. Protection may intervene again.",
-        occurredAt: at,
-        dedupeKey: "charging-demand-guard:restored",
-      });
+      if (notifyRestore) {
+        await dependencies.notify({
+          type: "guardRestored",
+          severity: "info",
+          title: "Charging Demand Guard restored manually",
+          message: "Demand Guard was restored manually. Adaptive Charging will follow the latest plan when available and safe. Protection may intervene again.",
+          occurredAt: at,
+          dedupeKey: "charging-demand-guard:restored",
+        });
+      }
       return rules;
     });
   }

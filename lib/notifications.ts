@@ -48,6 +48,7 @@ interface NotificationObservation {
   active: boolean;
   activeCount: number;
   recoveryCount: number;
+  activeSinceMs?: number;
   notified?: boolean;
   changedAt?: string;
 }
@@ -323,14 +324,18 @@ export function createNotificationService({
     key,
     active,
     activateAfter = 1,
+    activateAfterMs = 0,
     recoverAfter = 1,
+    observedAtMs = Date.now(),
     activeEvent,
     recoveryEvent,
   }: {
     key: string;
     active: boolean;
     activateAfter?: number;
+    activateAfterMs?: number;
     recoverAfter?: number;
+    observedAtMs?: number;
     activeEvent?: unknown;
     recoveryEvent?: unknown;
   }): Promise<unknown> {
@@ -348,6 +353,7 @@ export function createNotificationService({
       if (active && !observation.active && activeEvent
         && config.triggers[String(asRecord(activeEvent).type ?? "")]?.enabled === false) {
         observation.activeCount = 0;
+        delete observation.activeSinceMs;
         state.observations[key] = observation;
         await writeState(state);
         return;
@@ -356,6 +362,7 @@ export function createNotificationService({
         if (observation.activeCount > 0) {
           observation.activeCount = 0;
           observation.recoveryCount = 0;
+          delete observation.activeSinceMs;
           state.observations[key] = observation;
           await writeState(state);
         }
@@ -374,6 +381,11 @@ export function createNotificationService({
         return;
       }
       if (active && observation.active) {
+        if (observation.recoveryCount > 0) {
+          observation.recoveryCount = 0;
+          state.observations[key] = observation;
+          await writeState(state);
+        }
         if (observation.notified !== false || !activeEvent) return;
         const result = await deliver(activeEvent);
         if (result.ok) {
@@ -389,7 +401,9 @@ export function createNotificationService({
       if (active) {
         observation.activeCount += 1;
         observation.recoveryCount = 0;
-        if (!observation.active && observation.activeCount >= activateAfter) {
+        const activeSinceMs = observation.activeSinceMs ?? observedAtMs;
+        observation.activeSinceMs = Math.min(activeSinceMs, observedAtMs);
+        if (observation.activeCount >= activateAfter && observedAtMs - observation.activeSinceMs >= activateAfterMs) {
           observation.active = true;
           observation.notified = !activeEvent;
           observation.changedAt = new Date().toISOString();
@@ -411,6 +425,7 @@ export function createNotificationService({
       } else {
         observation.recoveryCount += 1;
         observation.activeCount = 0;
+        delete observation.activeSinceMs;
         if (observation.active && observation.recoveryCount >= recoverAfter) {
           observation.active = false;
           observation.notified = !recoveryEvent;

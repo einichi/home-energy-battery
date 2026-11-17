@@ -1716,6 +1716,23 @@ const safeRecoveryHeadroom = adaptiveChargingLiveChargeHeadroom({
   meter: { grid_import_power: { value: 3000 } },
 }, adaptiveChargingConfig, {}, adaptiveChargingGuardRules);
 
+const telemetryRecovery = cleanAdaptiveChargingState({});
+const telemetryOutageAt = new Date("2026-07-11T00:00:00.000Z");
+beginAdaptiveChargingBreakerRecovery(telemetryRecovery, safeRecoveryHeadroom, telemetryOutageAt, { demandUnavailable: true });
+const telemetryCheck = (seconds: number, available = true) => advanceAdaptiveChargingBreakerRecovery(
+  telemetryRecovery,
+  { ...safeRecoveryHeadroom, available },
+  new Date(telemetryOutageAt.getTime() + seconds * 1000),
+);
+telemetryCheck(170);
+telemetryCheck(180);
+telemetryCheck(190, false);
+telemetryCheck(200);
+telemetryCheck(210);
+assert.equal(telemetryCheck(220).ready, false, "three good polls alone do not end a telemetry pause");
+assert.equal(telemetryCheck(259).ready, false, "the new safe streak has not reached a minute");
+assert.equal(telemetryCheck(260).ready, true);
+
 const recoveryCheck1 = advanceAdaptiveChargingBreakerRecovery(
   recoveryState,
   safeRecoveryHeadroom,

@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { configNumber } from "./configuration.js";
+import { finiteNumberOrNull } from "./numbers.js";
 import { asRecord } from "./values.js";
+
+export const MIN_DEMAND_RECOVERY_SECONDS = 60;
 
 const DEFAULT_GUARD_CONDITIONS = {
   breakerVoltage: 100,
@@ -108,8 +111,7 @@ export function automationDemandWatts(status: AutomationStatus, source: DemandSo
   const raw = source === "gridImportW"
     ? status.meter?.grid_import_power?.value
     : status.meter?.branch_demand_power?.value;
-  if (raw === null || raw === undefined || raw === "") return Number.NaN;
-  return Number(raw);
+  return finiteNumberOrNull(raw) ?? Number.NaN;
 }
 
 
@@ -121,11 +123,8 @@ export function batteryOperationMode(status: AutomationStatus): string | null {
 
 
 export function batteryChargingWatts(status: AutomationStatus): number | null {
-  const raw = status.energy?.battery?.instant_power?.value;
-  if (raw === null || raw === undefined || raw === "") return null;
-  const watts = Number(raw);
-  if (!Number.isFinite(watts)) return null;
-  return Math.max(0, watts);
+  const watts = finiteNumberOrNull(status.energy?.battery?.instant_power?.value);
+  return watts === null ? null : Math.max(0, watts);
 }
 
 export interface ChargingStartGuardDecision {

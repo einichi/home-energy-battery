@@ -2300,6 +2300,8 @@
     "restorePanelFailureDetail": "復帰の完了を確認できませんでした。現在の状態を確認するか、再試行してください。",
     "restorePanelRecoveringDetail": "自動復帰には充電時の余裕と最新の計画の確認が必要です。",
     "restorePanelAwaitingDetail": "下の復帰条件を確認するか、今すぐ充電を自動制御に戻せます。",
+    "restoreDemandUnavailable": "電力需要の計測値を取得できなくなりました。安全を確認できるまで、充電は待機モードです。",
+    "restoreStandbyUnconfirmed": "待機モードへの切り替えを確認できませんでした。蓄電池への指示を再試行します。",
     "restoreBadgePending": "処理中",
     "restoreBadgeUnavailable": "状態不明",
     "restoreBadgeBlocked": "ポリシーで制限中",

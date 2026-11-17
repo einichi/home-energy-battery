@@ -2301,6 +2301,8 @@
     "restorePanelFailureDetail": "A complete restoration was not confirmed. Check the current status or try again.",
     "restorePanelRecoveringDetail": "Automatic recovery still depends on charging headroom and the latest plan.",
     "restorePanelAwaitingDetail": "Review the recovery rule below, or return charging to Auto immediately.",
+    "restoreDemandUnavailable": "Demand readings dropped out. Charging is in Standby while Demand Guard checks for safe readings.",
+    "restoreStandbyUnconfirmed": "Demand Guard could not confirm Standby. It will retry the battery command.",
     "restoreBadgePending": "In progress",
     "restoreBadgeUnavailable": "Status unknown",
     "restoreBadgeBlocked": "Blocked by policy",

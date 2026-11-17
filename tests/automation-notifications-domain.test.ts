@@ -602,6 +602,33 @@ assert.match(sentMessages.at(-1).message.subject, /Test notification/);
 
 assert.equal((await notificationService.view()).deliveries.length, 5);
 
+const deviceAlertStart = Date.parse("2026-05-31T03:32:00.000Z");
+const observeDeviceTimeout = (active: boolean, elapsedMs: number) => notificationService.observeCondition({
+  key: "sustained-device-timeout",
+  active,
+  observedAtMs: deviceAlertStart + elapsedMs,
+  activateAfter: 3,
+  activateAfterMs: 300_000,
+  recoverAfter: 2,
+  activeEvent: { type: "deviceOffline", title: "Offline", message: "Device is offline", dedupeKey: "sustained-device:offline" },
+  recoveryEvent: { type: "deviceRecovered", title: "Recovered", message: "Device recovered", dedupeKey: "sustained-device:recovered" },
+});
+for (const elapsedMs of [0, 10_000, 20_000, 98_000]) await observeDeviceTimeout(true, elapsedMs);
+await observeDeviceTimeout(false, 100_000);
+await observeDeviceTimeout(false, 110_000);
+assert.equal(sentMessages.length, 5, "a short outage sends neither an offline nor a recovery notification");
+
+for (const elapsedMs of [200_000, 210_000, 499_999]) await observeDeviceTimeout(true, elapsedMs);
+assert.equal(sentMessages.length, 5, "the successful polls reset the five-minute timer");
+await observeDeviceTimeout(true, 500_000);
+assert.equal(sentMessages.length, 6);
+await observeDeviceTimeout(false, 510_000);
+await observeDeviceTimeout(true, 520_000);
+await observeDeviceTimeout(false, 530_000);
+assert.equal(sentMessages.length, 6, "recovery requires two consecutive healthy polls");
+await observeDeviceTimeout(false, 540_000);
+assert.equal(sentMessages.length, 7);
+
 await notificationService.updateSecret({ channelId: "primary-email", clearPassword: true });
 
 assert.equal((await notificationService.view()).passwordConfigured, false);

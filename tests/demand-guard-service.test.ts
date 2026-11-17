@@ -212,3 +212,60 @@ function harness(initialRules: AutomationRule[], overrides = cleanOperationalOve
   assert.deepEqual(interventions, [{ action: "set-mode", payload: { mode: "standby" } }]);
   assert.equal((await fixture.store.read())[0].state.awaitingRestore, true, "a later overload reactivates the restored guard");
 }
+
+{
+  const rule = guardRule("scheduled", { awaitingRestore: false });
+  rule.conditions.restoreDelaySeconds = 30;
+  const actions: unknown[] = [];
+  const notifications: unknown[] = [];
+  let breakerTrips = 0;
+  const evaluate = createAutomationRuleEvaluator({
+    execute: async (_action, payload) => { actions.push(payload); },
+    recordGuardTrigger: async () => { breakerTrips += 1; },
+    notify: (event) => { notifications.push(event); },
+  });
+  // Scheduled charging can already be in Charging mode before power ramps up.
+  const charging = { energy: { battery: { operation_mode: { value: "charging" }, instant_power: { value: 0 } } } };
+  const standby = { energy: { battery: { operation_mode: { value: "standby" }, instant_power: { value: 0 } } } };
+  const safe = { ...standby, meter: { grid_import_power: { value: 1000 } } };
+  const config = { batteryCapabilities: { maximumChargeWatts: 1000 } } as Parameters<typeof evaluate>[4];
+  const check = (status: Parameters<typeof evaluate>[1], seconds: number) =>
+    evaluate(rule, status, new Date(at.getTime() + seconds * 1000), undefined, config);
+
+  assert.equal((await check(charging, 0)).result.kind, "demand-unavailable");
+  assert.deepEqual(actions, [{ mode: "standby" }]);
+  assert.equal(breakerTrips, 0);
+  await check(safe, 10);
+  await check(standby, 25);
+  assert.equal(rule.state.restoreSince, null, "a second telemetry gap resets the safe-reading timer");
+  await check(safe, 40);
+  await check(safe, 99);
+  assert.deepEqual(actions, [{ mode: "standby" }]);
+  assert.equal((await check(safe, 100)).result.kind, "restore");
+  assert.deepEqual(actions, [{ mode: "standby" }, { mode: "auto" }]);
+  assert.deepEqual(notifications, [], "neither a telemetry pause nor its restore sends a guard notification");
+}
+
+{
+  const rule = guardRule("adaptive-charge", { awaitingRestore: false });
+  const actions: unknown[] = [];
+  const evaluate = createAutomationRuleEvaluator({
+    execute: async (_action, payload) => {
+      actions.push(payload);
+      if (actions.length === 1) throw new Error("battery did not respond");
+    },
+    recordGuardTrigger: async () => undefined,
+    notify: () => undefined,
+  });
+  const partialStatus = { meter: { grid_import_power: { value: 600 } } };
+  const coordination = { adaptiveChargingEnabled: true, adaptiveChargeActive: true };
+  await assert.rejects(evaluate(rule, partialStatus, at, undefined, null, coordination), /battery did not respond/);
+  assert.equal(rule.state.awaitingRestore, true);
+  assert.equal(rule.state.standbyUnconfirmed, true);
+  // Persisted restore ownership keeps retrying without battery telemetry.
+  const persisted = cleanAutomationRule(rule);
+  const retry = await evaluate(persisted, partialStatus, new Date(at.getTime() + 5000), undefined, null, coordination);
+  assert.equal(retry.result.kind, "maintain");
+  assert.equal(persisted.state.standbyUnconfirmed, false);
+  assert.deepEqual(actions, [{ mode: "standby" }, { mode: "standby" }]);
+}

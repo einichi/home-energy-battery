@@ -122,6 +122,8 @@ export function DemandGuardRestoreControl({ rules, rulesError, onRestored, refre
   const blocked = awaitingRestore && policy?.blocked === true;
   const checking = awaitingRestore && policy === null;
   const failed = outcome?.ok === false;
+  const standbyUnconfirmed = guard?.state?.standbyUnconfirmed === true;
+  const demandUnavailablePause = guard?.state?.trigger === "demand-unavailable";
   const recovering = awaitingRestore && Number.isFinite(recoveryStarted);
   const intervenedAgain = awaitingRestore && hasRestored;
   const freshBattery = success && Date.parse(status?.read_at ?? "") >= (outcome?.at ?? Infinity);
@@ -129,13 +131,15 @@ export function DemandGuardRestoreControl({ rules, rulesError, onRestored, refre
   const successTitle = batteryPower === null ? "restorePanelSuccess" : batteryPower > 0 ? "restorePanelCharging" : batteryPower < 0 ? "restorePanelDischarging" : "restorePanelIdle";
   const title = pending ? "restorePanelPending" : unavailable ? "restorePanelUnavailable" : blocked ? "restorePanelBlocked" : failed ? "restorePanelFailure" : success ? successTitle : intervenedAgain ? "restorePanelReintervened" : recovering ? "restorePanelRecovering" : "restorePanelAwaiting";
   const badge = pending ? "restoreBadgePending" : unavailable ? "restoreBadgeUnavailable" : blocked ? "restoreBadgeBlocked" : failed ? "restoreBadgeFailure" : success ? "restoreBadgeSuccess" : recovering ? "restoreBadgeRecovering" : "restoreBadgeIntervened";
-  const message = pending ? "restorePanelPendingDetail" : unavailable ? "restorePanelUnavailableDetail" : blocked ? "restorePanelBlockedDetail" : failed ? "restorePanelFailureDetail" : success ? "restoreAutoSuccess" : recovering ? "restorePanelRecoveringDetail" : "restorePanelAwaitingDetail";
+  const message = pending ? "restorePanelPendingDetail" : unavailable ? "restorePanelUnavailableDetail" : blocked ? "restorePanelBlockedDetail" : failed ? "restorePanelFailureDetail" : success ? "restoreAutoSuccess" : standbyUnconfirmed ? "restoreStandbyUnconfirmed" : recovering ? "restorePanelRecoveringDetail" : demandUnavailablePause ? "restoreDemandUnavailable" : "restorePanelAwaitingDetail";
   const tone = unavailable || failed ? "failure" : success ? "success" : pending ? "pending" : "warning";
-  const remainingSeconds = Math.max(0, Math.ceil((recoveryStarted + Number(guard?.conditions?.restoreDelaySeconds ?? 0) * 1000 - now) / 1000));
+  const configuredDelay = guard?.conditions?.restoreDelaySeconds;
+  const minimumDelay = guard?.state?.minimumRestoreDelaySeconds;
+  const delaySeconds = minimumDelay ? Math.max(configuredDelay ?? 0, minimumDelay) : configuredDelay;
+  const remainingSeconds = Math.max(0, Math.ceil((recoveryStarted + (delaySeconds ?? 0) * 1000 - now) / 1000));
   const recoveryWait = remainingSeconds > 0 ? `${Math.floor(remainingSeconds / 60)}:${String(remainingSeconds % 60).padStart(2, "0")}` : t("restoreSafetyCheckPending");
   const demand = guard?.conditions?.source === "branchDemandW" ? metricValue(status?.meter?.branch_demand_power) : metricValue(status?.meter?.grid_import_power);
   const threshold = guard?.conditions?.restoreBelowAmps;
-  const delaySeconds = guard?.conditions?.restoreDelaySeconds;
   const detail = outcome?.detail || rulesError || policy?.error;
 
   return (
@@ -150,7 +154,7 @@ export function DemandGuardRestoreControl({ rules, rulesError, onRestored, refre
         <div className="demand-guard-copy">
           <div className="demand-guard-kicker">{t("demandGuard")} <span>{t(badge)}</span></div>
           <h2 id={headingId} tabIndex={-1} ref={headingRef}>{t(title)}</h2>
-          <p className="demand-guard-message" role={failed || unavailable ? "alert" : "status"}>{t(message)}</p>
+          <p className="demand-guard-message" role={failed || unavailable || standbyUnconfirmed ? "alert" : "status"}>{t(message)}</p>
         </div>
         <div className="demand-guard-actions">
           {blocked ? <Link className="button" to="/battery/backup">{t("restoreReviewBackup")}</Link> : (

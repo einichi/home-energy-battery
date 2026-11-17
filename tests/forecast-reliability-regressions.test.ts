@@ -203,6 +203,7 @@ assert.equal(unsafe.available, false);
 assert.match(String(unsafe.reason), /unknown generation.*headroom/);
 
 let refreshAttempts = 0;
+const availabilityObservations: Array<Record<string, unknown>> = [];
 const orchestrationState = { ...await stateService.read(), forecast: { ...solarForecast,
   fetchedAt: new Date(Date.now() - 4 * 3_600_000).toISOString() },
   lastForecastError: { at: new Date().toISOString(), error: "provider down", kind: "provider", retryCount: 3 },
@@ -216,13 +217,18 @@ const orchestrator = createAutomationOrchestrator({
   readAdaptiveChargingState: async () => orchestrationState, getStatusSnapshot: async () => ({}), deviceTimings: () => [],
   evaluateAutomationRule: async () => ({ changed: false }), executeAction: async () => {},
   refreshAdaptiveChargingForecast: async () => { refreshAttempts += 1; return orchestrationState; },
-  evaluateAdaptiveCharging: async () => orchestrationState, notifications: { observeCondition: () => {}, enqueue: () => {} }, warn: () => {},
+  evaluateAdaptiveCharging: async () => orchestrationState,
+  notifications: { observeCondition: (condition) => availabilityObservations.push(condition), enqueue: () => {} }, warn: () => {},
 });
 await orchestrator.run(); await orchestrator.run();
 assert.equal(refreshAttempts, 0, "repeated automation ticks during backoff must not retry the provider");
 orchestrationState.lastForecastError.at = new Date(Date.now() - 5 * 60_000).toISOString();
 await orchestrator.run();
 assert.equal(refreshAttempts, 1, "the provider is retried after the exponential delay expires");
+assert.equal(availabilityObservations.length, 0, "missing telemetry is reported through the device outage alert");
+orchestrationState.forecast.fetchedAt = new Date(Date.now() - 7 * 3_600_000).toISOString();
+await orchestrator.run();
+assert.equal(availabilityObservations[0]?.active, true, "an expired forecast still has its separate provider alert");
 
 const expiredRevision = await stateService.read();
 for (let index = 0; index < 260; index += 1) await stateService.write(await stateService.read());

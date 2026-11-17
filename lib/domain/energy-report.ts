@@ -1,6 +1,6 @@
 import { intervalOverlapFraction } from "./circuits.js";
 import { DEFAULT_CONFIG, configNumber } from "./configuration.js";
-import { hasPowerSample, sampleDiscountSavings, samplePowerKwh, sampleSolarGenerationKwh } from "./energy-summary.js";
+import { hasPowerSample, sampleBatteryDischargeKwh, sampleDiscountSavings, samplePowerKwh, sampleSolarGenerationKwh } from "./energy-summary.js";
 import { finiteNumberOrNull } from "./numbers.js";
 import type { ApplicationConfig } from "../contracts/configuration.js";
 import type { HistorySample, TimeRange } from "../contracts/history.js";
@@ -351,13 +351,7 @@ export function createEnergyReportAccumulator({
       addReportEnergy(
         row,
         "batteryDischargedKwh",
-        samplePowerKwh(
-          { ...sample, batteryPowerW: -Number(sample.batteryPowerW) },
-          "batteryDischargeKwh",
-          "batteryPowerW",
-          prev ? { ...prev, batteryPowerW: -Number(prev.batteryPowerW) } : null,
-          reportRange,
-        ),
+        sampleBatteryDischargeKwh(sample, prev, reportRange),
         hasPowerSample(sample, "batteryDischargeKwh", "batteryPowerW", prev),
       );
       addReportQuality(row, "batteryDischargeKwh", sample, prev, reportRange, "batteryDischargedKwh");

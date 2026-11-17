@@ -8,15 +8,21 @@ interface StatusError {
 }
 
 interface DeviceStatus {
+  unavailableEquipment?: string[];
   energy?: {
     error?: string;
     errors?: StatusError[];
-    battery?: { error?: string; remaining_percent?: { error?: string | null } };
+    battery?: { error?: string; remaining_percent?: { error?: string | null; value?: unknown } };
     solar?: { error?: string };
     fuel_cells?: Array<{ error?: string }>;
     fuelCells?: Array<{ error?: string }>;
   };
-  meter?: { error?: string; errors?: StatusError[] };
+  meter?: {
+    error?: string;
+    errors?: StatusError[];
+    grid_import_power?: { value?: unknown };
+    branch_demand_power?: { value?: unknown };
+  };
 }
 
 interface FuelCellNotificationStatus {
@@ -35,6 +41,7 @@ export function deviceStatusFailures(
   config: Pick<ApplicationConfig, "batteryHost" | "smartCosmoEnabled" | "meterHost" | "solarEnabled" | "solarHost" | "fuelCellEnabled" | "fuelCellHosts">,
 ): string[] {
   const failures: string[] = [];
+  const unavailable = new Set(status.unavailableEquipment ?? []);
   const energyError = status.energy?.error;
   const propertyErrors = Array.isArray(status.energy?.errors) ? status.energy.errors : [];
   const errorsForHost = (host: string) => propertyErrors
@@ -43,17 +50,24 @@ export function deviceStatusFailures(
   if (config.batteryHost && !isDocumentationHost(config.batteryHost)) {
     const errors = [energyError ?? status.energy?.battery?.error, status.energy?.battery?.remaining_percent?.error, ...errorsForHost(config.batteryHost)].filter(Boolean);
     if (errors.length) failures.push(`Battery: ${errors.join(", ")}`);
+    else if (unavailable.has("Battery")) failures.push(`Battery (${config.batteryHost}): readings unavailable`);
+    else if (numericMetric(status.energy?.battery?.remaining_percent) === null) {
+      failures.push(`Battery (${config.batteryHost}): state of charge unavailable`);
+    }
   }
   if (config.smartCosmoEnabled && config.meterHost && !isDocumentationHost(config.meterHost)) {
     const errors = [
       status.meter?.error,
       ...(Array.isArray(status.meter?.errors) ? status.meter.errors.map((item) => `${item.epc ?? "property"}: ${item.error}`) : []),
+      numericMetric(status.meter?.grid_import_power) === null ? "grid import unavailable" : null,
+      numericMetric(status.meter?.branch_demand_power) === null ? "total circuit demand unavailable" : null,
     ].filter(Boolean);
     if (errors.length) failures.push(`Smart Cosmo: ${errors.join(", ")}`);
   }
   if (config.solarEnabled && config.solarHost && !isDocumentationHost(config.solarHost)) {
     const errors = [energyError ?? status.energy?.solar?.error, ...errorsForHost(config.solarHost)].filter(Boolean);
     if (errors.length) failures.push(`Solar: ${errors.join(", ")}`);
+    else if (unavailable.has("Solar")) failures.push(`Solar (${config.solarHost}): readings unavailable`);
   }
   if (config.fuelCellEnabled && config.fuelCellHosts.some((host) => !isDocumentationHost(host))) {
     const fuelCellErrors = (status.energy?.fuel_cells ?? status.energy?.fuelCells ?? [])
@@ -66,7 +80,7 @@ export function deviceStatusFailures(
     if (energyError) failures.push(`Ene-Farm: ${energyError}`);
     else if (fuelCellErrors.length || propertyFuelCellErrors.length) {
       failures.push(`Ene-Farm: ${[...fuelCellErrors, ...propertyFuelCellErrors].join(", ")}`);
-    }
+    } else if (unavailable.has("Ene-Farm")) failures.push("Ene-Farm: readings unavailable");
   }
   return [...new Set(failures)];
 }

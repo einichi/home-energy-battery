@@ -15,6 +15,7 @@ test("live readings are available during a partial outage while automation waits
   const details = new Promise<void>((resolve) => { resolveDetails = resolve; });
   let primaryAvailable = false;
   let records = 0;
+  const observations: Array<{ active: boolean; activateAfterMs?: number; activeEvent?: unknown }> = [];
   const primary = () => ({
     host: config.fuelCellPrimaryHost, source_role: "primary", instant_power: primaryAvailable ? { value: 150 } : {},
   });
@@ -39,7 +40,7 @@ test("live readings are available during a partial outage while automation waits
     async recordStatusSample() { records += 1; },
     async readHistoryRange() { return {}; },
     readCalendarSavings: () => ({}),
-    observeNotification: async () => {},
+    observeNotification: async (state) => { observations.push(state); },
   });
 
   const completeRead = service.get();
@@ -59,4 +60,14 @@ test("live readings are available during a partial outage while automation waits
   primaryAvailable = true;
   const recovered = await service.get({ force: true });
   assert.deepEqual(recovered.unavailableEquipment, []);
+
+  service.observeDevice({
+    ...recovered,
+    meter: { grid_import_power: { value: 0 }, branch_demand_power: { value: null } },
+  }, config);
+  assert.equal(observations[0].active, true, "missing demand must count even without a protocol error");
+  assert.equal(observations[0].activateAfterMs, 300_000);
+  assert.match(String(asRecord(observations[0].activeEvent).message), /total circuit demand unavailable/);
+  service.observeDevice(recovered, config);
+  assert.equal(observations[1].active, false);
 });

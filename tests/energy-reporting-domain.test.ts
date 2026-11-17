@@ -589,6 +589,25 @@ const recordingGapSummary = summarizeSamples([
 
 assert.equal(recordingGapSummary.gridImportKwh, 0, "recording gaps must not be filled with invented energy");
 
+const dischargeWithMissingReadings = [
+  { timestamp: "2026-05-31T00:00:00.000Z", batteryPowerW: -3600 },
+  { timestamp: "2026-05-31T00:00:10.000Z", batteryPowerW: null },
+  { timestamp: "2026-05-31T00:00:20.000Z", batteryPowerW: -3600 },
+  { timestamp: "2026-05-31T00:00:30.000Z", batteryPowerW: 0 },
+];
+
+assert.equal(
+  summarizeSamples(dischargeWithMissingReadings).batteryDischargedKwh,
+  0.005,
+  "only the interval ending with a measured zero contributes to discharge",
+);
+
+assert.equal(aggregateEnergyReportSamples(dischargeWithMissingReadings, {
+  start: "2026-05-31T00:00:00.000Z",
+  end: "2026-05-31T00:01:00.000Z",
+  bucket: "day",
+}).totals.batteryDischargedKwh, 0.005);
+
 // A power-only sample integrates instantaneous solar power instead of
 // contributing 0 kWh while being reported as valid.
 assert.ok(Math.abs(sampleSolarGenerationKwh(

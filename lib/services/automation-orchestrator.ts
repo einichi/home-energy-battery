@@ -1,11 +1,13 @@
 import type { ApplicationConfig } from "../contracts/configuration.js";
 import type { AdaptiveChargingState } from "../domain/adaptive-state.js";
 import type { AutomationRule, AutomationStatus } from "../domain/automation-rules.js";
-import { automationRuleLabel, automationRuleList } from "../domain/automation-rules.js";
+import { automationDemandWatts, automationRuleLabel, automationRuleList } from "../domain/automation-rules.js";
 import { adaptiveChargingConfiguredActive, adaptiveChargingWindowHasShortfall, shouldHoldGuardStandbyForAdaptiveCharging } from "../domain/adaptive-control.js";
 import { adaptiveChargingAvailability, adaptiveChargingBaseAvailability } from "../domain/adaptive-planning.js";
 import type { OperationalOverridesState } from "../domain/operational-overrides.js";
 import { cachedForecastIsUsable } from "../domain/adaptive-availability.js";
+import { numericMetric } from "../domain/telemetry.js";
+import type { AutomationRuleCoordination } from "./automation-rule-evaluator.js";
 
 export interface AutomationRunContext {
   startedAt?: string;
@@ -64,7 +66,7 @@ export interface AutomationOrchestratorDependencies {
     now: Date,
     onPhase: (phase: string) => void,
     config: ApplicationConfig,
-    coordination: { execute(action: string, payload?: unknown): Promise<unknown>; holdStandbyForAdaptiveCharging: boolean },
+    coordination: AutomationRuleCoordination,
   ) => Promise<{ changed: boolean; result?: Record<string, unknown> }>;
   executeAction(action: string, payload: Record<string, unknown>, options: { source: string }): Promise<unknown>;
   evaluateAdaptiveCharging(config: ApplicationConfig, status: AdaptiveEvaluationStatus, rules: AutomationRule[], now: Date): Promise<AdaptiveChargingState>;
@@ -73,12 +75,14 @@ export interface AutomationOrchestratorDependencies {
 }
 
 export function createAutomationOrchestrator(dependencies: AutomationOrchestratorDependencies) {
-  function observeAdaptiveCharging(config: ApplicationConfig, state: AdaptiveChargingState): void {
+  function observeAdaptiveCharging(config: ApplicationConfig, state: AdaptiveChargingState, telemetryInterrupted = false): void {
     if (!adaptiveChargingConfiguredActive(config)) return;
     const paused = state.pausedUntil && new Date(state.pausedUntil).getTime() > Date.now();
-    if (!paused) {
-      const cachedForecastUsable = cachedForecastIsUsable(state);
-      const reason = (state.lastForecastError?.error && !cachedForecastUsable ? state.lastForecastError.error : null)
+    const forecastError = state.lastForecastError?.error && !cachedForecastIsUsable(state) ? state.lastForecastError.error : null;
+    // Device health reports sustained telemetry loss, including pauses that
+    // would otherwise look like plan unavailability before a plan exists.
+    if (!paused && (!telemetryInterrupted || forecastError)) {
+      const reason = forecastError
         ?? (state.plan?.available === false ? state.plan.reason : null)
         ?? (!state.plan ? state.lastResult?.skipped : null);
       dependencies.notifications.observeCondition({
@@ -167,6 +171,8 @@ export function createAutomationOrchestrator(dependencies: AutomationOrchestrato
             payload !== null && typeof payload === "object" ? payload as Record<string, unknown> : {},
             { source: "charging-demand-guard" },
           ),
+          adaptiveChargingEnabled,
+          adaptiveChargeActive: coordinationState?.owner === "adaptiveCharging",
           holdStandbyForAdaptiveCharging: adaptiveChargingEnabled && !status.unavailableEquipment?.length
             && shouldHoldGuardStandbyForAdaptiveCharging(coordinationState, now),
         });
@@ -214,7 +220,16 @@ export function createAutomationOrchestrator(dependencies: AutomationOrchestrato
         context.phase = "refreshing Open-Meteo forecast";
         await dependencies.refreshAdaptiveChargingForecast(config, { now: startedAt });
       }
-      observeAdaptiveCharging(config, await dependencies.evaluateAdaptiveCharging(config, status, rules, new Date()));
+      const telemetryInterrupted = Boolean(status.unavailableEquipment?.length)
+        || !Number.isFinite(automationDemandWatts(status, "gridImportW"))
+        || !Number.isFinite(automationDemandWatts(status, "branchDemandW"))
+        || numericMetric(status.energy?.battery?.remaining_percent) === null
+        || rules.some((rule) => rule.enabled && rule.state.awaitingRestore === true && rule.state.trigger === "demand-unavailable");
+      const nextState = await dependencies.evaluateAdaptiveCharging(config, status, rules, new Date());
+      observeAdaptiveCharging(config, nextState, telemetryInterrupted
+        || nextState.lastResult?.kind === "demand-recovery"
+        || nextState.lastResult?.kind === "demand-standby-retry"
+        || nextState.lastResult?.kind === "demand-unavailable");
     }
     context.phase = "complete";
     const totalDurationMs = Date.now() - startedAt.getTime();

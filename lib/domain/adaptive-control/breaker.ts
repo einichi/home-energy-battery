@@ -7,6 +7,7 @@ import { appendAdaptiveChargingLog } from "../adaptive-state.js";
 import type { AdaptiveChargingState, BreakerRecovery, InterruptedCharge } from "../adaptive-state.js";
 import { finiteNumberOrNull } from "../numbers.js";
 import { explicitDiscountedBand } from "../tariffs.js";
+import { MIN_DEMAND_RECOVERY_SECONDS } from "../automation-rules.js";
 
 export function adaptiveChargingLiveChargeHeadroom(status: ControlStatus, config: ControlConfig, state: Partial<AdaptiveChargingState> = {}, rules: Array<Partial<AutomationRule>> = []): ChargeHeadroom {
   const rawGridImportW = status.meter?.grid_import_power?.value;
@@ -39,11 +40,12 @@ export function adaptiveChargingLiveChargeHeadroom(status: ControlStatus, config
   };
 }
 
-export function beginAdaptiveChargingBreakerRecovery(state: StateLike, headroom: ChargeHeadroom, now: Date = new Date()): BreakerRecovery {
+export function beginAdaptiveChargingBreakerRecovery(state: StateLike, headroom: ChargeHeadroom, now: Date = new Date(), { demandUnavailable = false } = {}): BreakerRecovery {
   const recovery: BreakerRecovery = {
     interruptedAt: now.toISOString(),
     cooldownUntil: new Date(now.getTime() + ADAPTIVE_CHARGING_BREAKER_RETRY_COOLDOWN_MS).toISOString(),
     consecutiveSafeChecks: 0,
+    ...(demandUnavailable ? { demandStableSince: null } : {}),
     lastCheckedAt: null,
     lastWaitLogAt: null,
     currentImportW: finiteNumberOrNull(headroom?.gridImportW),
@@ -63,6 +65,9 @@ export function advanceAdaptiveChargingBreakerRecovery(state: StateLike, headroo
     recovery.consecutiveSafeChecks = headroom.available
       ? Number(recovery.consecutiveSafeChecks ?? 0) + 1
       : 0;
+    if (recovery.demandStableSince !== undefined) {
+      recovery.demandStableSince = headroom.available ? recovery.demandStableSince ?? checkedAt : null;
+    }
     recovery.lastCheckedAt = checkedAt;
   }
   recovery.currentImportW = finiteNumberOrNull(headroom.gridImportW);
@@ -76,7 +81,7 @@ export function advanceAdaptiveChargingBreakerRecovery(state: StateLike, headroo
     || lastWaitLogMs <= 0
     || now.getTime() - lastWaitLogMs >= ADAPTIVE_CHARGING_BREAKER_WAIT_LOG_MS;
   return {
-    ready: Boolean(headroom.available && cooldownReady && checksReady),
+    ready: headroom.available && adaptiveChargingBreakerRecoveryReady(state, now),
     waiting: true,
     cooldownReady,
     checksReady,
@@ -91,9 +96,13 @@ export function adaptiveChargingBreakerRecoveryReady(state: { breakerRecovery?: 
   const recovery = state?.breakerRecovery;
   if (!recovery) return false;
   const cooldownUntilMs = new Date(String(recovery.cooldownUntil ?? "")).getTime();
+  const demandStable = recovery.demandStableSince === undefined
+    || (recovery.demandStableSince !== null
+      && now.getTime() - Date.parse(recovery.demandStableSince) >= MIN_DEMAND_RECOVERY_SECONDS * 1000);
   return Number.isFinite(cooldownUntilMs)
     && now.getTime() >= cooldownUntilMs
-    && Number(recovery.consecutiveSafeChecks) >= ADAPTIVE_CHARGING_BREAKER_SAFE_CHECKS;
+    && Number(recovery.consecutiveSafeChecks) >= ADAPTIVE_CHARGING_BREAKER_SAFE_CHECKS
+    && demandStable;
 }
 
 export function shouldHoldGuardStandbyForAdaptiveCharging(state: { interruptedCharge?: Partial<InterruptedCharge> | null; breakerRecovery?: Partial<BreakerRecovery> | null } | null | undefined, now: Date = new Date()): boolean {

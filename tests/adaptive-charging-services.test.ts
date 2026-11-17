@@ -6,6 +6,7 @@ import { adaptiveChargingPlanRefreshDecision, adaptiveChargingScheduledEvent } f
 import { cleanAutomationRule } from "../lib/domain/automation-rules.js";
 import { cleanOperationalOverridesState } from "../lib/domain/operational-overrides.js";
 import { createAdaptiveChargingEvaluator } from "../lib/services/adaptive-charging-evaluator.js";
+import { createAdaptiveChargingOperations } from "../lib/services/adaptive-charging-operations.js";
 import { createBatteryStrategyService } from "../lib/services/battery-strategy-service.js";
 import type { BatterySchedule } from "../lib/contracts/schedules.js";
 
@@ -204,6 +205,17 @@ const blockedState = cleanAdaptiveChargingState({
   lastPlanEventKey: adaptiveChargingScheduledEvent(config, slotStart).eventKey,
   lastAwayStateKey: "home",
 });
+const sentStandbyModes: unknown[] = [];
+const blockedOperations = createAdaptiveChargingOperations({
+  execute: async (_action, payload) => {
+    sentStandbyModes.push(payload?.mode);
+    if (sentStandbyModes.length === 1) throw new Error("battery verification timed out");
+  },
+  readState: async () => blockedState,
+  writeState: async (next) => next,
+  retryDelayMs: 5000,
+  guardOwnsStandby: async () => false,
+});
 const blockedEvaluator = createAdaptiveChargingEvaluator({
   readState: async () => blockedState,
   writeState: async (next) => next,
@@ -211,7 +223,7 @@ const blockedEvaluator = createAdaptiveChargingEvaluator({
   readOperationalOverrides: async () => cleanOperationalOverridesState(),
   executeAction: async () => ({ ok: true }),
   releaseCharge: async () => false,
-  suspendInStandby: async () => false,
+  suspendInStandby: blockedOperations.suspendInStandby,
   startCharge: async () => ({ ok: true }),
   recoverIdle: async () => false,
   readHistory: async () => [],
@@ -236,6 +248,46 @@ assert.equal(blockedState.activeWindowExecution?.interruptionCount, 1, "one guar
 await blockedEvaluator(config, status, [guardRule], new Date(slotStart.getTime() + 10_000));
 assert.equal(blockedState.activeWindowExecution?.guardInterruptionStartedAt, null);
 assert.equal(blockedState.activeWindowExecution?.guardInterruptedMs, 10_000);
+
+Object.assign(blockedState, cleanAdaptiveChargingState({
+  forecast: { fetchedAt: forecastFetchedAt },
+  plan,
+  owner: "adaptiveCharging",
+  activeSlot: plan.slots[0],
+  activeChargedKwh: 0.2,
+  lastPlanEventKey: adaptiveChargingScheduledEvent(config, slotStart).eventKey,
+  lastAwayStateKey: "home",
+}));
+const missingMeterStatus = { ...status, meter: {}, unavailableEquipment: ["Smart Cosmo"] };
+const telemetryGuard = cleanAutomationRule({
+  ...guardRule,
+  state: { awaitingRestore: true, standbyUnconfirmed: true, trigger: "demand-unavailable" },
+});
+await blockedEvaluator(config, missingMeterStatus, [telemetryGuard], slotStart);
+assert.equal(blockedState.owner, "adaptiveCharging", "keep ownership until the battery pause is confirmed");
+
+telemetryGuard.state.standbyUnconfirmed = false;
+await blockedEvaluator(config, missingMeterStatus, [telemetryGuard], new Date(slotStart.getTime() + 5_000));
+assert.equal(blockedState.owner, null);
+assert.equal(blockedState.interruptedCharge?.remainingWh, 800);
+assert.equal(blockedState.breakerRecovery?.consecutiveSafeChecks, 0);
+assert.deepEqual(sentStandbyModes, [], "Adaptive Charging defers to an enabled guard");
+
+Object.assign(blockedState, cleanAdaptiveChargingState({
+  forecast: { fetchedAt: forecastFetchedAt },
+  plan,
+  owner: "adaptiveCharging",
+  activeSlot: plan.slots[0],
+  lastAwayStateKey: "home",
+}));
+const disabledGuard = { ...guardRule, enabled: false };
+await blockedEvaluator(config, missingMeterStatus, [disabledGuard], slotStart);
+assert.equal(blockedState.lastResult?.kind, "demand-standby-retry");
+assert.equal(blockedState.owner, "adaptiveCharging");
+await blockedEvaluator(config, status, [disabledGuard], new Date(slotStart.getTime() + 5_000));
+assert.deepEqual(sentStandbyModes, ["standby", "standby"], "retry the unconfirmed pause even if demand returns");
+assert.equal(blockedState.owner, null);
+assert.equal(blockedState.breakerRecovery?.consecutiveSafeChecks, 0);
 
 for (const source of ["gridImportW", "branchDemandW"] as const) {
 const preflightConfig = cleanConfig({

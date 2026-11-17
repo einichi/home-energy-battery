@@ -12,6 +12,7 @@ type UnknownRecord = Record<string, unknown>;
 type ProbeProgress = (result: { label: string; durationMs: number }) => void;
 const STATUS_READ_TIMEOUT_SECONDS = 1.5;
 const LIVE_READ_MAX_AGE_MS = 5000;
+const DEVICE_OFFLINE_ALERT_DELAY_MS = 5 * 60_000;
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -80,6 +81,7 @@ export interface StatusCollectionDependencies {
     key: string;
     active: boolean;
     activateAfter?: number;
+    activateAfterMs?: number;
     recoverAfter?: number;
     activeEvent?: unknown;
     recoveryEvent?: unknown;
@@ -390,8 +392,9 @@ export function createStatusCollectionService(dependencies: StatusCollectionDepe
       key: "device-health",
       active: failures.length > 0,
       activateAfter: 3,
+      activateAfterMs: DEVICE_OFFLINE_ALERT_DELAY_MS,
       recoverAfter: 2,
-      activeEvent: { type: "deviceOffline", severity: "error", title: "Energy device unavailable", message: `Three consecutive background polls reported device errors:\n${failures.join("\n")}`, dedupeKey: "device-health:offline" },
+      activeEvent: { type: "deviceOffline", severity: "error", title: "Energy device unavailable", message: `Background polls have reported missing readings or device errors for at least five minutes:\n${failures.join("\n")}`, dedupeKey: "device-health:offline" },
       recoveryEvent: { type: "deviceRecovered", severity: "info", title: "Energy devices recovered", message: "Configured energy devices responded successfully to two consecutive background polls.", dedupeKey: "device-health:recovered" },
     });
   }
