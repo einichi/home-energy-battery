@@ -336,14 +336,21 @@ async function cmdLivePower(opts: CommandOptions) {
     }
     const timestamped = (value: Record<string, unknown>, acquiredAt: string) => ({ ...value, acquired_at: acquiredAt });
 
-    // Keep the readings in one queue item while each reply arrives independently.
-    const [solarPower, batteryPower, fuelCellPower, gridPower, channelPowerRaw] = await Promise.all([
+    async function readMeterPower() {
+      // Smart Cosmo can skip the circuit reply if both requests arrive together.
+      const gridPower = await read(meterHost, meterEojText, EPC.METER_INSTANT_POWER_W);
+      const channelPowerRaw = await read(meterHost, meterEojText, EPC.METER_INSTANT_POWER_LIST);
+      return { gridPower, channelPowerRaw };
+    }
+
+    const [solarPower, batteryPower, fuelCellPower, meterPower] = await Promise.all([
       solarEnabled ? read(solarHost, SOLAR_EOJ, EPC.SOLAR_INSTANT_POWER_W) : null,
       batteryEnabled ? read(batteryHost, STORAGE_BATTERY_EOJ, EPC.INSTANT_POWER_W) : null,
       fuelCellEnabled ? read(fuelCellPrimaryHost, FUEL_CELL_EOJ, EPC.FUEL_CELL_INSTANT_POWER_W) : null,
-      meterEnabled ? read(meterHost, meterEojText, EPC.METER_INSTANT_POWER_W) : null,
-      meterEnabled ? read(meterHost, meterEojText, EPC.METER_INSTANT_POWER_LIST) : null,
+      meterEnabled ? readMeterPower() : null,
     ]);
+    const gridPower = meterPower?.gridPower;
+    const channelPowerRaw = meterPower?.channelPowerRaw;
     const netGridWatts = gridPower?.raw && gridPower.raw.length === 4 ? gridPower.raw.readInt32BE(0) : null;
     const channelPower = decodeInstantPowerList(channelPowerRaw?.raw ?? null);
     const branchDemandWatts = sumInstantPowerChannels(channelPower);

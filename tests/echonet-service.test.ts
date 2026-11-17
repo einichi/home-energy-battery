@@ -10,6 +10,8 @@ let initCalls = 0;
 let closeCalls = 0;
 let getCalls = 0;
 let setCalls = 0;
+let meterBusy = false;
+let failGridRead = false;
 const getRequests: Array<{ host: string; epc: number }> = [];
 const fakeClient: Record<string, any> = {
   async init(): Promise<any> { initCalls += 1; },
@@ -17,6 +19,13 @@ const fakeClient: Record<string, any> = {
   async get(host: any, _eoj: any, epc: any): Promise<any> {
     getCalls += 1;
     getRequests.push({ host: String(host), epc: Number(epc) });
+    if (host === "192.0.2.20") {
+      if (meterBusy) throw new Error("meter ignored an overlapping request");
+      meterBusy = true;
+      await Promise.resolve();
+      meterBusy = false;
+      if (failGridRead && epc === 0xc6) throw new Error("grid read timed out");
+    }
     const values: Record<string, any> = {
       0x80: Buffer.from([0x30]),
       0xd3: Buffer.from([0x00, 0x00, 0x01, 0x2c]),
@@ -56,13 +65,14 @@ assert.equal(status["0xE4"].raw, "0x40");
 assert.equal(getCalls, 6);
 
 getRequests.length = 0;
-const livePower = await adapter.execute("live-power", {
+const livePowerArgs = {
   "battery-host": "192.0.2.10",
   "solar-host": "192.0.2.10",
   "fuel-cell-primary-host": "192.0.2.30",
   "meter-host": "192.0.2.20",
   "meter-eoj": "0x028701",
-}) as Record<string, any>;
+};
+const livePower = await adapter.execute("live-power", livePowerArgs) as Record<string, any>;
 assert.deepEqual(getRequests, [
   { host: "192.0.2.10", epc: 0xe0 },
   { host: "192.0.2.10", epc: 0xd3 },
@@ -75,8 +85,16 @@ assert.equal(livePower.energy.battery.instant_power.value, 300);
 assert.equal(livePower.energy.fuel_cells[0].instant_power.value, 650);
 assert.equal(livePower.meter.grid_import_power.value, 920);
 assert.equal(livePower.meter.branch_demand_power.value, 800);
+assert.deepEqual(livePower.errors, []);
 assert.equal(typeof livePower.energy.battery.instant_power.acquired_at, "string");
 assert.equal(typeof livePower.completed_at, "string");
+
+failGridRead = true;
+const partialMeter = await adapter.execute("live-power", livePowerArgs) as Record<string, any>;
+assert.equal(partialMeter.meter.grid_import_power.value, undefined);
+assert.equal(partialMeter.meter.branch_demand_power.value, 800);
+assert.equal(partialMeter.errors[0]?.epc, "0xC6");
+failGridRead = false;
 
 const acknowledged = await adapter.execute("set-mode", { host: "192.0.2.10" }, ["auto"]) as Record<string, any>;
 assert.equal(acknowledged.acknowledged, true);
