@@ -2545,7 +2545,6 @@
     "nextAction": "次の操作",
     "liveEnergyStatus": "現在のエネルギー状態",
     "energyFlow": "エネルギーフロー",
-    "storage": "蓄電",
     "batteryStateOfCharge": "蓄電池残量",
     "power": "電力",
     "workingState": "動作状態",

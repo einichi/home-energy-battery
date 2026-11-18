@@ -2548,7 +2548,6 @@
     "nextAction": "Next action",
     "liveEnergyStatus": "Live energy status",
     "energyFlow": "Energy flow",
-    "storage": "Storage",
     "batteryStateOfCharge": "Battery state of charge",
     "power": "Power",
     "workingState": "Working state",

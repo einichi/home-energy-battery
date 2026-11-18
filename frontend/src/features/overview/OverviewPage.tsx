@@ -152,14 +152,7 @@ export function OverviewPage() {
 
         <article className="battery-panel panel">
           <div className="section-heading">
-            <div>
-              <p className="eyebrow">
-                {t("storage")}
-              </p>
-              <h2>
-                {t("battery")}
-              </h2>
-            </div>
+            <h2>{t("battery")}</h2>
             {widgetVisible("batterySoc") ? <span className="battery-soc">{formatSoc(soc)}<BatteryReadingNotice reading={batteryReadings?.soc} /></span> : null}
           </div>
           {widgetVisible("batterySoc") ? <div className="soc-track" role="meter" aria-label={t("batteryStateOfCharge")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={soc ?? undefined}>
