@@ -5,7 +5,7 @@ import { automationDemandWatts, automationRuleLabel, automationRuleList } from "
 import { adaptiveChargingConfiguredActive, adaptiveChargingWindowHasShortfall, shouldHoldGuardStandbyForAdaptiveCharging } from "../domain/adaptive-control.js";
 import { adaptiveChargingAvailability, adaptiveChargingBaseAvailability } from "../domain/adaptive-planning.js";
 import type { OperationalOverridesState } from "../domain/operational-overrides.js";
-import { cachedForecastIsUsable } from "../domain/adaptive-availability.js";
+import { cachedForecastIsUsable, describeSolarForecastError } from "../domain/adaptive-availability.js";
 import { numericMetric } from "../domain/telemetry.js";
 import type { AutomationRuleCoordination } from "./automation-rule-evaluator.js";
 
@@ -78,7 +78,7 @@ export function createAutomationOrchestrator(dependencies: AutomationOrchestrato
   function observeAdaptiveCharging(config: ApplicationConfig, state: AdaptiveChargingState, telemetryInterrupted = false): void {
     if (!adaptiveChargingConfiguredActive(config)) return;
     const paused = state.pausedUntil && new Date(state.pausedUntil).getTime() > Date.now();
-    const forecastError = state.lastForecastError?.error && !cachedForecastIsUsable(state) ? state.lastForecastError.error : null;
+    const forecastError = cachedForecastIsUsable(state) ? null : describeSolarForecastError(state.lastForecastError?.error);
     // Device health reports sustained telemetry loss, including pauses that
     // would otherwise look like plan unavailability before a plan exists.
     if (!paused && (!telemetryInterrupted || forecastError)) {
@@ -87,7 +87,12 @@ export function createAutomationOrchestrator(dependencies: AutomationOrchestrato
         ?? (!state.plan ? state.lastResult?.skipped : null);
       dependencies.notifications.observeCondition({
         key: "adaptive-charging-availability", active: Boolean(reason), activateAfter: 2, recoverAfter: 1,
-        activeEvent: { type: "adaptiveChargingUnavailable", severity: "warning", title: "Adaptive Charging unavailable", message: `Adaptive Charging remained unavailable for two checks: ${reason || "unknown reason"}`, dedupeKey: "adaptive-charging:unavailable" },
+        activeEvent: {
+          type: "adaptiveChargingUnavailable", severity: "warning", title: "Adaptive Charging unavailable", dedupeKey: "adaptive-charging:unavailable",
+          message: forecastError
+            ? `Adaptive Charging cannot plan charging without a current solar forecast. ${forecastError}`
+            : `Adaptive Charging remained unavailable for two checks. ${reason || "No reason was reported."}`,
+        },
         recoveryEvent: { type: "adaptiveChargingRecovered", severity: "info", title: "Adaptive Charging recovered", message: "Adaptive Charging is available again and can evaluate discounted charging windows.", dedupeKey: "adaptive-charging:recovered" },
       });
     }
@@ -213,7 +218,9 @@ export function createAutomationOrchestrator(dependencies: AutomationOrchestrato
       const failureAt = new Date(String(state.lastForecastError?.at ?? "")).getTime();
       const retryCount = Math.max(0, Number(state.lastForecastError?.retryCount) || 0);
       const retryDelayMs = Math.min(30 * 60_000, 60_000 * 2 ** Math.min(5, Math.max(0, retryCount - 1)));
-      const retryDue = !Number.isFinite(failureAt) || startedAt.getTime() - failureAt >= retryDelayMs;
+      const rateLimitRetryAt = Number(state.lastForecastError?.retryAt) || 0;
+      const retryDue = startedAt.getTime() >= rateLimitRetryAt
+        && (!Number.isFinite(failureAt) || startedAt.getTime() - failureAt >= retryDelayMs);
       if (!status.unavailableEquipment?.length && adaptiveChargingAvailability(config, rules).available
         && ((!Number.isFinite(forecastAge) || forecastAge >= dependencies.forecastRefreshMs)
           && (!state.lastForecastError || retryDue))) {

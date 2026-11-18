@@ -7,6 +7,7 @@ import { backupPreparationView } from "../domain/operational-overrides.js";
 import { finiteNumberOrNull } from "../domain/numbers.js";
 import { nextScheduleAt } from "../domain/schedules.js";
 import { adaptiveChargingConfiguredActive } from "../domain/adaptive-control.js";
+import { adaptiveChargingPlanningBlock } from "../domain/adaptive-availability.js";
 import type { AwayPeriod } from "../contracts/away-period.js";
 import type { BatteryStrategy } from "../../shared/api-contracts.js";
 
@@ -58,8 +59,7 @@ export function createBatteryStrategyService(dependencies: BatteryStrategyDepend
         .filter((item): item is { schedule: BatterySchedule; at: string } => typeof item.at === "string")
         .sort((left, right) => new Date(left.at).getTime() - new Date(right.at).getTime())[0] ?? null;
     const paused = adaptive.pausedUntil && new Date(adaptive.pausedUntil).getTime() > now.getTime();
-    const equipmentPause = config.adaptiveCharging?.enabled && adaptive.lastResult?.kind === "equipment-unavailable"
-      && typeof adaptive.lastResult.skipped === "string" ? adaptive.lastResult.skipped : null;
+    const planningBlock = config.adaptiveCharging?.enabled ? adaptiveChargingPlanningBlock(config, adaptive, rules, now) : null;
     const manualDirect = recentTerminal?.state === "succeeded"
       && recentTerminal.source === "manual"
       && ["charge", "discharge", "set-mode"].includes(recentTerminal.action)
@@ -73,8 +73,8 @@ export function createBatteryStrategyService(dependencies: BatteryStrategyDepend
       strategy = { kind: "backup-preparation", title: "Disaster Prep", description: `Holding the ${backup.currentProfile ?? "backup"} profile while normal automation is suspended.` };
     } else if (guard) {
       strategy = { kind: "demand-guard", title: "Charging Demand Guard", description: "Standby is being held to preserve configured breaker headroom." };
-    } else if (equipmentPause) {
-      strategy = { kind: "adaptive-charging", title: "Adaptive Charging paused", description: equipmentPause };
+    } else if (planningBlock?.kind === "equipment") {
+      strategy = { kind: "adaptive-charging", title: "Adaptive Charging paused", description: planningBlock.reason };
     } else if (adaptive.owner === "adaptiveCharging") {
       strategy = { kind: "adaptive-charging", title: "Adaptive Charging", description: adaptive.plan?.reason ?? "The active charging plan currently owns battery operation." };
     } else if (away.active) {
@@ -90,7 +90,7 @@ export function createBatteryStrategyService(dependencies: BatteryStrategyDepend
             : "The latest direct battery command remains in effect until changed by another command or automation.",
       };
     } else if (config.adaptiveCharging?.enabled) {
-      strategy = { kind: "adaptive-charging", title: "Adaptive Charging", description: adaptive.plan?.reason ?? "Waiting for the next planned charging window." };
+      strategy = { kind: "adaptive-charging", title: "Adaptive Charging", description: planningBlock?.reason ?? adaptive.plan?.reason ?? "Waiting for the next planned charging window." };
     } else if (scheduledCommand) {
       strategy = { kind: "schedule", title: "Scheduled control", description: `The latest schedule applied ${recentTerminal.action}; that result remains in effect until another command or automation changes it.` };
     } else if (nextSchedule) {
@@ -101,8 +101,8 @@ export function createBatteryStrategyService(dependencies: BatteryStrategyDepend
     const upcomingAdaptiveSlot = adaptive.plan?.slots
       ?.filter((slot) => new Date(slot.end).getTime() > now.getTime())
       .sort((left, right) => new Date(left.start).getTime() - new Date(right.start).getTime())[0] ?? null;
-    const nextAction: BatteryStrategy["nextAction"] = equipmentPause
-      ? { title: "Waiting for equipment", reason: equipmentPause, href: "/system/equipment" }
+    const nextAction: BatteryStrategy["nextAction"] = planningBlock
+      ? { title: planningBlock.title, reason: planningBlock.reason, href: planningBlock.kind === "equipment" ? "/system/equipment" : "/automation" }
       : adaptive.owner === "adaptiveCharging" && adaptive.activeSlot
       ? {
           action: "continue-charging",

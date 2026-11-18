@@ -311,17 +311,24 @@ export type AdaptiveChargingPlan = {
   solarCalibration?: { learned?: boolean; sampleCount?: number; factor?: number | null };
 };
 
+export type AdaptiveChargingPlanningBlock = {
+  kind: "paused" | "equipment" | "configuration" | "forecast" | "plan";
+  title: string;
+  reason: string;
+};
+
 export type AdaptiveChargingStatus = {
   awayFuelCell?: AwayFuelCellSummary | null;
   enabled: boolean;
   available: boolean;
   reason?: string | null;
+  planningBlock?: AdaptiveChargingPlanningBlock | null;
   warning?: string | null;
   paused?: boolean;
   pausedUntil?: string | null;
   owner?: string | null;
   activeSlot?: { start?: string; end?: string; windowEnd?: string; targetWh?: number; targetSocPercent?: number; label?: string } | null;
-  forecast?: { fetchedAt?: string | null; ageMs?: number | null; timezone?: string | null; stale?: boolean } | null;
+  forecast?: { fetchedAt?: string | null; source?: "jma" | "previous-runs"; ageMs?: number | null; timezone?: string | null; stale?: boolean } | null;
   plan?: AdaptiveChargingPlan | null;
   away?: AwayPeriodsView;
   batteryModel?: {

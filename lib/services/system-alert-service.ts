@@ -5,6 +5,7 @@ import type { AdaptiveChargingState } from "../domain/adaptive-state.js";
 import type { AutomationRule } from "../domain/automation-rules.js";
 import { adaptiveChargingConfiguredActive } from "../domain/adaptive-control.js";
 import { summarizeEquipmentIssues, type EquipmentIssueStatus } from "../../shared/equipment-issues.js";
+import type { AdaptiveChargingPlanningBlock } from "../../shared/api-contracts.js";
 
 export interface SystemStatusSnapshot extends Record<string, unknown>, EquipmentIssueStatus {
   read_at?: string;
@@ -51,6 +52,7 @@ interface AdaptiveChargingView {
   paused?: boolean;
   available?: boolean;
   reason?: unknown;
+  planningBlock?: AdaptiveChargingPlanningBlock | null;
 }
 
 export interface SystemAlertDependencies {
@@ -108,7 +110,7 @@ export function createSystemAlertService(dependencies: SystemAlertDependencies) 
       suggestedAction: "Review the active override and resume automation when appropriate.", href: "/automation",
     });
     else if (adaptiveChargingConfiguredActive(config) && !adaptive.available) add({
-      id: "automation-degraded", source: /weather|forecast/i.test(String(adaptive.reason ?? "")) ? "Weather service" : "Automation",
+      id: "automation-degraded", source: adaptive.planningBlock?.kind === "forecast" ? "Weather service" : "Automation",
       severity: "critical", title: "Adaptive Charging degraded", startedAt: adaptiveState.updatedAt ?? now.toISOString(),
       impact: String(adaptive.reason ?? "A safe charging plan cannot currently be produced."),
       suggestedAction: "Review prerequisites and forecast status.", href: "/automation",

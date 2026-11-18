@@ -55,7 +55,7 @@ import {
 import type { ApplicationConfig, RetentionConfig } from "./contracts/configuration.js";
 import type { HistorySample } from "./contracts/history.js";
 import type { AdaptiveChargingState, AdaptivePlan } from "./domain/adaptive-state.js";
-import { cachedForecastIsUsable } from "./domain/adaptive-availability.js";
+import { adaptiveChargingPlanningBlock, cachedForecastIsUsable, describeSolarForecastError } from "./domain/adaptive-availability.js";
 import type { AutomationRule } from "./domain/automation-rules.js";
 import { backupPreparationBlocksActions, backupPreparationView } from "./domain/operational-overrides.js";
 import {
@@ -478,38 +478,26 @@ function adaptiveChargingView(
   now: Date = new Date(),
 ) {
   const solarForecastAccuracy = adaptiveChargingSolarForecastAccuracy(now);
-  const availability = adaptiveChargingAvailability(config, rules);
   const forecastAgeMs = state.forecast?.fetchedAt
     ? now.getTime() - new Date(state.forecast.fetchedAt).getTime()
     : null;
-  const paused = Boolean(state.pausedUntil && new Date(state.pausedUntil).getTime() > now.getTime());
-  const equipmentPause = adaptiveChargingConfiguredActive(config) && state.lastResult?.kind === "equipment-unavailable" && typeof state.lastResult.skipped === "string"
-    ? state.lastResult.skipped : null;
-  const planUnavailableReason = state.plan && state.plan.available === false ? state.plan.reason : null;
+  const planningBlock = adaptiveChargingPlanningBlock(config, state, rules, now);
   const cachedForecastUsable = cachedForecastIsUsable(state, now);
-  const forecastError = state.lastForecastError?.error && !cachedForecastUsable ? String(state.lastForecastError.error) : null;
+  const forecastError = describeSolarForecastError(state.lastForecastError?.error);
   return {
     enabled: config.adaptiveCharging?.enabled === true,
-    available: availability.available
-      && cachedForecastUsable
-      && !paused
-      && !equipmentPause
-      && !forecastError
-      && !planUnavailableReason,
-    reason: paused
-      ? `paused until ${state.pausedUntil}`
-      : equipmentPause || availability.reason
-        || forecastError
-        || planUnavailableReason
-        || (!forecastIsFresh(state.forecast, now) ? "solar forecast is stale or unavailable" : null),
-    warning: state.lastForecastError?.error && cachedForecastUsable
-      ? `Forecast refresh failed; using the cached forecast: ${String(state.lastForecastError.error)}`
+    available: planningBlock === null,
+    reason: planningBlock?.reason ?? null,
+    planningBlock,
+    warning: forecastError && cachedForecastUsable
+      ? `Using the cached solar forecast. ${forecastError}`
       : state.plan?.warning ?? null,
     away: historyStore.isReady() ? awayPeriodsView(now) : { periods: [], active: null, next: null, state: "home" },
-    paused,
+    paused: planningBlock?.kind === "paused",
     pausedUntil: state.pausedUntil,
     forecast: state.forecast ? {
       fetchedAt: state.forecast.fetchedAt,
+      source: state.forecast.source ?? "jma",
       ageMs: Number.isFinite(forecastAgeMs) ? Math.max(0, Number(forecastAgeMs)) : null,
       timezone: state.forecast.timezone,
       stale: !forecastIsFresh(state.forecast, now),

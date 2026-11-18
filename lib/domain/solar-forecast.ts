@@ -42,6 +42,7 @@ interface SolarForecastInput {
 
 export interface SolarForecast {
   fetchedAt: string;
+  source?: "jma" | "previous-runs";
   timezone: string | null;
   utcOffsetSeconds: number | null;
   latitude: number | null;

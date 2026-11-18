@@ -1,5 +1,6 @@
 import type { ApplicationConfig } from "../contracts/configuration.js";
 import { adaptiveChargingBreakerSettings } from "./adaptive-plan-utils.js";
+import type { AdaptiveChargingState } from "./adaptive-state.js";
 import type { AutomationRule } from "./automation-rules.js";
 import type { SolarForecast } from "./solar-forecast.js";
 
@@ -60,4 +61,36 @@ export function cachedForecastIsUsable(
   const incompatible = error?.kind === "incompatible"
     || (!error?.kind && /timezone|coordinate|configuration/i.test(String(error?.error ?? "")));
   return forecastIsFresh(state.forecast, now) && !incompatible;
+}
+
+export function describeSolarForecastError(error: unknown): string | null {
+  if (error === "fetch failed") return "Could not connect to Open-Meteo.";
+  return typeof error === "string" && error ? error : null;
+}
+
+export function adaptiveChargingPlanningBlock(
+  config: ApplicationConfig,
+  state: AdaptiveChargingState,
+  rules: AutomationRule[],
+  now: Date,
+) {
+  if (state.pausedUntil && new Date(state.pausedUntil).getTime() > now.getTime()) {
+    return { kind: "paused", title: "Adaptive Charging paused", reason: `Paused until ${state.pausedUntil}` } as const;
+  }
+  if (config.adaptiveCharging?.enabled && state.lastResult?.kind === "equipment-unavailable" && typeof state.lastResult.skipped === "string") {
+    return { kind: "equipment", title: "Waiting for equipment", reason: state.lastResult.skipped } as const;
+  }
+  const availability = adaptiveChargingAvailability(config, rules);
+  if (!availability.available) {
+    return { kind: "configuration", title: "Charging setup needs attention", reason: availability.reason ?? "Charging setup is incomplete." } as const;
+  }
+  if (!cachedForecastIsUsable(state, now)) {
+    const reason = describeSolarForecastError(state.lastForecastError?.error)
+      ?? (state.forecast ? "The last solar forecast has expired." : "Waiting for the first Open-Meteo solar forecast.");
+    return { kind: "forecast", title: "Waiting for solar forecast", reason } as const;
+  }
+  if (state.plan?.available === false) {
+    return { kind: "plan", title: "Charging plan unavailable", reason: state.plan.reason || "Adaptive Charging could not build a plan." } as const;
+  }
+  return null;
 }

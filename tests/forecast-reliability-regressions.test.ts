@@ -78,13 +78,29 @@ const forecastService = createAdaptiveForecastService({
   externalIoDisabled: false, timezone: "Asia/Tokyo", readState: stateService.read, writeState: stateService.write,
   readHistory: async () => [], logError: () => {},
 });
-const refreshing = forecastService.refresh(config, { now, fetchImpl: (async () => { entered!(); return response; }) as typeof fetch });
+const dayStart = new Date(now);
+dayStart.setHours(0, 0, 0, 0);
+const sunset = new Date(dayStart);
+sunset.setHours(17);
+const liveForecast = {
+  timezone: "Asia/Tokyo",
+  hourly: {
+    time: Array.from({ length: 48 }, (_, index) => new Date(dayStart.getTime() + index * 3_600_000).toISOString()),
+    global_tilted_irradiance: Array.from({ length: 48 }, (_, index) => index % 24 === 12 ? 700 : 0),
+  },
+  daily: { time: [localDayKey(now)], sunset: [sunset.toISOString()] },
+};
+const refreshing = forecastService.refresh(config, { now, fetchImpl: async (input) => {
+  if (new URL(String(input)).hostname === "historical-forecast-api.open-meteo.com") return Response.json(liveForecast);
+  entered!();
+  return response;
+} });
 await fetching;
 const duringFetch = await stateService.read();
 duringFetch.pausedUntil = new Date(now.getTime() + 7_200_000).toISOString();
 await stateService.write(duringFetch);
-resolveForecast!(new Response(JSON.stringify({ timezone: "Asia/Tokyo", hourly: { time: [] }, daily: { time: [] } })));
-await refreshing;
+resolveForecast!(Response.json(liveForecast));
+assert.equal((await refreshing).forecast?.source, "jma");
 assert.equal((await stateService.read()).pausedUntil, duringFetch.pausedUntil);
 const failure = (async () => { throw new Error("network configuration unavailable"); }) as typeof fetch;
 await forecastService.refresh(config, { now, fetchImpl: failure });
@@ -94,6 +110,43 @@ assert.equal(failed.lastForecastError?.retryCount, 2, "retry count survives pers
 assert.equal(cachedForecastIsUsable(failed, now), true, "provider error text is not an incompatibility classifier");
 assert.equal(cachedForecastIsUsable({ ...failed, lastForecastError: { kind: "incompatible" } }, now), false);
 assert.equal(cachedForecastIsUsable(failed, new Date(now.getTime() + 7 * 3_600_000)), false);
+const forecastRequests: URL[] = [];
+const recovered = await forecastService.refresh(config, { now, fetchImpl: async (input) => {
+  const url = new URL(String(input));
+  forecastRequests.push(url);
+  if (url.hostname === "api.open-meteo.com") {
+    throw new TypeError("fetch failed", { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } });
+  }
+  return Response.json({
+    ...liveForecast,
+    hourly: { time: liveForecast.hourly.time, global_tilted_irradiance_previous_day0: liveForecast.hourly.global_tilted_irradiance },
+  });
+} });
+assert.deepEqual(forecastRequests.map((url) => url.hostname), ["api.open-meteo.com", "previous-runs-api.open-meteo.com"]);
+assert.equal(forecastRequests[1].searchParams.get("models"), "jma_msm");
+assert.match(forecastRequests[1].searchParams.get("hourly") ?? "", /global_tilted_irradiance_previous_day0/);
+assert.equal(recovered.forecast?.source, "previous-runs");
+assert.equal(recovered.forecast?.hours[12].tiltedIrradianceWm2, 700);
+assert.equal(recovered.lastForecastError, null);
+
+const rejected = await forecastService.refresh(config, { now, fetchImpl: async (input) => {
+  if (new URL(String(input)).hostname === "api.open-meteo.com") return new Response(null, { status: 503 });
+  return Response.json({ ...liveForecast, hourly: { time: liveForecast.hourly.time } });
+} });
+assert.match(String(rejected.lastForecastError?.error), /JMA forecast failed \(Open-Meteo returned HTTP 503\).*Previous Runs failed \(Open-Meteo returned incomplete hourly solar forecast data\)/);
+assert.equal(rejected.forecast?.source, "previous-runs");
+assert.equal(cachedForecastIsUsable(rejected, now), true);
+
+const rateLimitRequests: string[] = [];
+const rateLimitedFetch: typeof fetch = async (input) => {
+  rateLimitRequests.push(new URL(String(input)).hostname);
+  return new Response(null, { status: 429, headers: { "Retry-After": "180" } });
+};
+const rateLimited = await forecastService.refresh(config, { now, fetchImpl: rateLimitedFetch });
+assert.equal(rateLimited.lastForecastError?.retryAt, now.getTime() + 180_000);
+const duringRateLimit = await forecastService.refresh(config, { now: new Date(now.getTime() + 120_000), fetchImpl: rateLimitedFetch });
+assert.equal(duringRateLimit.lastForecastError?.at, rateLimited.lastForecastError?.at);
+assert.deepEqual(rateLimitRequests, ["api.open-meteo.com"], "a 429 never tries the fallback or makes a new request during Retry-After");
 
 const band = { label: "Cheap", yenPerKwh: 10 };
 const timeline = Array.from({ length: 4 }, (_, index) => ({
@@ -206,7 +259,7 @@ let refreshAttempts = 0;
 const availabilityObservations: Array<Record<string, unknown>> = [];
 const orchestrationState = { ...await stateService.read(), forecast: { ...solarForecast,
   fetchedAt: new Date(Date.now() - 4 * 3_600_000).toISOString() },
-  lastForecastError: { at: new Date().toISOString(), error: "provider down", kind: "provider", retryCount: 3 },
+  lastForecastError: { at: new Date().toISOString(), error: "The connection to Open-Meteo timed out.", kind: "provider", retryCount: 3, retryAt: 0 },
 };
 const guardRule = cleanAutomationRule({ type: "backup-demand-guard", enabled: true,
   conditions: { breakerVoltage: 200, breakerAmps: 30, reserveAmps: 0 } });
@@ -223,12 +276,17 @@ const orchestrator = createAutomationOrchestrator({
 await orchestrator.run(); await orchestrator.run();
 assert.equal(refreshAttempts, 0, "repeated automation ticks during backoff must not retry the provider");
 orchestrationState.lastForecastError.at = new Date(Date.now() - 5 * 60_000).toISOString();
+orchestrationState.lastForecastError.retryAt = Date.now() + 60_000;
+await orchestrator.run();
+assert.equal(refreshAttempts, 0, "Retry-After takes precedence over the exponential delay");
+orchestrationState.lastForecastError.retryAt = 0;
 await orchestrator.run();
 assert.equal(refreshAttempts, 1, "the provider is retried after the exponential delay expires");
 assert.equal(availabilityObservations.length, 0, "missing telemetry is reported through the device outage alert");
 orchestrationState.forecast.fetchedAt = new Date(Date.now() - 7 * 3_600_000).toISOString();
 await orchestrator.run();
 assert.equal(availabilityObservations[0]?.active, true, "an expired forecast still has its separate provider alert");
+assert.match(String((availabilityObservations[0]?.activeEvent as { message: string }).message), /current solar forecast\. The connection to Open-Meteo timed out\./);
 
 const expiredRevision = await stateService.read();
 for (let index = 0; index < 260; index += 1) await stateService.write(await stateService.read());

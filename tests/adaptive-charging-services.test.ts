@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 import { cleanConfig } from "../lib/domain/configuration.js";
-import { cleanAdaptiveChargingState } from "../lib/domain/adaptive-state.js";
+import { cleanAdaptiveChargingState, type AdaptiveChargingState } from "../lib/domain/adaptive-state.js";
 import { adaptiveChargingPlanRefreshDecision, adaptiveChargingScheduledEvent } from "../lib/domain/adaptive-control.js";
 import { cleanAutomationRule } from "../lib/domain/automation-rules.js";
 import { cleanOperationalOverridesState } from "../lib/domain/operational-overrides.js";
@@ -391,9 +391,10 @@ const schedule: BatterySchedule = {
 };
 let strategyConfig = config;
 let strategyForecastLearned = true;
+let strategyState: AdaptiveChargingState = state;
 const strategyView = createBatteryStrategyService({
   readConfig: async () => strategyConfig,
-  readAdaptiveChargingState: async () => state,
+  readAdaptiveChargingState: async () => strategyState,
   readOperationalOverridesState: async () => cleanOperationalOverridesState(),
   readAutomationRules: async () => [guardRule],
   readSchedules: async () => [schedule],
@@ -411,6 +412,16 @@ assert.equal(adaptiveStrategy.nextAction?.confidence, "calibrated", "the next ac
 strategyForecastLearned = false;
 const initialForecastStrategy = await strategyView(now);
 assert.equal(initialForecastStrategy.nextAction?.confidence, "initial", "the next action should remain initial until forecast history is calibrated");
+
+strategyState = cleanAdaptiveChargingState({
+  forecast: { fetchedAt: new Date(now.getTime() - 7 * 3_600_000).toISOString() },
+  lastForecastError: { error: "fetch failed", kind: "provider" },
+  plan,
+});
+const forecastBlockedStrategy = await strategyView(now);
+assert.equal(forecastBlockedStrategy.nextAction?.title, "Waiting for solar forecast");
+assert.equal(forecastBlockedStrategy.nextAction?.reason, "Could not connect to Open-Meteo.");
+assert.equal(forecastBlockedStrategy.nextAction?.action, undefined, "an old slot must not be presented as the next charge");
 
 strategyConfig = cleanConfig({ ...config, adaptiveCharging: { ...config.adaptiveCharging, enabled: false } });
 const scheduledStrategy = await strategyView(now);

@@ -776,6 +776,29 @@ function mockApiWithGuardRestore(options: { triggered?: boolean; fail?: boolean;
 afterEach(() => vi.unstubAllGlobals());
 
 describe("React application shell", () => {
+  it("shows the Previous Runs forecast source while Adaptive Charging remains available", async () => {
+    mockApi("succeeded", true, { forecast: { ...adaptiveCharging.forecast, source: "previous-runs" } });
+    render(<MemoryRouter initialEntries={["/automation"]}><AppProviders><App /></AppProviders></MemoryRouter>);
+    expect(await screen.findByRole("link", { name: "Open-Meteo Previous Runs" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: /^Charge until/ })).toBeVisible();
+  });
+
+  it("explains a forecast outage before offering a charge from the previous plan", async () => {
+    const reason = "The connection to Open-Meteo timed out.";
+    mockApi("succeeded", true, {
+      available: false,
+      reason,
+      planningBlock: { kind: "forecast", title: "Waiting for solar forecast", reason },
+      lastForecastError: { at: new Date().toISOString(), error: reason },
+      forecast: { ...adaptiveCharging.forecast, stale: true },
+    });
+    render(<MemoryRouter initialEntries={["/automation"]}><AppProviders><App /></AppProviders></MemoryRouter>);
+    expect(await screen.findByRole("heading", { name: "Waiting for solar forecast" })).toBeVisible();
+    expect(screen.getByText(reason)).toBeVisible();
+    expect(screen.getByText(/Last successful forecast/)).toBeVisible();
+    expect(screen.queryByRole("heading", { name: /^Charge until/ })).not.toBeInTheDocument();
+  });
+
   it("keeps battery details visible during power-only polls and flags a failed reading until it recovers", async () => {
     const readAt = new Date().toISOString();
     const complete = {
