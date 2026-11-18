@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AwayPeriod, AwayPeriodsView, AwayReserveStatus } from "../api/contracts";
@@ -776,6 +776,76 @@ function mockApiWithGuardRestore(options: { triggered?: boolean; fail?: boolean;
 afterEach(() => vi.unstubAllGlobals());
 
 describe("React application shell", () => {
+  it("keeps battery details visible during power-only polls and flags a failed reading until it recovers", async () => {
+    const readAt = new Date().toISOString();
+    const complete = {
+      ...status,
+      read_at: readAt,
+      hosts: { battery: config.batteryHost },
+      energy: {
+        ...status.energy,
+        battery: { ...status.energy.battery, remaining_percent: { value: 68, acquired_at: readAt } },
+      },
+      settings: { discharge_limit: { available: true, decoded: { percent: 30 } } },
+    };
+    const pending = {
+      read_at: readAt,
+      hosts: complete.hosts,
+      statusDetailsPending: true,
+      energy: { battery: { instant_power: { value: 1400 } } },
+    };
+    let response: unknown = complete;
+    const fetchMock = mockApi();
+    const originalFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input, init) => String(input).endsWith("/api/status")
+      ? Promise.resolve({ ok: true, status: 200, json: async () => response } as Response)
+      : originalFetch(input, init));
+    render(<MemoryRouter initialEntries={["/"]}><AppProviders><App /></AppProviders></MemoryRouter>);
+    const panel = within((await screen.findByRole("heading", { name: "Battery" })).closest("article")!);
+    const refresh = screen.getByRole("button", { name: "Refresh" });
+    expect(await panel.findByText("68%")).toBeVisible();
+    expect(panel.getByText("30%")).toBeVisible();
+
+    response = pending;
+    fireEvent.click(refresh);
+    expect(await panel.findByText("1.4 kW")).toBeVisible();
+    expect(panel.getByText("68%")).toBeVisible();
+    expect(panel.getByText("auto")).toBeVisible();
+    expect(panel.getByText("30%")).toBeVisible();
+    expect(panel.queryByText(/Stale/)).not.toBeInTheDocument();
+
+    response = {
+      ...complete,
+      energy: {
+        ...complete.energy,
+        battery: { ...complete.energy.battery, remaining_percent: { value: null }, operation_mode: { value: "standby" } },
+      },
+    };
+    fireEvent.click(refresh);
+    expect(await panel.findByText("standby")).toBeVisible();
+    expect(panel.getByText("68%")).toBeVisible();
+    expect(panel.getByText(/Stale · last read/)).toHaveAttribute("datetime", readAt);
+    expect(panel.getByText("30%")).toBeVisible();
+
+    response = pending;
+    fireEvent.click(refresh);
+    expect(await panel.findByText("1.4 kW")).toBeVisible();
+    expect(panel.getByText(/Stale · last read/)).toBeVisible();
+    fireEvent.click(screen.getAllByRole("link", { name: "Battery" })[0]);
+    const batteryPage = within((await screen.findByText("Verified operation mode")).closest("section")!);
+    expect(batteryPage.getByText("68%")).toBeVisible();
+    expect(batteryPage.getByText(/Stale · last read/)).toHaveAttribute("datetime", readAt);
+    expect(batteryPage.getByText("standby")).toBeVisible();
+    expect(batteryPage.getByText("30%")).toBeVisible();
+
+    response = {
+      ...complete,
+      energy: { ...complete.energy, battery: { ...complete.energy.battery, remaining_percent: { value: 69 } } },
+    };
+    expect(await batteryPage.findByText("69%", {}, { timeout: 3000 })).toBeVisible();
+    expect(batteryPage.queryByText(/Stale/)).not.toBeInTheDocument();
+  });
+
   it("saves the global Away reserve preference from the Away schedule", async () => {
     const fetchMock = mockApi();
     render(<MemoryRouter initialEntries={["/automation"]}><AppProviders><App /></AppProviders></MemoryRouter>);

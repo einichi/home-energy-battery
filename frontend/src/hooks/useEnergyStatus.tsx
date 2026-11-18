@@ -2,10 +2,15 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from "react";
 import type { AppConfig, LoadingState, StatusSnapshot } from "../api/contracts";
 import { getConfig, getStatus } from "../api/queries";
+import { updateBatteryReadings } from "../core/battery-readings";
+import type { BatteryReadings } from "../core/battery-readings";
+import { useSnapshotStale } from "./useSnapshotStale";
 
 type EnergyStatusContextValue = {
   config: AppConfig | null;
   status: StatusSnapshot | null;
+  batteryReadings: BatteryReadings | null;
+  batteryReadingsStale: boolean;
   loadingState: LoadingState;
   manualRefreshing: boolean;
   error: string | null;
@@ -17,7 +22,11 @@ const EnergyStatusContext = createContext<EnergyStatusContextValue | null>(null)
 
 export function EnergyStatusProvider({ children }: { children: ReactNode }) {
   const [config, setConfig] = useState<AppConfig | null>(null);
-  const [status, setStatus] = useState<StatusSnapshot | null>(null);
+  const [{ status, battery: observedBattery, batteryRequestFailed }, setPollResult] = useState<{
+    status: StatusSnapshot | null;
+    battery: BatteryReadings | null;
+    batteryRequestFailed: boolean;
+  }>({ status: null, battery: null, batteryRequestFailed: false });
   const [loadingState, setLoadingState] = useState<LoadingState>("loading");
   const [statusError, setStatusError] = useState<string | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
@@ -25,6 +34,10 @@ export function EnergyStatusProvider({ children }: { children: ReactNode }) {
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const latestRequest = useRef(0);
   const manualRefreshQueued = useRef(false);
+  const configuredBatteryHost = config?.batteryHost;
+  const batteryReadings = configuredBatteryHost === undefined || observedBattery?.host === configuredBatteryHost ? observedBattery : null;
+  const batteryDetailsExpired = useSnapshotStale(batteryReadings?.lastDetailsAt, config?.updateIntervalSeconds);
+  const batteryReadingsStale = batteryRequestFailed || batteryDetailsExpired;
 
   const refresh = useCallback(() => {
     manualRefreshQueued.current = true;
@@ -74,11 +87,16 @@ export function EnergyStatusProvider({ children }: { children: ReactNode }) {
         const next = await getStatus(controller.signal);
         if (stopped || request !== latestRequest.current) return;
         detailsPending = next.statusDetailsPending === true;
-        setStatus(next);
+        setPollResult((current) => ({
+          status: next,
+          battery: updateBatteryReadings(current.battery, next, configuredBatteryHost),
+          batteryRequestFailed: (next.statusDetailsPending === true || next.statusRefreshPaused === true) && current.batteryRequestFailed,
+        }));
         setStatusError(null);
         setLoadingState("ready");
       } catch (reason) {
         if (stopped || controller.signal.aborted || request !== latestRequest.current) return;
+        setPollResult((current) => ({ ...current, batteryRequestFailed: true }));
         setStatusError(reason instanceof Error ? reason.message : "Status request failed");
         setLoadingState("error");
       } finally {
@@ -104,17 +122,19 @@ export function EnergyStatusProvider({ children }: { children: ReactNode }) {
       controller?.abort();
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [config?.updateIntervalSeconds, refreshSequence]);
+  }, [config?.updateIntervalSeconds, configuredBatteryHost, refreshSequence]);
 
   const value = useMemo<EnergyStatusContextValue>(() => ({
     config,
     status,
+    batteryReadings,
+    batteryReadingsStale,
     loadingState,
     manualRefreshing,
     error: statusError ?? configError,
     refresh,
     replaceConfig: setConfig,
-  }), [config, status, loadingState, manualRefreshing, statusError, configError, refresh]);
+  }), [config, status, batteryReadings, batteryReadingsStale, loadingState, manualRefreshing, statusError, configError, refresh]);
 
   return <EnergyStatusContext.Provider value={value}>{children}</EnergyStatusContext.Provider>;
 }

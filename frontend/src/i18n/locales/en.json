@@ -1244,6 +1244,7 @@
     "Live readings paused": "Live readings paused",
     "Stale · last known values": "Stale · last known values",
     "Stale": "Stale",
+    "staleLastRead": "Stale · last read {value}",
     "The latest values remain visible while {value}.": "The latest values remain visible while {value}.",
     "Review equipment →": "Review equipment →",
     "System alerts": "System alerts",

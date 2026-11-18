@@ -1244,6 +1244,7 @@
     "Live readings paused": "現在値の更新を一時停止中",
     "Stale · last known values": "古い値・最終取得値を表示中",
     "Stale": "古い値",
+    "staleLastRead": "古い値・最終取得 {value}",
     "The latest values remain visible while {value}.": "{value}の間も、最後に取得した値を表示します。",
     "Review equipment →": "機器を確認 →",
     "System alerts": "システム警告",

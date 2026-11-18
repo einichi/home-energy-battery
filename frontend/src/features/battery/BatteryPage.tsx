@@ -16,12 +16,13 @@ import {
 import type { BatteryAction } from "../../api/battery";
 import type { BackupPreparation, BatterySchedule, CommandReceipt } from "../../api/contracts";
 import type { DeviceCommand } from "../../api/commands";
+import { BatteryReadingNotice } from "../../components/BatteryReadingNotice";
 import { CombinedEnergyChart } from "../../components/CombinedEnergyChart";
 import type { TimelineOverlay } from "../../components/CombinedEnergyChart";
 import { withLatestStatus } from "../../core/energy";
 import { useEnergyStatus } from "../../hooks/useEnergyStatus";
 import { useHistoryRange } from "../../hooks/useHistoryRange";
-import { formatDateTime, formatDateTimesInText, formatMonthDay, formatPower, formatSoc, formatTime, formatWeekdayShort } from "../../core/format";
+import { formatDateTime, formatDateTimesInText, formatMonthDay, formatPercent, formatPower, formatSoc, formatTime, formatWeekdayShort } from "../../core/format";
 import { useDialogFocus } from "../../hooks/useDialogFocus";
 import { useTranslation } from "react-i18next";
 import { useAwayReserve } from "../../hooks/useAwayReserve";
@@ -312,7 +313,7 @@ function recurringWindow(startHour: number, endHour: number, label: string, tone
 
 export function BatteryPage({ view = "status" }: { view?: "status" | "schedules" | "backup" }) {
   const { t } = useTranslation("battery");
-  const { config, status, loadingState, refresh } = useEnergyStatus();
+  const { config, status, batteryReadings, loadingState, refresh } = useEnergyStatus();
   const { reserve: awayReserve, refresh: refreshAwayReserve } = useAwayReserve();
   const { history: batteryHistory, loading: batteryHistoryLoading, refresh: refreshBatteryHistory } = useHistoryRange(24 * 60 * 60_000);
   const { state, dispatch } = useCommandLifecycle();
@@ -512,13 +513,20 @@ export function BatteryPage({ view = "status" }: { view?: "status" | "schedules"
 
       {view === "status" ? <>
       <section className="battery-hero panel">
-        <div><p className="eyebrow">{t("currentState")}</p><strong className="battery-soc">{formatSoc(battery?.remaining_percent?.value ?? null)}</strong><p>{t("{state} · {power}", { state: sentence(battery?.working_status?.value), power: formatPower(battery?.instant_power?.value ?? null) })}</p></div>
-        {battery?.remaining_percent?.error ? <p className="status-banner" role="alert">{battery.remaining_percent.error}</p> : null}
+        <div>
+          <p className="eyebrow">{t("currentState")}</p>
+          <strong className="battery-soc">{formatSoc(batteryReadings?.soc?.value ?? null)}</strong>
+          <BatteryReadingNotice reading={batteryReadings?.soc} />
+          <p>{t("{state} · {power}", { state: sentence(batteryReadings?.workingStatus?.value), power: formatPower(battery?.instant_power?.value ?? null) })}
+            <BatteryReadingNotice reading={batteryReadings?.workingStatus} />
+          </p>
+        </div>
+        {batteryReadings?.socError ? <p className="status-banner" role="alert">{batteryReadings.socError}</p> : null}
         <dl className="battery-state-grid">
-          <div><dt>{t("verifiedOperationMode")}</dt><dd>{sentence(battery?.operation_mode?.value)}</dd></div>
-          <div><dt>{t("chargingProfile")}</dt><dd>{sentence(profile)}</dd></div>
-          <div><dt>{t("reserve")}</dt><dd>{t("{value}%", { value: reserve })}</dd></div>
-          <div><dt>{t("latestContact")}</dt><dd>{status?.read_at ? formatTime(status.read_at) : "Unavailable"}</dd></div>
+          <div><dt>{t("verifiedOperationMode")}</dt><dd>{sentence(batteryReadings?.operationMode?.value)}<BatteryReadingNotice reading={batteryReadings?.operationMode} /></dd></div>
+          <div><dt>{t("chargingProfile")}</dt><dd>{sentence(batteryReadings?.profile?.value)}<BatteryReadingNotice reading={batteryReadings?.profile} /></dd></div>
+          <div><dt>{t("reserve")}</dt><dd>{formatPercent(batteryReadings?.reserve?.value)}<BatteryReadingNotice reading={batteryReadings?.reserve} /></dd></div>
+          <div><dt>{t("latestContact")}</dt><dd>{batteryReadings?.lastContactAt ? formatTime(batteryReadings.lastContactAt) : t("common:Unavailable")}</dd></div>
         </dl>
       </section>
 

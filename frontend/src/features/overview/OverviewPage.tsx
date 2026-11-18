@@ -1,5 +1,6 @@
 import { useMemo, useRef } from "react";
 import { Link } from "react-router-dom";
+import { BatteryReadingNotice } from "../../components/BatteryReadingNotice";
 import { EnergyFlow } from "../../components/EnergyFlow";
 import { EnergyPeriodSections } from "../../components/EnergyPeriodSections";
 import { OffPeakSavings } from "../../components/TelemetryParity";
@@ -31,7 +32,7 @@ function nextActionTitle(nextAction: NonNullable<NonNullable<ReturnType<typeof u
 
 export function OverviewPage() {
   const { t } = useTranslation("overview");
-  const { config, status, loadingState, manualRefreshing, error, refresh: refreshStatus } = useEnergyStatus();
+  const { config, status, batteryReadings, loadingState, manualRefreshing, error, refresh: refreshStatus } = useEnergyStatus();
   const { rules, error: rulesError, refresh: refreshRules, replaceRules } = useAutomationRules();
   const refreshButtonRef = useRef<HTMLButtonElement>(null);
   const todayStart = useMemo(() => {
@@ -40,7 +41,7 @@ export function OverviewPage() {
     return value.toISOString();
   }, []);
   const battery = status?.energy?.battery;
-  const soc = metricValue(battery?.remaining_percent);
+  const soc = batteryReadings?.soc?.value ?? null;
   const batteryPower = metricValue(battery?.instant_power);
   const solarPower = metricValue(status?.energy?.solar?.instant_power);
   const fuelCellPower = liveFuelCellPower(status);
@@ -55,7 +56,6 @@ export function OverviewPage() {
     : "Circuits total — sum of monitored circuits";
   const gridImport = metricValue(status?.meter?.grid_import_power);
   const gridExport = metricValue(status?.meter?.grid_export_power);
-  const reserve = status?.settings?.discharge_limit?.decoded?.percent;
   const nextAction = status?.batteryStrategy?.nextAction;
   const formattedNextActionTitle = nextActionTitle(nextAction, t);
   const readingsStale = useSnapshotStale(status?.read_at, config?.updateIntervalSeconds);
@@ -131,7 +131,7 @@ export function OverviewPage() {
 
       <section className="mobile-operating-summary" aria-label={t("currentOperatingSummary")}>
         <div><span>{t(gridExport != null && gridExport > 0 ? "Grid export" : "Grid import")}</span><strong>{formatPower(gridExport != null && gridExport > 0 ? gridExport : gridImport)}</strong></div>
-        <div><span>{t("battery")}</span><strong>{t("{soc} · {state}", { soc: formatSoc(soc), state: t(batteryStateLabel(batteryPower)) })}</strong></div>
+        <div><span>{t("battery")}</span><strong>{t("{soc} · {state}", { soc: formatSoc(soc), state: t(batteryStateLabel(batteryPower)) })}</strong><BatteryReadingNotice reading={batteryReadings?.soc} /></div>
         <div><span>{t("nextAction")}</span><strong>{formattedNextActionTitle}</strong></div>
       </section>
 
@@ -160,7 +160,7 @@ export function OverviewPage() {
                 {t("battery")}
               </h2>
             </div>
-            {widgetVisible("batterySoc") ? <span className="battery-soc">{formatSoc(soc)}</span> : null}
+            {widgetVisible("batterySoc") ? <span className="battery-soc">{formatSoc(soc)}<BatteryReadingNotice reading={batteryReadings?.soc} /></span> : null}
           </div>
           {widgetVisible("batterySoc") ? <div className="soc-track" role="meter" aria-label={t("batteryStateOfCharge")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={soc ?? undefined}>
             <i style={{ width: `${soc ?? 0}%` }} />
@@ -176,27 +176,27 @@ export function OverviewPage() {
               <dt>
                 {t("workingState")}
               </dt>
-              <dd>{t(battery?.working_status?.value ?? "Unavailable")}</dd>
+              <dd>{t(batteryReadings?.workingStatus?.value ?? "Unavailable")}<BatteryReadingNotice reading={batteryReadings?.workingStatus} /></dd>
             </div> : null}
             {widgetVisible("operationMode") ? <div>
               <dt>
                 {t("operationMode")}
               </dt>
-              <dd>{t(battery?.operation_mode?.value ?? "Unavailable")}</dd>
+              <dd>{t(batteryReadings?.operationMode?.value ?? "Unavailable")}<BatteryReadingNotice reading={batteryReadings?.operationMode} /></dd>
             </div> : null}
             {widgetVisible("vendorProfile") ? <div>
               <dt>
                 {t("profile")}
               </dt>
-              <dd>{t(battery?.vendor_profile?.value ?? "Unavailable")}</dd>
+              <dd>{t(batteryReadings?.profile?.value ?? "Unavailable")}<BatteryReadingNotice reading={batteryReadings?.profile} /></dd>
             </div> : null}
             {widgetVisible("dischargeLimit") ? <div>
               <dt>{t("reserve")}</dt>
-              <dd>{formatPercent(reserve ?? null)}</dd>
+              <dd>{formatPercent(batteryReadings?.reserve?.value)}<BatteryReadingNotice reading={batteryReadings?.reserve} /></dd>
             </div> : null}
             <div>
               <dt>{t("latestContact")}</dt>
-              <dd>{status?.read_at ? formatTime(status.read_at) : t("unavailable")}</dd>
+              <dd>{batteryReadings?.lastContactAt ? formatTime(batteryReadings.lastContactAt) : t("unavailable")}</dd>
             </div>
           </dl>
           <p className="panel-note">
