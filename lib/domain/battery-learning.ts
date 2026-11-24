@@ -1,5 +1,6 @@
 import { finiteNumberOrNull } from "./numbers.js";
 import { median, percentile } from "./statistics.js";
+import { recentTaperWatts, type ChargeCurveSample } from "./recent-taper.js";
 import { localDayKey } from "./time.js";
 import type { HistorySample } from "../contracts/history.js";
 
@@ -75,6 +76,7 @@ export interface BatteryChargePowerBand {
   configuredWatts: number | null;
   candidateWatts: number | null;
   activeWatts: number | null;
+  recentSessionWatts?: number | null;
   sampleCount: number;
   sessionCount: number;
   distinctDays: number;
@@ -158,14 +160,6 @@ interface ChargePerformanceSample {
   socPercent?: number | null;
   sessionId?: string;
   day?: string;
-}
-
-interface ChargeCurveSample {
-  at?: string;
-  day?: string;
-  sessionId?: string;
-  socPercent?: unknown;
-  batteryChargingW?: unknown;
 }
 
 interface BatteryLearningConfig {
@@ -260,6 +254,7 @@ export function cleanBatteryLearningPower(input: unknown = {}): BatteryLearningP
     configuredWatts: finiteNumberOrNull(band.configuredWatts),
     candidateWatts: finiteNumberOrNull(band.candidateWatts),
     activeWatts: finiteNumberOrNull(band.activeWatts),
+    recentSessionWatts: finiteNumberOrNull(band.recentSessionWatts),
     sampleCount: Math.max(0, Math.round(Number(band.sampleCount) || 0)),
     sessionCount: Math.max(0, Math.round(Number(band.sessionCount) || 0)),
     distinctDays: Math.max(0, Math.round(Number(band.distinctDays) || 0)),
@@ -669,6 +664,7 @@ export function buildBatteryChargePowerCurve(
   configuredWatts: number,
   plateauModel: Partial<BatteryLearningPower> = {},
   previousCurve: readonly BatteryChargePowerBand[] = [],
+  now: Date = new Date(),
 ): BatteryChargePowerBand[] {
   const normalized = samples.filter((sample) => Number.isFinite(Number(sample.socPercent))
     && Number(sample.socPercent) >= 0
@@ -737,6 +733,9 @@ export function buildBatteryChargePowerCurve(
       configuredWatts,
       candidateWatts,
       activeWatts: previousActive,
+      recentSessionWatts: definition.minSoc >= 90 && source === "learned"
+        ? recentTaperWatts(bandSamples, previousActive, now)
+        : null,
       sampleCount: values.length,
       sessionCount,
       distinctDays,
@@ -767,6 +766,7 @@ export function buildBatteryLearningModel(
     configuredWatts,
     power,
     previous.power?.curve ?? [],
+    now,
   );
   const sources: LearningSource[] = [charge.source, discharge.source, power.source];
   const anyDegraded = [charge, discharge, power]
@@ -920,18 +920,29 @@ export function adaptiveChargingTimingProfile({
   windowDurationMs,
 }: ChargeTimingInput = {}) {
   const targetWh = Math.max(0, Number(requiredWh) || 0);
+  const endSocPercent = Math.min(100, Number(startSocPercent) + targetWh / Math.max(0.001, Number(whPerSocPoint)));
+  const crossesBand = (band: BatteryChargePowerBand) =>
+    Number(startSocPercent) < band.maxSoc && endSocPercent > band.minSoc;
+  let usesRecentTaper = false;
+  const timingCurve = powerCurve.map((band) => {
+    const watts = band.recentSessionWatts;
+    if (band.minSoc >= 90 && band.source === "learned" && crossesBand(band)
+      && watts != null && watts > 0 && watts < Number(band.activeWatts)) {
+      usesRecentTaper = true;
+      return { ...band, activeWatts: watts };
+    }
+    return band;
+  });
   const modeledDurationMs = estimateChargeDurationMs({
     targetWh,
     startSocPercent,
     whPerSocPoint,
-    powerCurve,
+    powerCurve: timingCurve,
     fallbackWatts,
   });
-  const endSocPercent = Math.min(100, Number(startSocPercent) + targetWh / Math.max(0.001, Number(whPerSocPoint)));
   const unvalidatedTaper = powerCurve.some((band) => Number(band.minSoc) >= 80
     && band.source !== "learned"
-    && Number(startSocPercent) < Number(band.maxSoc)
-    && endSocPercent > Number(band.minSoc));
+    && crossesBand(band));
   const timingReserveMs = Math.min(
     ADAPTIVE_CHARGING_TIMING_RESERVE_MAX_MS,
     Math.max(ADAPTIVE_CHARGING_TIMING_RESERVE_MIN_MS, modeledDurationMs * ADAPTIVE_CHARGING_TIMING_RESERVE_FRACTION),
@@ -944,7 +955,7 @@ export function adaptiveChargingTimingProfile({
     durationMs: windowDurationMs,
     startSocPercent,
     whPerSocPoint,
-    powerCurve,
+    powerCurve: timingCurve,
     fallbackWatts,
   });
   const schedulableWh = Math.min(targetWh, physicallyDeliverableWh);
@@ -959,6 +970,6 @@ export function adaptiveChargingTimingProfile({
     unvalidatedTaper,
     physicallyDeliverableWh,
     timeConstrainedWh: Math.max(0, targetWh - physicallyDeliverableWh),
-    source: unvalidatedTaper ? "conservative-fallback" : "soc-curve",
+    source: unvalidatedTaper ? "conservative-fallback" : usesRecentTaper ? "soc-curve+recent-taper" : "soc-curve",
   };
 }
