@@ -50,3 +50,24 @@ export function adaptiveChargingPlanLogMessage(plan: PlanLike | null | undefined
 export function adaptiveChargingWindowHasShortfall(summary: Partial<WindowSummary> | null | undefined): boolean {
   return Number(summary?.unmetWh) >= 50 && summary?.socTargetReached !== true;
 }
+
+export function adaptiveChargingShortfallMessage(summary: WindowSummary): string {
+  const wh = (value: number) => `${value.toLocaleString("en-US")} Wh`;
+  const minutes = (ms: number) => `${Math.round(ms / 6000) / 10} min`;
+  const openingWh = summary.openingPlannedWh;
+  const openingGap = openingWh === null ? 0 : Math.max(0, openingWh - summary.deliveredWh);
+  const opening = openingWh === null ? "Opening plan unavailable."
+    : `Opening plan ${wh(openingWh)}${openingGap > 0 ? ` (${wh(openingGap)} short)` : ""}.`;
+  const timing = summary.initialGuardBlockedMs !== null && summary.postStartGuardInterruptedMs !== null
+    ? `Breaker guard blocked the first start for ${minutes(summary.initialGuardBlockedMs)} and interrupted charging for ${minutes(summary.postStartGuardInterruptedMs)} after start.`
+    : `Recorded breaker interruption time ${minutes(summary.guardInterruptedMs)}. Pre-start timing unavailable.`;
+  return [
+    `${summary.label || "Discounted window"} delivered ${wh(summary.deliveredWh)}.`,
+    opening,
+    `Final plan ${wh(summary.plannedWh)} (${wh(summary.unmetWh)} short).`,
+    timing,
+    `Breaker interruptions ${summary.interruptionCount}. Solar-headroom pauses ${summary.solarHeadroomInterruptionCount}.`,
+    `SOC ${summary.startSocPercent ?? "--"}% to ${summary.endSocPercent ?? "--"}%.`,
+    summary.estimatedDeliveryWh > 0 ? `Delivery includes ${wh(summary.estimatedDeliveryWh)} estimated at the charge boundaries.` : "",
+  ].filter(Boolean).join(" ");
+}

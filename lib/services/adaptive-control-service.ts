@@ -1,6 +1,6 @@
 import type { ApplicationConfig } from "../contracts/configuration.js";
 import type { AdaptiveChargingState } from "../domain/adaptive-state.js";
-import { appendAdaptiveChargingLog, finalizeAdaptiveChargeSession } from "../domain/adaptive-state.js";
+import { appendAdaptiveChargingLog, finalizeAdaptiveChargeSession, settleInitialGuardWait } from "../domain/adaptive-state.js";
 import {
   adaptiveChargingConfiguredActive,
   adaptiveChargingSlotEndDelayMs,
@@ -37,6 +37,7 @@ export function createAdaptiveControlService(dependencies: AdaptiveControlDepend
     state.interruptedCharge = null;
     state.breakerRecovery = null;
     state.standbyHoldUntil = null;
+    settleInitialGuardWait(state, now);
     state.pausedUntil = nextLocalMidnight(now);
     appendAdaptiveChargingLog(state, `Manual ${action} action paused Adaptive Charging until ${state.pausedUntil}`, "pause", now);
     return dependencies.writeState(state);
@@ -44,6 +45,7 @@ export function createAdaptiveControlService(dependencies: AdaptiveControlDepend
 
   async function resume(now: Date = new Date()): Promise<AdaptiveChargingState> {
     const state = await dependencies.readState();
+    settleInitialGuardWait(state, now);
     state.pausedUntil = null;
     state.plan = null;
     state.interruptedCharge = null;

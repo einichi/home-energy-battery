@@ -173,6 +173,10 @@ interface WindowExecution {
   windowEnd: string | null;
   label: string | null;
   yenPerKwh: number | null;
+  openingPlannedWh: number | null;
+  initialGuardBlockedMs: number | null;
+  initialGuardWait: { since: string; until: string } | null;
+  guardInterruptedMsAtFirstStart: number | null;
   plannedWh: number;
   deliveredWh: number;
   estimatedDeliveryWh: number;
@@ -189,7 +193,8 @@ interface WindowExecution {
   updatedAt: string | null;
 }
 
-export interface WindowSummary extends Omit<WindowExecution, "latestSocPercent" | "peakSocPercent" | "guardInterruptionStartedAt" | "idleRecoveryCount" | "startedTrackingAt" | "updatedAt"> {
+export interface WindowSummary extends Omit<WindowExecution, "initialGuardWait" | "guardInterruptedMsAtFirstStart" | "latestSocPercent" | "peakSocPercent" | "guardInterruptionStartedAt" | "idleRecoveryCount" | "startedTrackingAt" | "updatedAt"> {
+  postStartGuardInterruptedMs: number | null;
   unmetWh: number;
   socTargetReached: boolean;
   endSocPercent: number | null;
@@ -276,6 +281,7 @@ export function cleanAdaptiveChargingState(input: unknown = {}): AdaptiveChargin
   const interruptedCharge = asRecord(value.interruptedCharge);
   const breakerRecovery = asRecord(value.breakerRecovery);
   const activeWindowExecution = asRecord(value.activeWindowExecution);
+  const initialGuardWait = asRecord(activeWindowExecution.initialGuardWait);
   const exportConfirmation = asRecord(value.exportConfirmation);
   return {
     revision: Math.max(0, Math.floor(Number(value.revision) || 0)),
@@ -347,6 +353,11 @@ export function cleanAdaptiveChargingState(input: unknown = {}): AdaptiveChargin
         windowEnd: stringOrNull(activeWindowExecution.windowEnd),
         label: stringOrNull(activeWindowExecution.label),
         yenPerKwh: finiteNumberOrNull(activeWindowExecution.yenPerKwh),
+        openingPlannedWh: finiteNumberOrNull(activeWindowExecution.openingPlannedWh),
+        initialGuardBlockedMs: finiteNumberOrNull(activeWindowExecution.initialGuardBlockedMs),
+        initialGuardWait: typeof initialGuardWait.since === "string" && typeof initialGuardWait.until === "string"
+          ? { since: initialGuardWait.since, until: initialGuardWait.until } : null,
+        guardInterruptedMsAtFirstStart: finiteNumberOrNull(activeWindowExecution.guardInterruptedMsAtFirstStart),
         plannedWh: Math.max(0, Math.round(Number(activeWindowExecution.plannedWh) || 0)),
         deliveredWh: Math.max(0, Math.round(Number(activeWindowExecution.deliveredWh) || 0)),
         estimatedDeliveryWh: Math.max(0, Math.round(Number(activeWindowExecution.estimatedDeliveryWh) || 0)),
@@ -376,6 +387,9 @@ export function cleanAdaptiveChargingState(input: unknown = {}): AdaptiveChargin
         windowEnd: String(summary.windowEnd),
         label: stringOrNull(summary.label),
         yenPerKwh: finiteNumberOrNull(summary.yenPerKwh),
+        openingPlannedWh: finiteNumberOrNull(summary.openingPlannedWh),
+        initialGuardBlockedMs: finiteNumberOrNull(summary.initialGuardBlockedMs),
+        postStartGuardInterruptedMs: finiteNumberOrNull(summary.postStartGuardInterruptedMs),
         plannedWh: Math.max(0, Math.round(Number(summary.plannedWh) || 0)),
         deliveredWh: Math.max(0, Math.round(Number(summary.deliveredWh) || 0)),
         estimatedDeliveryWh: Math.max(0, Math.round(Number(summary.estimatedDeliveryWh) || 0)),
@@ -507,6 +521,11 @@ export function startAdaptiveChargeSession(
   soc: unknown,
   now: Date = new Date(),
 ): void {
+  const execution = state.activeWindowExecution;
+  if (execution && execution.guardInterruptedMsAtFirstStart === null) {
+    settleInitialGuardWait(state, now);
+    execution.guardInterruptedMsAtFirstStart = execution.guardInterruptedMs + openGuardInterruptionMs(execution, now);
+  }
   state.activeChargeSession = {
     startedAt: now.toISOString(),
     requestedWh: Math.max(0, Math.round(Number(slot?.targetWh) || 0)),
@@ -563,16 +582,18 @@ export function finalizeAdaptiveChargingWindowExecution(
   const targetSocPercent = finiteNumberOrNull(active.targetSocPercent);
   const socTargetReached = Number.isFinite(endSoc) && Number.isFinite(targetSocPercent)
     && Number(endSoc) >= Number(targetSocPercent);
-  const activeGuardStartedMs = new Date(active.guardInterruptionStartedAt ?? "").getTime();
-  const additionalGuardInterruptedMs = Number.isFinite(activeGuardStartedMs)
-    ? Math.max(0, now.getTime() - activeGuardStartedMs)
-    : 0;
+  settleInitialGuardWait(state, now);
+  const guardInterruptedMs = active.guardInterruptedMs + openGuardInterruptionMs(active, now);
   const summary: WindowSummary = {
     key: active.key,
     windowStart: active.windowStart,
     windowEnd: active.windowEnd,
     label: active.label,
     yenPerKwh: active.yenPerKwh,
+    openingPlannedWh: active.openingPlannedWh,
+    initialGuardBlockedMs: active.initialGuardBlockedMs,
+    postStartGuardInterruptedMs: active.initialGuardBlockedMs === null ? null
+      : active.guardInterruptedMsAtFirstStart === null ? 0 : Math.max(0, guardInterruptedMs - active.guardInterruptedMsAtFirstStart),
     plannedWh: active.plannedWh,
     deliveredWh: active.deliveredWh,
     estimatedDeliveryWh: Math.max(0, Math.round(Number(active.estimatedDeliveryWh) || 0)),
@@ -580,7 +601,7 @@ export function finalizeAdaptiveChargingWindowExecution(
     targetSocPercent,
     socTargetReached,
     interruptionCount: active.interruptionCount,
-    guardInterruptedMs: Math.max(0, Math.round(active.guardInterruptedMs + additionalGuardInterruptedMs)),
+    guardInterruptedMs,
     solarHeadroomInterruptionCount: Math.max(
       0,
       Math.round(Number(active.solarHeadroomInterruptionCount) || 0),
@@ -634,6 +655,10 @@ export function syncAdaptiveChargingWindowExecution(
       windowEnd: occurrence.end,
       label: occurrence.band?.label || "Discounted",
       yenPerKwh: Number(occurrence.band?.yenPerKwh),
+      openingPlannedWh: remainingWh,
+      initialGuardBlockedMs: 0,
+      initialGuardWait: null,
+      guardInterruptedMsAtFirstStart: state.owner === "adaptiveCharging" ? 0 : null,
       plannedWh: remainingWh,
       deliveredWh: 0,
       estimatedDeliveryWh: 0,
@@ -681,6 +706,36 @@ export function finalizeExpiredAdaptiveChargingWindow(
 }
 
 
+// Each evaluation settles the previous decision. Only a due charge blocked by
+// the guard opens a new interval, bounded by the slot that was actually due.
+export function settleInitialGuardWait(state: AdaptiveChargingState, now: Date): void {
+  const active = state.activeWindowExecution;
+  if (!active?.initialGuardWait) return;
+  const { since, until } = active.initialGuardWait;
+  const endMs = Math.min(now.getTime(), Date.parse(until));
+  const elapsedMs = endMs - Date.parse(since);
+  if (active.initialGuardBlockedMs !== null && Number.isFinite(elapsedMs)) {
+    active.initialGuardBlockedMs += Math.max(0, elapsedMs);
+  }
+  active.initialGuardWait = null;
+}
+
+export function recordInitialGuardWait(state: AdaptiveChargingState, now: Date, slotEnd: string): void {
+  const active = state.activeWindowExecution;
+  if (active && active.initialGuardBlockedMs !== null && active.guardInterruptedMsAtFirstStart === null
+    && state.owner !== "adaptiveCharging" && !active.initialGuardWait) {
+    const until = Math.min(Date.parse(slotEnd), Date.parse(active.windowEnd ?? ""));
+    if (until > now.getTime()) active.initialGuardWait = { since: now.toISOString(), until: new Date(until).toISOString() };
+  }
+}
+
+function openGuardInterruptionMs(active: WindowExecution, now: Date): number {
+  const startedMs = Date.parse(active.guardInterruptionStartedAt ?? "");
+  const windowEnd = Date.parse(active.windowEnd ?? "");
+  const endMs = Number.isFinite(windowEnd) ? Math.min(windowEnd, now.getTime()) : now.getTime();
+  return Number.isFinite(startedMs) ? Math.max(0, endMs - startedMs) : 0;
+}
+
 export function recordAdaptiveChargingWindowInterruption(state: AdaptiveChargingState, now: Date = new Date()): number {
   if (!state.activeWindowExecution) return 0;
   if (!state.activeWindowExecution.guardInterruptionStartedAt) {
@@ -694,8 +749,7 @@ export function recordAdaptiveChargingWindowInterruption(state: AdaptiveCharging
 export function completeAdaptiveChargingWindowInterruption(state: AdaptiveChargingState, now: Date = new Date()): number {
   const execution = state.activeWindowExecution;
   if (!execution?.guardInterruptionStartedAt) return 0;
-  const startedMs = new Date(execution.guardInterruptionStartedAt).getTime();
-  const elapsedMs = Number.isFinite(startedMs) ? Math.max(0, now.getTime() - startedMs) : 0;
+  const elapsedMs = openGuardInterruptionMs(execution, now);
   execution.guardInterruptedMs = Math.max(0, execution.guardInterruptedMs + elapsedMs);
   execution.guardInterruptionStartedAt = null;
   return elapsedMs;

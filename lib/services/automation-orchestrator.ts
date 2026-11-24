@@ -2,7 +2,7 @@ import type { ApplicationConfig } from "../contracts/configuration.js";
 import type { AdaptiveChargingState } from "../domain/adaptive-state.js";
 import type { AutomationRule, AutomationStatus } from "../domain/automation-rules.js";
 import { automationDemandWatts, automationRuleLabel, automationRuleList } from "../domain/automation-rules.js";
-import { adaptiveChargingConfiguredActive, adaptiveChargingWindowHasShortfall, shouldHoldGuardStandbyForAdaptiveCharging } from "../domain/adaptive-control.js";
+import { adaptiveChargingConfiguredActive, adaptiveChargingShortfallMessage, adaptiveChargingWindowHasShortfall, shouldHoldGuardStandbyForAdaptiveCharging } from "../domain/adaptive-control.js";
 import { adaptiveChargingAvailability, adaptiveChargingBaseAvailability } from "../domain/adaptive-planning.js";
 import type { OperationalOverridesState } from "../domain/operational-overrides.js";
 import { cachedForecastIsUsable, describeSolarForecastError } from "../domain/adaptive-availability.js";
@@ -98,12 +98,9 @@ export function createAutomationOrchestrator(dependencies: AutomationOrchestrato
     }
     const summary = state.windowSummaries?.at(-1);
     if (summary && adaptiveChargingWindowHasShortfall(summary)) {
-      const estimatedDeliveryText = summary.estimatedDeliveryWh > 0
-        ? ` ${summary.estimatedDeliveryWh} Wh of delivery was estimated between the final sample and exact charge boundaries.`
-        : "";
       dependencies.notifications.enqueue({
         type: "adaptiveChargingWindowShortfall", severity: "warning", title: "Discounted charging window ended with a shortfall",
-        message: `${summary.label || "Discounted window"} planned ${summary.plannedWh} Wh and delivered ${summary.deliveredWh} Wh, leaving ${summary.unmetWh} Wh unmet.${estimatedDeliveryText} Breaker interruptions: ${summary.interruptionCount}. Solar-headroom pauses: ${summary.solarHeadroomInterruptionCount ?? 0}. SOC: ${summary.startSocPercent ?? "--"}% to ${summary.endSocPercent ?? "--"}%.`,
+        message: adaptiveChargingShortfallMessage(summary),
         occurredAt: summary.completedAt, dedupeKey: `adaptive-charging-window:${summary.key}`, once: true,
       });
     }

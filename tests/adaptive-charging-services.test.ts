@@ -248,6 +248,7 @@ assert.equal(blockedState.activeWindowExecution?.interruptionCount, 1, "one guar
 await blockedEvaluator(config, status, [guardRule], new Date(slotStart.getTime() + 10_000));
 assert.equal(blockedState.activeWindowExecution?.guardInterruptionStartedAt, null);
 assert.equal(blockedState.activeWindowExecution?.guardInterruptedMs, 10_000);
+assert.equal(blockedState.activeWindowExecution?.initialGuardBlockedMs, 10_000);
 
 Object.assign(blockedState, cleanAdaptiveChargingState({
   forecast: { fetchedAt: forecastFetchedAt },
@@ -364,6 +365,8 @@ preflightStatus.meter.grid_import_power.value = 1_000;
 preflightStatus.energy.battery.operation_mode.value = "standby";
 await preflightEvaluator(preflightConfig, preflightStatus, [preflightRule], new Date(slotStart.getTime() + 5_000));
 assert.equal(preflightChargeStarts, 1, "adaptive charging starts when the configured branch-demand source falls within reserve");
+
+assert.equal(preflightState.activeWindowExecution?.initialGuardBlockedMs, 5_000);
 
 preflightActions.length = 0;
 await preflightEvaluator(preflightConfig, { ...preflightStatus, unavailableEquipment: ["Ene-Farm"] }, [preflightRule], slotStart);

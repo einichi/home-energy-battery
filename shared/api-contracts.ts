@@ -367,6 +367,9 @@ export type AdaptiveChargingStatus = {
     windowStart?: string;
     windowEnd?: string;
     label?: string | null;
+    openingPlannedWh?: number | null;
+    initialGuardBlockedMs?: number | null;
+    postStartGuardInterruptedMs?: number | null;
     plannedWh?: number | null;
     deliveredWh?: number | null;
     estimatedDeliveryWh?: number | null;

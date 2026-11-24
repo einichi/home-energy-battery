@@ -25,6 +25,8 @@ import {
   finalizeAdaptiveChargeSession,
   finalizeExpiredAdaptiveChargingWindow,
   recordAdaptiveChargingWindowInterruption,
+  recordInitialGuardWait,
+  settleInitialGuardWait,
   startAdaptiveChargeSession,
   syncAdaptiveChargingWindowExecution,
 } from "../domain/adaptive-state.js";
@@ -163,6 +165,7 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
       // overlapping evaluation can retry the queued plan without re-arming it.
       state = await writeAdaptiveChargingState(state);
     }
+    settleInitialGuardWait(state, now);
     const lifecycle = await prepareAdaptiveEvaluation(state, status, now, {
       history: historyStore,
       readOperationalOverrides: dependencies.readOperationalOverrides,
@@ -320,7 +323,13 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
           numericMetric(status.energy?.battery?.remaining_percent),
           now,
         );
-        if (adaptiveChargingSlotAt(state.plan, now)) {
+        const dueSlot = adaptiveChargingSlotAt(state.plan, now);
+        if (dueSlot) {
+          if (liveSoc !== null && liveSoc < Number(dueSlot.targetSocPercent ?? config.adaptiveCharging.targetSocPercent)
+            && !(Date.parse(state.solarHeadroomHoldUntil ?? "") > now.getTime())
+            && capAdaptiveChargingSlotToRemainingTime(dueSlot, config.batteryCapabilities.maximumChargeWatts, now)) {
+            recordInitialGuardWait(state, now, dueSlot.end);
+          }
           recordAdaptiveChargingWindowInterruption(state, now);
         }
       }
@@ -514,6 +523,7 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
         rules,
       );
       if (!startDecision.allowed) {
+        recordInitialGuardWait(state, now, slot.end);
         await ensureDiscountedWindowStandby(
           state,
           status,
@@ -532,6 +542,7 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
       const resumeFromStandby = Boolean(state.breakerRecovery || state.interruptedCharge || standbyHoldActive);
       const headroom = adaptiveChargingLiveChargeHeadroom(status, config, state, rules);
       if (!headroom.available) {
+        recordInitialGuardWait(state, now, slot.end);
         if (!state.breakerRecovery) logAdaptiveChargingInitialHeadroomWait(state, headroom, now);
         if (state.breakerRecovery) {
           const recoveryStatus = advanceAdaptiveChargingBreakerRecovery(state, headroom, now);
@@ -557,6 +568,7 @@ export function createAdaptiveChargingEvaluator(dependencies: AdaptiveChargingEv
       if (state.breakerRecovery) {
         const recoveryStatus = advanceAdaptiveChargingBreakerRecovery(state, headroom, now);
         if (!recoveryStatus.ready) {
+          recordInitialGuardWait(state, now, slot.end);
           logAdaptiveChargingBreakerWait(state, headroom, recoveryStatus, now);
           if (activeDiscountedWindow) {
             await ensureDiscountedWindowStandby(
